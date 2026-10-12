@@ -1211,3 +1211,153 @@ D6b. After the kexec, "link timers for 60 Hz" (shutdown went back to 60).
 
 **Next:** D4a-3 (trigger masking, TE vblank), then the 10 Hz idle; D3b/D4b
 (panel sleep, full DECON/DSIM restart) for real screen-off power savings.
+
+### D6 result (2026-10-12, on the phone)
+
+Kernel `omandroid-int` `…-00209-gd577cf9b38ce` (int with `omandroid-display2`
+merged), default DTB, no decon overlay:
+
+- `gs-decon` probed at 4.4 s. It logged "MIF at 2028000000 Hz", "DISP at
+  400000000 Hz" and "flip-only KMS on DECON0, 1440x3120, up to 120 Hz (at
+  60 Hz)", then "120 Hz" at 11.1 s.
+- simpledrm is gone. `hyprctl monitors` shows 1440x3120@120.00, with modes
+  120 and 60.
+- `flip_timeouts` is 0. `display-hz` reads 120.01 Hz, `UNDERRUN_CTRL` 0x3ec,
+  underrun bit 0.
+- The boot splash, brightness and how it feels still need the user's check.
+- One boot WARNING (`drm_plane.c:543`, the plane had no `destroy` hook) is
+  fixed by `fe2647543`.
+
+## D3b under KMS: stop the frames and sleep the panel with the screen off (2026-10-12, offline)
+
+Today "screen off" means:
+
+- DECON keeps sending a black frame on every TE (at 60 Hz since D6), so the
+  DPU still reads 1.08 GB/s;
+- the panel is only in display-off (`bl_power` 4), which still costs it
+  about 87 mW.
+
+Branch `omandroid-display2`:
+
+| Commit | What |
+|---|---|
+| `dcc41a530` | panel: a taken-over panel is marked prepared/enabled. Backlight updates are held while it is in reset or asleep (`enable()` applies them). The rate switch refuses while asleep. Locks in prepare/enable/disable/unprepare. |
+| `2ca20ad4d` | gs-dsim-cmd: `gs_dsim_panel_sleep()` (display off, sleep in `10`, reset), and `gs_dsim_panel_wake()` in two steps: the cold init (reset, DSC/PPS, sleep out, the init and feature set at 60 Hz, link timers back to 60 Hz), then display on with the backlight |
+| `172c08f89` | gs-decon: `screen_off` module parameter (0644) |
+
+The `screen_off` values:
+
+- **0, the default:** black frames, as D6.
+- **1:** after the black frame, mask DECON's hardware trigger (`TRIG_CON`
+  bit 4). No frames are sent and no memory is read; DECON itself stays
+  enabled.
+- **2:** 1, then put the panel to sleep.
+
+Turning the CRTC back on:
+
+1. The panel's cold init runs.
+2. The trigger is unmasked and one black frame goes out.
+3. Display on and the backlight.
+4. The CRTC's rate switch to 120 Hz.
+5. The first flip.
+
+Other behaviour:
+
+- Remove and shutdown restore the boot state (panel lit, trigger running),
+  so a kexec'd kernel finds it as ABL leaves it.
+- `stats` shows `trigger_masked` and `panel_asleep`.
+- A failed cold init leaves the panel in reset, and the next screen-on tries
+  again.
+- The default is unchanged, so the build is safe to merge before the test.
+
+The wake is Google's order (reset, init, a frame, display on). It also
+re-sends every register the init sets: VLIN1, VGH, VREG, black insertion,
+toggle, SP, FFC, TSP sync, frame insertion, TE and rate. Sleep-out returns
+those to the panel's defaults, and dark greys go wrong if they aren't
+written again. What it does **not** do: restart the DSIM or DECON (D4b),
+switch the panel's rails (no S2MPG12/13 regulator driver: they stay on, so
+the panel sits in reset with power), or suspend (D4c).
+
+Build: `out-display2`, release `7.3.0-rc6-omandroid-push1-00082-g172c08f89a2d`,
+logs `logs/*-display2-d6.log`. W=1 and checkpatch are clean for the three
+files, and it merges into `omandroid-int` without conflicts.
+
+### D3b runbook (each step needs the user)
+
+Merge `omandroid-display2` into int, build, `modules-push`, `push`. Then
+check that D6b/D6c still pass: `screen_off` is 0, so nothing else changed.
+
+Run `tools/phone-ssh dmesg -w` in a second terminal.
+`P=/sys/module/gs_decon/parameters/screen_off`,
+`S=/sys/bus/platform/devices/1c240000.display-controller/stats`.
+
+**D3b-1: stop frames while off.**
+
+```sh
+tools/phone-ssh "echo 1 > $P"
+# power key (screen off), wait 10 s
+tools/phone-ssh "cat $S; grep gs-decon /proc/interrupts"   # twice, 5 s apart
+# power key (screen on)
+```
+
+- Pass while off: `trigger_masked 1`; the frame_start interrupt count does
+  not move; no TE timeout or FIFO errors in dmesg.
+- Pass after on: the lock screen comes back at once at 120 Hz;
+  `trigger_masked 0`; `flip_timeouts` unchanged. Brightness works.
+- Repeat 10 times.
+- **Stop if** the screen stays black after on. Recovery: `echo 0 > $P`, then
+  a DPMS cycle; else reboot.
+
+**D3b-2: panel sleep, from SSH first.** Stop the session
+(`systemctl stop sddm`), then `modetest`/`kmscube` on the card as in D4a-1.
+Or keep Hyprland and use `omarchy-brightness-display off/on` over SSH
+(it needs the session's `HYPRLAND_INSTANCE_SIGNATURE` and `XDG_RUNTIME_DIR`;
+otherwise use the power key).
+
+```sh
+tools/phone-ssh "echo 2 > $P"
+tools/phone-ssh 'sudo -u $(id -nu 1000) omarchy-brightness-display off'; sleep 10
+tools/phone-ssh "cat $S"            # panel_asleep 1, trigger_masked 1
+tools/phone-ssh 'sudo -u $(id -nu 1000) omarchy-brightness-display on'
+```
+
+- Pass: the screen comes back within half a second with correct colours.
+  Dark greys must stay grey, not black: compare the wallpaper and a dark
+  theme against a screenshot. Then 120 Hz (`display-hz`), brightness
+  follows the slider, `panel_asleep 0`.
+- In dmesg: "panel asleep/awake" (with dyndbg), no "cold init failed", no
+  DSIM FIFO timeout, no "staying at 60 Hz".
+- **Stop if:**
+  - the panel stays dark. Try a second off/on cycle, since the cold init
+    retries. Then `echo 0 > $P`, then reboot: ABL re-inits the panel;
+  - the colours are wrong after wake. Compare with D6; most likely a panel
+    register the init doesn't write, so read it back with a DCS read once
+    reads exist;
+  - the screen shows garbage before the picture (display on came before
+    the frame).
+
+**D3b-3: power.** Measure `current_now` of the fuel gauge with the screen
+off for two minutes at each `screen_off` value 0/1/2 (USB unplugged,
+over Wi-Fi). Expect 1 to save the DPU and memory traffic, and 2 another
+≈ 80–90 mW.
+
+**D3b-4: soak.** With `screen_off=2`:
+
+- 20 power-key cycles, including some within 1 s of each other;
+- an idle-lock and screen-off by hypridle;
+- `systemctl restart sddm` with the screen off and with it on;
+- one reboot and one kexec with the screen off.
+
+Pass: every wake works, and after a reboot or kexec "link timers for 60 Hz"
+appears and the boot shows the splash.
+
+**Then make it the default:** `options gs_decon screen_off=2` in
+`omandroid-device-cheetah`'s `modprobe.d/omandroid-display.conf`, or change
+the driver default.
+
+**Rollback:** `echo 0 > $P` at run time (takes effect at the next screen
+off); `options gs_decon screen_off=0`; or the D6 rollback list.
+
+**Next:** D4a-3 (keep the trigger masked between flips, vblank from DECON's
+TE interrupt), and then the panel's 10 Hz idle at 120 Hz. D4b (DSIM/DECON
+restart) only if the panel wake proves unreliable without it.
