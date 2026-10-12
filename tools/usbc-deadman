@@ -1,0 +1,171 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# usbc-deadman: run one MAX77759 charger / USB-C bring-up step on the phone
+# under a dead-man switch (device/cheetah/USB-C-PLAN.md). USB is the only
+# link to the phone, so the step runs DETACHED on the phone
+# (tools/usbc-deadman-phone, started with systemd-run) and undoes itself
+# unless this script gets back in over a NEW SSH login and confirms. If even
+# the undo does not bring USB back, the phone's hardware watchdog resets it
+# into the known-good setup (all MAX77759 drivers blacklisted at boot).
+#
+# Usage:
+#   tools/usbc-deadman install          copy the phone half to /usr/local/bin
+#   tools/usbc-deadman dump             read-only charger/TCPC register dump
+#   tools/usbc-deadman STEP [options]   run STEP under the dead-man switch
+#   tools/usbc-deadman undo STEP        revert a confirmed STEP by hand
+#   tools/usbc-deadman log              the phone's /var/log/usbc-deadman.log
+#
+# STEP: b2-core | b3-charger | b4a-tcpm | b4b-role | replug | noop
+#
+# Options:
+#   --confirm SECS   phone waits this long for our confirmation (default 90;
+#                    replug: 120)
+#   --grace SECS     after its undo, wait this long again (default 60)
+#   --ilim UA        b3-charger: default_ilim_ua (default 500000)
+#   --no-watchdog    phone falls back to a crash (panic=10) instead of the
+#                    watchdog if the undo fails too
+#   --no-confirm     do not confirm until the phone has undone the step
+#                    (tests the undo path on purpose)
+#
+# replug: confirms only after the link has gone down and come back, i.e.
+# after you unplugged and replugged the cable.
+
+set -uo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+SSH="$ROOT/tools/phone-ssh"
+LOGDIR="$ROOT/logs"
+
+say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
+warn() { printf '\e[33m==> %s\e[0m\n' "$*"; }
+die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
+usage() { sed -n '/^# Usage:/,/^# after you/p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+phone() { "$SSH" "$@"; }
+
+recovery() {
+  cat <<'EOF'
+Physical recovery, in order:
+  1. Wait 2 minutes: the phone undoes the step, then its watchdog resets it
+     (the screen goes black and the boot logo returns). Linux on slot B then
+     boots with every MAX77759 driver blacklisted and USB comes back.
+  2. Unplug and replug the cable once (after a VBUS loss the data switch may
+     be open; a fresh boot or the undo closes it).
+  3. Hold Power ~30 s until the phone is off, release, press Power: it boots
+     slot B again with the drivers blacklisted.
+  4. If slot B itself no longer gets USB (only after an overlay DTB): the
+     initramfs crashes after 45 s without a configured gadget and, after
+     ABL's retries, ABL boots stock Android on slot A. From there:
+     adb reboot bootloader, then flash the previous images (bin/omandroid flash
+     with the out dir whose DTB has no usbc overlay).
+  5. Fastboot by hand: hold Power ~30 s (off), then Volume Down + Power for
+     ~20 s until "Fastboot Mode".
+EOF
+}
+
+install_phone() {
+  phone 'command -v i2cget >/dev/null' ||
+    die "i2c-tools missing on the phone: tools/phone-ssh 'pacman -S --needed --noconfirm i2c-tools'"
+  phone 'cat > /usr/local/bin/usbc-deadman-phone && chmod 755 /usr/local/bin/usbc-deadman-phone' \
+    < "$ROOT/tools/usbc-deadman-phone" || die "could not install the phone half"
+}
+
+cmd="${1:-}"; shift || true
+step= confirm= grace=60 ilim=500000 nowd= noconfirm=0
+case "$cmd" in
+  ''|-h|--help) usage ;;
+  install) install_phone; say "installed /usr/local/bin/usbc-deadman-phone"; exit 0 ;;
+  dump) install_phone; phone 'usbc-deadman-phone dump'; exit $? ;;
+  log) phone 'cat /var/log/usbc-deadman.log'; exit $? ;;
+  undo) install_phone; phone "usbc-deadman-phone undo ${1:?STEP}"; exit $? ;;
+  b2-core|b3-charger|b4a-tcpm|b4b-role|replug|noop) step="$cmd" ;;
+  *) usage 1 ;;
+esac
+while (($#)); do
+  case "$1" in
+    --confirm) confirm="${2:?}"; shift ;;
+    --grace) grace="${2:?}"; shift ;;
+    --ilim) ilim="${2:?}"; shift ;;
+    --no-watchdog) nowd=--no-watchdog ;;
+    --no-confirm) noconfirm=1 ;;
+    *) usage 1 ;;
+  esac
+  shift
+done
+[[ -n "$confirm" ]] || { [[ $step == replug ]] && confirm=120 || confirm=90; }
+
+phone true || die "phone not reachable at 172.16.42.1: nothing started"
+install_phone
+mkdir -p "$LOGDIR"
+stamp=$(date +%Y%m%d-%H%M%S)
+log="$LOGDIR/usbc-$step-$stamp.log"
+
+# Kernel log on the laptop while the link lasts; reconnects after a drop.
+say "streaming the phone's kernel log to $log"
+(
+  while :; do
+    "$SSH" -T -o ConnectTimeout=3 -o ServerAliveInterval=1 -o ServerAliveCountMax=3 \
+      'exec cat /dev/kmsg' 2>/dev/null |
+      while IFS= read -r line; do printf '%s %s\n' "$(date +%T.%3N)" "$line"; done
+    echo "# $(date +%T.%3N) log stream ended" ; sleep 2
+  done
+) >> "$log" &
+logger=$!
+trap 'kill $logger 2>/dev/null' EXIT
+sleep 2
+
+unit="usbc-deadman-$step-$stamp"
+args="run $step --confirm $confirm --grace $grace --ilim $ilim $nowd"
+say "starting $step on the phone, detached (unit $unit): usbc-deadman-phone $args"
+phone "if command -v systemd-run >/dev/null; then
+         systemd-run --quiet --collect --unit=$unit /usr/local/bin/usbc-deadman-phone $args
+       else
+         setsid nohup /usr/local/bin/usbc-deadman-phone $args >/dev/null 2>&1 < /dev/null &
+       fi" || die "could not start the step (nothing applied)"
+
+if ((noconfirm)); then
+  warn "--no-confirm: not confirming for ${confirm}s, so the phone undoes the step; confirming after that"
+fi
+
+start=$(date +%s)
+deadline=$(( start + confirm + grace + 90 ))
+dropped=0 confirmed=0 result=
+sleep 5
+while (( $(date +%s) < deadline )); do
+  if phone true 2>/dev/null; then
+    if [[ $step == replug ]] && ((!dropped)); then
+      printf '.'; sleep 2; continue          # waiting for the unplug
+    fi
+    if ((!confirmed)) && { ((!noconfirm)) || (( $(date +%s) > start + confirm + 3 )); }; then
+      if out=$(phone 'usbc-deadman-phone confirm' 2>/dev/null); then
+        confirmed=1
+        echo; say "confirmed over a new SSH login after $(( $(date +%s) - start ))s ($out)"
+      fi
+    fi
+    result=$(phone 'cat /run/usbc-deadman/result 2>/dev/null' 2>/dev/null)
+    [[ -n "$result" ]] && break
+  else
+    ((dropped)) || { echo; warn "link down (expected for replug and once for b4a/b4b); waiting"; }
+    dropped=1
+  fi
+  printf '.'
+  sleep 2
+done
+echo
+
+case "$result" in
+  confirmed)
+    say "step $step stays applied. State:"
+    phone 'usbc-deadman-phone dump; dmesg | grep -iE "max77759|tcpci|tcpm|typec|usbdrd|dwc3|charger" | tail -25'
+    ;;
+  reverted)
+    warn "step $step was UNDONE by the phone (no confirmation in time); the link is back"
+    phone 'tail -20 /var/log/usbc-deadman.log'
+    ;;
+  *)
+    warn "no result from the phone (result='${result}'). If it does not answer within 2 minutes:"
+    recovery
+    ;;
+esac
+kill $logger 2>/dev/null
+say "kernel log: $log"

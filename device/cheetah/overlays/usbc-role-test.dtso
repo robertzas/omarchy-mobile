@@ -1,0 +1,34 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (USB-C-PLAN.md, gate B4b), applied after usbc-tcpm-test:
+ * turn dwc3 into a dual-role controller behind a USB role switch, with
+ * peripheral as the default role, and link the connector's data port to
+ * it. Without TCPM (tcpci_maxim blacklisted) dwc3 then starts in device
+ * mode as before, only through the role switch. The port is still sink
+ * only, so TCPM always asks for the device role; host mode needs VBUS
+ * sourcing first (gate B4c).
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/usi@10d600c0/i2c@10d60000/usb-typec@25/connector/ports} {
+	port@1 {
+		reg = <1>;
+
+		usbc0_role_sw: endpoint {
+			remote-endpoint = <&usbdrd31_dwc3_role_switch>;
+		};
+	};
+};
+
+&{/soc@0/usb@11210000} {
+	dr_mode = "otg";
+	usb-role-switch;
+	role-switch-default-mode = "peripheral";
+
+	port {
+		usbdrd31_dwc3_role_switch: endpoint {
+			remote-endpoint = <&usbc0_role_sw>;
+		};
+	};
+};

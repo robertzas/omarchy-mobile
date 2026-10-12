@@ -1,0 +1,44 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (USB-C-PLAN.md, gate B4a): enable the MAX77759 Type-C port
+ * controller and link its connector to the USB PHY as orientation switch,
+ * which makes the PHY's VBUS valid follow the Type-C connection once TCPM
+ * reports one. tcpci_maxim stays blacklisted: until it is loaded by hand the
+ * PHY keeps VBUS forced valid exactly as without this overlay (kernel:
+ * "phy: samsung: usbdrd: keep VBUS valid until Type-C reports a
+ * connection"). dwc3 stays peripheral-only (no role switch, gate B4b).
+ * Applied to the built gs201-cheetah.dtb with fdtoverlay. Paths, not labels,
+ * so the base DTB needs no __symbols__; the two endpoints are new nodes, so
+ * their mutual references resolve inside the overlay.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/usi@10d600c0/i2c@10d60000/usb-typec@25} {
+	status = "okay";
+};
+
+&{/soc@0/usi@10d600c0/i2c@10d60000/usb-typec@25/connector} {
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@0 {
+			reg = <0>;
+
+			usbc0_orien_sw: endpoint {
+				remote-endpoint = <&usbdrd31_phy_orien_switch>;
+			};
+		};
+	};
+};
+
+&{/soc@0/phy@11200000} {
+	orientation-switch;
+
+	port {
+		usbdrd31_phy_orien_switch: endpoint {
+			remote-endpoint = <&usbc0_orien_sw>;
+		};
+	};
+};

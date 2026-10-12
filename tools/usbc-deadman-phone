@@ -1,0 +1,302 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# usbc-deadman-phone: the phone half of tools/usbc-deadman. Runs ONE risky
+# USB-C / charger bring-up step (device/cheetah/USB-C-PLAN.md) detached from
+# SSH, and undoes it by itself unless the laptop confirms, over a fresh SSH
+# login, that the USB link still works:
+#
+#   1. arm the hardware watchdog (s3c2410, ~15 s) with a feeder that only
+#      feeds until a deadline;
+#   2. save the registers the step touches, apply the step;
+#   3. wait CONFIRM seconds for /run/usbc-deadman/confirm (the laptop writes it);
+#   4. no confirmation: revert the step, close the MAX77759 USB data switch if
+#      VBUS is there (the replug fix), force the PHY's VBUS valid, and wait
+#      GRACE seconds for a confirmation again;
+#   5. still nothing: stop feeding the watchdog, so the phone resets (warm, so
+#      pstore keeps the log) and boots the same slot with every MAX77759
+#      driver blacklisted, i.e. the known-good USB setup. If the watchdog could
+#      not be armed, crash instead (panic=10 reboots).
+#
+# Every action is logged before it happens to /dev/kmsg (so pstore has it)
+# and to /var/log/usbc-deadman.log.
+#
+# Usage (normally through tools/usbc-deadman on the laptop):
+#   usbc-deadman-phone dump                 read-only register dump (no dead-man)
+#   usbc-deadman-phone rescue               close the USB data switch now if VBUS is there
+#   usbc-deadman-phone run STEP [options]   run STEP under the dead-man switch
+#   usbc-deadman-phone confirm              what the laptop runs to confirm
+#   usbc-deadman-phone undo STEP            revert a confirmed STEP by hand
+#   usbc-deadman-phone rescue-watch         loop: close the data switch after each replug
+#
+# STEP: b2-core | b3-charger | b4a-tcpm | b4b-role | replug | noop
+# Options: --confirm SECS (default 90)  --grace SECS (default 60)
+#          --ilim UA (b3: default_ilim_ua, default 500000)  --no-watchdog
+
+set -u
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+D=/run/usbc-deadman
+LOG=/var/log/usbc-deadman.log
+PHY_PARAM=/sys/module/phy_exynos5_usbdrd/parameters/force_vbus_valid
+CHG=0x69 TCPC=0x25
+confirm_s=90 grace_s=60 ilim=500000 use_wd=1
+
+log() {
+  local m="usbc-deadman: $*"
+  echo "$m" > /dev/kmsg 2>/dev/null
+  echo "$(date '+%F %T') $m" >> "$LOG" 2>/dev/null
+  echo "$m"
+}
+
+i2c_bus() {
+  local d
+  for d in /sys/bus/i2c/devices/i2c-*; do
+    if grep -qs 10d60000 "$d/name" || readlink -f "$d" | grep -q 10d60000.i2c; then
+      echo "${d##*-}"; return 0
+    fi
+  done
+  return 1
+}
+
+BUS=$(i2c_bus) || BUS=
+rd() { i2cget -f -y "$BUS" "$1" "$2" 2>/dev/null; }          # rd ADDR REG
+wr() { log "i2cset $1 reg $2 = $3"; i2cset -f -y "$BUS" "$1" "$2" "$3"; }
+
+# VBUS as the charger sees it: CHG_DETAILS_00.CHGIN_DTLS (bits 6:5) == 3
+vbus_valid() {
+  local v
+  v=$(rd $CHG 0xb5) || return 1
+  (( ((v >> 5) & 3) == 3 ))
+}
+
+udc_state() { cat /sys/class/udc/*/state 2>/dev/null || echo none; }
+
+# The replug fix: the MAX77759 opens its USB2 data switch (TCPC vendor
+# USBSW_CTRL, 0x93) on unplug and nothing closes it; 0x09 connects D+/D-.
+rescue() {
+  [[ -n "$BUS" ]] || { log "rescue: no i2c bus for 10d60000"; return 1; }
+  if vbus_valid; then
+    log "rescue: VBUS valid, USBSW_CTRL was $(rd $TCPC 0x93), udc $(udc_state)"
+    wr $TCPC 0x93 0x09
+  else
+    log "rescue: no valid VBUS (CHG_DETAILS_00 $(rd $CHG 0xb5)), switch left as is"
+  fi
+}
+
+force_vbus() {
+  if [[ -w $PHY_PARAM ]]; then
+    log "PHY: force_vbus_valid=1"
+    echo 1 > $PHY_PARAM
+  fi
+}
+
+dump() {
+  [[ -n "$BUS" ]] || { echo "no i2c bus for 10d60000.i2c"; return 1; }
+  local r v
+  echo "i2c bus $BUS; udc $(udc_state); modules: $(lsmod | awk '/max77759|tcpci|tcpm|max17042/ {printf "%s ", $1}')"
+  echo "charger 0x$(printf %x $CHG):"
+  for r in 0xb0 0xb1 0xb2 0xb3 0xb4 0xb5 0xb6 0xb7 0xb8 0xb9 0xba 0xbb 0xbc \
+           0xbd 0xbe 0xbf 0xc0 0xc1 0xc2 0xc3 0xc4 0xc5 0xc6 0xc7 0xc8 0xc9 \
+           0xca 0xcb 0xcc; do
+    printf '  %s=%s' "$r" "$(rd $CHG $r || echo ERR)"
+  done
+  echo
+  v=$(rd $CHG 0xb9) && echo "  CNFG_00 mode $((v & 0xf)) (5 = charger+buck on, 0 = off, 0xa = OTG boost)"
+  v=$(rd $CHG 0xbb) && echo "  CNFG_02 fast charge $(( (v & 0x3f) < 3 ? 133 : 200 + ((v & 0x3f) - 3) * 6667 / 100 )) mA (sel $((v & 0x3f)))"
+  v=$(rd $CHG 0xbd) && { s=$((v & 0x3f)); case $s in 56) f=3800 ;; 57) f=3900 ;; *) f=$((4000 + 10 * s)) ;; esac
+    echo "  CNFG_04 float voltage $f mV (sel $s; stock fv-max 4450 mV = sel 45)"; }
+  v=$(rd $CHG 0xc2) && echo "  CNFG_09 input limit $(( (v & 0x7f) < 3 ? 100 : 100 + ((v & 0x7f) - 3) * 25 )) mA (sel $((v & 0x7f)), NO_AUTOIBUS $(( v >> 7 )))"
+  v=$(rd $CHG 0xbf) && echo "  CNFG_06 CHGPROT $(( (v >> 2) & 3 )) (0 = protected registers locked)"
+  v=$(rd $CHG 0xc5) && echo "  CNFG_12 CHGINSEL $(( (v >> 5) & 1 )) WCINSEL $(( (v >> 6) & 1 ))"
+  v=$(rd $CHG 0xcb) && echo "  CNFG_18 WDTEN $(( v & 1 ))"
+  v=$(rd $CHG 0xb5) && echo "  DETAILS_00 CHGIN_DTLS $(( (v >> 5) & 3 )) (3 = VBUS valid)"
+  v=$(rd $CHG 0xb6) && echo "  DETAILS_01 CHG_DTLS $(( v & 0xf )) (0 prequal, 1 CC, 2 CV, 3 top-off, 4 done, 8 off, 0xb watchdog, 0xc JEITA) BAT_DTLS $(( (v >> 4) & 7 )) (3 ok)"
+  echo "tcpc 0x$(printf %x $TCPC):"
+  for r in 0x00 0x01 0x02 0x03 0x10 0x11 0x1a 0x1b 0x1c 0x1d 0x1e 0x1f 0x20 0x92 0x93 0x94; do
+    printf '  %s=%s' "$r" "$(rd $TCPC $r || echo ERR)"
+  done
+  echo
+  echo "  (0x00/0x01 vendor id 0x6a 0x0b = Maxim; 0x1e POWER_STATUS bit2 VBUS present; 0x93 USBSW_CTRL 0x09 = data connected, 0 = open)"
+  [[ -r $PHY_PARAM ]] && echo "PHY force_vbus_valid=$(cat $PHY_PARAM)"
+  grep -H . /sys/class/power_supply/*/{online,status,capacity,voltage_now,current_now,temp,constant_charge_voltage_max,input_current_limit} 2>/dev/null
+}
+
+# ---- steps: apply / revert ----
+
+save_charger() {
+  local r
+  for r in 0xb9 0xbb 0xbd 0xc2; do echo "$r $(rd $CHG $r)"; done > $D/charger.saved
+  log "saved charger registers: $(tr '\n' ' ' < $D/charger.saved)"
+}
+
+restore_charger() {
+  local r v
+  [[ -f $D/charger.saved ]] || return 0
+  # mode last, and through OFF as the driver does
+  while read -r r v; do
+    [[ $r == 0xb9 || -z $v ]] && continue
+    wr $CHG "$r" "$v"
+  done < $D/charger.saved
+  v=$(awk '$1 == "0xb9" {print $2}' $D/charger.saved)
+  if [[ -n $v ]]; then
+    wr $CHG 0xb9 $(( $(rd $CHG 0xb9) & 0xf0 ))
+    wr $CHG 0xb9 "$v"
+  fi
+}
+
+apply() {
+  case "$1" in
+    noop|replug) log "step $1: nothing to apply"
+      [[ $1 == replug ]] && log "replug: unplug the cable now, wait 5 s, plug it back in" ;;
+    b2-core)
+      log "modprobe max77759 + gpio_max77759 (charger cell stays blacklisted)"
+      modprobe max77759 && modprobe gpio_max77759 ;;
+    b3-charger)
+      save_charger
+      lsmod | grep -q '^max77759 ' || { log "modprobe max77759"; modprobe max77759 || return 1; }
+      log "modprobe max77759_charger default_ilim_ua=$ilim"
+      modprobe max77759_charger default_ilim_ua="$ilim" ;;
+    b4a-tcpm|b4b-role)
+      [[ -e $PHY_PARAM ]] || { log "no $PHY_PARAM: kernel without the PHY change, refusing"; return 1; }
+      [[ -e /proc/device-tree/soc@0/phy@11200000/orientation-switch ]] ||
+        { log "DTB without the usbc-tcpm-test overlay, refusing"; return 1; }
+      [[ $1 == b4a-tcpm || -e /proc/device-tree/soc@0/usb@11210000/usb-role-switch ]] ||
+        { log "DTB without the usbc-role-test overlay, refusing"; return 1; }
+      lsmod | grep -q '^tcpci_maxim ' && { log "tcpci_maxim already loaded"; return 0; }
+      log "modprobe tcpci_maxim (TCPM takes over the port; expect one USB re-enumeration)"
+      modprobe tcpci_maxim ;;
+    *) log "unknown step $1"; return 1 ;;
+  esac
+}
+
+revert() {
+  log "reverting step $1 (udc $(udc_state))"
+  case "$1" in
+    noop|b2-core) ;;
+    b3-charger)
+      log "modprobe -r max77759_charger"
+      modprobe -r max77759_charger
+      restore_charger ;;
+    b4a-tcpm|b4b-role|replug)
+      force_vbus
+      log "modprobe -r tcpci_maxim tcpci tcpm"
+      modprobe -r tcpci_maxim tcpci tcpm ;;
+  esac
+  rescue
+}
+
+# ---- watchdog ----
+
+wd_arm() {
+  echo $(( $(date +%s) + confirm_s + 30 )) > $D/deadline
+  rm -f $D/disarm
+  (
+    exec 3>/dev/watchdog0 || exit 1
+    echo armed > $D/wd
+    while :; do
+      if [[ -e $D/disarm ]]; then printf V >&3; echo disarmed > $D/wd; exit 0; fi
+      if (( $(date +%s) >= $(cat $D/deadline 2>/dev/null || echo 0) )); then
+        echo "usbc-deadman: watchdog deadline passed, no longer feeding: reset in ~15 s" > /dev/kmsg
+        sync
+        sleep 3600
+      fi
+      printf k >&3
+      sleep 2
+    done
+  ) &
+  sleep 1
+  [[ $(cat $D/wd 2>/dev/null) == armed ]]
+}
+
+wd_extend() { echo $(( $(date +%s) + $1 )) > $D/deadline; }
+wd_disarm() { touch $D/disarm; sleep 3; log "watchdog: $(cat $D/wd 2>/dev/null)"; }
+
+wait_confirm() {   # wait_confirm SECS
+  local end=$(( $(date +%s) + $1 ))
+  while (( $(date +%s) < end )); do
+    [[ -e $D/confirm ]] && return 0
+    sleep 1
+  done
+  return 1
+}
+
+run() {
+  local step="$1"
+  mkdir -p $D
+  rm -f $D/confirm $D/result
+  [[ -n "$BUS" ]] || { log "no i2c bus for 10d60000.i2c, refusing"; return 1; }
+  command -v i2cget >/dev/null || { log "i2c-tools missing, refusing"; return 1; }
+  log "=== step $step: confirm ${confirm_s}s, grace ${grace_s}s, watchdog $use_wd; udc $(udc_state)"
+  if ((use_wd)); then
+    wd_arm || { log "cannot open /dev/watchdog0 (in use?), refusing; --no-watchdog to accept a crash fallback"; return 1; }
+    log "watchdog armed"
+  fi
+  if ! apply "$step"; then
+    log "apply failed: reverting now"
+    revert "$step"
+  fi
+  if wait_confirm "$confirm_s"; then
+    ((use_wd)) && wd_disarm
+    log "=== step $step CONFIRMED (udc $(udc_state)); left applied"
+    echo confirmed > $D/result
+    return 0
+  fi
+  log "no confirmation within ${confirm_s}s"
+  ((use_wd)) && wd_extend $(( grace_s + 20 ))
+  revert "$step"
+  if wait_confirm "$grace_s"; then
+    ((use_wd)) && wd_disarm
+    log "=== step $step REVERTED, link back (udc $(udc_state))"
+    echo reverted > $D/result
+    return 1
+  fi
+  log "=== step $step: no link after revert either (udc $(udc_state)); resetting"
+  echo reset > $D/result
+  sync
+  if ((use_wd)); then
+    wd_extend 0
+    sleep 40
+  fi
+  log "still alive: crashing (panic=10 reboots)"
+  sync
+  echo c > /proc/sysrq-trigger
+}
+
+rescue_watch() {
+  log "rescue-watch: closing the USB data switch after every replug (bus $BUS)"
+  local was=0 now
+  while :; do
+    if vbus_valid; then now=1; else now=0; fi
+    if (( now && !was )) || { (( now )) && [[ $(udc_state) != configured ]]; }; then
+      sleep 1
+      [[ $(rd $TCPC 0x93) == 0x09 ]] || rescue
+    fi
+    was=$now
+    sleep 2
+  done
+}
+
+cmd="${1:-}"; shift || true
+step=
+while (($#)); do
+  case "$1" in
+    --confirm) confirm_s="$2"; shift ;;
+    --grace) grace_s="$2"; shift ;;
+    --ilim) ilim="$2"; shift ;;
+    --no-watchdog) use_wd=0 ;;
+    -*) echo "unknown option $1" >&2; exit 2 ;;
+    *) step="$1" ;;
+  esac
+  shift
+done
+
+case "$cmd" in
+  dump) dump ;;
+  rescue) rescue ;;
+  rescue-watch) rescue_watch ;;
+  confirm) mkdir -p $D; touch $D/confirm; echo "confirmed; result so far: $(cat $D/result 2>/dev/null || echo pending)" ;;
+  undo) [[ -n "$step" ]] || { echo "undo needs a STEP" >&2; exit 2; }; mkdir -p $D; revert "$step" ;;
+  run) [[ -n "$step" ]] || { echo "run needs a STEP" >&2; exit 2; }; run "$step" ;;
+  *) sed -n '/^# Usage/,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac
