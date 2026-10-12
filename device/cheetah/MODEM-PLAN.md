@@ -4,11 +4,14 @@
 Status (2026-10-12): **M0 passed; M2 link works (Gen1 x1, 144d:a5a5).
 M2.4 left the PHY out of isolation (fixed offline, `c22dc53b3`) and UFS
 logged two recovered LINERESETs around modem power changes (analysis and
-the M2.5 measurement below). M3 has started offline: the PCI bus with MSI
-(`3a8f4c503`), the modem vendor-chroot profile, and the plan in 3.3.**
+the M2.5 measurement below). Offline, M3.2 is done (the link API for CPIF,
+link-down and completion-timeout interrupts, the lines handed to CPIF) and
+M3.3 has its first stage: Google's CPIF builds as `cpif.ko` + `shm_ipc.ko`
+(boot, IPC and RFS over the legacy buffers; section 2.1). Next on the
+phone: M2.5, M3.1, then M3.3-B (bind only, no firmware).**
 Kernel branch `omandroid-modem` in `~/android/mainline/wt-modem`, build in
-`~/android/mainline/out-modem` (last full build
-`7.3.0-rc6-omandroid-push1-00248-g3a8f4c503c80`, `logs/kernel-modem3.log`).
+`~/android/mainline/out-modem` (last full build in
+`logs/kernel-modem6.log`; release in section 2.1).
 Everything new is disabled by default. RADIOS-CAMERA-PLAN.md section 1 is
 the survey this follows.
 
@@ -137,13 +140,136 @@ omandroid repo:
   - controller registers only once the PHY is out of isolation (the Wi-Fi
     lesson: an ELBI access while isolated hangs the SoC).
 - `bus` (M3.1): register and scan the PCI bus, MSI on (3.3).
-- **Not yet:** the API CPIF calls (`exynos_pcie_poweron()` and friends),
-  the controller-event interrupt (link-down), suspend. They come with M3.
+- Since M3.2 (section 2.1): the API CPIF calls (`gs201_pcie_cp_*()`) and
+  the controller-event interrupt (link-down, completion timeout). **Not
+  yet:** suspend.
 
 Why our own driver and not Google's: Google's RC driver is one module for
 both channels, built around its vendor DWC fork, and the Wi-Fi link already
 runs on our `pcie-gs201`. The modem link shares only the PHY. A separate
 driver keeps the Wi-Fi driver untouched.
+
+### 2.1 M3.2 and the first M3.3 stage (offline, 2026-10-12)
+
+Branch `omandroid-modem`, back-merged from `omandroid-int` first (a fast
+forward: int already had the modem branch), then:
+
+| Commit | What |
+|---|---|
+| `e760ccf73` dt-bindings: PCI: google,gs201-pcie-cp: let the modem driver own the lines | the `modem` child may be disabled |
+| `ce6c974f8` PCI: dwc: gs201-cp: leave the modem lines to the modem driver | lines taken only while `modem` is available; otherwise `cp_on`/`cp_off` return -ENODEV and `status` says so |
+| `4513ebe14` soc: google: cpif: import Google's S5300 modem interface driver | `CP/` files for boot, IPC, RFS, verbatim, not built (`L/drivers/soc/google/cpif/`) |
+| `acfb82374` PCI: dwc: gs201-cp: export the modem link to the modem driver | `gs201_pcie_cp_*()` (`L/include/linux/soc/google/gs201-pcie-cp.h`) and the "ctrl" interrupt |
+| `ff5b99009` soc: google: aoc: alsa: notify voice calls through the modem notifier only | AoC card built again once `EXYNOS_MODEM_IF` exists; no behaviour change |
+| `f521c0894` soc: google: cpif: port the S5300 boot, IPC and RFS path to Linux 7.3 | `cpif.ko`, `shm_ipc.ko`, `pcie-gs201-compat.c` |
+| `3ec0e495a` soc: google: cpif: shm_ipc: index regions by their memory-region position | no `rmem_index` needed on our reserved-memory nodes |
+| `4983fc51e` dt-bindings: PCI: google,gs201-pcie-cp: add the modem's shared memory | `memory-region` on `modem` |
+| `2afb0db3f` arm64: dts: exynos: google: gs201-cheetah: describe the modem's shared memory | IPC 0xea400000, MSI 0xf6200000, packets 0xe8000000, stock's order |
+| `6ff2a4690` soc: google: cpif: take the lines and regions from the board's modem node | see "where the lines live" below |
+| `4dce2136a` PCI: dwc: gs201-cp: refuse the modem driver's poweron without allow_hw | bind CPIF with the link provably down |
+| `1344a9e0b` soc: google: cpif: do not let the driver be unloaded | no `remove()`, so no `module_exit()`: permanent |
+
+**The link API (M3.2).** CPIF's ~20 `exynos_pcie_*()` calls map onto
+`gs201_pcie_cp_*()` in `L/drivers/soc/google/cpif/pcie-gs201-compat.c`:
+
+| Google's call | Ours | Notes |
+|---|---|---|
+| `exynos_pcie_poweron(ch, spd, width)` | `gs201_pcie_cp_poweron(spd)` | `link_up` + secure ATU + bus (scanned the first time, then MSI re-armed and the endpoint's saved config restored, as `PC/pcie-exynos-rc.c:3358-3530`); faults cleared; width ignored, as Google; **-EPERM without `allow_hw=1`** |
+| `exynos_pcie_poweroff(ch)` | `gs201_pcie_cp_poweroff()` | PME_Turn_Off and the wait for L2 idle (`:3033-3101`), then our `link_down` (PHY isolated again); bus kept |
+| `exynos_pcie_rc_chk_link_status(ch)` | `gs201_pcie_cp_link_ok()` | LTSSM 0x0d-0x14 = up (`:4299-4349`); lock-free, reads ELBI only while the PHY is out of isolation |
+| `exynos_pcie_set_msi_ctrl_addr(ch, a)` | `gs201_pcie_cp_check_msi_addr(a)` | the target is the controller's `memory-region`; a mismatch is an error |
+| `exynos_pcie_set_perst_gpio(ch, on)` | `gs201_pcie_cp_set_perst_level()` | raw level |
+| `exynos_pcie_rc_l1ss_ctrl()` | `gs201_pcie_cp_l1ss()` | no-op: L1SS never enabled yet (open question 5) |
+| `exynos_pcie_register_event()` / `deregister` | `gs201_pcie_cp_register_event()` | one client; callback from a work item with Google's event codes |
+| `rc_get/set_sudden_linkdown_state`, `rc_get/set_cpl_timeout_state` | `gs201_pcie_cp_faults()` / `clear_faults()` | |
+| `exynos_pcie_rc_force_linkdown_work()` | `gs201_pcie_cp_force_linkdown()` | atomic-safe; CPIF calls it with a spinlock held |
+| `exynos_pcie_set_ready_cto_recovery()` | `gs201_pcie_cp_prepare_recovery()` | our `link_down` |
+| `rc_register_dump`, `rc_dump_all_status`, `rc_print_msi_register` | `gs201_pcie_cp_dump()` | LTSSM, IRQ0-2, faults |
+| `rc_set_outbound_atu` (BTL), `register_separated_msi_vector` (pktproc) | -EOPNOTSUPP | parts not ported |
+
+**The "ctrl" interrupt (SPI 388).** Enabled after `link_up`, disabled first
+in `link_down` (ELBI is readable only between them). IRQ1 bit 10 = link
+down, IRQ2 bit 24 = completion timeout, as `exynos_pcie_rc_irq_handler()`
+(`PC/pcie-exynos-rc.c:2853-2920`). The first fault is kept until CPIF
+clears it, later ones are only logged (Google ignores them during a
+recovery). After a link-down the endpoint's config space reads as absent
+and the link-down source stays masked until the next `link_up`, so a dead
+link cannot storm. Without a client the driver only logs "event ...: no
+client". `status` shows `faults: <bits>, ctrl irq on|off`. This also
+applies to the debugfs `link_up` from now on (M2.5.3 and M3.1 log a
+link-down if the ROM's link drops).
+
+**Where the lines live.** The plan said "move the lines to a CPIF node
+(overlay)". That cannot work with our overlays: the base DTB has no
+`__symbols__`, and our dtc refuses `<&{/path}>` references in an overlay
+("Can't generate fixup for reference to path"), so an overlay cannot give a
+new node GPIO or memory-region phandles. Putting Google's CPIF node in the
+base DTS instead adds ~200 dt-validate items (vendor properties, no
+binding). So the board describes the modem once, in the documented
+`samsung,s5300-modem` child of `pcie_0` (lines, and now the three shared
+regions); CPIF's own nodes carry only CPIF's configuration, and CPIF takes
+the lines and regions from the modem node (`cp_lines_node()`,
+`cp_rmem_node()`). Ownership is the node's status: the `modem-cpif-test`
+overlay disables it, so the link driver leaves the lines alone and CPIF
+owns them. Never apply `modem-link-test` and `modem-cpif-test` together.
+
+**The CPIF port, stage 1 (M3.3).** `CONFIG_EXYNOS_MODEM_IF=m`,
+`SEC_MODEM_S5100=y`, `SHM_IPC=m` (in `kernel/configs/omandroid.config`).
+Built: the platform driver and DT parsing, the boot/dump device
+(`/dev/umts_boot0`), the IPC/RFS character devices (`umts_ipc0/1`,
+`umts_rfs0`, ...), the rmnet network devices, the shared-memory link with
+legacy buffers, the S5100 control, the PCIe endpoint driver and the region
+driver. Not built (as planned): packet processor (data goes through the
+legacy raw buffers, `pktproc_*` left out of the node), DIT, PCIe IOMMU,
+S2MPU, BTL, throughput monitor, thermal zones, SPI boot. Port changes
+beyond API drift:
+- GPIO descriptors from the modem node (raw levels, outputs start low).
+- Regions are `no-map` here: `memremap()` (WB for cached, WC otherwise)
+  instead of `phys_to_virt()`/`vmap()`; nothing is ever given back to the
+  page allocator.
+- Every `panic()` and `BUG()` is an error or a log line, including the one
+  cbd can request (`IOCTL_TRIGGER_KERNEL_PANIC`).
+- The PCI driver matches 144d:a5a5 only (stock: any Samsung function,
+  which would take our root port 144d:ecec).
+- `cpif` has no `remove()`, so it has no `module_exit()` either: once loaded
+  it stays until reboot (`rmmod` refuses). Lesson from the AoC `rmmod` oops.
+- `pcie-gs201-cp` refuses `gs201_pcie_cp_poweron()` unless loaded with
+  `allow_hw=1`, so binding CPIF without it cannot touch the link.
+
+DT: the modem node gets `memory-region` (base DTS); the overlay
+`device/cheetah/overlays/modem-cpif-test.dtso` enables the HSI1 pins, the
+controller and the PHY, disables the modem node for the link driver, and
+adds `cpif` and `cp-shmem` from stock's nodes (`R/live.dts:18238`,
+`:18649`), compared property by property with stock after `fdtoverlay`:
+identical except the left-out parts, the GPIO property names, `pinctrl`
+(below) and the AoC voice window. The modules are blacklisted by a new
+file, `packages/omandroid-device-cheetah/vendor/modprobe.d/omandroid-cpif.conf`
+(package version unchanged; reinstall it before the overlay boots).
+
+**Stock's line pin states, not ported yet.** Stock's `cpif` node selects
+11 pinctrl states: the seven ap2cp outputs with no pull and
+`pin-con-pdn = 3` (keep the level in power-down), cp2ap-wakeup and
+cp2ap-phone-active as EINT (function 0xf) with pull-down (`pin-pud = 1`),
+ps-hold and cp2ap-cp-wrst with pull-down. M0.3 found ABL leaves gpa8-3
+(cp2ap-wakeup) at `PUD` 0x3. Irrelevant for bind and boot with the AP
+awake; needed before any suspend with the modem on (M3.4+).
+
+**Checks (2026-10-12):**
+- full build exits 0: `logs/kernel-modem6.log` (release in the last line
+  of this list);
+- `W=1`: `pcie-gs201-cp.o` and all of `drivers/soc/google/cpif/` build with
+  no warnings (16 missing-prototype warnings in Google's code fixed);
+- checkpatch `--strict`: clean on our new code (driver, header,
+  `pcie-gs201-compat.c`, `cpif-compat.h`, Kconfig, Makefile); the imported
+  Google files keep Google's style, as with the AoC port;
+- `dt_binding_check` of `google,gs201-pcie-cp.yaml`: passes;
+- `dt-validate` of the default DTB: only the existing `soc_id`,
+  simplefb and gs201 PMU/watchdog compatible items; with `modem-cpif-test`:
+  the same plus the vendor properties of `cpif` and `cp-shmem` (no binding,
+  overlay only);
+- `modinfo`: `cpif` depends on `shm_ipc` and `pcie-gs201-cp`.
+- release `7.3.0-rc6-omandroid-push1-00318-g1344a9e0b9ea` (head `1344a9e0b`);
+  `git merge-tree` against `omandroid-int`: clean.
 
 ## 3. Runbooks
 
@@ -352,14 +478,34 @@ transient.**
    cleanly, so that would be a nuisance at boot and shutdown, not a risk to
    data.
 
-### M2.5: isolation re-test and the UFS measurement (int + `omandroid-modem` @ `3a8f4c503`)
+### M2.5: isolation re-test and the UFS measurement (int + `omandroid-modem` @ `3a8f4c503` or later)
 
 **Before:** the human merges `omandroid-modem` into `omandroid-int` (merge
 tree clean on 2026-10-12) and builds int into `out-int`. The DTB changes
 (`memory-region`), so push the images, not only the modules. Same overlays
-as M2. **Risk: medium.** UFS is the root disk and M2.5.2/M2.5.3
-deliberately repeat the two transitions that coincided with LINERESETs.
-Each was seen once and recovered at once.
+as M2 (`modem-link-test`, never `modem-cpif-test`). **Risk: medium.** UFS
+is the root disk and M2.5.2/M2.5.3 deliberately repeat the two transitions
+that coincided with LINERESETs. Each was seen once and recovered at once.
+
+The same runbook works at the M3.2 head (section 2.1): the steps are
+unchanged; the driver also enables the "ctrl" interrupt after `link_up`,
+so a link that drops during M2.5.3 now logs "link down (IRQ0/1/2 ...)",
+and `status` has a `faults:` line (expect `0x0`, `ctrl irq off` after
+`link_down`).
+
+**Modem power is attended and short.** M2.5.2 and M2.5.3 keep the modem
+powered for 60 s each, under load, with a human watching the kmsg stream.
+Each is one SSH command that ends with `cp_off`; in case the session dies
+in between, arm a dead-man timer first that powers the modem off after
+100 s, and stop it after the step (it does nothing if the modem is
+already off):
+
+```sh
+tools/phone-ssh 'systemd-run --unit=x-modem-off --on-active=100 sh -c "C=/sys/kernel/debug/gs201-pcie-cp/ctl; echo link_down > \$C; echo cp_off > \$C"'
+# ... the step ...
+tools/phone-ssh 'systemctl stop x-modem-off.timer 2>/dev/null; cat /sys/kernel/debug/gs201-pcie-cp/status | grep -E "pwr-on|PMU|state"'
+#   pass: ap2cp-cp-pwr-on 0, PMU 0x3ec0: 0x0, "state: cp 0"
+```
 
 ```sh
 ov gnss-pmic-test gnss-test aoc-boot-test modem-link-test && bin/omandroid push   # reboots
@@ -380,6 +526,7 @@ tools/phone-ssh 'timeout 60 sh -c "while :; do dd if=/var/tmp/ufsload of=/dev/nu
 #   pass: the err_handler count and every counter unchanged
 
 # M2.5.2 M2's timing: modem powered with no link for 60 s under load, then off under load
+#   (dead-man armed as above)
 tools/phone-ssh 'C=/sys/kernel/debug/gs201-pcie-cp/ctl
   (timeout 70 sh -c "while :; do dd if=/var/tmp/ufsload of=/dev/null bs=1M iflag=direct status=none; done") &
   echo cp_on > $C; sleep 60; echo cp_off > $C; wait
@@ -389,6 +536,7 @@ tools/phone-ssh 'C=/sys/kernel/debug/gs201-pcie-cp/ctl
 #   and of every ufshcd_err_handler, against "modem power-on/off sequence".
 
 # M2.5.3 stock timing: link 0.2 s after power-on, 60 s up under load, then down and off under load
+#   (dead-man armed as above)
 tools/phone-ssh 'C=/sys/kernel/debug/gs201-pcie-cp/ctl
   (timeout 70 sh -c "while :; do dd if=/var/tmp/ufsload of=/dev/null bs=1M iflag=direct status=none; done") &
   echo cp_on > $C; sleep 0.2; echo link_up > $C; sleep 60; echo link_down > $C; echo cp_off > $C; wait
@@ -396,12 +544,15 @@ tools/phone-ssh 'C=/sys/kernel/debug/gs201-pcie-cp/ctl
   cat /sys/kernel/debug/gs201-pcie-cp/status; cat /sys/kernel/debug/ufshcd/14700000.ufs/stats'
 #   pass (the M2.4 fix): "link up: Gen1 x1", then "PHY isolated (PMU 0x3ec0 = 0x0)";
 #   status shows PMU 0x3ec0: 0x0, outputs 0, perst 1, "state: cp 0, phy 0/0, link 0, atu 0"
+#   (M3.2 head: also "faults: 0x0, ctrl irq off"; a "link down" line during the 60 s
+#   means the ROM dropped its link: record its time against the cp2ap edges)
 #   record: ufshcd_err_handler times as in M2.5.2
 tools/phone-ssh 'rmmod pcie_gs201_cp; rm -f /var/tmp/ufsload'
 ```
 
-**Stop** at once (`echo link_down > $C; echo cp_off > $C; rmmod
-pcie_gs201_cp`, no more modem power until analysed) if UFS logs anything
+**Expect/Pass** per step above. **Stop** at once (`echo link_down > $C;
+echo cp_off > $C; rmmod pcie_gs201_cp`, no more modem power until
+analysed) if UFS logs anything
 beyond the error handler and its recovery: an I/O error, `Host Resets` or
 `SCSI command aborts` going up in `stats`, "link broken", an ext4 error.
 If the root filesystem stops answering, wait for the watchdog, or ask the
@@ -501,8 +652,8 @@ options in `G/devices/google/pantah/pantah_defconfig:2-11`):**
 | Stage | What | Where | Effort | Risk |
 |---|---|---|---|---|
 | M3.1 | `bus` on the ROM link: enumerate, MSI domain, guarded config space | phone, runbook below | an hour | medium |
-| M3.2 | `gs201_pcie_cp_*` API + compat names; lines moved to a CPIF node (overlay); "ctrl" IRQ for link-down | offline | 3-5 days | none |
-| M3.3 | CPIF port as an out-of-tree module set built against our tree: about 21k lines in 21 C files plus headers (the pantah set minus the parts above). API drift (class, netdev, GPIO, timers), panics turned into errors | offline | 2-3 weeks | none |
+| M3.2 | `gs201_pcie_cp_*` API + compat names; lines handed to CPIF (overlay); "ctrl" IRQ for link-down | offline | **done 2026-10-12** (2.1) | none |
+| M3.3 | CPIF port, in-tree modules (`L/drivers/soc/google/cpif/`): stage 1 (boot, IPC, RFS, legacy buffers; 18 C files, 13.6k lines) **builds, 2026-10-12** (2.1); then M3.3-B on the phone (bind only); pktproc later | offline + phone | stage 1 done; M3.3-B an hour | low-medium |
 | M3.4 | Load the port with the line overlay; the modem profile with `OMANDROID_MODEM_STAGE=rfsd`, then `cbd`: BOOT image over PCIe at Gen1, main firmware at Gen3 x2, CP ONLINE | phone | 1-2 weeks of debugging (boot handshake, shared-memory layout, doorbell, MSI) | medium: the modem DMAs into reserved memory with no IOMMU |
 | M3.5 | After every M3.4 run: the M0.1 checksums of the six partitions against the 20261012-radio backup | phone, read-only | minutes | none |
 | M3.6 | HSI1 SysMMU confining the modem's DMA to its shared memory | offline, then phone | 1 week | medium |
@@ -517,37 +668,151 @@ The SIT transport, message IDs, layouts and a minimal client are in [MODEM-SIT-R
 
 #### M3.1: the bus on the ROM link (after M2.5, same boot or the next)
 
-**Risk: medium.** The first enumeration through the secure monitor's
-config window, and the first root-port services (`pcieport`: AER, PME,
-bandwidth notification) on this controller. ASPM is set to `performance`
-first so the core does not put the ROM's link into L1 while we look.
-Nothing binds to the endpoint, so its bus mastering stays off.
+**Kernel:** int with `omandroid-modem` at the M3.2 head (section 2.1) or
+at `3a8f4c503`; overlays as M2.5 (`modem-link-test`, never
+`modem-cpif-test`). **Risk: medium.** The first enumeration through the
+secure monitor's config window, and the first root-port services
+(`pcieport`: AER, PME, bandwidth notification) on this controller. ASPM is
+set to `performance` first so the core does not put the ROM's link into L1
+while we look. Nothing binds to the endpoint, so its bus mastering stays
+off. **Modem power:** about 30 s, attended, under a 90 s dead-man; the
+power-on and the bus scan are one command so the ROM never waits for a
+link (the M2 analysis).
+
+Keep the kmsg stream from M2.5 running (`tools/phone-ssh dmesg -w | tee logs/m3.1-kmsg.log`).
 
 ```sh
-tools/phone-ssh 'cat /sys/module/pcie_aspm/parameters/policy; echo performance > /sys/module/pcie_aspm/parameters/policy'
-tools/phone-ssh 'modprobe pcie-gs201-cp allow_hw=1 watch_lines=1'
-tools/phone-ssh 'C=/sys/kernel/debug/gs201-pcie-cp/ctl; echo cp_on > $C; sleep 0.2; echo link_up > $C;
-  echo atu > $C; echo id > $C; echo bus > $C; dmesg | grep -E "pcie-cp|11920000|pcieport|144d" | tail -20'
-#   pass: "MSI: 160 vectors, target 0x00000000f6200000"; "<dom>:00:00.0 144d:ecec class 060400"
-#   and "<dom>:01:00.0 144d:a5a5 class ..." (dom is 0001 or the next free domain)
+# M3.1.0 read-only: ASPM policy, then load (no hardware access)
+tools/phone-ssh 'cat /sys/module/pcie_aspm/parameters/policy; echo performance > /sys/module/pcie_aspm/parameters/policy;
+  lsmod | grep -c pcie_gs201_cp || modprobe pcie-gs201-cp allow_hw=1 watch_lines=1;
+  dmesg | grep -c ufshcd_err_handler; cat /sys/kernel/debug/gs201-pcie-cp/status | grep -E "PMU|state|faults"'
+#   expect: "PMU 0x3ec0: 0x0", "state: cp 0, phy 0/0, link 0, atu 0", "faults: 0x0, ctrl irq off"
+#   record: the err_handler count
+
+# M3.1.1 dead-man, then power-on, link, ATU, bus in one go
+tools/phone-ssh 'systemd-run --unit=x-modem-off --on-active=90 sh -c "C=/sys/kernel/debug/gs201-pcie-cp/ctl; echo link_down > \$C; echo cp_off > \$C"'
+tools/phone-ssh 'C=/sys/kernel/debug/gs201-pcie-cp/ctl; echo cp_on > $C; sleep 0.2; echo link_up > $C &&
+  echo atu > $C && echo id > $C && echo bus > $C; dmesg | grep -E "pcie-cp|11920000|pcieport|144d" | tail -20;
+  cat /sys/kernel/debug/gs201-pcie-cp/status | grep -E "LTSSM|faults"'
+#   pass: "link up: Gen1 x1"; "MSI: 160 vectors, target 0x00000000f6200000";
+#   "<dom>:00:00.0 144d:ecec class 060400" and "<dom>:01:00.0 144d:a5a5 class ..." (dom 0001 or the next free);
+#   M3.2 head: "faults: 0x0, ctrl irq on", LTSSM 0x11
+
+# M3.1.2 read-only look at the bus (same power window)
 tools/phone-ssh 'for d in /sys/bus/pci/devices/*; do echo "$d $(cat $d/vendor):$(cat $d/device)"; done;
   E=$(grep -l 0xa5a5 /sys/bus/pci/devices/*/device | head -1 | xargs dirname);
   cat $E/resource | head -2; grep -E "PCI-MSI|pcie" /proc/interrupts'
 #   pass: BAR0 of the endpoint inside 0x40000000-0x40feffff (or unassigned: CPIF sets it itself);
-#   the root port's MSI vectors listed (pcieport)
-# link down with the bus kept: config space must read as absent, not hang
+#   the root port's MSI vectors listed (pcieport); no driver bound to the a5a5 function
+
+# M3.1.3 link down with the bus kept: config space must read as absent, not hang; then power off
 tools/phone-ssh 'C=/sys/kernel/debug/gs201-pcie-cp/ctl; E=$(grep -l 0xa5a5 /sys/bus/pci/devices/*/device | head -1 | xargs dirname);
-  echo link_down > $C; echo cp_off > $C; od -An -tx4 -N4 $E/config; cat /sys/kernel/debug/gs201-pcie-cp/status'
-#   pass: ffffffff; PMU 0x3ec0: 0x0
+  echo link_down > $C; echo cp_off > $C; od -An -tx4 -N4 $E/config; cat /sys/kernel/debug/gs201-pcie-cp/status;
+  systemctl stop x-modem-off.timer'
+#   pass: ffffffff; PMU 0x3ec0: 0x0; outputs 0; "state: cp 0, phy 0/0, link 0, atu 0";
+#   M3.2 head: "faults: 0x0, ctrl irq off" (a link-down event logged at link_down would be a bug: report it)
+
+# M3.1.4 unload (the bus goes with the module)
 tools/phone-ssh 'rmmod pcie_gs201_cp; ls /sys/bus/pci/devices; dmesg | grep -c ufshcd_err_handler'
-#   pass: the modem's domain is gone; the err_handler count as after M2.5
+#   pass: the modem's domain is gone; the err_handler count as in M3.1.0
 ```
 
 **Stop:** `bus` does not return, or the phone resets (the watchdog): the
-config window or DBI path is wrong; send `logs/m2.5-kmsg.log`. "no L0":
-as M2.2. Any UFS message beyond a recovered error handler: as M2.5.
-**Rollback:** `link_down`, `cp_off`, `rmmod pcie_gs201_cp`; reboot clears
-the ASPM policy.
+config window or DBI path is wrong; send `logs/m3.1-kmsg.log`. "no L0":
+as M2.2 (`link_down`, `cp_off`, analyse). A "link down" or "completion
+timeout" line while the link should be up: power off (`link_down`,
+`cp_off`) and send the log. Any UFS message beyond a recovered error
+handler: as M2.5.
+**Rollback:** `link_down`, `cp_off`, `systemctl stop x-modem-off.timer`,
+`rmmod pcie_gs201_cp`; reboot clears the ASPM policy. If the phone stops
+answering, wait for the watchdog (or the dead-man) and ask the human; send
+no more commands.
+
+#### M3.3-B: bind CPIF, no firmware, no modem power
+
+**What it proves:** the port probes on the phone: `shm_ipc` finds and maps
+the three regions, CPIF parses its node, takes the eleven lines from the
+modem node, registers its interrupts and creates its devices, and the
+link driver hands over the lines. CPIF requests the cp2ap interrupts
+only once the modem has booted (`complete_normal_boot()`), so none are
+requested here. **Nothing powers the modem:**
+`pcie-gs201-cp` is loaded *without* `allow_hw`, so the link API refuses
+`poweron` (and the debugfs steps); CPIF powers the modem only when `cbd`
+asks (`IOCTL_POWER_ON`/`BOOT`), and nothing here opens its devices. The NV
+and firmware partitions are not involved at all (no `cbd`, no `rfsd`, no
+chroot).
+
+**Before:** M2.5 and M3.1 passed (M3.1 proves the bus that CPIF will scan
+in M3.4). Int with `omandroid-modem` at the M3.2 head, built, and
+`modules-<release>.tar.zst` pushed with the images (CPIF is new). **Risk:
+low-medium**: first probe of a large vendor driver (13.6k lines), which
+maps 8 MiB of reserved memory (`memremap()` of no-map RAM) and takes the
+eleven lines. Binding drives the ap2cp outputs low; M0.4 found them low
+already. CPIF cannot be unloaded once loaded (no `remove()`): undo by
+reboot.
+
+```sh
+# M3.3-B.0 blacklist first (AGENTS: before the DTB that enables the node).
+# Same package version, reinstalled with the new omandroid-cpif.conf:
+tools/phone-install-package packages/omandroid-device-cheetah
+tools/phone-ssh 'modprobe -c | grep -E "^blacklist (cpif|shm_ipc|pcie_gs201_cp)$"; ls /etc/modprobe.d/'
+#   pass: the three blacklist lines; no omandroid-*.conf copies in /etc/modprobe.d
+# M0.1-style checksums of the six partitions against the 20261012-radio backup (read-only)
+#   pass: all match (M0 result); if a stock boot happened since, take a fresh backup first (AGENTS)
+
+# M3.3-B.1 boot the overlay (asks the human: reboots)
+ov gnss-pmic-test gnss-test aoc-boot-test modem-cpif-test && bin/omandroid push
+tools/phone-ssh 'uname -r; lsmod | grep -E "^(cpif|shm_ipc|pcie_gs201_cp) " ; ls /dev/umts_* 2>&1 | head -2;
+  cat /sys/kernel/debug/gpio | grep -E "gph0-[23]|gph1-[1236]|gpa0-[23]|gpa8-[234]"'
+#   pass: none of the three modules loaded; no /dev/umts_*; the eleven lines as M0.3/M0.4 (no owner)
+
+# second terminal for the rest:
+tools/phone-ssh dmesg -w | tee logs/m3.3b-kmsg.log
+
+# M3.3-B.2 link driver without hardware access
+tools/phone-ssh 'modprobe pcie-gs201-cp; dmesg | grep pcie-cp | tail -2; cat /sys/kernel/debug/gs201-pcie-cp/status'
+#   pass: "steps disabled (allow_hw=0), modem lines left to the modem driver";
+#   status: "modem lines: owned by the modem driver", "PMU 0x3ec0: 0x0", "state: cp 0, phy 0/0, link 0, atu 0",
+#   "faults: 0x0, ctrl irq off"
+
+# M3.3-B.3 the regions
+tools/phone-ssh 'modprobe shm_ipc; dmesg | grep -iE "rmem|shmem|cp_shmem" | tail -12'
+#   pass: "rmem 0 cp-rmem@ea400000 0xea400000 0x00800000", "rmem 1 cp-msi@f6200000 0xf6200000 0x00001000",
+#   "rmem 2 cp-rmem1@e8000000 0xe8000000 0x02000000", then the four regions; no "failed"
+
+# M3.3-B.4 CPIF
+tools/phone-ssh 'modprobe cpif; dmesg | grep -iE "cpif|cp_interface|s5100|s51xx|mif|xxx" | tail -40'
+#   pass: the probe ends without "xxx" (CPIF's failure marker) and without an Oops;
+#   "num_iodevs:52"; "PCIe Channel Number:0"; no "Failed to vmap"/"Failed to map"; no "poweron" line
+tools/phone-ssh 'ls /dev/umts_*; ls /sys/class/net | grep -c rmnet; grep -ciE "cp2ap|phone_active" /proc/interrupts;
+  cat /sys/kernel/debug/gpio | grep -E "AP2CP|CP2AP"; cat /sys/kernel/debug/gs201-pcie-cp/status | grep -E "PMU|state|faults";
+  grep "^cpif " /proc/modules; dmesg | grep -c ufshcd_err_handler'
+#   pass: /dev/umts_boot0, umts_ipc0, umts_ipc1, umts_rfs0 (and the other iodevs); 30 rmnet devices;
+#   0 cp2ap interrupts (requested only after a boot); every AP2CP_* line "out lo", CP2AP_* "in";
+#   link status unchanged (PMU 0x0, state all 0); /proc/modules shows cpif "[permanent]";
+#   err_handler count unchanged
+
+# M3.3-B.5 nothing changes on its own: wait 60 s, look again
+tools/phone-ssh 'sleep 60; cat /sys/kernel/debug/gpio | grep -E "AP2CP|CP2AP"; dmesg | tail -5'
+#   pass: AP2CP lines still low, CP2AP inputs low (the modem is unpowered); no new CPIF lines
+```
+
+**Record** in this plan: the date, `uname -r`, the probe log lines (no
+addresses beyond the region bases above), the `/dev/umts_*` list.
+**Stop** (and reboot, never `rmmod cpif`): an Oops or a panic; any
+`AP2CP_*` line high, or `ap2cp-cp-pwr-on`/`nreset` driven; "PMU 0x3ec0"
+not 0x0; a "poweron" or "link up" line (the `allow_hw` gate failed: report
+it, it must not happen); a CP2AP input high while the modem is unpowered
+(a floating line: compare gpa8-3's `PUD` with stock's pull-down, section
+2.1); anything from UFS beyond the M2.5 baseline.
+**Rollback:** reboot (`reboot-to omandroid`); CPIF's reboot handler only
+sets a flag, and its shutdown runs the power-off line sequence on an
+already unpowered modem. Then images without `modem-cpif-test`: `cp
+"$D.default" "$D"; bin/omandroid images && bin/omandroid push`.
+**Next (M3.4, a separate runbook after this passes):** `pcie-gs201-cp
+allow_hw=1`, the modem profile's RAM copies, `rfsd`, then `cbd` for the
+BOOT stage at Gen1, under the M2.5 power rules (dead-man, attended, UFS
+check after each step) and the M3.5 checksums after every run.
 
 ## 4. Risks
 
@@ -585,3 +850,9 @@ the ASPM policy.
 6. `cbd -s 2` and the `persist.vendor.modem.efs.clear.action` paths: read
    from the binaries before M3.4 (strings and disassembly, offline); the
    RAM copies make a wrong guess cost a copy, not NV.
+7. Does the S5300 firmware boot and serve IPC/RFS with the packet
+   processor absent on the AP side (`pktproc_*` left out of the CPIF node,
+   AP capabilities 0)? Stock negotiates capabilities at boot
+   (`capability_offset`); if the firmware insists, the packet processor
+   (`link_rx_pktproc.c`, `link_tx_pktproc.c`, ~2.8k lines) is the next port
+   stage, with `use_exclusive_irq` off (3.3).
