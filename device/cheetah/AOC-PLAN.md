@@ -825,6 +825,16 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    `omandroid-audio` if anything changed, and record the CSPL readings as
    the baseline C9 compares against.
 
+   **C7d-7 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00290-g66446bf5b725):
+   passed.** With the stock TDM_0 format set first (Four, S32_LE, SR_48K),
+   `AMP=bottom CH=LR` powered the bottom amplifier (0x2014 1, 0x4800
+   0x10000; every DAPM widget from "Bottom AMP Playback" to "Main AMP" On),
+   and the tone came from the bottom speaker. Then `AMP=both`: `CH=L` from
+   the top only, `CH=R` from the bottom only, `CH=LR` from both, as stock
+   (left = top = slot 0, right = bottom = slot 1). The earlier silent bottom
+   run used the driver's default TDM_0 format (S16_LE stereo). The UCM
+   profile (C8) sets the stock format.
+
 ## 0. Top findings
 
 1. **Stock starts the AoC through Trusty; this phone's GSA also takes the
