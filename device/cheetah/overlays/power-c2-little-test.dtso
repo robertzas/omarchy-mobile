@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (POWER-PLAN.md, gate C2a): C2 core power-down on the four
+ * Cortex-A55 cores (cpu0-3) only. Apply on top of power-mct-test.dtso.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/cpus/idle-states/cpu-ananke-sleep} {
+	status = "okay";
+};

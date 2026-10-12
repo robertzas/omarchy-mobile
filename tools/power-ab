@@ -1,0 +1,165 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# power-ab: measure battery drain on the phone for two settings, A and B,
+# alternated in rounds so slow drift (battery voltage, temperature, a
+# background job) cancels out. Runs ON the phone, detached, because the USB
+# cable has to be out while it measures (and USB may not come back after an
+# unplug until the next boot): the results go to a file on the root
+# filesystem.
+#
+# Usage (on the phone, as root):
+#   power-ab [options] TEST
+#
+# TEST:
+#   baseline    A and B identical (shows the noise floor)
+#   c2          A = C2 idle state disabled on every CPU, B = enabled
+#               (needs a DTB with the power-c2-* overlay)
+#   ufs-gate    A = UFS clock gating (and so idle Hibern8) off, B = on
+#   ufs-delay   A = Hibern8 after 150 ms idle (kernel default), B = after
+#               --delay-ms (default 4, the stock Android value)
+#
+# Options:
+#   --unplug SECS   wait before the first phase, to pull the cable (default 60)
+#   --phase SECS    length of each phase (default 120)
+#   --settle SECS   seconds at the start of each phase not counted (default 20)
+#   --rounds N      A/B rounds (default 4)
+#   --delay-ms MS   B value for ufs-delay (default 4)
+#   --detach        re-run itself with setsid/nohup and return at once
+#
+# Output: /var/lib/omandroid/power/<time>-<test>.csv (one sample a second:
+# time, phase, voltage_now uV, current_now uA, current_avg uA) and
+# <time>-<test>.txt (mean current and power per phase, then A vs B).
+# Every setting the test changes is restored at the end, also on SIGTERM.
+#
+# See device/cheetah/POWER-PLAN.md, section 4.
+
+set -uo pipefail
+
+unplug=60 phase=120 settle=20 rounds=4 delay_ms=4 detach=0 test=
+
+usage() { sed -n '/^# Usage/,/^# See /p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+while (($#)); do
+  case "$1" in
+    --unplug) unplug="${2:?}"; shift ;;
+    --phase) phase="${2:?}"; shift ;;
+    --settle) settle="${2:?}"; shift ;;
+    --rounds) rounds="${2:?}"; shift ;;
+    --delay-ms) delay_ms="${2:?}"; shift ;;
+    --detach) detach=1 ;;
+    -h|--help) usage ;;
+    baseline|c2|ufs-gate|ufs-delay) test="$1" ;;
+    *) usage 1 ;;
+  esac
+  shift
+done
+[[ -n "$test" ]] || usage 1
+[[ $EUID -eq 0 ]] || { echo "power-ab: run as root" >&2; exit 1; }
+
+if ((detach)); then
+  args=(--unplug "$unplug" --phase "$phase" --settle "$settle" --rounds "$rounds" --delay-ms "$delay_ms" "$test")
+  setsid nohup "$0" "${args[@]}" > /dev/null 2>&1 < /dev/null &
+  echo "power-ab: started (pid $!); unplug within ${unplug} s"
+  exit 0
+fi
+
+# The battery: the power supply of type Battery that reports current_now
+bat=
+for d in /sys/class/power_supply/*; do
+  [[ "$(cat "$d/type" 2>/dev/null)" == Battery && -r "$d/current_now" ]] && { bat=$d; break; }
+done
+[[ -n "$bat" ]] || { echo "power-ab: no battery with current_now (is max17042_battery loaded?)" >&2; exit 1; }
+
+ufs=$(ls -d /sys/bus/platform/devices/*.ufs 2>/dev/null | head -n1)
+idle_states=(/sys/devices/system/cpu/cpu[0-7]/cpuidle/state1/disable)
+
+case "$test" in
+  c2)
+    [[ -e "${idle_states[0]}" ]] || { echo "power-ab: no cpuidle state1 (boot a DTB with the C2 overlay)" >&2; exit 1; } ;;
+  ufs-gate|ufs-delay)
+    [[ -n "$ufs" && -w "$ufs/clkgate_enable" ]] || { echo "power-ab: no UFS clock gating attributes" >&2; exit 1; } ;;
+esac
+
+# Save what we may change, restore it on exit
+declare -A saved
+save() { [[ -r "$1" ]] && saved["$1"]=$(cat "$1"); }
+for f in "${idle_states[@]}"; do [[ -e "$f" ]] && save "$f"; done
+[[ -n "$ufs" ]] && { save "$ufs/clkgate_enable"; save "$ufs/clkgate_delay_ms"; }
+restore() {
+  local f
+  for f in "${!saved[@]}"; do echo "${saved[$f]}" > "$f" 2>/dev/null; done
+}
+trap 'restore; exit 1' TERM INT HUP
+trap restore EXIT
+
+set_cfg() { # A|B
+  local v f
+  case "$test" in
+    baseline) : ;;
+    c2)
+      [[ $1 == A ]] && v=1 || v=0
+      for f in "${idle_states[@]}"; do echo "$v" > "$f"; done ;;
+    ufs-gate)
+      [[ $1 == A ]] && v=0 || v=1
+      echo "$v" > "$ufs/clkgate_enable" ;;
+    ufs-delay)
+      [[ $1 == A ]] && v=150 || v=$delay_ms
+      echo 1 > "$ufs/clkgate_enable"
+      echo "$v" > "$ufs/clkgate_delay_ms" ;;
+  esac
+}
+
+out=/var/lib/omandroid/power
+mkdir -p "$out"
+stamp=$(date +%Y%m%d-%H%M%S)
+csv="$out/$stamp-$test.csv" txt="$out/$stamp-$test.txt"
+
+{
+  echo "# power-ab $test: phase ${phase}s settle ${settle}s rounds $rounds unplug ${unplug}s delay_ms $delay_ms"
+  echo "# kernel $(uname -r); battery $bat; ufs ${ufs:-none}"
+  echo "time,phase,voltage_uv,current_ua,current_avg_ua"
+} > "$csv"
+
+sleep "$unplug"
+if grep -qsx 1 /sys/class/power_supply/*/online; then
+  echo "# warning: a supply reports online=1 at start (cable still in?)" >> "$csv"
+fi
+
+for ((r = 1; r <= rounds; r++)); do
+  for p in A B; do
+    set_cfg "$p"
+    t0=$(date +%s)
+    while (( $(date +%s) - t0 < phase )); do
+      t=$(( $(date +%s) - t0 ))
+      tag=$p
+      (( t < settle )) && tag="${p}-settle"
+      printf '%s,%s,%s,%s,%s\n' "$(date +%s)" "$tag" \
+        "$(cat "$bat/voltage_now")" "$(cat "$bat/current_now")" \
+        "$(cat "$bat/current_avg" 2>/dev/null || echo)" >> "$csv"
+      sleep 1
+    done
+    sync
+  done
+done
+
+restore
+trap - EXIT
+
+# Summary: mean current and power per phase. Discharge current is negative.
+awk -F, -v test="$test" '
+  /^#/ || $1 == "time" { next }
+  $2 == "A" || $2 == "B" {
+    n[$2]++; i[$2] += $4; pw[$2] += ($3 / 1e6) * ($4 / 1e6)
+  }
+  END {
+    printf "test %s\n", test
+    for (p in n)
+      printf "%s: %d samples, mean current %.1f mA, mean power %.0f mW\n",
+        p, n[p], i[p] / n[p] / 1000, pw[p] / n[p] * 1000
+    if (n["A"] && n["B"])
+      printf "B - A: %+.1f mA, %+.0f mW (positive = B draws less)\n",
+        (i["B"] / n["B"] - i["A"] / n["A"]) / 1000,
+        (pw["B"] / n["B"] - pw["A"] / n["A"]) * 1000
+  }' "$csv" > "$txt"
+sync

@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (POWER-PLAN.md, gate C2b): C2 core power-down on all eight
+ * cores. Apply on top of power-mct-test.dtso (power-c2-little-test.dtso is
+ * then redundant).
+ */
+/dts-v1/;
+/plugin/;
+
+&{/cpus/idle-states/cpu-ananke-sleep} {
+	status = "okay";
+};
+
+&{/cpus/idle-states/cpu-hercules-sleep} {
+	status = "okay";
+};
+
+&{/cpus/idle-states/cpu-hera-sleep} {
+	status = "okay";
+};

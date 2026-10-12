@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (POWER-PLAN.md, gate C1): turn on the gs201 MCT, the
+ * broadcast timer the C2 idle states need. On its own it changes nothing
+ * visible: the architected timer stays the per-CPU tick. Applied to the
+ * built gs201-cheetah.dtb with fdtoverlay. Paths, not labels, so the base
+ * DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/timer@10050000} {
+	status = "okay";
+};
