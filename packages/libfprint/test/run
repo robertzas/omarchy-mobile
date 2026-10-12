@@ -1,0 +1,27 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Build libfprint with the omandroid_udfps driver in an Arch Linux container
+# (x86_64 is fine: the driver is plain GLib) and run driver-test.py against
+# a fake bridge. Needs docker and network access (pacman, libfprint's git).
+#
+#   packages/libfprint/test/run [LIBFPRINT_TAG]
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")/.." && pwd)
+tag=${1:-v$(sed -n 's/^pkgver=//p' "$here/PKGBUILD")}
+
+docker run --rm -v "$here:/pkg:ro" archlinux:latest bash -euo pipefail -c "
+  pacman -Sy --noconfirm --needed git patch meson ninja gcc pkgconf glib2 glib2-devel \
+    libgusb gobject-introspection cairo pixman python-gobject >/dev/null
+  git -c advice.detachedHead=false clone -q --depth 1 --branch '$tag' \
+    https://gitlab.freedesktop.org/libfprint/libfprint.git /b
+  cd /b
+  patch -p1 -s < /pkg/0001-add-the-omandroid_udfps-driver.patch
+  cp /pkg/omandroid-udfps.c libfprint/drivers/
+  meson setup build -Ddrivers=omandroid_udfps -Ddoc=false -Dudev_rules=disabled \
+    -Dudev_hwdb=disabled -Dgtk-examples=false >/dev/null
+  ninja -C build >/tmp/ninja.log 2>&1 || { tail -30 /tmp/ninja.log; exit 1; }
+  if grep -E 'omandroid-udfps.*(warning|error)' /tmp/ninja.log; then exit 1; fi
+  GI_TYPELIB_PATH=/b/build/libfprint LD_LIBRARY_PATH=/b/build/libfprint \
+    timeout 120 python3 /pkg/test/driver-test.py
+"

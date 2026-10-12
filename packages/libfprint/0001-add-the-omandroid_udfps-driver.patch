@@ -1,0 +1,26 @@
+diff --git a/libfprint/meson.build b/libfprint/meson.build
+index f11533c..7c4d546 100644
+--- a/libfprint/meson.build
++++ b/libfprint/meson.build
+@@ -123,6 +123,7 @@ driver_sources = {
+     'elanmoc' : files('drivers/elanmoc/elanmoc.c'),
+     'elanspi' : files('drivers/elanspi.c'),
+     'nb1010' : files('drivers/nb1010.c'),
++    'omandroid_udfps' : files('drivers/omandroid-udfps.c'),
+     'virtual_image' : files('drivers/virtual-image.c'),
+     'virtual_device' : files('drivers/virtual-device.c'),
+     'virtual_device_storage' : files('drivers/virtual-device-storage.c'),
+diff --git a/meson.build b/meson.build
+index ab09dc1..f530a49 100644
+--- a/meson.build
++++ b/meson.build
+@@ -147,6 +147,9 @@ drivers_info = {
+     'focaltech_moc': {},
+     'mafpmoc': {},
+     'secugen': {},
++    # Pixel 7 Pro under-display sensor through Omandroid's HAL bridge;
++    # appears only when FP_OMANDROID_UDFPS names the bridge's socket
++    'omandroid_udfps': {},
+ 
+     # SPI driver (non-optional if SPI is available)
+     'elanspi': { 'spi': true, 'helper': ['udev'], 'optional': not have_spi },
