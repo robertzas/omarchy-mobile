@@ -1905,3 +1905,55 @@ SysMMU question is settled, no device DMA above 4 GiB. If D fails the
 same way as A/B, writes are dropped regardless of address: the next
 suspect is the HSI2 SysMMU at 0x145c0000 (stock enables it; we leave it
 as ABL did), and that needs its own staged, read-only probe.
+
+### 9.10 Run C and the pool that would not move (2026-10-12)
+
+**Run C** (`logs/wifi-w1-20261012-020701-s5.log`): the alias watch was
+armed (0xaff000000 → 0xff000000, plus the control and rx completion
+rings), and every check said `0 words changed`. So the chip's writes do
+not land at the 32-bit alias. They are dropped, or go somewhere else.
+
+**Run D could not run: the pool stayed at 0xaff000000.** Cause: both
+overlays had the wrong cell count. gs201 has `#address-cells = <2>`,
+`#size-cells = <1>` at the root and in `/reserved-memory`. `alloc-ranges =
+<0x0 0x80000000 0x0 0x80000000>` (my 9.9 overlay) and the fixed `reg =
+<0x0 0xa0000000 0x0 0x1000000>` are 16 bytes, not a multiple of the
+12-byte entry. `of_flat_dt_get_addr_size_prop()` (`L/drivers/of/fdt.c:626-641`)
+then returns NULL as if the property were absent, with no message. In
+`fdt_scan_reserved_mem()` (`L/drivers/of/of_reserved_mem.c`) a node with
+no usable `reg` but a `size` is dynamic, and with no usable
+`alloc-ranges` it is placed top-down anywhere: 0xaff000000. That also
+explains why the pool was "initialized" before the static regions in
+dmesg (dynamic nodes are set up in the early scan). /proc/device-tree
+shows the raw properties, so they looked right.
+
+| Commit / file | Change |
+|---|---|
+| `d520f515d` of: fdt: warn when an address/size property has the wrong length | `OF: fdt: <node>: '<prop>' is N bytes, not a multiple of M (...): ignored` |
+| `7ba655a94` arm64: dts: …gs201-cheetah: keep the Wi-Fi DMA pool below 4 GiB | `alloc-ranges = <0x0 0x80000000 0x80000000>` in the pool node itself, so the standard test DTB (pcie + pool overlays) is run D. Still disabled by default |
+| `device/cheetah/overlays/wifi-dma-pool-low-test.dtso` | fixed to one size cell; no longer needed with the DT change, kept for older builds |
+
+Builds: `logs/{kernel,modules,images}-w2low.log`, release `7.3.0-rc6-omandroid-push1-00081-g7ba655a9481e`; out-pcie has the
+standard test DTB (pcie_1 + pool), `.default` rebuilt plain.
+
+**Run D (same command, standard DTB):**
+
+```sh
+export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
+bin/omandroid modules-push && bin/omandroid push       # replaces the fixed-reg DTB in slot B
+tools/phone-ssh 'dmesg | grep -E "restricted DMA pool|wifi-dma-pool|not a multiple"'
+#   pass: "created restricted DMA pool at 0x00000000........" (below 4 GiB), "OF: reserved mem:
+#         0x00000000........ (16384 KiB) map non-reusable wifi-dma-pool", no "not a multiple"
+#   not below 4 GiB: stop and send the dmesg lines
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
+```
+
+| Line | Pass | If not |
+|---|---|---|
+| no `alias watch` lines | (nothing above 4 GiB to watch) | `alias watch …` means the pool is still high |
+| `ring bell: TCM H2D w …` | follows the host as before | — |
+| `update rptr: host H2D w … r 5 1023 …` | host read indices move | still 0: writes are dropped whatever the address. Next is the HSI2 SysMMU at 0x145c0000 (stock enables it; we never touch it), which needs a staged read-only probe of its own |
+| `mailboxint 0x…` | non-zero | — |
+| `Firmware: BCM4389/3 …`, `CLM version = Google.C10sub6` | both | then 9.4 W2.2-W2.4 (`iw dev`, `iw dev wlan0 scan`) |
+
+Rollback as 9.5.
