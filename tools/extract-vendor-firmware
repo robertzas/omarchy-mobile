@@ -21,6 +21,8 @@
 #   vendor/firmware/cs35l41-dsp1-spk-prot.wmfw   -> cirrus/cs35l41-dsp1-spk-prot-cheetah.wmfw        (both amplifiers)
 #   vendor/firmware/cs35l41-dsp1-spk-prot.bin    -> cirrus/cs35l41-dsp1-spk-prot-cheetah-top.bin     (top speaker tuning)
 #   vendor/firmware/R-cs35l41-dsp1-spk-prot.bin  -> cirrus/cs35l41-dsp1-spk-prot-cheetah-bottom.bin  (bottom speaker tuning)
+#   vendor/firmware/fast_switch3.txt   -> cirrus/cs35l41-cheetah-top-media-delta.txt     (stock media "Bypass FIR" delta, top)
+#   vendor/firmware/fast_switch4.txt   -> cirrus/cs35l41-cheetah-bottom-media-delta.txt  (the same, bottom)
 #
 # <board> is the first string of the DT root compatible ("google,gs201-cheetah"),
 # which brcmfmac and btbcm both try before the generic name. The CS40L26 files
@@ -58,6 +60,8 @@ MAP=(
   "firmware/cs35l41-dsp1-spk-prot.wmfw|cirrus/cs35l41-dsp1-spk-prot-$DEVICE.wmfw"
   "firmware/cs35l41-dsp1-spk-prot.bin|cirrus/cs35l41-dsp1-spk-prot-$DEVICE-top.bin"
   "firmware/R-cs35l41-dsp1-spk-prot.bin|cirrus/cs35l41-dsp1-spk-prot-$DEVICE-bottom.bin"
+  "firmware/fast_switch3.txt|cirrus/cs35l41-$DEVICE-top-media-delta.txt"
+  "firmware/fast_switch4.txt|cirrus/cs35l41-$DEVICE-bottom-media-delta.txt"
 )
 
 usage() {
@@ -218,6 +222,12 @@ grep -aq 'CAL_CHECKSUM' "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE.wmfw" ||
   die "cs35l41-dsp1-spk-prot.wmfw has no calibration controls"
 cmp -s "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE-top.bin" "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE-bottom.bin" &&
   die "the top and bottom speaker tunings are the same file"
+# The media deltas: comma-separated integers, the first the word count
+# (vendor mixer_paths.xml "speaker-post"; Google's cs35l41 driver parses them)
+for f in top bottom; do
+  python3 -I -c 'import sys; w = [int(x) for x in open(sys.argv[1]).read().replace(" ", "").strip().split(",")]; sys.exit(w[0] != len(w))' \
+    "$dest/cirrus/cs35l41-$DEVICE-$f-media-delta.txt" || die "the $f media delta is not a word list"
+done
 for f in cs40l26.bin cs40l26-svc.bin cs40l26-dvl.bin \
          "cirrus/cs35l41-dsp1-spk-prot-$DEVICE-top.bin" "cirrus/cs35l41-dsp1-spk-prot-$DEVICE-bottom.bin"; do
   [[ "$(head -c4 "$dest/$f")" == WMDR ]] || die "$f is not a WMDR coefficient file"
