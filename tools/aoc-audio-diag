@@ -1,0 +1,62 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# aoc-audio-diag: AOC-PLAN.md stage C7d-3, run ON THE PHONE as root:
+#   tools/phone-ssh 'bash -s' < tools/aoc-audio-diag > logs/c7d3.txt 2>&1
+# Plays /tmp/tone.wav (C7d) for at most 5 s on the top amplifier through AoC
+# EP6, once with mmap and once in copy mode, and snapshots before, during and
+# after: the AoC mailbox interrupt counts, the audio_playback5 ring counters,
+# CS35L41 registers (read through regmap debugfs; nothing is written) and the
+# DAPM state. The mixer is left as the speaker test found it: EP6 off, top
+# amplifier analog 0. No devmem.
+set -u
+C=$(awk '/aoc-snd-card/{print $1; exit}' /proc/asound/cards)
+[[ -n $C ]] || { echo "no aoc-snd-card"; exit 1; }
+P=$(grep -l '^id: EP6 playback' /proc/asound/card$C/pcm*/info | sed -n 's#.*/pcm\([0-9]*\)p/info#\1#p' | head -1)
+[[ -n $P ]] || { echo "no EP6 playback PCM"; exit 1; }
+[[ -e /tmp/tone.wav ]] || { echo "no /tmp/tone.wav (make it as in C7d)"; exit 1; }
+echo "card $C, EP6 playback = pcm $P"
+
+amps=$(ls -d /sys/kernel/debug/regmap/spi*.* 2>/dev/null)
+
+snap() {
+  echo "== $1 $(date +%T.%N)"
+  grep -iE 'mbox|mailbox' /proc/interrupts
+  if [[ -r /sys/kernel/debug/aoc/services ]]; then
+    grep -A2 '"audio_playback5"' /sys/kernel/debug/aoc/services
+  else
+    grep -A2 '"audio_playback5"' /sys/bus/platform/devices/181d0000.aoc/services ||
+      echo "(audio_playback5 not in the sysfs listing: it stops at a page)"
+  fi
+  for a in $amps; do
+    echo "-- $a"
+    # registers up to 0x10100 only: the reading stops there
+    awk -F': ' '{a = strtonum("0x" $1)}
+      a == 0x2014 || a == 0x2018 || a == 0x2c04 || a == 0x3808 || a == 0x4800 ||
+      a == 0x4804 || a == 0x4808 || a == 0x4820 || a == 0x4c00 || a == 0x6000 ||
+      a == 0x6c04 || a == 0x10010 || a == 0x10018 || a == 0x10090 || a == 0x10098 {print}
+      a > 0x10100 {exit}' "$a/registers"
+  done
+  find /sys/kernel/debug/asoc -path '*/dapm/*' \( -name 'Main AMP' -o -name ASPRX1 -o -name SPK -o -name bias_level \) \
+    -exec sh -c 'echo "$1: $(head -1 "$1")"' _ {} \; 2>/dev/null
+}
+
+mix() { amixer -c "$C" -q cset name="$1" "$2" || echo "amixer $1 failed"; }
+mix 'Bottom Digital PCM Volume' 0
+mix 'Bottom Analog PCM Volume' 0
+mix 'Top PCM Source' ASP
+mix 'Top Analog PCM Volume' 6
+amixer -c "$C" cget name='Top Digital PCM Volume' | tail -1
+mix 'TDM_0_RX Mixer EP6' 1
+
+snap before
+timeout 5 aplay -M -D "hw:$C,$P" /tmp/tone.wav &
+sleep 2
+snap during
+wait; echo "mmap aplay exit $?"
+snap after
+timeout 5 aplay -D "hw:$C,$P" /tmp/tone.wav; echo "copy-mode aplay exit $?"
+
+mix 'TDM_0_RX Mixer EP6' 0
+mix 'Top Analog PCM Volume' 0
+dmesg | grep -iE 'alsa|aoc|cs35l41|mbox|sysmmu' | tail -40

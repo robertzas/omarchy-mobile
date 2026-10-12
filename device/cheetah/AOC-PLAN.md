@@ -146,6 +146,34 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    Rollback: `systemctl stop omandroid-sensor-proxy`; the user service
    restores nothing by itself, so `hyprctl reload` (or rotate back to
    upright) before stopping it.
+
+   **C6c result (first run):** the proxy failed with ENODEV, and every
+   `AOCC_CMD_OPEN_CHANNEL` failed with -19. Not a channel leak (channel
+   IDs only ever count up). The proxy unit `Requires=omandroid-aoc.service`.
+   The AoC had been started by hand, so the unit was inactive and systemd
+   ran `omandroid-aoc-start` again. That wrote `aoc.bin` to a running AoC:
+   the core took the AoC offline, the GSA refused the image (-16), and the
+   AoC stayed down until a reboot. Fixed twice:
+   - `omandroid-aoc-start` (omandroid-device-cheetah 0.1.17) exits 0 when
+     the AoC is already online, and refuses when an earlier start this boot
+     failed;
+   - kernel `67abdfab5` refuses a firmware write unless the AoC is offline.
+
+   **Clean sequence, next boot** (device-cheetah 0.1.17 and
+   omandroid-sensors 0.1.1 installed; no audio before this passes):
+   ```sh
+   tools/phone-ssh 'systemctl start omandroid-aoc; journalctl -u omandroid-aoc -b --no-pager | tail -3'
+   tools/phone-ssh 'systemctl start omandroid-sensor-proxy; sleep 3; journalctl -u omandroid-sensor-proxy -b --no-pager | tail -8'
+   tools/phone-ssh 'python3 - --check-registry --list --wait 10' < tools/usf.py
+   tools/phone-ssh 'timeout 10 monitor-sensor --accel 2>&1 | tail -5'
+   tools/phone-ssh 'U=$(id -nu 1000); runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start omandroid-autorotate'
+   ```
+   Always start the AoC through the unit (`systemctl start omandroid-aoc`),
+   not the script, so units that require it see it active. The proxy loads
+   the registry itself (stock scripts, then the factory calibration read
+   from persist, read-only) and waits up to 10 s for the sensors. Expect
+   "up: Services : 82", then "sensors: accel (handle …), light …,
+   proximity …", `loaded=1` and the sensor list, then rotation.
 3. **C7 audio** (kernel `omandroid-aoc` @ `33b28cee6` or later: the AoC
    sound card, `aoc_alsa_dev`/`aoc_alsa_dev_util`, ported from Google's
    driver, with the speaker limits in code; the amplifier description from
@@ -236,6 +264,43 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      `aoc_alsa_dev_util.ko`) logs the ring's written/read counters if a
      copy write still fails. Stop as before, and also if `aplay -M` reports
      an mmap error or the AoC logs a SysMMU fault (report the dmesg).
+
+     **C7d-2 result:** `aplay -M` hung (killed after 60 s) and nothing was
+     heard. The AoC accepted bind, EP setup and start (`0x00c9`), then sent
+     no period interrupts and no position updates. The PCM's interrupt is
+     AoC mailbox index 20 (`PCM_CHANNEL`), which is the F1 mailbox
+     (0x18320000, SPI 76), channel 4; the sensors use the A32 mailbox only.
+     Still to tell apart: the AoC never ran the stream (no TDM 0 clock, so
+     nothing drains the ring); it ran but its interrupt does not reach us;
+     or the amplifiers never powered up.
+
+   - **C7d-3, diagnosis** (kernel `omandroid-aoc` @ `dee7e2334` for the
+     complete `debugfs aoc/services` listing; the sysfs `services` file
+     stops at a page; modules only: `aoc_core.ko`, `aoc_alsa_dev_util.ko`).
+     `tools/aoc-audio-diag` sets the C7d mixer (bottom amplifier 0/0, Top
+     PCM Source ASP, Top Analog 6, Top Digital left at 657, `TDM_0_RX Mixer
+     EP6` 1), plays `/tmp/tone.wav` for at most 5 s with mmap and then in
+     copy mode (each under `timeout`), snapshots before, during and after,
+     and sets EP6 and Top Analog back to 0:
+     ```sh
+     tools/phone-ssh 'bash -s' < tools/aoc-audio-diag > logs/c7d3.txt 2>&1
+     ```
+     Only reads apart from the mixer and the two `aplay` runs (the regmap
+     files are read up to 0x10100 and the reading stops there). What the
+     snapshots show:
+     - the F1 mailbox's count in `/proc/interrupts` (`18320000.mailbox` or
+       similar) going up during playback means the AoC signals and we
+       lose it after the IRQ; no change means the AoC sends nothing;
+     - `audio_playback5` Down `Rx` going up means the AoC drains the
+       ring (the stream runs); flat means it never started;
+     - CS35L41 0x2014 bit 0 (GLOBAL_EN) and 0x2018 bit 0 (AMP_EN) set,
+       "Main AMP: On" in DAPM: the amplifier is on; 0x10090 and 0x10098
+       hold the raw status bits (a PLL or clock error means no BCLK from
+       the AoC); 0x4800 shows the enabled receive slots.
+     Run it after the clean sequence above, C7b, and the tone file step of
+     C7d (`/tmp/tone.wav` is gone after a reboot).
+     Stop on anything louder than a tone burst, an amplifier error, or a
+     watchdog. Send `logs/c7d3.txt`.
 
 ## 0. Top findings
 

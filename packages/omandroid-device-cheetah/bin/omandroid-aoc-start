@@ -43,6 +43,16 @@ if [[ ! -e $node ]]; then
   log "the AoC is not enabled in this DTB; nothing to do"
   exit 0
 fi
+# The AoC starts once per boot: a second firmware load would take the running
+# AoC down (the GSA refuses the image while it runs, and there is no AoC reset).
+if grep -q '^Services : [1-9]' "$node/services" 2>/dev/null; then
+  log "already online: $(head -1 "$node/services")"
+  exit 0
+fi
+if [[ -d /sys/module/aoc_core ]]; then
+  log "the AoC was already started this boot but is not online; reboot to start it again"
+  exit 1
+fi
 if ! grep -q okay /proc/device-tree/trusty/status 2>/dev/null; then
   log "Trusty is not enabled in this DTB; the AoC cannot be started"
   exit 1
