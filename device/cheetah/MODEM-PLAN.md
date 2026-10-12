@@ -513,6 +513,7 @@ weeks to data and SMS, then 2-4 weeks for a ModemManager plugin; oFono has
 no SIT driver either. "Registers on the network under ModemManager" is
 realistically two to three months away, M3 included, and calls need the
 AoC voice path on top (M5).
+The SIT transport, message IDs, layouts and a minimal client are in [MODEM-SIT-RESEARCH.md](MODEM-SIT-RESEARCH.md).
 
 #### M3.1: the bus on the ROM link (after M2.5, same boot or the next)
 
