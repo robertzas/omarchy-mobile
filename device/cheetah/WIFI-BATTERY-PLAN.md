@@ -2889,3 +2889,69 @@ pick an option. If you want a data point, F4a (`mode=3 vids=0xfe`, so not
 VID 0) is now the only firewall test that still makes sense. It should show
 **no** blocked lines and working Wi-Fi, which confirms PCIe never uses
 VIDs 1-7.
+
+### 9.21 W4 decision: ship with the restricted pool, no SysMMU (2026-10-12)
+
+Derek chose option (a) from 9.20:
+- Wi-Fi comes up at boot with the restricted DMA pool and the hang-safe
+  start script;
+- no SysMMU enforcement: the node is disabled and the module isn't loaded;
+- this protects against driver bugs and stray pointers, not hostile
+  firmware, which appears to be no worse than stock.
+
+**Kernel** (wt-pcie `omandroid-w4`, on top of the pcie work):
+- `7ff22794d` the SysMMU driver refuses VID 0 unless `allow_vid0=1`;
+- `c0545e232` brcmutil decodes the 6 GHz band (band 0x4000) in d11ac
+  chanspecs. This silences `WARN_ONCE("Invalid chanspec 0x5001")` from
+  `brcmf_setup_wiphybands()` (0x5001 = 6 GHz ch 1, 20 MHz);
+- `24cfee473` brcmfmac skips 6 GHz chanspecs quietly when building the
+  channel list. 6 GHz support itself is future work;
+- `242602382` cheetah DT: `pcie_1`, `pcie_1_phy` and `wifi_dma_pool` are
+  enabled by default. `pcie_1_sysmmu` stays disabled, so the two test
+  overlays (`wifi-pcie-test`, `wifi-dma-pool-test`) are no longer needed.
+
+Build: release `7.3.0-rc6-omandroid-push1-00104-g242602382ed0`, logs
+`logs/{kernel,modules,images}-w4e.log`. The images carry the plain
+default DTB with no overlays.
+
+**omandroid-device-cheetah 0.1.12:**
+- `omandroid-wifi-start` no longer touches the SysMMU. It writes the hang
+  marker, then:
+  - exits quietly if `14520000.pcie` doesn't exist (DTB without Wi-Fi);
+  - refuses if the `wifi-dma-pool` node is missing or disabled;
+  - then `pcie_gs201`, then `brcmfmac`, then waits up to 30 s for the
+    interface.
+- `omandroid-wifi.service` is enabled by a vendor
+  `multi-user.target.wants` link, with
+  `ConditionPathExists=/sys/bus/platform/devices/14520000.pcie`.
+- `modprobe.d/omandroid-wifi.conf` keeps `blacklist pcie_gs201` and
+  `blacklist brcmfmac`. That only stops udev autoloading them ahead of the
+  guard (explicit modprobe still works), so the service is the only loader
+  and a hang skips Wi-Fi on the next boot.
+- Tests check the staged files, the wants link, the blacklist, and that the
+  script never passes `mode=`.
+
+#### Runbook (merge `omandroid-w4` @ `242602382` into int; package 0.1.12)
+
+```sh
+# build/push the int kernel as usual (no DTB overlays for Wi-Fi any more), then:
+bin/omandroid modules-push && bin/omandroid push          # reboots
+# install omandroid-device-cheetah 0.1.12 on the phone (your usual package path), then
+tools/phone-ssh 'nmcli con modify nevermore connection.autoconnect yes'
+tools/phone-ssh 'systemctl reboot'
+
+# boot 1 (repeat for boot 2)
+tools/phone-ssh 'uname -r; systemctl is-enabled omandroid-wifi; systemctl status --no-pager omandroid-wifi | tail -3;
+  journalctl -b -u omandroid-wifi --no-pager | tail -3; ls /var/lib/omandroid/wifi-bringup-started 2>&1;
+  lsmod | grep -E "^(pcie_gs201|brcmfmac|pcie_gs201_sysmmu) "; dmesg | grep -E "restricted|wifi-dma-pool" | head -3;
+  dmesg | grep -cE "Invalid chanspec|WARNING"; nmcli -t -f DEVICE,STATE,CONNECTION dev | grep -i wl'
+#   pass: enabled; "omandroid-wifi: up: wlp1s0" (or the renamed interface); no marker file;
+#         pcie_gs201 + brcmfmac loaded, pcie_gs201_sysmmu NOT loaded; the pool assigned to
+#         0000:01:00.0; 0 "Invalid chanspec"; NetworkManager connected to nevermore
+tools/phone-ssh 'curl -o /dev/null -w "%{speed_download}\n" https://speed.cloudflare.com/__down?bytes=50000000'
+#   pass: ~19-21 MB/s
+# if a boot hangs: after the watchdog reset, Wi-Fi is skipped and the journal says
+#   "the last bring-up (...) never finished"; send that boot's log, retry with omandroid-wifi-start --retry
+# rollback: systemctl disable is not possible for a vendor link; mask it instead:
+#   systemctl mask omandroid-wifi.service   (or reinstall 0.1.11 and the previous kernel)
+```

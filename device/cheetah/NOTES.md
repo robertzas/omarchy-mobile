@@ -132,6 +132,12 @@ Made on the development laptop to give the phone internet over USB. Revert when 
 - Fixes that got it there (WIFI-BATTERY-PLAN 9.13-9.16): host ready rung once, FLR on probe and remove, versioned join parameters (JOIN_V1), host-built 802.3/LLC TX headers (HOST_SFHLLC), and re-polling the D2H rings after each INTx.
 - The interface uses the bootloader's MAC (omandroid-device-cheetah 0.1.5); NetworkManager randomises it only while scanning.
 - Still a test setup: Wi-Fi stays blacklisted at boot and is loaded by hand until W4 (S2MPU confinement). No long transfers before W4.
+- **W4 decision (2026-10-12): Wi-Fi ships with the restricted DMA pool only.**
+  - The HSI2 System MMU (and the S2MPU) select by VID, and the negative tests showed the PCIe master (AxID 0x0) and UFS (AxID 0x2) both arrive on VID 0. Translating VID 0 starved storage and wedged the phone. So neither block can confine the chip, and the firewall driver now refuses VID 0.
+  - The pool keeps every buffer the kernel gives the chip in 16 MiB below 4 GiB. That contains driver bugs and stray pointers, not hostile firmware, which appears to be no worse than stock: stock's VID-1 SysMMU maps every buffer 1:1.
+  - The default DTB enables `pcie_1`, its PHY and the pool, and the SysMMU node stays disabled.
+  - omandroid-device-cheetah 0.1.12 enables `omandroid-wifi.service`. The modules stay blacklisted for autoload, so only the hang-safe script loads them.
+  - 6 GHz chanspecs now decode without the "Invalid chanspec 0x5001" warning; 6 GHz itself is not enabled yet.
 
 ## 2026-10-12: Bluetooth, haptics and torch bring-up (BT1.1-1.3, H1-H3, T1-T3)
 
