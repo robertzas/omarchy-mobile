@@ -440,6 +440,21 @@ the touch screen work afterwards; the GPU renders (Panthor resumed). Note the
 slowest devices from `pm_print_times`. **Fail:** read which device returned
 an error, stop and report.
 
+**S1 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00283-gafa4d777403d,
+int with `omandroid-suspend`, `omandroid-chgguard` and `omandroid-modem`
+merged): passed, with one UFS finding.** `mem_sleep` `[s2idle] deep`,
+`pm_test` present. Wi-Fi unloaded. `freezer`, `devices` and `platform`
+each returned `rc=0`; the phone came back on USB about a minute later and
+the session was still running. The log keeps only the last level
+(`platform`):
+- UFS failed its first hibern8 exit on resume (`ufshcd_uic_hibern8_exit:
+  hibern8 exit failed. ret = 5`, `__ufshcd_wl_resume`), then a host reset
+  restored the link (`Power mode changed to : FAST series_B G_4 L_2`), and
+  the device WLUN resumed with 0 after 250 ms. No I/O or filesystem
+  errors. This is what S2's `spm_lvl` question is about.
+- Slowest resumes: the UFS device WLUN 250 ms (the reset), dwc3 113 ms.
+  Device resume took 252 ms in total.
+
 ### S2: first real freeze, woken by Volume Up (attended)
 
 ```sh
