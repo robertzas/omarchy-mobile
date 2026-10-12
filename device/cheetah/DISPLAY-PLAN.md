@@ -1458,31 +1458,113 @@ tools/phone-ssh "grep -E 'for DPMS|page-flip' \$XDG_RUNTIME_DIR/hypr/*/hyprland.
     that, since it's a different bug.
 - **Stop if** the screen doesn't come back on enable (as in D3b-1).
 
-**D3b-2: panel sleep.**
+**D3b-1b result (2026-10-12):** kernel `…-00253-g48b42df9b5c7` (has
+`5f4808c32`), hyprland 0.56.2-5.1 built on the phone (about 20 min at -j4),
+`screen_off=1`, 6 cycles of `/tmp/hdpms disable`, 3 s, `enable`.
+
+- **Cycles 2–6 pass:** dpms "Off", `trigger_masked 1`, 0 frames a second
+  while off; 120 Hz and 120 frames a second after on.
+- **Cycle 1 fails:** dpms "On", 121 frames a second. The session had just
+  restarted, and the PIN was probably being typed on the lock screen.
+- **Stats:** `flip_timeouts 0`, `flips_late 0`, `flip_latency_us_avg 4124`,
+  `flip_latency_us_max 9669`. That is half a frame on average, and never
+  more than one frame plus scheduling at 120 Hz: flips complete at the frame
+  that latched them.
+- **Hyprland log:** no "for DPMS" lines, and two "Cannot commit when a
+  page-flip is awaiting".
+
+**Reading of the result (offline, Hyprland v0.56.2 source).**
+
+- **The log can't show DPMS retries as configured.** `debug:disable_logs`
+  defaults to true. Once the config is loaded, `CLogger` drops every
+  message, whatever its level (`src/debug/log/Logger.cpp`), including the
+  patch's error line and Hyprland's own "will retry". The two aquamarine
+  lines are from before the config loaded at session start. So "0 lines"
+  says nothing about cycle 1.
+- **Cycle 1 most likely wasn't a refused commit at all.** Omarchy sets
+  `misc:key_press_enables_dpms = true` and `mouse_move_enables_dpms = true`
+  (`default/hypr/input.lua`). Any key press re-enables DPMS
+  (`InputManager.cpp`, `Config::Actions::dpms(ENABLE)`), and that includes
+  the on-screen keyboard typing the PIN, which is a virtual keyboard. So
+  typing on the lock screen within those 3 s turns the screen back on: dpms
+  "On", 120 Hz. That is Omarchy's intended behaviour, not a bug. D3b-1c
+  checks it.
+- **Is a 1 s retry enough while something animates (the lock screen)?**
+  - Aquamarine refuses only while an asynchronous commit is queued or in
+    flight. With our flips that is at most about 9.7 ms, 4.1 ms on average,
+    so about half the time at a steady 120 fps.
+  - The retry timer runs every `2000/refresh` ms (16 ms at 120 Hz), which
+    drifts against the 8.33 ms frame. The tries don't phase-lock onto the
+    busy part.
+  - About 60 tries at a roughly 50% chance each fail together with
+    negligible probability.
+  - Retrying from the output's present event would be tidier. But Hyprland
+    renders the next frame from the same event, so the DPMS commit would
+    race the next frame's commit in listener order. It is a bigger and less
+    obvious change, and not needed unless D3b-1c shows "Couldn't retry
+    committing output".
+
+**D3b-1c: confirm, with logs on.** As the user on the phone (or over SSH
+with the session's `HYPRLAND_INSTANCE_SIGNATURE` and `XDG_RUNTIME_DIR`):
+
+```sh
+hyprctl eval 'hl.config({ debug = { disable_logs = false } })'
+hyprctl getoption debug:disable_logs          # expect false
+L=$(ls -d $XDG_RUNTIME_DIR/hypr/*/ | tail -1)hyprland.log
+```
+
+1. **Hands off, with something animating.** For example
+   `alacritty -e top -d 0.1` in front, or the lock screen's clock. Run 10
+   cycles of `/tmp/hdpms disable`, 3 s, read `$S` and the connector's
+   `dpms`, `/tmp/hdpms enable`, 2 s. Don't touch the screen or type during
+   the cycles.
+2. `grep -nE 'for DPMS|page-flip|dpms' $L | tail -40`
+3. **Wake on a key.** Run `/tmp/hdpms disable`, then press a volume key (or
+   type on the on-screen keyboard) within 3 s. Expect dpms "On" and 120
+   frames a second. That confirms the wake-on-key reading of cycle 1.
+
+- **Pass:** all 10 hands-off cycles reach `trigger_masked 1` and dpms "Off".
+  Any "will retry" line is followed by success, never by "Couldn't retry
+  committing output". Step 3 shows the key wake.
+- **If** "Couldn't retry committing output" appears: send the log section.
+  The next step is then a retry tied to the output's present event.
+- Turn logging off again afterwards
+  (`hyprctl eval 'hl.config({ debug = { disable_logs = true } })'`): it
+  writes on every frame.
+- Leave `screen_off=1`, then go on to D3b-2.
+
+**D3b-2: panel sleep.** Only after D3b-1c passes. Hands off during each
+cycle, as in D3b-1c: a key press wakes the screen.
 
 ```sh
 tools/phone-ssh "echo 2 > $P"
 tools/phone-ssh '/tmp/hdpms disable'; sleep 10
 tools/phone-ssh "cat $S"            # panel_asleep 1, trigger_masked 1
-tools/phone-ssh '/tmp/hdpms enable'
+tools/phone-ssh '/tmp/hdpms enable'; sleep 2
+tools/phone-ssh "cat $S; dmesg | grep -E 'gs-decon|gs-dsim|s6e3hc4' | tail"
 ```
 
-- Pass:
-  - the screen comes back within half a second with correct colours.
+- **Pass:**
+  - the screen comes back within about half a second, with correct colours.
     Dark greys must stay grey, not black: compare the wallpaper and a dark
-    theme against a screenshot;
-  - then 120 Hz (`display-hz`), and brightness follows the slider;
-  - `panel_asleep 0`;
-  - no "cold init failed", DSIM FIFO timeout or "staying at 60 Hz" in
-    dmesg.
-- Then 5 cycles with the power key (`bl_power` 4/0 around it: the panel
-  driver holds those while the panel sleeps).
+    theme with a screenshot taken before;
+  - `display-hz` reads 120 and `refresh_hz` is 120;
+  - brightness follows the slider;
+  - `panel_asleep 0`, `trigger_masked 0`, `flip_timeouts` unchanged;
+  - dmesg shows no "cold init failed", "display on failed", DSIM FIFO
+    timeout or "staying at 60 Hz".
+- Do 5 cycles with hdpms. Then do 5 with the power key, which also runs
+  `bl_power` 4/0 around them; the panel driver holds those while the panel
+  sleeps. Then 2 cycles where a key press does the wake.
 - **Stop if:**
-  - the panel stays dark. Do one more disable/enable cycle, since the cold
-    init retries. Then `echo 0 > $P`, then reboot: ABL re-inits the panel;
+  - the panel stays dark. Do one more disable/enable, since the cold init
+    retries at the next screen-on; then `echo 0 > $P` and another cycle;
+    else reboot, and ABL re-initialises the panel;
   - the colours are wrong after wake (a panel register the init doesn't
-    write);
-  - garbage shows before the picture (display on came before the frame).
+    write; take a photo and compare with D6);
+  - garbage shows before the picture (display on came before the black
+    frame);
+  - a flip timeout or a hang on enable.
 
 **D3b-3: power.** Measure `current_now` of the fuel gauge with the screen
 off for two minutes at each `screen_off` value 0/1/2 (USB unplugged,

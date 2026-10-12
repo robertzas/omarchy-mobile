@@ -28,7 +28,17 @@ screen off, but the CRTC never turned off. See
 
 ## Status
 
-Not built on the phone yet. What has been checked, offline:
+**Built natively on the phone (2026-10-12):** about 20 min at `-j4`.
+`hyprland` 0.56.2-5.1 is installed and running (DISPLAY-PLAN.md, D3b-1b).
+
+The phone's `/etc/makepkg.conf` sets `PKGEXT='.pkg.tar.xz'`, so packages
+built there end in `.pkg.tar.xz`, not `.zst`. The commands below use a glob.
+
+`hyprpm` isn't installed on the phone, so install only `hyprland`. The
+`hyprpm` split is still built, and published by `tools/repo-build`. pacman
+upgrades only installed packages, so publishing it changes nothing.
+
+Checked offline before that:
 
 - The source tarball's sha256 matches Arch's and Omarchy's
   (`03ad3f5e…`).
@@ -84,14 +94,17 @@ Then pick one of these:
    tools/phone-ssh 'rm -rf /home/omandroid/build/pkgs/hyprland && mkdir -p /home/omandroid/build/pkgs'
    tar cf - -C packages ./hyprland | tools/phone-ssh 'tar xf - -C /home/omandroid/build/pkgs --no-same-owner && chown -R omandroid: /home/omandroid/build/pkgs/hyprland'
    tools/phone-ssh "su - omandroid -c 'cd build/pkgs/hyprland && MAKEFLAGS=-j4 makepkg -f --noconfirm' 2>&1 | tail -3"
-   tools/phone-ssh 'OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U --noconfirm /home/omandroid/build/pkgs/hyprland/{hyprland,hyprpm}-0.56.2-5.1-aarch64.pkg.tar.zst'
+   tools/phone-ssh 'OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U --noconfirm $(ls /home/omandroid/build/pkgs/hyprland/hyprland-0.56.2-5.1-aarch64.pkg.tar.* | grep -v "\.sig$")'
    ```
 
-   (`tools/phone-install-package packages/hyprland` also works, but it
-   installs only `hyprland-*` and builds at makepkg's default job count.)
+   (`tools/phone-install-package packages/hyprland` also works. It
+   installs every `hyprland-*` file, so `hyprland-debug` too if makepkg
+   built one, and it builds with the PKGBUILD's default of 4 jobs.)
 
 After installing, restart the session (`systemctl restart sddm`) and check
-`hyprctl version` and `pacman -Q hyprland hyprpm` (expect `0.56.2-5.1`).
+`hyprctl version` and `pacman -Q hyprland` (expect `0.56.2-5.1`).
+If `hyprpm` is installed, upgrade it too:
+`hyprpm-0.56.2-5.1-aarch64.pkg.tar.*` from the same directory.
 
 ## Pinning
 
@@ -120,11 +133,10 @@ Drop the DPMS patch once upstream retries refused DPMS commits.
 ```sh
 # on the phone
 sudo OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U \
-  https://pkgs.omarchy.org/stable/aarch64/hyprland-0.56.2-5-aarch64.pkg.tar.zst \
-  https://pkgs.omarchy.org/stable/aarch64/hyprpm-0.56.2-5-aarch64.pkg.tar.zst
+  https://pkgs.omarchy.org/stable/aarch64/hyprland-0.56.2-5-aarch64.pkg.tar.zst
+# add .../hyprpm-0.56.2-5-aarch64.pkg.tar.zst only if hyprpm is installed
 # or from the cache, if still there:
-sudo OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U /var/cache/pacman/pkg/hyprland-0.56.2-5-aarch64.pkg.tar.zst \
-  /var/cache/pacman/pkg/hyprpm-0.56.2-5-aarch64.pkg.tar.zst
+sudo OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U /var/cache/pacman/pkg/hyprland-0.56.2-5-aarch64.pkg.tar.zst
 systemctl restart sddm
 ```
 
