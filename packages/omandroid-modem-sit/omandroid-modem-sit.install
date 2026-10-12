@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+post_install() {
+  echo "omandroid-modem-sit: omandroid-sitd is installed but not enabled. It needs the"
+  echo "  modem ONLINE first (MODEM-PLAN M3.4); then follow the M4 runbook in"
+  echo "  device/cheetah/MODEM-CLIENT.md. Settings: /etc/omandroid/modem-sit.conf"
+}
+post_upgrade() {
+  systemctl daemon-reload 2>/dev/null || true
+}
+pre_remove() {
+  systemctl disable --now omandroid-sitd.service 2>/dev/null || true
+}

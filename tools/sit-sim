@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""sit-sim: a scripted S5300 SIT modem for testing omandroid-sitd offline.
+
+Speaks SIT as /dev/umts_ipc0 delivers it (MODEM-SIT-RESEARCH.md 1.3: the
+12-byte request/response header, the 8-byte indication header, one message
+per read) over a SOCK_SEQPACKET Unix socket, which keeps message boundaries
+the way the CPIF node does. Point the daemon at it with
+`omandroid-sitd --device unix:PATH`.
+
+The layouts here are packed independently of the daemon's codec, straight
+from the spec's offset tables, so a codec bug doesn't hide itself.
+
+Script (default): IND_RADIO_READY on connect; radio on -> IND_RADIO_STATE_CHANGED 2;
+SIM ready (one USIM, PIN disabled); registration "searching" for the first
+--search-polls polls, then "home" on LTE with an IND_NTW_STATE_CHANGED;
+SETUP_DATA_CALL answered with a short-form success (documentation-range
+addresses); SEND_SMS answered with a message reference. Every value is made
+up: the IMSI uses the test PLMN 001 01, numbers are fictional 555-01xx ones.
+
+  tools/sit-sim --listen /tmp/sit.sock [--transcript FILE] [--search-polls N]
+                [--pin-locked] [--pin 1234] [--pin-retries 3] [--long-datacall]
+                [--incoming-sms] [--no-sim]
+
+The transcript is JSON lines: every message in and out, and a "violation"
+line for any request on the spec's do-not-send list (and for unknown ones).
+"""
+import argparse
+import heapq
+import json
+import os
+import select
+import socket
+import struct
+import sys
+import time
+
+TEST_IMSI = "001010000000001"      # test PLMN, made up
+TEST_SENDER = "+15550100"          # fictional
+TEST_USIM_AID = bytes.fromhex("a0000000871002ff86ffff89ffffffff")
+
+# Do-not-send list (MODEM-SIT-RESEARCH section 5), by ID from the appendix.
+DENIED = {
+    0x0947: "SET_RADIO_NODE_VALUE", 0x0937: "SET_RADIO_NODE", 0x0948: "EXEC_RADIO_NODE",
+    0x0907: "SET_CFG_DEFAULT", 0x0908: "SET_ENG_MODE", 0x0910: "SET_ENG_STRING_INPUT",
+    0x093A: "SET_SELFLOG", 0x0942: "SET_SELFLOG_PROFILE", 0x0940: "SET_MODEM_LOG_DUMP",
+    0x0406: "SET_CARRIER_INFO_IMSI_ENCRYPTION", 0x072E: "SET_CARRIER_RESTRICTIONS",
+    0x0766: "SET_CARRIER_RESTRICTIONS_V2", 0x4600: "OEM_SET_CARRIER_CONFIG_MANIFEST",
+    0x024C: "SET_SIM_CARD_POWER", 0x020A: "SET_FACILITY_LOCK", 0x0205: "CHG_SIM_PIN",
+    0x0206: "CHG_SIM_PIN2", 0x0207: "VERIFY_NETWORK_LOCK", 0x0931: "SET_FORWARDING_AT_COMMAND",
+    0x0760: "SET_SATELLITE_MODE_SERVICE", 0x0762: "SET_SATELLITE_PLMN_LIST",
+}
+DENIED_FAMILIES = {0x0E: "VSIM", 0x13: "NTN"}
+NAMES = {
+    0x0100: "SEND_SMS", 0x0101: "SEND_SMS_EXPECT_MORE", 0x0102: "SEND_SMS_ACK",
+    0x010C: "IND_NEW_SMS", 0x0200: "GET_SIM_STATUS", 0x0201: "VERIFY_SIM_PIN",
+    0x0210: "IND_SIM_STATUS_CHANGED", 0x0250: "SET_LOGICAL_TO_PHYSICAL_SLOT_MAPPING",
+    0x0400: "GET_IMSI", 0x0401: "GET_IMEI", 0x0402: "GET_IMEISV", 0x0600: "SETUP_DATA_CALL",
+    0x0601: "DEACT_DATA_CALL", 0x0602: "GET_DATA_CALL_LIST", 0x0603: "SET_INITIAL_ATTACH_APN",
+    0x0604: "IND_DATA_CALL_LIST_CHANGED", 0x0700: "GET_CS_REG_STATE", 0x0701: "GET_PS_REG_STATE",
+    0x0702: "GET_OPERATOR", 0x0703: "GET_NTW_MODE", 0x0704: "SET_NTW_MODE_AUTO",
+    0x070E: "IND_NTW_STATE_CHANGED", 0x0710: "SET_PS_SERVICE", 0x0800: "SET_RADIO_POWER",
+    0x0801: "GET_RADIO_POWER", 0x0802: "IND_RADIO_STATE_CHANGED", 0x0803: "IND_RADIO_READY",
+    0x0900: "GET_SIGNAL_STRENGTH", 0x0906: "IND_SIGNAL_STRENGTH", 0x093F: "SET_MODEM_CONFIG",
+    0x0949: "SET_AP_SYSTEM_TIME",
+}
+NAMES.update(DENIED)
+# Expected request lengths (the stock builders', spec section 3).
+LENGTHS = {0x0800: 18, 0x0201: 38, 0x0400: 29, 0x0600: 246, 0x0603: 251, 0x0601: 14,
+           0x0710: 13, 0x0100: 271, 0x0101: 271, 0x0102: 21, 0x093F: 13, 0x0949: 18, 0x0250: 17}
+
+
+def nm(i):
+    return NAMES.get(i, "0x%04x" % i)
+
+
+class Sim:
+    def __init__(self, a):
+        self.a = a
+        self.radio = 1                # STOP_NETWORK
+        self.polls = 0
+        self.registered = False
+        self.pin_ok = not a.pin_locked
+        self.pin_retries = a.pin_retries
+        self.calls = {}
+        self.sms_ref = 0
+        self.timers = []
+        self.conn = None
+        self.tlog = open(a.transcript, "a") if a.transcript else None
+
+    def log(self, **kw):
+        kw["t"] = round(time.monotonic(), 3)
+        if self.tlog:
+            self.tlog.write(json.dumps(kw) + "\n")
+            self.tlog.flush()
+        if self.a.verbose:
+            print("sit-sim:", kw, file=sys.stderr)
+
+    def after(self, delay, fn):
+        heapq.heappush(self.timers, (time.monotonic() + delay, id(fn), fn))
+
+    # ---- framing --------------------------------------------------------
+
+    def send(self, raw):
+        self.conn.send(raw)
+
+    def respond(self, mid, token, err=0, params=b""):
+        raw = struct.pack("<BBHHIBB", 1, 0, mid, 12 + len(params), token, err, 0) + params
+        self.log(dir="out", type="resp", id=mid, name=nm(mid), len=len(raw), err=err)
+        self.send(raw)
+
+    def indicate(self, mid, params=b""):
+        raw = struct.pack("<BBHHH", 2, 0, mid, 8 + len(params), 0) + params
+        self.log(dir="out", type="ind", id=mid, name=nm(mid), len=len(raw))
+        self.send(raw)
+
+    # ---- the script -----------------------------------------------------
+
+    def on_connect(self):
+        self.after(0.05, lambda: self.indicate(0x0803))
+
+    def reg_state(self):
+        if self.radio != 2:
+            return 0
+        return 1 if self.registered else 2
+
+    def handle(self, raw):
+        typ, _, mid, length, token, _err, _ = struct.unpack_from("<BBHHIBB", raw)
+        entry = dict(dir="in", type="req", id=mid, name=nm(mid), len=len(raw), hex=raw.hex())
+        self.log(**entry)
+        if typ != 0 or length != len(raw):
+            self.log(violation="bad header", id=mid)
+            return
+        if mid in DENIED or (mid >> 8) in DENIED_FAMILIES:
+            self.log(violation="do-not-send", id=mid, name=nm(mid))
+            return self.respond(mid, token, 22)
+        if mid in LENGTHS and len(raw) != LENGTHS[mid]:
+            self.log(violation="length %d, expected %d" % (len(raw), LENGTHS[mid]), id=mid, name=nm(mid))
+        fn = getattr(self, "r_%04x" % mid, None)
+        if fn is None:
+            self.log(violation="unexpected request", id=mid, name=nm(mid))
+            return self.respond(mid, token, 6)
+        fn(mid, token, raw)
+
+    def ok(self, mid, token, raw):
+        self.respond(mid, token)
+
+    r_093f = r_0250 = r_0949 = r_0704 = r_0710 = r_0603 = r_0102 = ok
+
+    def r_0800(self, mid, token, raw):          # SET_RADIO_POWER
+        v = struct.unpack_from("<I", raw, 12)[0]
+        self.respond(mid, token)
+        self.radio = 2 if v == 2 else 1
+
+        def changed():
+            self.indicate(0x0802, struct.pack("<I", self.radio))
+            if self.radio == 2 and not self.a.no_sim:
+                self.indicate(0x0210)
+        self.after(0.05, changed)
+
+    def r_0801(self, mid, token, raw):
+        self.respond(mid, token, 0, struct.pack("<I", self.radio))
+
+    def r_0200(self, mid, token, raw):          # GET_SIM_STATUS
+        if self.a.no_sim:
+            return self.respond(mid, token, 0, bytes([0, 0, 0]))
+        app = bytearray(63)
+        app[0] = 2                               # USIM
+        app[1] = 5 if self.pin_ok else 2         # ready / PIN
+        app[3] = len(TEST_USIM_AID)
+        app[4:20] = TEST_USIM_AID
+        label = b"USIM"
+        app[20] = len(label)
+        app[21:21 + len(label)] = label
+        app[57] = 2 if (self.a.pin_locked and self.pin_ok) else (1 if not self.pin_ok else 3)
+        if self.pin_retries == 0:
+            app[57] = 4
+        app[58] = 3
+        app[59], app[60], app[61], app[62] = self.pin_retries, 10, 3, 10
+        self.respond(mid, token, 0, bytes([1, 0, 1]) + bytes(app))
+
+    def r_0201(self, mid, token, raw):          # VERIFY_SIM_PIN
+        n = raw[12]
+        pin = raw[13:13 + n].decode()
+        aid = raw[22:22 + raw[21]]
+        if aid != TEST_USIM_AID:
+            self.log(violation="VERIFY_SIM_PIN with the wrong AID")
+        if pin == self.a.pin and self.pin_retries > 0:
+            self.pin_ok = True
+            self.pin_retries = 3
+            self.respond(mid, token)
+            self.after(0.05, lambda: self.indicate(0x0210))
+        else:
+            self.pin_retries = max(0, self.pin_retries - 1)
+            self.respond(mid, token, 3)
+
+    def r_0400(self, mid, token, raw):          # GET_IMSI
+        if not self.pin_ok:
+            return self.respond(mid, token, 20)
+        if raw[13:13 + raw[12]] != TEST_USIM_AID:
+            self.log(violation="GET_IMSI with the wrong AID")
+        self.respond(mid, token, 0, bytes([len(TEST_IMSI)]) + TEST_IMSI.encode())
+
+    def _poll(self):
+        self.polls += 1
+        if self.radio == 2 and not self.registered and self.polls > self.a.search_polls and self.pin_ok:
+            self.registered = True
+            self.after(0.05, lambda: self.indicate(0x070E))
+
+    def r_0700(self, mid, token, raw):          # GET_CS_REG_STATE
+        self._poll()
+        p = bytearray(0x40 - 12)
+        p[0] = self.reg_state()
+        p[2] = 14 if self.registered else 0
+        self.respond(mid, token, 0, bytes(p))
+
+    def r_0701(self, mid, token, raw):          # GET_PS_REG_STATE
+        p = bytearray(0x36 - 12)
+        p[0] = self.reg_state()
+        p[2] = 4
+        p[3] = 14 if self.registered else 0
+        self.respond(mid, token, 0, bytes(p))
+
+    def r_0702(self, mid, token, raw):          # GET_OPERATOR
+        if not self.registered:
+            return self.respond(mid, token, 9)
+        p = bytearray(0x77 - 12)
+        p[0:6] = b"00101#"
+        p[0x12 - 12:0x12 - 12 + 4] = b"Test"
+        p[0x32 - 12:0x32 - 12 + 12] = b"Test Network"
+        p[0x72 - 12] = 1
+        self.respond(mid, token, 0, bytes(p))
+
+    def r_0900(self, mid, token, raw):          # GET_SIGNAL_STRENGTH
+        self.respond(mid, token, 0, bytes(40))
+
+    def r_0600(self, mid, token, raw):          # SETUP_DATA_CALL
+        cid = raw[0x0C]
+        apn = raw[0x10:0x75].split(b"\0")[0].decode()
+        self.log(event="setup_data_call", cid=cid, apn=apn, auth=raw[0xD9], pdp=raw[0xDA])
+        if not self.registered:
+            return self.respond(mid, token, 9)
+        if self.a.long_datacall:
+            return self.respond(mid, token, 0, bytes(0x84 + 64))
+        p = bytearray(0x75 - 12)
+
+        def slot(off, v4, v6=None):
+            o = off - 12
+            p[o:o + 4] = socket.inet_pton(socket.AF_INET, v4) if v4 else bytes(4)
+            p[o + 4:o + 20] = socket.inet_pton(socket.AF_INET6, v6) if v6 else bytes(16)
+        struct.pack_into("<hBBB", p, 0, 0, cid, 1, 3)
+        slot(0x11, "192.0.2.2", "2001:db8::2")
+        slot(0x25, "192.0.2.1")
+        slot(0x39, "192.0.2.53")
+        slot(0x4D, None, "2001:db8::53")
+        self.calls[cid] = True
+        self.respond(mid, token, 0, bytes(p))
+        if self.a.incoming_sms:
+            self.after(0.2, self.incoming_sms)
+
+    def r_0601(self, mid, token, raw):          # DEACT_DATA_CALL
+        self.calls.pop(raw[0x0C], None)
+        self.respond(mid, token)
+
+    def r_0100(self, mid, token, raw):          # SEND_SMS
+        tl = raw[0x1A]
+        tpdu = raw[0x1B:0x1B + tl]
+        self.log(event="send_sms", smsc_len=raw[0x0D], tpdu=tpdu.hex(), more=mid == 0x0101)
+        self.sms_ref = (self.sms_ref + 1) & 0xFF
+        self.respond(mid, token, 0, bytes([self.sms_ref, 0, 0, 0, 0]))
+
+    r_0101 = r_0100
+
+    def incoming_sms(self):
+        # SMS-DELIVER from a fictional number, GSM 7-bit "hello from sim"
+        text = "hello from sim"
+        sept = [ord(c) for c in text]          # ASCII letters/space match GSM 7-bit here
+        bits = 0
+        for i, s in enumerate(sept):
+            bits |= s << (7 * i)
+        ud = bits.to_bytes((7 * len(sept) + 7) // 8, "little")
+        digits = TEST_SENDER[1:]
+        d = digits + ("F" if len(digits) % 2 else "")
+        bcd = bytes(int(d[i + 1] + d[i], 16) for i in range(0, len(d), 2))
+        tpdu = bytes([0x04, len(digits), 0x91]) + bcd + bytes([0, 0]) + \
+            bytes.fromhex("62012131000000") + bytes([len(sept)]) + ud
+        pdu = bytes([0]) + tpdu                # no SMSC
+        self.indicate(0x010C, bytes([0, len(pdu)]) + pdu)
+
+
+def main():
+    p = argparse.ArgumentParser(description="SIT modem simulator")
+    p.add_argument("--listen", required=True)
+    p.add_argument("--transcript")
+    p.add_argument("--search-polls", type=int, default=2)
+    p.add_argument("--pin-locked", action="store_true")
+    p.add_argument("--pin", default="1234")
+    p.add_argument("--pin-retries", type=int, default=3)
+    p.add_argument("--long-datacall", action="store_true")
+    p.add_argument("--incoming-sms", action="store_true")
+    p.add_argument("--no-sim", action="store_true")
+    p.add_argument("-v", "--verbose", action="store_true")
+    a = p.parse_args()
+    try:
+        os.unlink(a.listen)
+    except FileNotFoundError:
+        pass
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    srv.bind(a.listen)
+    srv.listen(1)
+    sim = Sim(a)
+    sim.log(event="listening")
+    while True:
+        conn, _ = srv.accept()
+        sim.conn = conn
+        sim.timers = []
+        sim.log(event="connected")
+        sim.on_connect()
+        while True:
+            timeout = None
+            if sim.timers:
+                timeout = max(0, sim.timers[0][0] - time.monotonic())
+            r, _, _ = select.select([conn], [], [], timeout)
+            now = time.monotonic()
+            while sim.timers and sim.timers[0][0] <= now:
+                heapq.heappop(sim.timers)[2]()
+            if r:
+                data = conn.recv(65568)
+                if not data:
+                    break
+                sim.handle(data)
+        conn.close()
+        sim.log(event="disconnected")
+
+
+if __name__ == "__main__":
+    main()

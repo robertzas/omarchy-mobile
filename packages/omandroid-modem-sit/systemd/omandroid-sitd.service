@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+# The SIT modem client. Not enabled by the package: the modem has to be
+# ONLINE first (MODEM-PLAN M3.4, the vendor-chroot "modem" profile), and the
+# first runs follow the M4 runbook in device/cheetah/MODEM-CLIENT.md.
+[Unit]
+Description=Omandroid SIT modem client (S5300)
+ConditionPathExists=/dev/umts_ipc0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/omandroid-sitd
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=omandroid-sit
+RuntimeDirectoryMode=0755
+StateDirectory=omandroid-sit
+StateDirectoryMode=0700
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+DevicePolicy=closed
+DeviceAllow=/dev/umts_ipc0 rw
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

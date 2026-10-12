@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+pkgname=omandroid-modem-sit
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omandroid SIT modem client for the Pixel 7 Pro's S5300: registration, mobile data on rmnet, SMS"
+arch=(aarch64)
+url="https://github.com/derekross/omandroid"
+license=(MIT)
+depends=(python iproute2 systemd)
+backup=(etc/omandroid/modem-sit.conf)
+install=omandroid-modem-sit.install
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}
