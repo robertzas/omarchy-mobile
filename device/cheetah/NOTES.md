@@ -177,3 +177,12 @@ Kernel omandroid-int `7.3.0-rc6-omandroid-push1-00171-g907128673cba` with the **
   - The gauge current is above what a 500 mA input allows. NO_AUTOIBUS is 0, so the chip's automatic input limit may have raised it on this laptop port (open question).
   - **Not default yet:** it needs the temperature guard (USB-C-PLAN B3) first. At boot the charger driver stays blacklisted and the bootloader's settings apply.
 - Bug: `omandroid-bt-agent` doesn't exit when stdin reaches EOF, which hung a scripted `omandroid-bt-agent </dev/null`. The panel keeps stdin open, so this doesn't affect normal use.
+
+## 2026-10-12: our own display driver at 120 Hz, by default (D4a, D5, D6)
+
+- gs-decon (flip-only KMS on DECON0) replaces simpledrm at boot (about 4.4 s) and switches to 120 Hz at about 11 s. Hyprland runs 1440x3120@120 with a 60 Hz mode too. display-hz measured 120.01 Hz, DSIM UNDERRUN_CTRL 0x3ec, no underrun, flip_timeouts 0. Derek: scrolling is smoother, the boot animation shows with no black flash, and the brightness slider works.
+- Fixes found on the way:
+  - The display pool's `alignment` must be two cells (the root's #address-cells), or of_reserved_mem rejects it.
+  - The DPP format for DRM XRGB8888 is code 4: Google's regs-dpp.h names formats by byte order. Code 7 gave a green screen.
+- Mistake to avoid: our phone `devmem` is `devmem ADDR [VALUE]`, so `devmem ADDR 32` WRITES 0x20. It briefly clobbered DSIM 0x34/0x88; restored to 0x1f09/0x33eb3b26.
+- Also today: GNSS G1/G2 passed (sub-PMIC rails read-only at stock voltages; the BCM4775x MCU answers over SPI5 with HSI status 0). The AoC loads through the GSA (command 90) and reaches "running" with RELEASE_RESET, but publishes no control block yet (AOC-PLAN).
