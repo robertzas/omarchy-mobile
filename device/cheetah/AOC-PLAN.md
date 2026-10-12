@@ -1,11 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # AoC plan (cheetah / gs201): audio and sensor DSP bring-up
 
-Status: **offline research and the first kernel piece done, 2026-10-12.
-Nothing has run on the phone.** Kernel branch `omandroid-aoc` in
-`~/android/mainline/wt-aoc` (out dir `~/android/mainline/out-aoc`), on
-`omandroid` @ `7b0f8b5d1`. Everything new is disabled by default. The
-runbook is section 7; stage C1 is the first one to run.
+Status (2026-10-12): **C1 passed on the phone** (section 0.1): the GSA
+answers its mailbox, including the AoC state command 91, so the AoC can be
+loaded and started without Trusty. C2-C4 (read-only probes, rails, load,
+start) are written and built offline, not run yet. Kernel branch
+`omandroid-aoc` in `~/android/mainline/wt-aoc` (out dir
+`~/android/mainline/out-aoc`), on `omandroid` @ `7b0f8b5d1` plus the Trusty
+commits of `omandroid-fingerprint`. Everything new is disabled by default.
+The runbook is section 7; stage C2 is next.
 
 The AoC (Always-on Compute) is Google's audio and sensor DSP. On gs201 every
 on-device audio path ends there: the speaker amplifiers' TDM link, the three
@@ -27,7 +30,8 @@ Path abbreviations (as in the other plans):
 
 ## 0. Top findings
 
-1. **The AoC is started by Trusty, not by the GSA mailbox alone.** Stock
+1. **Stock starts the AoC through Trusty; this phone's GSA also takes the
+   mailbox command (C1).** Stock
    loads `aoc.bin` from the kernel (`aoc 19000000.aoc: attempting to load
    firmware "aoc.bin"`, `R/dmesg.txt:5799`), the GSA authenticates it over its
    mailbox (`GSA_MB_CMD_LOAD_AOC_FW_IMG` = 90, `GSA/gsa_core.c:169-176`), and
@@ -35,10 +39,11 @@ Path abbreviations (as in the other plans):
    `com.android.trusty.gsa.hwmgr.aoc` (`GSA/gsa_core.c:187-194`,
    `R/dmesg.txt:5886` "TZ: com.android.trusty.gsa.hwmgr.aoc connected").
    Every public Google kernel does the same, back to the first Pixel 6 branch
-   (`android-gs-raviole-5.10-android12-d1`). So **Trusty is mandatory**
-   unless one untested shortcut works (finding 4). Our Trusty port already
-   exists on `omandroid-fingerprint` (`FINGERPRINT-RESEARCH.md` 3.1, gate F2
-   not yet run): the AoC and fingerprint share it.
+   (`android-gs-raviole-5.10-android12-d1`). But the GSA mailbox also
+   carries AoC state commands (command 91), and C1 got an answer: the
+   **GSA-direct path** (section 0.1) needs no Trusty. Trusty (already ported
+   on `omandroid-fingerprint`, shared with fingerprint) stays as the
+   fallback; `gsa.c` speaks both.
 2. **The bootloader does not leave the AoC running.** Stock's kernel loads and
    starts it 4.07 s into boot and it reports "firmware version
    14022723-polygon did become online with 82 services" at 4.60 s
@@ -68,12 +73,11 @@ Path abbreviations (as in the other plans):
      All are 1 MiB multiples, so a first-level-only SysMMU v8 table (the
      format our Wi-Fi work already uses, `WIFI-BATTERY-PLAN.md` 9.17) covers
      them: about 300 lines instead of Google's 3,200-line IOMMU driver.
-4. **One untested shortcut: AoC state commands over the GSA mailbox.**
+4. **AoC state commands work over the GSA mailbox.**
    `GSA_MB_CMD_AOC_CMD` (91) is defined next to the load command
-   (`GSA/gsa_mbox.h:49-52`) but no public driver sends it. If the production
-   GSA firmware still serves it, `GSA_AOC_START` could skip Trusty. Stage C1
-   asks it for `GSA_AOC_GET_STATE` (value 0, so harmless whatever the argument
-   layout). Expect "unhandled"; plan for Trusty.
+   (`GSA/gsa_mbox.h:49-52`) but no public driver sends it. C1 asked it for
+   `GSA_AOC_GET_STATE` and got a proper answer (state 0, inactive). Start,
+   shutdown and reset are the same command with another argument.
 5. **ACPM channel 13 is a doorbell, not a queue, and is not needed to start
    the AoC.** Our A1 dump shows it as type 2 (buffer), all offsets 0, `mlen
    0` (`logs/acpm-20261012-112536-a1.log`). Google's driver handles a type-2
@@ -81,24 +85,68 @@ Path abbreviations (as in the other plans):
    bit (`GS/drivers/soc/google/acpm/acpm_ipc.c:499-505`), and the AoC callback
    ignores the payload (`GA/aoc_v1.c:58-67`, sets `aoc_reset_done`). It is
    used only after an AoC watchdog reset (`aoc_watchdog_restart()`,
-   `GA/aoc_v1.c:109-206`). So the fix for AoC restart is to watch bit 13 of the
-   AP2APM mailbox status (SPI 78), not to read any SRAM ring. Until then the
-   AoC starts once per boot and a crash needs a reboot.
+   `GA/aoc_v1.c:109-206`). So the fix for crash recovery is to watch bit 13
+   of the AP2APM mailbox status (SPI 78), not to read any SRAM ring. A
+   **clean** restart needs no ACPM at all: Google's `aoc_take_offline()`
+   (`GA/aoc.c:1582-1640`) does shutdown (GSA 4, back to "loaded"), then
+   unload (the GSA unlocks the carve-out, "inactive"), after which load and
+   start run again.
 6. **First sensor reading comes before first sound.** Sensors need the AoC
    core plus a character-device client in userspace; audio additionally
    needs the 16,700-line `aoc_alsa` port, the amplifiers and their protection.
+
+### 0.1 C1 result and the GSA-direct path
+
+C1 on `omandroid-int` `7.3.0-rc6-omandroid-push1-00186-ga0b0c0ebb3f6`
+(default DTB + `display-decon-test` + `aoc-gsa-test`):
+
+```
+google-gsa 17c90000.gsa: mailbox ready, irq 104
+sjtag_status: args 3: debug_allowed 0x00000000 hw_status 0x00000010 debug_time 0x00000000
+cmd 100: answer 0x80000064 err 0 argc 3
+cmd 91: answer 0x8000005b err 0 argc 1
+aoc_state: args 1: 0x00000000 ... (state inactive)
+```
+
+`hw_status 0x10` is what stock prints for the same command
+(`R/dmesg.txt:2012`). No hang.
+
+GSA commands for the AoC (`GSA/gsa_mbox.h:49-52`, `include/linux/gsa/gsa_aoc.h`,
+`GSA/hwmgr-ipc.h`):
+
+| Mailbox cmd | Args | Reply | Stock sends it |
+|---|---|---|---|
+| 90 `LOAD_AOC_FW_IMG` | header DMA lo, hi; body PA lo, hi | none | yes, on the mailbox; a "data transfer" command: under a GSA wakelock (150/151) with the GSA S2MPU open |
+| 91 `AOC_CMD` | one: `GET_STATE` 0, `START` 1, `SHUTDOWN` 4, `RELEASE_RESET` 5, `RESET` 6 | one: state `INACTIVE` 0, `LOADED` 1, `RUNNING` 2 | no: stock sends the same commands as Trusty `hwmgr.aoc` `STATE_CMD` (1) |
+| 92 `UNLOAD_AOC_FW_IMG` | none | none | no: stock uses `hwmgr.aoc` `UNLOAD_IMG` (2) |
+| 150 / 151 `WAKELOCK_ACQUIRE/RELEASE` | none | none | yes, around data transfers (`GSA/gsa_mbox.c:466-560`) |
+
+Stock's order:
+
+- **Boot** (`GA/aoc.c:508-710`): `aoc_req` = 1 → copy the body → load (90) →
+  write the parameter block → `START` → the firmware fills its control
+  block ("online with 82 services" 0.45 s later).
+- **Offline** (`GA/aoc.c:1582-1640`): `aoc_req` = 1 and wait for the
+  acknowledge → `SHUTDOWN` (expects "loaded") → unload (expects success,
+  state "inactive").
+- **Crash**: the PCU watchdog, ACPM channel 13, then boot again.
+
+So the GSA-direct path is: load (90), then 91 `START`; restart = 91
+`SHUTDOWN`, 92, load, 91 `START`. `gsa.c` sends 91/92 when loaded with
+`aoc_cmd_mbox=1`, and the Trusty messages otherwise.
 
 What is mandatory, in boot order:
 
 | Piece | Why | Source | Our status |
 |---|---|---|---|
-| GSA mailbox | authenticates and loads `aoc.bin` | `GSA/gsa_mbox.c` (600) + `gsa_core.c` load path | **written** (`omandroid-aoc`, status queries only) |
-| S2MPU off for the GSA and the AoC | the GSA reads the image header by DMA; stock's pKVM programs both S2MPUs at power-up (`R/dmesg.txt:462`), nothing does without a hypervisor | `GS/drivers/soc/google/s2mpu/s2mpu-regs.h` (CTRL0 at 0x0, bit 0 enable) | to write: CTRL0 only, while powered |
-| Trusty + GSA `hwmgr.aoc` client | `GSA_AOC_START` | `G/google-modules/trusty`, `GSA/gsa_tz.c` (236) | Trusty ported (fingerprint branch, not run); client to write |
-| SysMMU `sysmmu_asoc` (`0x1a090000`, v8) | the AoC's view of DRAM and its peripherals | `GS/drivers/iommu/samsung-iommu.[ch]` (v8 VM register set) | to write: static six-window table |
+| GSA mailbox | authenticates and loads `aoc.bin`; AoC state commands (91) | `GSA/gsa_mbox.c` (600) + `gsa_core.c` | **written**; C1 passed |
+| S2MPU off for the GSA and the AoC | the GSA reads the image header by DMA; stock's pKVM programs both S2MPUs at power-up (`R/dmesg.txt:462`), nothing does without a hypervisor | `GS/drivers/soc/google/s2mpu/s2mpu-regs.h` (CTRL0 at 0x0; 0 passes everything) | **written**: CTRL0 = 0 only, GSA's under a GSA wakelock and restored after the load, the AoC's while BLK_AOC is on |
+| Trusty + GSA `hwmgr.aoc` client | `GSA_AOC_START` on stock | `G/google-modules/trusty`, `GSA/gsa_tz.c` (236) | **fallback, written** (`CONFIG_GOOGLE_GSA_TRUSTY`); not needed while command 91 works |
+| SysMMU `sysmmu_asoc` (`0x1a090000`, v8) | the AoC's view of DRAM and its peripherals | `GS/drivers/iommu/samsung-iommu.[ch]` (v8 VM register set) | **written**: windows from the image header, VID 0 |
 | AoC mailboxes (`0x18300000`, `0x18320000`, `0x18340000`) | service doorbells | `GA/mailbox-wc.c` (412) | to port |
-| AoC core | firmware parameters, services, rings, char devices | `GA/aoc.c`, `aoc_v1.c`, `aoc_firmware.c`, `aoc_service_core.c`, `aoc_channel_dev.c`, `aoc_char_dev.c`, `aoc_control_dev.c` (~6,200) | to port |
-| PMIC rails over ACPM ch 2 | mics (LDO20M, LDO19S, LDO20S), sensors (LDO7S then LDO5S) | `GS/include/linux/mfd/samsung/s2mpg1[23]-register.h` | ACPM link works; no S2MPG12/13 driver (`ACPM-PLAN.md` 6) |
+| AoC boot (parameters, start, control block) | gets the firmware to "online" | `GA/aoc.c` `aoc_fw_callback()`, `aoc_v1.c` | **written** as a bring-up driver (`gs201-aoc-boot`) |
+| AoC core | services, rings, char devices | `GA/aoc.c`, `aoc_service_core.c`, `aoc_channel_dev.c`, `aoc_char_dev.c`, `aoc_control_dev.c`, `aoc_ipc` (~6,000) | to port (C5) |
+| PMIC rails over ACPM ch 2 | mics (LDO20M, LDO19S, LDO20S), sensors (LDO7S then LDO5S) | `GS/include/linux/mfd/samsung/s2mpg1[23]-register.h`, `GS/drivers/regulator/s2mpg1[23]-regulator.c` | **written** (`gs201-aoc-rails`, read-only unless `enable=1`) |
 | `aoc_alsa` | the sound card | `GA/alsa/` (~16,700) | audio only; to port |
 | ACPM ch 13 | AoC restart after a crash | above | later |
 
@@ -166,10 +214,10 @@ Other facts the port needs:
 | Idea | Verdict | Why |
 |---|---|---|
 | The bootloader leaves the AoC running; talk to it with a minimal mailbox client | **no** | stock's kernel loads and starts it (finding 2) |
-| Load with the GSA mailbox, start without Trusty (mailbox cmd 91) | **unknown, cheap to test** | stage C1 `aoc_state` |
+| Load with the GSA mailbox, start without Trusty (mailbox cmd 91) | **yes** | C1: the GSA answers command 91 (section 0.1) |
 | Release the AoC from reset ourselves (`aoc_release_from_reset()`, PCU bit 0) | **no** | only for unsigned images without GSA; signed images are locked by the GSA, and the production firmware is signed |
 | Skip the SysMMU (bypass) | **no** | the firmware addresses its carve-out at `0x98000000`, which is physically the GXP region; translation is required |
-| Skip ACPM ch 13 | **yes, for the first start** | needed only for restart (finding 5) |
+| Skip ACPM ch 13 | **yes** | needed only for crash recovery; a clean restart is shutdown, unload, load, start (finding 5) |
 | Skip `aoc_alsa` for sensors | **yes** | sensors use `aoc_channel_dev` only |
 | Skip the S2MPG12/13 regulator driver | **yes, at first** | five LDO enable bits over ACPM ch 2 (section 5); a proper regulator driver later |
 | Port Google's samsung-iommu (3,200 lines) | **no** | a static six-window table is enough; the AoC needs no runtime maps for first light (the heaps are inside the 48 MiB window) |
@@ -182,8 +230,7 @@ exposes each service as a character device (`/dev/acd-com.google.usf`,
 `/dev/aoc`); the sensor HAL (`V/lib64/sensors.usf.so`, `libusf.so`) and the
 audio HAL speak the services' message formats from userspace.
 
-- **The kernel part cannot move to userspace.** Starting the AoC needs
-  Trusty (SMCs from EL1), the GSA needs a DMA buffer below 4 GiB that it can
+- **The kernel part cannot move to userspace.** The GSA needs a DMA buffer below 4 GiB that it can
   read, the SysMMU and S2MPUs need privileged writes, and the services are
   interrupt-driven rings. A UIO/`/dev/mem` client would reimplement the same
   core worse and could not be upstreamed.
@@ -205,22 +252,23 @@ audio HAL speak the services' message formats from userspace.
 
 | Piece | Lines (Google) | Effort | Notes |
 |---|---|---|---|
-| GSA mailbox driver | 600 | **done** (C1 queries); +2 days for the load command | `L/drivers/soc/google/gsa.c` |
-| S2MPU CTRL0 helper | - | 1 day | two registers, only when powered |
-| GSA `hwmgr.aoc` client over Trusty IPC | 236 | 2-3 days | on top of the fingerprint branch's `tipc` kernel API |
-| SysMMU six-window driver | (3,200) → ~300 | 3-5 days | v8 VM registers as in `GS/drivers/iommu/samsung-iommu.c:38-75,182-240`; same table format as `pcie-gs201-sysmmu` |
-| AoC mailbox + core + char devices | ~6,600 | 2-3 weeks | out of tree first; vendor hooks (`exynos_pmu`, `dbg_snapshot`, `acpm_ipc`, `gs_chipid`, ITMON, power-mode) become stubs or upstream equivalents |
-| Rails over ACPM ch 2 | - | 2-3 days for five LDO bits; 2-3 weeks for a real S2MPG12/13 regulator driver | `ACPM-PLAN.md` 6 |
+| GSA mailbox driver, load/state/unload | 600 | **done** | `L/drivers/soc/google/gsa.c` |
+| S2MPU CTRL0 handling | - | **done** | in `gsa.c` and `gs201-aoc-boot.c` |
+| GSA `hwmgr.aoc` client over Trusty IPC | 236 | **done** (fallback) | on the fingerprint branch's `tipc` kernel API |
+| SysMMU six-window driver | (3,200) → ~400 | **done** | v8 VM registers as in `GS/drivers/iommu/samsung-iommu.c:38-75,182-240` |
+| AoC boot to "online" (bring-up) | (part of `aoc.c`) | **done** | `gs201-aoc-boot.c`, debugfs steps |
+| AoC mailbox + core + char devices | ~6,000 | 2 weeks | out of tree first; vendor hooks (`exynos_pmu`, `dbg_snapshot`, `acpm_ipc`, `gs_chipid`, ITMON, power-mode) become stubs or upstream equivalents; the boot steps come from `gs201-aoc-boot` |
+| Rails over ACPM ch 2 | - | **done** for the five LDO bits; 2-3 weeks for a real S2MPG12/13 regulator driver | `gs201-aoc-rails.c`; `ACPM-PLAN.md` 6 |
 | USF sensor client + D-Bus service | - | 2-4 weeks | clean-room from the stock library's behaviour |
 | `aoc_alsa` port to 7.3 ASoC | ~16,700 | 3-6 weeks | dummy codec on links with no driver, TDM slots from the DT |
 | Machine/UCM/calibration/protection | - | 2 weeks | `AUDIO-PLAN.md` A7 |
 | ACPM ch 13 doorbell + AoC restart | - | 3-5 days | upstream `exynos-mailbox` has no RX interrupt support yet |
 
-Calendar, one developer: **first AoC "online" in 4-6 weeks, first
-accelerometer reading 2-3 weeks after that, first protected speaker sound
-6-10 weeks after "online"**. The order is shorter than the "months" estimate
-in `AUDIO-PLAN.md` because Trusty is already ported, the IOMMU shrinks to a
-static table, and ACPM is working.
+Calendar, one developer: **first AoC "online" as soon as C2-C4 pass (the
+code is written), first accelerometer reading 3-4 weeks after that (core
+port + USF client), first protected speaker sound 6-10 weeks after
+"online"**. Much shorter than the "months" estimate in `AUDIO-PLAN.md`:
+no Trusty needed, the IOMMU is a static table, and ACPM works.
 
 ---
 
@@ -231,9 +279,10 @@ static table, and ACPM is working.
 | S2MPU registers other than CTRL0 can reset the SoC; any S2MPU register can abort while its block is off | touch only CTRL0, only after the GSA wakelock (`GSA_MB_CMD_WAKELOCK_ACQUIRE` 150) or `aoc_req` acknowledge; never from user space |
 | PMU reads from user space crash the phone (`GPU-PLAN.md` incident) | AoC power state only through the kernel, via `aoc_req + 0x40` or the GSA/Trusty `GET_STATE` |
 | After `LOAD_AOC_FW_IMG` the carve-out body is locked; an AP read faults | never read `0x94000000`-`0x955fffff` after load; the carve-out is already `no-map` (`gs201.dtsi`) |
-| A failed start cannot be retried in the same boot | hang-safe marker as for Wi-Fi: write and sync `/var/lib/omandroid/aoc-bringup-started` before the load, skip on the next boot if present; reboot to retry |
+| A failed start cannot be retried in the same boot | hang-safe marker as for Wi-Fi: `tools/aoc-stage c4a` writes and syncs `/var/lib/omandroid/aoc-bringup-started` before the load and refuses to run while it exists; `c4b` clears it on success. A clean retry is `unload`, then load and start; after a failure, reboot |
+| The AoC writes outside its windows (wrong table, wrong VID) | the System MMU translates VID 0 with only the six windows; anything else faults and is logged ("blocked ... VID n"). Untranslated traffic would reach physical memory directly, so C2 records the VID registers first, and C4b counts "blocked" lines |
 | GSA mailbox command never answered | `gsa.c` times out after 1 s and disables the mailbox until reload (Google's waits forever) |
-| AoC watchdog / IOMMU fault storms | IRQs requested disabled, enabled only after a successful start (as stock) |
+| AoC watchdog / IOMMU fault storms | the AoC watchdog IRQ (SPI 116) is not requested by the bring-up driver; System MMU fault lines are rate-limited |
 | The AoC holds the AP awake or wakes MIF constantly (sensors at high rate) | non-wakeup USF channels for UI sensors; pause sensors when the screen is off |
 | Firmware/driver mismatch after a vendor update | the UUID check refuses it; extract `aoc.bin` from the phone's own vendor partition with the matching kernel sources (checked offline for 14022723) |
 | **Speaker damage** | `AUDIO-PLAN.md` section 4 limits apply unchanged: boost peak ≤ 2.5 A, `Analog PCM Volume` ≤ 6 for the top amp as earpiece and ≤ 10 for either amp with the DSP bypassed, `Digital PCM Volume` ≤ 657 for first sound, 1 kHz bursts of 1-2 s, ≤ 30 s without protection, mapping and calibration confirmed before tuning loads. Also AoC-specific: the amps take their PLL reference from the AoC's TDM BCLK, so the TDM link must run before an amp's `GLOBAL_EN` and the amp must be muted before the AoC stops TDM |
@@ -245,31 +294,47 @@ static table, and ACPM is working.
 
 ## 5. Kernel and repo changes made
 
-Kernel branch `omandroid-aoc` (`L/`), on `omandroid` @ `7b0f8b5d1`:
+Kernel branch `omandroid-aoc` (`L/`), on `omandroid` @ `7b0f8b5d1`. It
+merges cleanly into `omandroid-int` @ `741b6ed1d` (`git merge-tree`).
 
 | Commit | What | Default |
 |---|---|---|
-| `58e9fb0a2` dt-bindings: soc: google: add the gs201 GSA mailbox | `google,gs201-gsa`: reg, one interrupt | - |
-| `21aa277d2` soc: google: add a GSA mailbox driver | `drivers/soc/google/gsa.c` (`CONFIG_GOOGLE_GSA`): Google's register protocol, 1 s timeout per command, then the mailbox is refused. Debugfs only: `sjtag_status` (cmd 100, what stock sends at boot), and `aoc_state` (cmd 91, `GET_STATE`) only with `aoc_query=1` | module; nothing binds without the DT node |
-| `aed858b94` arm64: dts: exynos: google: gs201: add the GSA mailbox | `gsa@17c90000`, GIC SPI 363, from `R/live.dts:7209-7216` | `disabled` |
+| `58e9fb0a2` dt-bindings: soc: google: add the gs201 GSA mailbox | `google,gs201-gsa` | - |
+| `21aa277d2` soc: google: add a GSA mailbox driver | `drivers/soc/google/gsa.c` (`CONFIG_GOOGLE_GSA`): Google's register protocol, 1 s timeout per command, then the mailbox is refused; debugfs `sjtag_status`, `aoc_state` (`aoc_query=1`) | module |
+| `aed858b94` arm64: dts: exynos: google: gs201: add the GSA mailbox | `gsa@17c90000`, SPI 363 | `disabled` |
+| `372cdfcb5` merge of `omandroid-fingerprint` @ `5a9cf359f` | the Trusty driver commits, shared with fingerprint (same commits, so both branches merge into int together) | modules, node disabled |
+| `477a82e16` arm64: dts: ... gs201: add Trusty | cherry-pick of `0c28d9948` (identical hunk; merges cleanly with fingerprint) | `disabled` |
+| `18c468053` dt-bindings: ... gs201-gsa: add the GSA's S2MPU | optional second range | - |
+| `6b3275d37` soc: google: gsa: load and start AoC firmware | `gsa_load_aoc_fw_image()` (cmd 90 under a GSA wakelock, GSA S2MPU CTRL0 = 0 for the load and restored after, 32-bit DMA mask), `gsa_send_aoc_cmd()` (Trusty `hwmgr.aoc`, or cmd 91 with `aoc_cmd_mbox=1`), `gsa_get_device()`; debugfs `aoc_state_tz`, `s2mpu_ctrl0` (`s2mpu_probe=1`) | - |
+| `36319e05e` arm64: dts: ... gs201: add the GSA's S2MPU range | `0x17c60000` | - |
+| `d239d411e`, `2fcba2704` AoC System MMU binding and driver | `gs201-aoc-sysmmu.c` (`CONFIG_GS201_AOC_SYSMMU`): first-level table of 1 MiB sections from the windows it is given, VID 0, stall on fault, stock QoS/TLB setup, fault lines with VID and AxID; touches no register until the AoC driver calls it with BLK_AOC on; `empty=1` = negative test | module |
+| `5caf0d303`, `0610de752` AoC binding and boot driver | `gs201-aoc-boot.c` (`CONFIG_GS201_AOC_BOOT`): debugfs `info`, `power`, `blk`, `load`, `start`, `control`, `shutdown` (section 7) | module |
+| `3a71f0471` soc: google: add the gs201 AoC supplies over ACPM | `gs201-aoc-rails.c` (`CONFIG_GS201_AOC_RAILS`): reads S2MPG12/13 CHIPID and the five LDOs; sets their enable bits only with `enable=1`, never a voltage | module, no DT |
+| `973b54b71` arm64: dts: ... gs201: add the AoC and its System MMU | `sysmmu@1a090000` (SPI 118), `aoc@181d0000` | `disabled` |
+| `2f785843b`, `615b5188a` unload | `gsa_unload_aoc_fw_image()` (cmd 92 or Trusty `UNLOAD_IMG`); debugfs `unload` (shutdown, unload, System MMU off, as `aoc_take_offline()`) | - |
 
-Built into `out-aoc`: release `7.3.0-rc6-omandroid-push1-00061-gaed858b9421c`,
-`gsa.ko`, modules tarball and images (default DTB, GSA node disabled).
-`gsa.c` builds with `W=1` and no warnings and passes `checkpatch.pl`; the DTB
-has only the existing framebuffer `unit_address_vs_reg` warning; the
-overlay applies with `fdtoverlay`. Not run: `dt_binding_check` (no dtschema
-on this host). `git merge-tree` shows the branch merges into
-`omandroid-int` @ `907128673` without conflicts.
+Build in `out-aoc`: release `7.3.0-rc6-omandroid-push1-00079-g615b5188a148`
+(kernel, modules tarball, images). The new C files build with `W=1` and no
+warnings and pass `checkpatch.pl`; the DTB has only the existing framebuffer
+`unit_address_vs_reg` warning; both overlays apply with `fdtoverlay`. Not
+run: `dt_binding_check` (no dtschema on this host).
+
+**Module dependencies:** with `CONFIG_GOOGLE_GSA_TRUSTY=y`, `gsa.ko` needs
+the Trusty modules, so `modprobe gsa` also loads `trusty-core`,
+`trusty-virtio` and `trusty-ipc` (a blacklist does not stop dependencies).
+With the `/trusty` node disabled, as in all AoC overlays, they bind to
+nothing and never call into the secure world.
 
 Repo:
 
-- `kernel/configs/omandroid.config`: `CONFIG_GOOGLE_GSA=m`.
-- `device/cheetah/overlays/aoc-gsa-test.dtso`: enables the GSA node (C1).
-
-Not written yet, in order: the S2MPU CTRL0 helper and the load command in
-`gsa.c`; the Trusty `hwmgr.aoc` client (needs the Trusty commits from
-`omandroid-fingerprint`); the `sysmmu_asoc` six-window driver; the AoC core
-port.
+- `kernel/configs/omandroid.config`: `CONFIG_GOOGLE_GSA=m`,
+  `CONFIG_GOOGLE_GSA_TRUSTY=y`, `CONFIG_GS201_AOC_SYSMMU=m`,
+  `CONFIG_GS201_AOC_BOOT=m`, `CONFIG_GS201_AOC_RAILS=m`.
+- `device/cheetah/overlays/aoc-gsa-test.dtso` (C1), `aoc-boot-test.dtso`
+  (C2-C4: GSA, AoC System MMU, AoC node with cheetah's board id `0x30301`
+  and revision `0x10000`).
+- `tools/aoc-stage`: runs C2-C4 with the log streamed to `logs/` first,
+  optional hardware watchdog, the hang marker, `--pstore`.
 
 ---
 
@@ -277,108 +342,219 @@ port.
 
 | Stage | What | Writes to hardware | Risk | Needs |
 |---|---|---|---|---|
-| C0 | offline: firmware header, IOMMU windows, UUID check | none | none | **done** (section 0) |
-| **C1** | GSA mailbox: `sjtag_status`, then `aoc_state` (cmd 91) | mailbox registers only (mask, doorbell) | low | this branch |
-| C2 | Trusty up (`FINGERPRINT-RESEARCH.md` F2), then `hwmgr.aoc` `GET_STATE` | Trusty SMCs as stock | low | fingerprint branch + client |
-| C3 | read the five LDO control registers over ACPM ch 2 | none (reads) | low | a read-only PMIC debug path on the ACPM branch |
-| C4 | AoC core probe with `aoc_autoload_firmware=0`; SysMMU windows programmed, not used | SysMMU registers | medium | core port, SysMMU driver |
-| C5 | load, authenticate, start; "online with 82 services" | S2MPU CTRL0, GSA, `aoc_req` | **high** (one try per boot) | C1-C4 |
-| C6 | first sensor reading: rails LDO7S → LDO5S, registry load, accelerometer samples; then rotation in Hyprland | PMIC LDO enable bits | medium | C5, USF client |
-| C7 | microphones: rails, capture EP1 (PCM 8), record the noise floor | PMIC, AoC | low | C5, `aoc_alsa` |
+| C0 | offline: firmware header, IOMMU windows, UUID check | none | none | **done** |
+| C1 | GSA mailbox: `sjtag_status`, `aoc_state` (cmd 91) | mailbox only | low | **passed** |
+| **C2** | read-only: `aoc_req` and acknowledge, GSA AoC state, chip id, GSA S2MPU CTRL0 (under a GSA wakelock), carve-out not System RAM; if BLK_AOC is on, the AoC System MMU registers (which VIDs exist, which are already on) and the AoC S2MPU CTRL0 | GSA wakelock commands | low | this branch, `aoc-boot-test` |
+| C2p | only if C2 found BLK_AOC off: `aoc_req` = 1, then C2's reads | `aoc_req` | low | C2 |
+| **C3** | read-only: S2MPG12/13 CHIPID and the five AoC LDOs over ACPM channel 2 | none | low | ACPM loaded (int) |
+| **C4a** | load: power, AoC S2MPU CTRL0 = 0, System MMU windows on VID 0, body into the carve-out, GSA authentication (90), parameters; state must become "loaded" | S2MPUs, System MMU, carve-out | medium | C2, C3 |
+| **C4b** | start: 91 `START`; control block within 5 s, ~82 services, no "blocked" lines | AoC runs | **high** (first run of the firmware) | C4a |
+| C4c | `unload`, then C4a/C4b again: proves a clean restart | GSA | medium | C4b |
+| C4n | negative test (separate boot): `gs201_aoc_sysmmu empty=1`, C4a, C4b: the AoC must fault at once with "blocked READ at 0x98..." on VID 0 and never come up; proves its traffic goes through this System MMU on VID 0 | as C4 | medium | C4b passed |
+| C5 | AoC core port (mailboxes, services, char devices) | - | - | C4b |
+| C6 | first sensor reading: `gs201_aoc_rails enable=1` (LDO7S then LDO5S), registry load, accelerometer samples; then rotation | PMIC LDO bits | medium | C5, USF client |
+| C7 | microphones: mic rails, capture EP1 (PCM 8) | PMIC, AoC | low | C5, `aoc_alsa` |
 | C8 | first sound: top amp alone, DSP bypassed, section 4 limits | amps, AoC TDM | **speaker damage** | `AUDIO-PLAN.md` A2/A3, C7 |
 | C9 | protection firmware + calibration, UCM, PipeWire | amps | medium | `AUDIO-PLAN.md` A7 |
-| C10 | ACPM ch 13 doorbell, AoC watchdog restart | AoC PCU watchdog | medium | C5 |
+| C10 | crash recovery: ACPM ch 13 doorbell, AoC watchdog | AoC PCU watchdog | medium | C5 |
+
+The order inside C4 follows stock (section 0.1). C4n comes after a working
+C4b on purpose: before the firmware runs there is no AoC traffic to test,
+and a firmware that runs with a wrong VID would reach physical memory
+untranslated. If C4b shows "blocked ... VID n" with n not 0, stop: rerun C4
+with `gs201_aoc_sysmmu vids=<1<<n>` after a reboot.
 
 ---
 
 ## 7. Runbook
 
-From the omandroid repo, phone in Arch over USB, a second terminal running
-`tools/phone-ssh dmesg -w` so the last line before any hang is on the laptop.
-Overlays as in `HAPTICS-TORCH-PLAN.md` 4.
+From the omandroid repo, phone in Arch over USB. Overlays as in
+`HAPTICS-TORCH-PLAN.md` 4. **Never use `devmem` for any of this.** The
+phone's `/usr/local/bin/devmem` is our `tools/devmem.c`, with usage
+`devmem ADDRESS [VALUE]`: a second argument WRITES (`devmem ADDR 32` writes
+0x20). All AoC registers are read from the kernel; PMU registers must not be
+read from user space at all (`GPU-PLAN.md` incident).
 
-### C1: GSA mailbox status queries (read-only)
+### C1: GSA mailbox status queries (read-only): passed
 
-Run it on the integration kernel, so Wi-Fi, the GPU and the rest stay as
-they are: merge `omandroid-aoc` into `omandroid-int` (three commits; it
-merges cleanly) and build int as usual. (`out-aoc` holds a build of the
-branch alone, on `omandroid`, which lacks the int-only features; use it only
-to check the module.)
+Overlay `aoc-gsa-test`, `modprobe gsa` then `cat
+/sys/kernel/debug/17c90000.gsa/sjtag_status`, and `modprobe gsa aoc_query=1`
+then `cat …/aoc_state`. Results in section 0.1.
+
+### Build and install for C2-C4
+
+On the integration kernel (merge `omandroid-aoc` again: it now carries the
+Trusty commits, the System MMU, boot and rails drivers):
 
 ```sh
 export KERNEL_DIR=$HOME/android/mainline/wt-int KERNEL_OUT=$HOME/android/mainline/out-int
 O=$KERNEL_OUT D=$O/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb
 git -C $KERNEL_DIR merge --no-edit omandroid-aoc
 bin/omandroid kernel && bin/omandroid modules && bin/omandroid initramfs && bin/omandroid images
-# keep the module from autoloading during bring-up
-tools/phone-ssh 'echo "blacklist gsa" > /etc/modprobe.d/omandroid-aoc-bringup.conf'
-cp "$D" "$D.default"     # the fresh default DTB
-$O/scripts/dtc/dtc -q -I dts -O dtb -o out/aoc-gsa-test.dtbo device/cheetah/overlays/aoc-gsa-test.dtso
-$O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" out/aoc-gsa-test.dtbo
+tools/phone-ssh 'printf "blacklist gsa\nblacklist gs201_aoc_sysmmu\nblacklist gs201_aoc_boot\nblacklist gs201_aoc_rails\n" > /etc/modprobe.d/omandroid-aoc-bringup.conf'
+cp "$D" "$D.default"
+$O/scripts/dtc/dtc -q -I dts -O dtb -o out/aoc-boot-test.dtbo device/cheetah/overlays/aoc-boot-test.dtso
+$O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" out/aoc-boot-test.dtbo   # add display-decon-test etc. as usual
 bin/omandroid images && bin/omandroid modules-push && bin/omandroid push
+tools/phone-ssh 'lsmod | grep -cE "^(gsa|gs201_aoc|trusty)"'     # expect 0
 ```
 
-After the reboot:
+Rollback for every stage below: reboot (nothing persists; the PMIC keeps a
+rail that C6 turns on until a cold boot), or the default DTB:
+`cp "$D.default" "$D"; bin/omandroid images && bin/omandroid push`.
+
+### C2: read-only probes
 
 ```sh
-tools/phone-ssh 'ls /sys/bus/platform/devices/ | grep 17c90000; lsmod | grep -c "^gsa "'
-tools/phone-ssh 'modprobe gsa; dmesg | grep google-gsa; grep gsa /proc/interrupts'
-tools/phone-ssh 'cat /sys/kernel/debug/17c90000.gsa/sjtag_status; dmesg | grep google-gsa | tail -2'
+tools/aoc-stage --watchdog c2
 ```
 
-- **Expect:** `17c90000.gsa` present, module count 0 before `modprobe`;
-  "mailbox ready, irq N"; one `gsa` line in `/proc/interrupts`. Then
-  `sjtag_status` prints `args 3: debug_allowed 0x… hw_status 0x… debug_time
-  0x…` and dmesg "cmd 100: answer 0x80000064 err 0 argc 3". Stock prints
-  "Cmd status: 0x00000010-0" for the same command (`R/dmesg.txt:2012`).
-  The interrupt count goes up by one.
-- **Stop:** "cmd 100: no answer in 1000 ms" (the GSA is not listening, or the
-  interrupt is wrong: report `/proc/interrupts`), or any abort/hang.
+- **Does:** loads `gsa aoc_cmd_mbox=1 s2mpu_probe=1` (pulls in the Trusty
+  modules, which bind to nothing), `gs201_aoc_sysmmu`, `gs201_aoc_boot`.
+  None of them touches an AoC register at probe. Then reads: `aoc_req` and
+  `aoc_req + 0x40` (acknowledge), GSA AoC state (cmd 91), the chip id block,
+  the GSA S2MPU CTRL0 (GSA wakelock acquire, read, release), the carve-out
+  check against `/proc/iomem`. Then `blk`: only if the acknowledge is set,
+  the AoC System MMU registers and the AoC S2MPU CTRL0.
+- **Expect:**
+  - `gsa aoc state 0 (inactive)`;
+  - `chip product 0x9855000`, `revision 0x10` (stock: "CPU[GS201]B0
+    CPU_REV[0x10]", `R/dmesg.txt:397`), board `0x30301/0x10000`;
+  - "carve-out 94000000-96ffffff: not System RAM";
+  - GSA S2MPU `CTRL0 0x…` (record it; bit 0 set = blocking);
+  - `aoc_req`/ack: record both. If BLK_AOC is on, the kernel log has
+    `blk: version 0x… (v8.x) … capa1 0x… (8 VIDs)` and one line per VID:
+    **record which VIDs are enabled and their table addresses**. All VIDs off
+    (ctrl bit 0 = 0) is expected before the AoC was ever loaded.
+- **Stop:** any abort or hang (the watchdog resets the phone; then
+  `tools/aoc-stage --pstore`); a `blk` line on a VID with a table already
+  set (someone else programs this System MMU: report it before C4); the
+  carve-out overlapping System RAM.
+- **If BLK_AOC is off:** run `tools/aoc-stage --watchdog c2p` (one write:
+  `aoc_req` = 1, then the same reads). Expect `aoc_req 1: ack 0x1`. A
+  time-out ("aoc_req 1: ack 0x0 (timed out)") is a stop: the APM did not
+  power the block.
 
-Then the shortcut test:
+### C3: the AoC rails, read-only
 
 ```sh
-tools/phone-ssh 'rmmod gsa; modprobe gsa aoc_query=1; cat /sys/kernel/debug/17c90000.gsa/aoc_state; dmesg | grep google-gsa | tail -2'
+tools/phone-ssh 'lsmod | grep -c "^acpm_protocol"'   # 1 on int (the GPU uses ACPM)
+tools/aoc-stage c3
 ```
 
-- **Expect (likely):** `error -5 (gsa err N)` or `error -22`, with dmesg
-  "cmd 91: answer 0x8000005b err N": the GSA firmware no longer serves AoC
-  commands on the mailbox. Trusty is then the only way to start the AoC (C2).
-- **If it answers** `args 1: 0x00000000 … (state inactive)`: the mailbox
-  serves AoC state commands. That opens a Trusty-free start (`GSA_AOC_START`
-  = 1 the same way), to be tried only in C5, after the load.
-- **Stop:** a timeout here wedges only our driver (`rmmod gsa` to reset).
-  Report it; do not retry in the same boot.
-- **Rollback:** `rmmod gsa`; `cp "$D.default" "$D"; bin/omandroid images &&
-  bin/omandroid push`; `rm /etc/modprobe.d/omandroid-aoc-bringup.conf`.
+- **Expect:** `S2MPG12 CHIPID 0x…` and `S2MPG13 CHIPID 0x…` (non-zero, not
+  equal), then five lines `LDO… : ctrl 0x…, on|off, N mV`. Expected
+  voltages: LDO20M, LDO19S, LDO20S and LDO7S 1800 mV (vsel `0x2c`), LDO5S
+  2500-3300 mV. The stock DT marks the sensor rails `regulator-boot-on`, so
+  LDO7S and LDO5S are probably on already; record the mic rails.
+- **Stop:** an ACPM error or timeout; a voltage outside the stock ranges
+  (the rail is then never enabled by the driver).
+- Nothing is written. Enabling (`modprobe gs201_aoc_rails enable=1`) comes
+  in C6/C7, not now.
 
-### C2 onwards
+### C4a: load (the AoC stays in reset)
 
-Written when C1 has answered. C2 reuses `FINGERPRINT-RESEARCH.md` F2
-(`tools/fingerprint-capture --watchdog trusty-core`, `trusty-log`,
-`trusty-ipc`), then adds one `hwmgr.aoc` `GET_STATE` call. C5 follows the
-Wi-Fi pattern: a guarded start script with a synced marker, the hardware
-watchdog armed, and one attempt per boot.
+```sh
+tools/aoc-stage --watchdog c4a
+```
+
+- **Does:** copies `V/firmware/aoc.bin` to `/usr/lib/firmware/updates/aoc.bin`
+  if the phone's copy differs (it is Google's file: never commit or publish
+  it), writes and syncs the hang marker, then `echo aoc.bin > load`:
+  1. GSA state must be "inactive";
+  2. validates the image (signed, superbin, `fw_start` = carve-out base,
+     IPC offset, six windows);
+  3. `aoc_req` = 1 and the acknowledge;
+  4. AoC S2MPU CTRL0 = 0 (logged before and after);
+  5. System MMU: the six windows on VID 0 (logged one per line, then the
+     registers again);
+  6. copies the 21 MB body to `0x94000000`;
+  7. GSA load (cmd 90): wakelock, GSA S2MPU CTRL0 = 0, load, CTRL0 restored,
+     wakelock released;
+  8. writes the parameter block at carve-out + `0x1600000`.
+- **Expect:** "image 14022723-polygon (release), body 0x… bytes at
+  0x94000000, IPC at +0x1600000, 6 windows"; "cmd 90: answer 0x8000005a err
+  0"; "loaded; GSA AoC state 1 (loaded)".
+- **Stop:**
+  - `cmd 90 … err 1` (invalid args: the header address or the S2MPU),
+    `err 2` (authentication failed: wrong or modified image);
+  - "no answer in 10000 ms" (the GSA mailbox is then disabled until
+    reboot);
+  - a System MMU fault line already now (the AoC is still in reset and must
+    not access anything).
+  Report the log and reboot. The marker stays, so `c4a` refuses to run again
+  until you have rebooted and removed `/var/lib/omandroid/aoc-bringup-started`.
+- **Never** read the carve-out (`0x94000000`-`0x955fffff`) after this step:
+  the GSA has locked it.
+
+### C4b: start
+
+```sh
+tools/aoc-stage --watchdog c4b
+```
+
+- **Does:** power request, cmd 91 `START`, then polls the control block at
+  carve-out + `0x1600000` for magic `0xa0c00a0c` (5 s), prints the firmware
+  version and the service list, counts "blocked" lines.
+- **Expect:** "AoC command 1: GSA state 2 (running)"; "firmware up: 82
+  services" (stock: 82, `R/dmesg.txt:6042`); `control` shows `fw
+  14022723-polygon` and names such as `audio_output_control`,
+  `com.google.usf`, `com.google.chre`; **0 "blocked" lines**. The hang
+  marker is removed.
+- **Stop:**
+  - any "blocked READ/WRITE at … (VID n …)": note n and the address, then
+    `tools/aoc-stage stop`. With n other than 0, see section 6;
+  - "no control block after 5 s": the firmware did not come up; `stop`,
+    then report the log;
+  - a hang: the watchdog resets the phone; `tools/aoc-stage --pstore`.
+- The AoC now runs without its AP-side services (no mailbox driver yet): it
+  may log nothing or wait for the AP. Leave it running at most a few minutes,
+  then `tools/aoc-stage stop` (`GSA_AOC_SHUTDOWN`, expect "state 1
+  (loaded)"), or reboot.
+
+### C4c: clean restart (optional, after C4b)
+
+```sh
+tools/phone-ssh 'echo 1 > /sys/kernel/debug/aoc/unload; cat /sys/kernel/debug/aoc/info'
+tools/phone-ssh 'rm -f /var/lib/omandroid/aoc-bringup-started'
+tools/aoc-stage --watchdog c4a && tools/aoc-stage --watchdog c4b
+```
+
+- **Expect:** "AoC unload (mailbox): 0", "unloaded; GSA AoC state 0
+  (inactive)", then the same C4a/C4b results as the first time.
+- **Stop:** unload refused or failing: reboot instead.
+
+### C4n: negative test (separate boot, after C4b passed)
+
+```sh
+tools/phone-ssh 'modprobe gsa aoc_cmd_mbox=1 s2mpu_probe=1; modprobe gs201_aoc_sysmmu empty=1; modprobe gs201_aoc_boot'
+tools/aoc-stage --watchdog c4a && tools/aoc-stage --watchdog c4b
+```
+
+- **Expect:** "empty table: every AoC access will fault"; C4a as before (the
+  AoC is in reset); C4b: "blocked READ at 0x98…" or similar on **VID 0**
+  right after `START`, and "no control block after 5 s". That proves the
+  AoC's traffic goes through this System MMU on VID 0.
+- Then `tools/aoc-stage stop` and reboot.
+- **Stop:** the firmware comes up anyway, with no "blocked" lines: its
+  traffic does not go through VID 0 of this System MMU. Do not run the AoC
+  again until that is understood.
 
 ---
 
 ## 8. Open questions
 
-1. Does the GSA firmware serve `GSA_MB_CMD_AOC_CMD` (91)? (C1)
-2. Who programs `sysmmu_asoc` on stock, the non-secure table or the secure
-   half? If the secure world expects its own table, our non-secure windows
-   may be ignored or conflict. C4 reads `CTRL`, `CFG`, `VERSION`, `CAPA1`
-   and the per-VID registers first, as F1 did for HSI2.
-3. Which VID does the AoC's traffic use on `sysmmu_asoc`? Stock gives no
-   VID property for it (single domain); expect VID 0, and confirm with a
-   window-only negative test before the first start.
-4. Where does the GSA's DMA reach? Allocate the header with a 32-bit mask
-   until proven otherwise.
-5. The GSA S2MPU (`0x17c60000`, `off-at-boot` in the stock DT) state after
-   ABL on a non-pKVM boot: read CTRL0 once, after a GSA wakelock (C5 prep).
-6. Chip revision/type/product id for the firmware parameter block: from
-   upstream `exynos-chipid` (gs101 has it) or the DT `soc_id`
-   (`0x09855001`).
-7. Are the mic and sensor LDOs on or off at hand-off? (C3)
-8. Is the factory sensor calibration in `persist:/sensors/registry` intact
+1. Is BLK_AOC on at hand-off (C2 `aoc_req` acknowledge)?
+2. Which System MMU VIDs exist and are any already programmed (C2 `blk`)?
+   Expect 8 VIDs (VM support), all off, and AoC traffic on VID 0 (C4n).
+3. Who programmed `sysmmu_asoc` on stock? Older Google AoC drivers map the
+   same windows into the AoC's IOMMU domain from the kernel, so the
+   non-secure table is the one that matters; C4b confirms it.
+4. GSA and AoC S2MPU CTRL0 at hand-off (C2): blocking (bit 0 set) is
+   expected for the GSA one.
+5. Are the mic LDOs on at hand-off (C3)? The sensor LDOs are
+   `regulator-boot-on` in the stock DT.
+6. Does the firmware need anything from the AP before it publishes its
+   control block (C4b without a mailbox driver)?
+7. Is the factory sensor calibration in `persist:/sensors/registry` intact
    on this phone (read-only, as `speaker.cal` was read)?

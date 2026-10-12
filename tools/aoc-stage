@@ -1,0 +1,208 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# aoc-stage: run one staged AoC bring-up step (device/cheetah/AOC-PLAN.md,
+# section 7) and keep every kernel line on the laptop, even if the phone hangs.
+#
+# A first SSH connection streams /dev/kmsg into logs/aoc-<time>-<stage>.log
+# BEFORE a second one touches the hardware. Every step prints what it is about
+# to do into the kernel log first ("aoc-stage: ...").
+#
+# Needs a kernel with omandroid-aoc and a DTB with the aoc-boot-test overlay.
+# The modules (gsa, gs201_aoc_sysmmu, gs201_aoc_boot, gs201_aoc_rails) must be
+# blacklisted from autoload (/etc/modprobe.d/omandroid-aoc-bringup.conf).
+#
+# Usage:
+#   tools/aoc-stage [options] STAGE
+#
+# Stages (in order; each needs the previous one to have passed):
+#   c2   read-only: load the three AoC modules (probing touches no AoC
+#        register), then: aoc_req and its acknowledge, the GSA's AoC state
+#        (mailbox command 91), chip id, the GSA S2MPU's CTRL0 (under a GSA
+#        wakelock), the carve-out in /proc/iomem; and, only if BLK_AOC is
+#        already on, the AoC System MMU registers and the AoC S2MPU's CTRL0
+#   c2p  as c2, but first ask the APM to power BLK_AOC (aoc_req = 1), the
+#        one write in the step. Only if c2 found BLK_AOC off.
+#   c3   read-only: the S2MPG12/13 chip ids and the five AoC LDOs over ACPM
+#   c4a  load: copy aoc.bin to the phone if missing, write the hang marker,
+#        then load (power, AoC S2MPU off, System MMU windows, body into the
+#        carve-out, GSA authentication, boot parameters). The AoC stays in
+#        reset: the GSA state must become "loaded".
+#   c4b  start: GSA_AOC_START over the mailbox, wait for the firmware's
+#        control block, list the services; clears the hang marker on success
+#   stop GSA_AOC_SHUTDOWN (back to "loaded")
+#
+# Options:
+#   --watchdog   arm the hardware watchdog (about 15 s) with a feeder loop on the
+#                phone; a hang then resets the phone by itself
+#   --fw FILE    aoc.bin to copy for c4a (default: the extracted stock vendor one)
+#   --pstore     after a watchdog reset: save /sys/fs/pstore
+#
+# Never use tools/devmem (/usr/local/bin/devmem on the phone) for any of this:
+# its usage is "devmem ADDRESS [VALUE]" and a second argument WRITES.
+
+set -uo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+SSH="$ROOT/tools/phone-ssh"
+LOGDIR="$ROOT/logs"
+FW="$HOME/android/omandroid/vendor/google/cheetah/proprietary/vendor/firmware/aoc.bin"
+DBG=/sys/kernel/debug/aoc
+GSADBG=/sys/kernel/debug/17c90000.gsa
+MARKER=/var/lib/omandroid/aoc-bringup-started
+
+watchdog=0 stage= pstore=0
+
+usage() { sed -n '/^# Usage:/,/^#   --pstore/p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
+warn() { printf '\e[33m==> %s\e[0m\n' "$*"; }
+die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
+
+while (($#)); do
+  case "$1" in
+    --watchdog) watchdog=1 ;;
+    --fw) FW="${2:?}"; shift ;;
+    --pstore) pstore=1 ;;
+    -h|--help) usage ;;
+    c2|c2p|c3|c4a|c4b|stop) stage="$1" ;;
+    *) usage 1 ;;
+  esac
+  shift
+done
+
+mkdir -p "$LOGDIR"
+stamp=$(date +%Y%m%d-%H%M%S)
+
+phone() { timeout 60 "$SSH" -o ServerAliveInterval=2 -o ServerAliveCountMax=3 "$@"; }
+mark() { phone "echo 'aoc-stage: $*' > /dev/kmsg"; }
+
+if ((pstore)); then
+  out="$LOGDIR/aoc-pstore-$stamp"
+  mkdir -p "$out"
+  phone 'ls -l /sys/fs/pstore/' || die "phone not reachable"
+  for f in $(phone 'ls /sys/fs/pstore/'); do
+    phone "cat /sys/fs/pstore/$f" > "$out/$f"
+  done
+  say "saved to $out"
+  grep -h 'aoc\|gsa\|sysmmu' "$out"/console-* 2>/dev/null | tail -20
+  exit 0
+fi
+
+[[ -n "$stage" ]] || usage 1
+log="$LOGDIR/aoc-$stamp-$stage.log"
+
+say "phone check"
+phone 'uname -r' || die "phone not reachable over $SSH"
+phone 'grep -q okay /sys/firmware/devicetree/base/soc@0/aoc@181d0000/status 2>/dev/null' ||
+  die "the running DTB has no enabled AoC node: push the aoc-boot-test overlay first (AOC-PLAN.md 7)"
+
+say "streaming the phone's kernel log to $log"
+{
+  echo "# aoc-stage $stamp stage=$stage watchdog=$watchdog"
+  "$SSH" -T -o ServerAliveInterval=1 -o ServerAliveCountMax=5 'exec cat /dev/kmsg' 2>&1 |
+  while IFS= read -r line; do printf '%s %s\n' "$(date +%T.%3N)" "$line"; done
+  echo "# $(date +%T.%3N) log stream ended (connection closed or phone gone)"
+} >> "$log" &
+logger=$!
+trap 'kill $logger 2>/dev/null' EXIT
+sleep 2
+mark "start $stage" || die "phone stopped answering before the test"
+
+if ((watchdog)); then
+  say "arming the hardware watchdog (feeder every 2 s)"
+  phone 'nohup sh -c "exec 3>/dev/watchdog0
+    trap \"printf V >&3; exit 0\" TERM
+    while :; do printf k >&3; sleep 2; done" >/dev/null 2>&1 &
+    echo $! > /run/aoc-wd.pid' || warn "could not arm the watchdog"
+fi
+
+# Load the three modules once; aoc_cmd_mbox: AoC state commands on the GSA
+# mailbox (C1 showed command 91 answers); s2mpu_probe: GSA S2MPU CTRL0 in debugfs.
+load_modules='if lsmod | grep -q "^gsa "; then
+    grep -q Y /sys/module/gsa/parameters/aoc_cmd_mbox || { lsmod | grep -q "^gs201_aoc_boot " || rmmod gsa; };
+  fi;
+  lsmod | grep -q "^gsa " || modprobe gsa aoc_cmd_mbox=1 s2mpu_probe=1;
+  grep -q Y /sys/module/gsa/parameters/aoc_cmd_mbox || echo "gsa is loaded without aoc_cmd_mbox=1: reboot";
+  lsmod | grep -q "^gs201_aoc_sysmmu " || modprobe gs201_aoc_sysmmu;
+  lsmod | grep -q "^gs201_aoc_boot " || modprobe gs201_aoc_boot;
+  test -d '$DBG' && echo modules-ok'
+readout="cat $DBG/info; echo; cat $GSADBG/s2mpu_ctrl0;
+  awk '/System RAM/ { split(\$1, a, \"-\"); s = strtonum(\"0x\" a[1]); e = strtonum(\"0x\" a[2]);
+    if (s <= 0x96ffffff && e >= 0x94000000) { print \"carve-out OVERLAPS System RAM: \" \$0; bad = 1 } }
+    END { if (!bad) print \"carve-out 94000000-96ffffff: not System RAM\" }' /proc/iomem"
+
+result=ok
+case "$stage" in
+  c2|c2p)
+    mark "about to load gsa, gs201_aoc_sysmmu, gs201_aoc_boot (no AoC register is touched)"
+    phone "$load_modules" | tee -a "$log" | grep -q modules-ok || result=fail
+    if [[ $stage == c2p ]]; then
+      mark "about to request BLK_AOC power (aoc_req = 1)"
+      phone "echo 1 > $DBG/power; echo power-exit=\$?" | tee -a "$log" || result=fail
+    fi
+    mark "about to read aoc_req, the GSA AoC state, chip id, GSA S2MPU CTRL0 (wakelock)"
+    phone "$readout" | tee -a "$log" || result=fail
+    mark "about to read the AoC System MMU and AoC S2MPU, only if BLK_AOC is on"
+    phone "cat $DBG/blk" | tee -a "$log" || result=fail
+    ;;
+  c3)
+    mark "about to load gs201_aoc_rails (reads only)"
+    phone 'lsmod | grep -q "^gs201_aoc_rails " && rmmod gs201_aoc_rails;
+      modprobe gs201_aoc_rails; echo modprobe-exit=$?; rmmod gs201_aoc_rails' | tee -a "$log" || result=fail
+    ;;
+  c4a)
+    phone "test -d $DBG" || die "run c2 first"
+    want=$(sha256sum < "$FW" | cut -d' ' -f1)
+    got=$(phone 'sha256sum < /usr/lib/firmware/updates/aoc.bin 2>/dev/null | cut -d" " -f1')
+    if [[ "$want" != "$got" ]]; then
+      say "copying $(basename "$FW") to /usr/lib/firmware/updates/aoc.bin"
+      phone 'mkdir -p /usr/lib/firmware/updates && cat > /usr/lib/firmware/updates/aoc.bin' < "$FW" ||
+        die "copy failed"
+    fi
+    phone "test -e $MARKER" && die "$MARKER exists: an earlier load or start never finished. Reboot, then remove it by hand."
+    phone "mkdir -p ${MARKER%/*} && date > $MARKER && sync"
+    mark "about to load aoc.bin (power, S2MPU, System MMU windows, carve-out, GSA authentication)"
+    phone "echo aoc.bin > $DBG/load; echo load-exit=\$?; cat $DBG/info" | tee -a "$log" || result=fail
+    ;;
+  c4b)
+    phone "test -e $MARKER" || warn "no hang marker: was c4a run in this boot?"
+    mark "about to start the AoC (GSA_AOC_START on the mailbox)"
+    phone "echo 1 > $DBG/start; echo start-exit=\$?; cat $DBG/info; cat $DBG/control" | tee -a "$log" || result=fail
+    sleep 3
+    phone "dmesg | grep -c 'blocked' ; cat $DBG/info" | tee -a "$log" || result=fail
+    [[ $result == ok ]] && phone "rm -f $MARKER; sync"
+    ;;
+  stop)
+    mark "about to shut the AoC down (GSA_AOC_SHUTDOWN)"
+    phone "echo 1 > $DBG/shutdown; echo stop-exit=\$?; cat $DBG/info" | tee -a "$log" || result=fail
+    ;;
+esac
+
+sleep 2
+alive=0
+phone 'true' && alive=1
+if ((alive)); then
+  say "phone alive"
+  if ((watchdog)); then
+    phone 'kill $(cat /run/aoc-wd.pid) && rm /run/aoc-wd.pid' ||
+      warn "could not stop the watchdog feeder: the phone resets in about 15 s unless /dev/watchdog0 is fed"
+  fi
+else
+  result=hang
+  warn "PHONE NOT ANSWERING: the last kernel lines that reached the laptop are below."
+  if ((watchdog)); then
+    warn "Wait about 15 s for the watchdog reset; after boot run: $0 --pstore"
+  else
+    warn "Recover by holding Power about 30 s (a cold reset; pstore will be empty)."
+  fi
+fi
+
+sleep 1
+kill "$logger" 2>/dev/null
+trap - EXIT
+
+echo
+say "summary ($log): $result"
+sed -n "/aoc-stage: start $stage/,\$p" "$log" |
+  grep -E 'aoc|gsa|sysmmu|s2mpu|S2MPU|rails|LDO|CHIPID|blocked|-exit' |
+  sed -E 's/^([0-9:.]+) [0-9]+,[0-9]+,[0-9]+,[^;]*;/\1 /' | tail -40

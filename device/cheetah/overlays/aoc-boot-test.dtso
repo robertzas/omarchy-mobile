@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (AOC-PLAN.md, stages C2-C4): enable the GSA mailbox, the
+ * AoC System MMU and the AoC boot node, with cheetah's board id and revision
+ * (stock: aoc-board-cfg "C10", aoc-board-id 0x30301, aoc-board-rev 0x10000).
+ * The modules stay blacklisted from autoload and are loaded by hand
+ * (tools/aoc-stage); probing them touches no AoC register. Applied to the
+ * built gs201-cheetah.dtb with fdtoverlay. Paths, not labels, so the base
+ * DTB needs no __symbols__. Includes everything aoc-gsa-test enables.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/gsa@17c90000} {
+	status = "okay";
+};
+
+&{/soc@0/sysmmu@1a090000} {
+	status = "okay";
+};
+
+&{/soc@0/aoc@181d0000} {
+	google,board-id = <0x30301>;
+	google,board-rev = <0x10000>;
+	status = "okay";
+};
