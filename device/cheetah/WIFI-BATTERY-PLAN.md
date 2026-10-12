@@ -2367,3 +2367,73 @@ What a failure looks like:
   3. If they are not, the remaining options are 1.5's other routes: pKVM
      with Google's S2MPU module, or the PCIe SysMMU path that stock uses
      (VID 1, a page table that maps only the pool).
+
+### 9.15 W3: association fails, "join" needs the versioned layout (2026-10-12)
+
+**W3 on the integration kernel (00126):** the scan works, and
+`nmcli --ask dev wifi connect nevermore` stores the profile. Then every
+attempt logs `brcmf_cfg80211_connect: BRCMF_C_SET_SSID failed (-52)` and
+NetworkManager reports "ssid-not-found". There is no trap.
+- -52 is `-EBADE`, brcmfmac's code for "the firmware returned an error"
+  (`L/.../brcmfmac/fwil.c:110-125`).
+- The "join" iovar failed first, quietly, then the `WLC_SET_SSID`
+  fallback failed too.
+- Reloading with `feature_disable=0x82000` changed nothing, so the
+  firmware supplicant is not involved.
+
+**Cause: the join parameter layout.**
+- Broadcom's driver chooses between two "join" layouts by the firmware's
+  WLC interface version. 14.2, 14.4, 16.1+ and 17+ take
+  `wl_extjoin_params_v1_t` (`W/wl_cfg80211.c:18509-18517`, constants
+  `W/wl_cfg80211.h:1393-1404`, fill `wl_fillup_assoc_params_v1()`).
+- Our firmware reports WLC **14.4** (`R/dmesg.txt:7128`).
+- The v1 layout (`W/include/wlioctl.h:1333-1346,1505-1520`) adds a
+  `version`/pad word in front of the SSID. Its assoc params start with
+  `version`, `flags`, then the BSSID, `bssid_cnt` and `chanspec_num`.
+  bcmdhd leaves both version fields 0.
+- brcmfmac only knows the unversioned layout. That one matches
+  `wl_extjoin_params_t` (with the `bssid_cnt` slot as alignment padding),
+  so older firmware is fine and this one is not.
+- **Chanspec:** the scan's channels decode correctly (ch 6 and 48 listed
+  right), and the join uses the same `d11inf` encoder (D11AC format, the
+  4389's io_type). For 2.4 GHz ch 6, 20 MHz, that is 0x1006, the same
+  value `wl_freq_to_chanspec()` gives. It is not the cause.
+
+| Commit (wt-pcie) | Change |
+|---|---|
+| `dfc8407db` wifi: brcmfmac: use the versioned join parameters on the BCM4389 | new `JOIN_V1` feature from `wlc_ver` (bcmdhd's test), BCM4389 only; `brcmf_ext_join_params_v1_le`/`brcmf_assoc_params_v1_le`; v1 "join" when set, logging the firmware's own error code (`join (v1, chanspec 0x...., N bytes) failed: firmware error E`) |
+
+Build: `logs/{kernel,modules,images}-w3join.log`, wt-pcie release
+`7.3.0-rc6-omandroid-push1-00090-gdfc8407db34a` (standard test DTB,
+`.default` plain), to be merged into omandroid-int.
+
+**Runbook.**
+
+1. **No rebuild (current 00126 kernel, CONFIG_BRCMDBG is on): get the
+   firmware's error string for the failing join.**
+   ```sh
+   tools/phone-ssh 'modprobe -r brcmfmac_wcc brcmfmac; modprobe brcmfmac debug=0x1000; sleep 8;
+     nmcli con up nevermore; sleep 10; dmesg | grep -E "Firmware error|SET_SSID|join" | tail -20'
+   nmcli con modify nevermore connection.autoconnect no   # (on the phone) keep it from retrying
+   ```
+   Expect `brcmf_fil_cmd_data: Firmware error: BCME_BADLEN` (or
+   `BADARG`) for "join" and for `WLC_SET_SSID`. A different error (e.g.
+   `NOTASSOCIATED`, `BUSY`, `NOTREADY`) means the layout is not the
+   problem: send it.
+
+2. **New kernel** (wt-pcie, to merge into omandroid-int):
+   ```sh
+   # after merging and pushing your integration kernel, with Wi-Fi loaded as before:
+   tools/phone-ssh 'dmesg | grep -i "enabling firmware feature: JOIN_V1"'   # needs debug=0x4 at load
+   tools/phone-ssh -t 'nmcli con up nevermore'
+   tools/phone-ssh 'dmesg | grep -E "join \\(v1|SET_SSID|Firmware error" | tail; nmcli -t -f GENERAL.STATE,IP4.ADDRESS dev show wlp1s0'
+   ```
+   - **Pass:** no "join (v1 ...) failed" and no `SET_SSID failed`;
+     NetworkManager reaches "100 (connected)" with an address. Then
+     continue with 9.14 W3.2-W3.5.
+   - **"join (v1 …) failed: firmware error E":** send E. -2 (BADARG) or
+     -24 (BADLEN) mean the layout is still off.
+   - **Associated but the 4-way handshake fails:** try
+     `feature_disable=0x82000` (9.14).
+   - **Rollback:** `nmcli dev disconnect wlp1s0`, then
+     `nmcli con modify nevermore connection.autoconnect no`.
