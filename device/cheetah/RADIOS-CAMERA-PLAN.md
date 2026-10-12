@@ -708,6 +708,8 @@ controller to `okay` in the base DT, and decide whether neard runs by default
 
 ## 4. Cameras: Google ISP, CSIS, four sensors
 
+**Superseded by [CAMERA-PLAN.md](CAMERA-PLAN.md)** (staged plan, corrections to 4.1 and 4.6).
+
 ### 4.1 Hardware
 
 | Camera | Stock node | Sensor | I2C bus, address | Reset | CSIS link / PHY |
