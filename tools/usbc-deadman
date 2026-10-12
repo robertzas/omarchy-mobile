@@ -30,6 +30,10 @@
 #
 # replug: confirms only after the link has gone down and come back, i.e.
 # after you unplugged and replugged the cable.
+#
+# Exit codes: 0 confirmed (or undone on purpose with --no-confirm),
+# 3 undone (no confirmation in time), 4 no answer from the phone,
+# 5 refused before applying anything (reason printed), 6 apply failed, undone.
 
 set -uo pipefail
 
@@ -40,7 +44,7 @@ LOGDIR="$ROOT/logs"
 say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 warn() { printf '\e[33m==> %s\e[0m\n' "$*"; }
 die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
-usage() { sed -n '/^# Usage:/,/^# after you/p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '/^# Usage:/,/^# 5 refused/p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 # Every call gets its own stdin and a hard time limit, so a stuck SSH can
 # neither eat our terminal nor hang the loop.
 phone() { timeout 30 "$SSH" "$@" < /dev/null; }
@@ -150,7 +154,7 @@ while (( $(date +%s) < deadline )); do
       fi
     fi
     result=$(phone 'cat /run/usbc-deadman/result 2>/dev/null' 2>/dev/null)
-    case "$result" in confirmed|reverted|reset) break ;; esac
+    case "$result" in confirmed|reverted|reset|refused*|failed*) break ;; esac
   else
     ((dropped)) || { echo; warn "link down (expected for replug and once for b4a/b4b); waiting"; }
     dropped=1
@@ -170,6 +174,15 @@ case "$result" in
   reverted)
     rc=$(( noconfirm ? 0 : 3 ))
     warn "step $step was UNDONE by the phone (no confirmation in time); the link is back"
+    phone 'tail -20 /var/log/usbc-deadman.log'
+    ;;
+  refused*)
+    rc=5
+    warn "the phone REFUSED to start $step, nothing was applied: ${result#refused: }"
+    ;;
+  failed*)
+    rc=6
+    warn "step $step FAILED to apply on the phone and was undone; the link is fine"
     phone 'tail -20 /var/log/usbc-deadman.log'
     ;;
   *)

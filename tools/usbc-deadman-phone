@@ -215,6 +215,37 @@ wd_arm() {
 wd_extend() { echo $(( $(date +%s) + $1 )) > $D/deadline; }
 wd_disarm() { touch $D/disarm; sleep 3; log "watchdog: $(cat $D/wd 2>/dev/null)"; }
 
+# Who has the watchdog open (other bring-up tools feed it too)
+wd_holders() {
+  local f p out=
+  for f in /proc/[0-9]*/fd/*; do
+    [[ $(readlink "$f" 2>/dev/null) == /dev/watchdog* ]] || continue
+    p=${f#/proc/}; p=${p%%/*}
+    out+="$(cat /proc/$p/comm 2>/dev/null)[$p]: $(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null | cut -c1-80); "
+  done
+  echo "${out:-nobody visible}"
+}
+
+# A final state written before anything was applied
+refuse() {
+  log "refusing: $*"
+  echo "refused: $*" > $D/result
+  return 1
+}
+
+final_reset() {
+  log "=== step $1: no link after revert either (udc $(udc_state)); resetting"
+  echo reset > $D/result
+  sync
+  if ((use_wd)); then
+    wd_extend 0
+    sleep 40
+  fi
+  log "still alive: crashing (panic=10 reboots)"
+  sync
+  echo c > /proc/sysrq-trigger
+}
+
 wait_confirm() {   # wait_confirm SECS
   local end=$(( $(date +%s) + $1 ))
   while (( $(date +%s) < end )); do
@@ -228,16 +259,25 @@ run() {
   local step="$1"
   mkdir -p $D
   rm -f $D/confirm $D/result
-  [[ -n "$BUS" ]] || { log "no i2c bus for 10d60000.i2c, refusing"; return 1; }
-  command -v i2cget >/dev/null || { log "i2c-tools missing, refusing"; return 1; }
+  [[ -n "$BUS" ]] || { refuse "no i2c bus for 10d60000.i2c"; return 1; }
+  command -v i2cget >/dev/null || { refuse "i2c-tools missing"; return 1; }
   log "=== step $step: confirm ${confirm_s}s, grace ${grace_s}s, watchdog $use_wd; udc $(udc_state)"
   if ((use_wd)); then
-    wd_arm || { log "cannot open /dev/watchdog0 (in use?), refusing; --no-watchdog to accept a crash fallback"; return 1; }
+    wd_arm || { refuse "cannot open /dev/watchdog0, held by: $(wd_holders) (stop that, or --no-watchdog to accept a crash fallback)"; return 1; }
     log "watchdog armed"
   fi
   if ! apply "$step"; then
     log "apply failed: reverting now"
+    ((use_wd)) && wd_extend $(( grace_s + 20 ))
     revert "$step"
+    if wait_confirm "$grace_s"; then
+      ((use_wd)) && wd_disarm
+      log "=== step $step FAILED to apply, undone (udc $(udc_state))"
+      echo "failed: step $step did not apply and was undone; see /var/log/usbc-deadman.log" > $D/result
+      return 1
+    fi
+    final_reset "$step"
+    return 1
   fi
   if wait_confirm "$confirm_s"; then
     ((use_wd)) && wd_disarm
@@ -254,16 +294,7 @@ run() {
     echo reverted > $D/result
     return 1
   fi
-  log "=== step $step: no link after revert either (udc $(udc_state)); resetting"
-  echo reset > $D/result
-  sync
-  if ((use_wd)); then
-    wd_extend 0
-    sleep 40
-  fi
-  log "still alive: crashing (panic=10 reboots)"
-  sync
-  echo c > /proc/sysrq-trigger
+  final_reset "$step"
 }
 
 rescue_watch() {
