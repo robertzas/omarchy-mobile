@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: 0BSD
+#
+# Omandroid build of neard, the Linux NFC daemon, and nfctool, for the Pixel 7
+# Pro's NFC controller (device/cheetah/RADIOS-CAMERA-PLAN.md, section 3).
+# Arch Linux and Arch Linux ARM don't package neard; this is a plain build of
+# the upstream release. Choices:
+#  - --enable-tools: installs nfctool (and nciattach), which talk to the
+#    kernel's NFC netlink API directly; the N2/N3 stages use them.
+#  - no --enable-ese: the ST54J's secure element is never driven from Linux.
+#  - neard.service is installed but not enabled: start it by hand.
+#  - never use `nfctool -w` (firmware download) on this phone.
+
+pkgname=neard
+pkgver=0.20
+pkgrel=1
+pkgdesc='Near Field Communication manager, with nfctool'
+arch=(aarch64)
+url='https://github.com/linux-nfc/neard'
+license=(GPL-2.0-only)
+depends=(dbus glib2 glibc libnl)
+makedepends=(autoconf autoconf-archive automake libtool)
+backup=(etc/neard/main.conf)
+source=("$pkgname-$pkgver.tar.gz::https://github.com/linux-nfc/neard/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('2b3c12e7ce77901a649237ea044d9af5b4df54c0cbeed5036b5342dbc89dc3fd')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  ./bootstrap
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  ./configure \
+    --prefix=/usr \
+    --sysconfdir=/etc \
+    --libexecdir=/usr/lib/$pkgname \
+    --with-systemdsystemunitdir=/usr/lib/systemd/system \
+    --enable-systemd \
+    --enable-tools
+  make
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  make DESTDIR="$pkgdir" install
+  # Built from the tree but not a public header; it shadows other version.h.
+  rm -f "$pkgdir/usr/include/version.h"
+  install -Dm644 src/main.conf "$pkgdir/etc/neard/main.conf"
+}

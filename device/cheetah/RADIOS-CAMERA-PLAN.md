@@ -483,15 +483,11 @@ No rail, SPI or PMIC access in G0. G1 belongs to the ACPM/PMIC work.
     quirk.
 - **Google downstream:** `G/google-modules/nfc/st21nfc.c` is a raw char
   device for the vendor HAL (ioctls `ST21NFC_*`). We don't need it.
-- **Kernel config today:** `CONFIG_NFC_NCI=m`, but
-  `CONFIG_NFC_ST_NCI_I2C` is not set (`out-int/.config`). Add it to
-  `kernel/configs/omandroid.config` when N1 is built.
-- **The clock:**
-  - mainline has no consumer for the PMU's CLKOUT pads on gs201;
-  - the minimum is a fixed `PAD_CTRL_CLKOUT1` bit 0 = 1 written once
-    through the PMU regmap (a small provider, or the st-nci driver's
-    optional clock);
-  - a clean `clk-exynos-clkout`-style provider later.
+- **Kernel config:** `CONFIG_NFC_NCI=m`, `CONFIG_NFC_ST_NCI_I2C=m` (N1).
+- **The clock:** mainline had no provider for the PMU's CLKOUT pads on
+  gs201. Built on `omandroid-nfc` (section 3.7): the pads in
+  `clk-exynos-clkout` through the PMU regmap, and an optional clock in
+  st-nci that runs while the controller is powered up.
 
 ### 3.3 Userspace
 
@@ -547,40 +543,166 @@ tools/phone-ssh 'grep -hE "\((gph0-5|gph1-[45])\)" /sys/kernel/debug/pinctrl/*11
 
 ### 3.7 Built (2026-10-12): stages N1-N3
 
-Kernel branch `omandroid-gnss` (GNSS-PLAN.md section 2):
+Kernel branch `omandroid-gnss` (GNSS-PLAN.md section 2), merged into int:
 - `cad9624c0`: `st,st54j-i2c` in the st-nci binding;
 - `ec375b274`: `nfc@8` on `hsi2c_8`, `interrupts-extended = <&gpa9 1
   IRQ_TYPE_LEVEL_HIGH>`, `reset-gpios = <&gph1 5 GPIO_ACTIVE_HIGH>` (st-nci
   pulses 0 then 1, like Google's driver), no `ese-present`/`uicc-present`;
   disabled. The reset pin group only sets power-down states, as stock.
-
-Also built:
-- `CONFIG_NFC_ST_NCI_I2C=m`, giving `st-nci.ko` and `st-nci_i2c.ko` in
-  `out-gnss`;
+- `CONFIG_NFC_ST_NCI_I2C=m` (`st-nci.ko`, `st-nci_i2c.ko`);
 - overlay `overlays/nfc-test.dtso`, which enables the HSI1 pin controller
   and the node.
 
-The PMU reference clock (`PAD_CTRL_CLKOUT1` bit 0) is **not** handled yet.
-N2 finds out whether the controller initialises without it.
+Kernel branch `omandroid-nfc` (worktree `~/android/mainline/wt-nfc`, output
+`~/android/mainline/out-nfc`), on int `e821a4bec`, head `a6ed1ea8b`:
+- `2f769ea68` dt-bindings: one optional `clocks` entry for st-nci.
+- `40a8b3779` `clk-exynos-clkout`: the gs101/gs201 PMU pads. One gate per
+  pad (`pmu-clkout0`, `pmu-clkout1`) through the PMU's SMC-backed regmap,
+  never MMIO. Enable writes `PAD_CTRL_CLKOUTn` bits 13:8 = 0 (TCXO) and bit
+  0 = 1; disable clears bit 0. `CLK_IGNORE_UNUSED`: the kernel leaves both
+  pads as ABL left them until a consumer enables one. The driver is
+  built in (`CONFIG_EXYNOS_CLKOUT=y`), so it binds at every boot once
+  merged; before this it failed with "cannot match parent device".
+- `9b7ba4873` st-nci i2c: the clock runs from before reset is released
+  (`nfctool -1`, NCI power-up) until power-down (`nfctool -0`), as Google's
+  st21nfc.c does around open/release. Nothing at probe.
+- `829e25aed` st-nci: with neither `ese-present` nor `uicc-present`, power-up
+  skips the HCI network set-up. Upstream st-nci otherwise clears every HCI
+  pipe in the controller and writes its own session identity on the first
+  Linux power-up (`nci_hci_dev_session_init()`), which would undo the pipes
+  Android's NFC stack set up to the eSE. With this, Linux sends only NCI
+  core and RF commands.
+- `e4e3913df` gs201.dtsi: the PMU node is a clock provider
+  (`#clock-cells = <1>`, `clocks = <&oscclk>`, `clock-names = "clkout0"`).
+- `a6ed1ea8b` cheetah: `clocks = <&pmu_system_controller 1>` on `nfc@8`
+  (stock: `clocks = <&clock CLKOUT1>`, `pmu_clk_pad = <0x3e84>`).
 
-Userspace: neard (`nfctool`) is not in Arch's repositories (AUR only).
-`/sys/class/nfc` and the kernel log are enough for N2.
+Checks (build `7.3.0-rc6-omandroid-push1-00291-ga6ed1ea8b5af` in
+`out-nfc`): checkpatch clean apart from the missing Signed-off-by (the
+human signs off) and the already undocumented `google,gs201-pmu`; W=1
+clean for the four changed C files; `dt-doc-validate` passes for st,st-nci;
+`dt-validate` of the default DTB and of default + nfc-test shows only the
+two warnings that were there before (`soc_id`, simplefb), none for `nfc@8`
+or the PMU node.
+
+**Bit 0 polarity is the open question.** Google's sources disagree:
+st21nfc.c sets bit 0 while the device is open, and its `ST21NFC_CLK_STATE`
+reports bit 0 as "on"; the cal-if clkout code (`ra_enable_clkout()`) clears
+it on enable. We follow st21nfc.c, the driver tested with this chip. N2.2
+records ABL's state of the pads; if N2.4 times out with the clock "on",
+the next build inverts the gate (one-line change in the driver). Never
+test it by writing the PMU from userspace.
+
+Userspace:
+- `packages/neard`: neard 0.20 with `nfctool` (Arch Linux and Arch Linux
+  ARM don't package it; Omarchy doesn't either). Built without eSE
+  support; `neard.service` installed, not enabled.
+- `packages/omandroid-device-cheetah/vendor/modprobe.d/omandroid-nfc.conf`:
+  `blacklist st_nci_i2c`, so the nfc-test DTB never loads the driver at
+  boot. The runbook loads it by hand. (Package version bump pending.)
+- Quick settings: the NFC tile runs `rfkill block|unblock nfc`. The NFC
+  core registers one rfkill switch per adapter (type `nfc`) when st-nci
+  binds, so the tile shows "No NFC" before N2.3 and "On"/"Off" after.
+  Blocking powers the controller down and refuses power-up; unblocking
+  only allows it. Something must still power the adapter up (neard with
+  `DefaultPowered`, or `nfctool -1`).
+
+Never run i2cdetect on this bus, never run `nfctool -w` (firmware download),
+never write `st54j_fw.bin` from Linux, never add `ese-present` to the node,
+and never touch gph1-4 (eSE reset).
+
+#### Runbook N2: bind st-nci, NCI power-up
+
+Laptop first. The human merges `omandroid-nfc` into `omandroid-int`.
 
 ```sh
-# N1: build only (done). N2 (int with omandroid-gnss + nfc-test):
-ov nfc-test && bin/omandroid push                               # reboots
-tools/phone-ssh 'dmesg | grep -iE "st-nci|st21nfc|nfc" | tail; ls /sys/class/nfc/ 2>&1;
-  grep -hE "\((gph1-[45]|gph0-5)\)" /sys/kernel/debug/pinctrl/*11840000*/pins'
-#   pass: st_nci_i2c bound to 8-0008, nfc0 registered, no "timeout" or NCI errors;
-#   gph1-4 (eSE reset) unchanged from N0.
-#   NCI init timeout: the reference clock is missing. Next step (not built): a small
-#   clock provider for PMU PAD_CTRL_CLKOUT1 through the PMU regmap, as st21nfc.c:191-200.
-# N3 (needs nfctool from neard, AUR): nfctool -d nfc0 -1; nfctool -d nfc0 -p
-#   with a tag on the back: its UID and protocol
-# rollback: images without the overlay
+export KERNEL_DIR=~/android/mainline/wt-int KERNEL_OUT=~/android/mainline/out-int
+bin/omandroid kernel && bin/omandroid modules
+O=$KERNEL_OUT D=$O/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb
+rm -f "$D.default"     # the new base DTB carries the PMU clock provider; refresh ov's copy
+# ov() as in M0.4 (section 1.6)
 ```
 
-Never run i2cdetect on this bus, and never write `st54j_fw.bin` from Linux.
+```sh
+# N2.1  blacklist and tools on the phone first (risk: none; package installs only)
+tools/phone-install-package packages/omandroid-device-cheetah    # after the version bump
+tools/phone-install-package packages/neard
+tools/phone-ssh 'modprobe -c | grep -c "^blacklist st_nci_i2c"; ls /etc/modprobe.d/;
+  systemctl is-enabled neard; command -v nfctool'
+#   pass: 1; no NFC file in /etc/modprobe.d; neard "disabled"; /usr/bin/nfctool.
+#   stop: blacklist count 0. Don't install a DTB with nfc-test until it is 1.
+
+# N2.2  boot with nfc-test (risk: low; the driver stays unloaded)
+#   keep the overlays the phone already boots with, add nfc-test, e.g.:
+ov gnss-pmic-test gnss-test aoc-boot-test nfc-test && bin/omandroid push    # reboots
+tools/phone-ssh 'uname -r; lsmod | grep -c "^st_nci"; dmesg | grep -iE "clkout|st.nci|nfc";
+  grep -E "pmu-clkout|oscclk" /sys/kernel/debug/clk/clk_summary;
+  grep -hE "\((gph0-5|gph1-[45])\)" /sys/kernel/debug/pinctrl/*11840000*/pins'
+#   pass: USB/SSH, UFS, touch, Wi-Fi, sound as before; 0 st_nci modules; no clkout error;
+#   pmu-clkout0 and pmu-clkout1 under oscclk, enable count 0, rate 24576000.
+#   record: the hardware-enable column of both pads (ABL's bit 0; a kernel regmap read).
+#   record: gph1-5 output high, gph1-4 output low, gph0-5: as N0 (2026-10-12).
+#   stop: no SSH within 2 minutes (the watchdog resets the phone), or any pin changed.
+#   rollback: cp "$D.default" "$D"; bin/omandroid images && bin/omandroid push
+
+# N2.3  bind (risk: low; no NCI traffic: probe only requests reset (already high) and the IRQ)
+tools/phone-ssh 'modprobe st_nci_i2c; sleep 1; dmesg | grep -iE "st.nci|nfc" | tail;
+  ls /sys/class/nfc/; rfkill -rn -o TYPE,SOFT,HARD | grep "^nfc";
+  cat /sys/kernel/debug/clk/pmu-clkout1/clk_enable_count;
+  grep -hE "\((gph1-[45])\)" /sys/kernel/debug/pinctrl/*11840000*/pins'
+#   pass: nfc0 (8-0008 bound to st_nci_i2c); rfkill "nfc unblocked unblocked";
+#   clk_enable_count 0; gph1-5 still high, gph1-4 unchanged. The NFC tile shows "On".
+#   stop: "Unable to get reference clock" (the PMU provider did not register: check N2.2),
+#   or any I2C error on bus 8 (haptics shares it).
+#   rollback: modprobe -r st_nci_i2c st_nci
+
+# N2.4  NCI power-up (risk: low-medium; first NCI traffic. The reset pulse on gph1-5
+#       resets the whole ST54J, eSE included, as stock does every time NFC turns on.
+#       CORE_RESET (reset config), CORE_INIT; no HCI, no NFCEE, no firmware)
+#   second terminal first:  tools/phone-ssh dmesg -w
+tools/phone-ssh 'nfctool -d nfc0 -1; echo rc=$?; nfctool -l;
+  cat /sys/kernel/debug/clk/pmu-clkout1/clk_enable_count; grep pmu-clkout1 /sys/kernel/debug/clk/clk_summary;
+  grep -hE "\((gph1-[45])\)" /sys/kernel/debug/pinctrl/*11840000*/pins'
+#   pass: rc=0; nfctool lists nfc0 powered, with protocols (Felica MIFARE Jewel ISO-DEP NFC-DEP
+#   ISO15693); enable count 1, hardware enable Y; no NCI error in dmesg; gph1-4 unchanged.
+#   stop: rc != 0 or "Connection timed out" (NCI init timeout). Run N2.5, record ABL's pad
+#   state from N2.2 next to the result: that decides the bit 0 polarity for the next build.
+# N2.5  power-down (risk: low)
+tools/phone-ssh 'nfctool -d nfc0 -0; nfctool -l; cat /sys/kernel/debug/clk/pmu-clkout1/clk_enable_count'
+#   pass: nfc0 not powered; enable count 0 (pad off again).
+# N2.6  rfkill, as the quick-settings tile uses it (risk: low)
+tools/phone-ssh 'rfkill block nfc; nfctool -d nfc0 -1; echo rc=$?; rfkill unblock nfc; rfkill -rn -o TYPE,SOFT | grep ^nfc'
+#   pass: power-up refused while blocked (rc != 0); "nfc unblocked" at the end.
+#   rollback for N2.3-N2.6: nfctool -d nfc0 -0; modprobe -r st_nci_i2c st_nci
+```
+
+#### Runbook N3: read a tag (needs N2.4 passed)
+
+Any NFC tag or transit card, held to the middle of the back. Don't copy a
+tag's UID into this plan; record its length and type.
+
+```sh
+# N3.1  poll from the kernel API (risk: low; RF reader mode only)
+tools/phone-ssh 'nfctool -d nfc0 -1 && timeout 30 nfctool -d nfc0 -p; nfctool -l'
+#   pass: "Targets found for nfc0" with a tag (tag0) and its protocol in nfctool -l.
+#   stop: nothing within 30 s with the tag in place: power down, record, retry once.
+tools/phone-ssh 'nfctool -d nfc0 -0'
+
+# N3.2  the UID through neard (risk: low; with upstream main.conf neard powers nfc0 and
+#       keeps polling while it runs)
+tools/phone-ssh 'systemctl start neard; sleep 2; busctl tree org.neard'
+#   hold the tag, then:
+tools/phone-ssh 'busctl tree org.neard; T=$(busctl tree --list org.neard | grep -m1 "/tag"); echo $T;
+  busctl get-property org.neard $T org.neard.Tag Type Protocol Uid'
+#   pass: a /org/neard/nfc0/tagN object; Type and Protocol set; Uid a byte array
+#   (4, 7 or 10 bytes for ISO 14443-A).
+tools/phone-ssh 'systemctl stop neard; nfctool -d nfc0 -0'
+#   rollback: systemctl stop neard; nfctool -d nfc0 -0; modprobe -r st_nci_i2c st_nci
+```
+
+After N3 passes: drop the blacklist, move `nfc@8` and the HSI1 pin
+controller to `okay` in the base DT, and decide whether neard runs by default
+(the quick-settings tile works either way through rfkill).
 
 ---
 
