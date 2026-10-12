@@ -39,9 +39,14 @@ for f in usr/bin/omandroid-bootctl usr/bin/reboot-to usr/bin/omandroid-boot-succ
          usr/lib/systemd/system.conf.d/10-omandroid-reboot-watchdog.conf \
          usr/lib/udev/rules.d/72-omandroid-feedbackd.rules \
          usr/bin/omandroid-bt-addr usr/lib/systemd/system/omandroid-bt-addr@.service usr/lib/udev/rules.d/80-omandroid-bt-addr.rules \
-         usr/lib/modprobe.d/omandroid-bluetooth.conf; do
+         usr/lib/modprobe.d/omandroid-bluetooth.conf \
+         usr/bin/omandroid-wifi-start usr/lib/systemd/system/omandroid-wifi.service usr/lib/modprobe.d/omandroid-wifi.conf; do
   [[ -e $tmp/root/$f ]] || fail "install stages $f"
 done
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omandroid-boot-success.service") == ../omandroid-boot-success.service ]] \
   || fail "the boot-success unit is enabled by a vendor wants link"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omandroid-wifi.service") == ../omandroid-wifi.service ]] \
+  || fail "the Wi-Fi unit is enabled by a vendor wants link"
+grep -q 'mode=' bin/omandroid-wifi-start && fail "omandroid-wifi-start never loads the SysMMU firewall"
+grep -qx 'blacklist pcie_gs201' vendor/modprobe.d/omandroid-wifi.conf || fail "pcie_gs201 only loads through the guarded service"
 pass "install stages the package"

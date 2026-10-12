@@ -1,19 +1,21 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Bring up Wi-Fi at boot, hang-safe (gate W4, device/cheetah/WIFI-BATTERY-PLAN.md).
+# Bring up Wi-Fi at boot, hang-safe (device/cheetah/WIFI-BATTERY-PLAN.md).
 #
-# Order: the PCIe System MMU DMA window first (the chip may only reach its DMA
-# pool), then the PCIe controller (powers the chip, trains the link), then
-# brcmfmac. A marker file is written and synced before anything touches the
-# hardware, and removed once the interface exists. If the phone hangs during
-# bring-up, the next boot finds the marker and skips Wi-Fi; remove it by hand
-# (or run "omandroid-wifi-start --retry") to try again.
+# Order: the PCIe controller (powers the chip, trains the link), then
+# brcmfmac. The chip's DMA buffers come from its restricted DMA pool (DT);
+# that keeps driver bugs away from the rest of RAM, but is not a firewall
+# against the chip's firmware. A marker file is written and synced before
+# anything touches the hardware, and removed once the interface exists. If the
+# phone hangs during bring-up, the next boot finds the marker and skips Wi-Fi;
+# run "omandroid-wifi-start --retry" to try again.
 #   omandroid-wifi-start [--retry]
 set -uo pipefail
 
 state=/var/lib/omandroid
 marker=$state/wifi-bringup-started
-firewall=/sys/bus/platform/drivers/gs201-pcie-sysmmu
+controller=/sys/bus/platform/devices/14520000.pcie
+pool=/proc/device-tree/reserved-memory/wifi-dma-pool
 
 log() { echo "omandroid-wifi: $*"; }
 
@@ -31,13 +33,13 @@ sync -f "$marker" 2>/dev/null || sync
 
 finish() { rm -f "$marker"; sync -f "$state" 2>/dev/null || sync; }
 
-# 1. The DMA window must be enforcing before the link exists.
-if ! modprobe pcie_gs201_sysmmu mode=1; then
-  log "the DMA window driver did not load; not powering the Wi-Fi chip"
-  finish; exit 1
+# 1. Only with the controller enabled and the DMA pool present (both from DT).
+if [[ ! -e $controller ]]; then
+  log "the PCIe controller is not enabled in this DTB; nothing to do"
+  finish; exit 0
 fi
-if ! compgen -G "$firewall/*.sysmmu" >/dev/null; then
-  log "the DMA window is not bound (DT node disabled?); not powering the Wi-Fi chip"
+if [[ ! -d $pool ]] || { [[ -e $pool/status ]] && [[ $(tr -d '\0' < "$pool/status") != okay ]]; }; then
+  log "no Wi-Fi DMA pool in this DTB; not powering the Wi-Fi chip"
   finish; exit 1
 fi
 

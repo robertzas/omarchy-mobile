@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: MIT
-# Wi-Fi at boot (gate W4). Shipped disabled: it is enabled by a
-# multi-user.target.wants link only once W4 has passed and the default DTB
-# enables pcie_1, the Wi-Fi DMA pool and the PCIe System MMU.
+# Wi-Fi at boot, enabled by the vendor multi-user.target.wants link. pcie_gs201
+# and brcmfmac are blacklisted for autoload (modprobe.d/omandroid-wifi.conf),
+# so this hang-safe script is the only thing that powers the chip.
 [Unit]
-Description=Bring up Wi-Fi behind its DMA window (hang-safe)
+Description=Bring up Wi-Fi (hang-safe)
 After=local-fs.target systemd-modules-load.service
-ConditionPathExists=/proc/device-tree/soc@0/sysmmu@145c0000
+ConditionPathExists=/sys/bus/platform/devices/14520000.pcie
 
 [Service]
 Type=oneshot
