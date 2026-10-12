@@ -9,7 +9,7 @@ Plan: https://claude.ai/code/artifact/060038bc-beff-497e-9643-4f322318b2be
 | Path | What it is |
 | --- | --- |
 | `bin/omandroid` | Native Omarchy tooling: `capture`, `kernel`, `kernel-shell` |
-| `packages/` | pacman packages: `omandroid-shell` (the phone profile for Omarchy's shell), `omandroid-device-cheetah` (Pixel 7 Pro support), `omandroid-sensors` (sensors and auto-rotate through the AoC), `omandroid-gnss` (location on demand), patched `mesa` and `hyprland`. `tools/phone-install-package` builds one on the phone and installs it |
+| `packages/` | pacman packages: `omandroid-shell` (the phone profile for Omarchy's shell), `omandroid-device-cheetah` (Pixel 7 Pro support), `omandroid-sensors` (sensors and auto-rotate through the AoC), `omandroid-gnss` (location on demand), `omandroid-audio` (PipeWire and speaker protection), `omandroid-fingerprint` with a patched `libfprint`, patched `mesa` and `hyprland`. `tools/phone-install-package` builds one on the phone and installs it |
 | `patches/omarchy/` | Changes to Omarchy for touch devices, to send upstream (`bridge-*` ones are stopgaps for the phone's older Omarchy) |
 | `bin/lineage-ref` | Builds LineageOS for the phone. Used as a rooted reference Android (M0) and, later, for Waydroid images |
 | `kernel/configs/` | Our kernel config fragment, merged on top of arm64 `defconfig` |

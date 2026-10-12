@@ -46,7 +46,7 @@ The status of each phone, as verified on real hardware. To add a device or updat
 | NFC | built | ST54J over I2C: st-nci with its reference clock, and a `neard` package, built but not yet run on the phone (the driver is blacklisted until its runbook); quick settings has an NFC tile (rfkill) | [RADIOS-CAMERA-PLAN](../device/cheetah/RADIOS-CAMERA-PLAN.md) |
 | Cameras | no | Surveyed only | [RADIOS-CAMERA-PLAN](../device/cheetah/RADIOS-CAMERA-PLAN.md) |
 | Suspend | WIP | `pm_test` dry runs pass, and a first real s2idle freeze slept and woke on a key with UFS at `spm_lvl` 5 and Wi-Fi unloaded. Not on by default: more cycles, the UFS default and Wi-Fi's D3 messages first | [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md) |
-| Fingerprint | WIP | Trusty runs from Linux; Google's HAL in a chroot, sensor and RPMB stages pending | [FINGERPRINT-RESEARCH](../device/cheetah/FINGERPRINT-RESEARCH.md) |
+| Fingerprint | WIP | Trusty runs at every boot (the AoC starts through it). Google's HAL in a chroot behind a bridge (`omandroid-fingerprint`) and a libfprint driver for fprintd are built and tested offline; nothing has run on the phone, and the first secure-storage write waits for an explicit go | [FINGERPRINT-PLAN](../device/cheetah/FINGERPRINT-PLAN.md), [FINGERPRINT-RESEARCH](../device/cheetah/FINGERPRINT-RESEARCH.md) |
 
 ## Wanted
 

@@ -130,7 +130,8 @@ Each entry gives the gotcha, then the reason or the fix. Details are in the link
 - **The HSI2 SysMMU and S2MPU select by VID, and PCIe (AxID 0x0) and UFS (AxID 0x2) both arrive on VID 0:** translating VID 0 starved storage and wedged the phone. Wi-Fi ships with a restricted DMA pool instead, and the driver refuses VID 0. [WIFI-BATTERY-PLAN](device/cheetah/WIFI-BATTERY-PLAN.md) W4
 - **ACPM reads its channel table from APM SRAM, and some channels are unusable** (a type-2 buffer channel with queues in DRAM): skip them rather than failing the probe. DVFS is channel 0, PMIC 2, thermal 9. Upstream supports polling only. [ACPM-PLAN](device/cheetah/ACPM-PLAN.md)
 - **The regulator core turns off unused rails that have constraints about 30 s after late init:** load PMIC regulator modules after that, or make sure the rails are claimed. [GNSS-PLAN](device/cheetah/GNSS-PLAN.md)
-- **The AoC starts only through Trusty** (`com.android.trusty.gsa.hwmgr.aoc`). The GSA mailbox `START` leaves the A32 held. So Trusty is a dependency of audio and sensors, not just of fingerprint.
+- **The AoC starts only through Trusty** (`com.android.trusty.gsa.hwmgr.aoc`). The GSA mailbox `START` leaves the A32 held. So Trusty is a dependency of audio and sensors, not just of fingerprint, and it runs at every boot on the integration kernel.
+- **Fingerprint: nothing writes `persist` or the RPMB without the human's explicit go.** The first `storageproxyd` run (FINGERPRINT-PLAN F4) is irreversible, and `omandroid-fp.service` ships disabled because its first run writes Trusty's secure storage. [FINGERPRINT-PLAN](device/cheetah/FINGERPRINT-PLAN.md)
 - **Set the Bluetooth address only after powering the controller on:** set on a never-powered controller, the kernel withdrew the index for good.
 - **brcmfmac on BCM4389 needs control-ring D3 messages:** this firmware ignores the TCM mailbox. Unload Wi-Fi for suspend tests until that lands. [SUSPEND-PLAN](device/cheetah/SUSPEND-PLAN.md)
 
@@ -163,6 +164,7 @@ Each entry gives the gotcha, then the reason or the fix. Details are in the link
 
 - **`grep -q` under `set -o pipefail`:** `grep -q` exits early, SIGPIPEs the writer, and the pipeline fails on large input. Use `grep -c … >/dev/null`.
 - **Omarchy's Chromium launcher splits each line of `chromium-flags.conf` on spaces:** quote a flag whose value has spaces (`"--user-agent=…"`).
+- **Chromium needs `--force-device-scale-factor` on the phone,** even with the mobile user agent: its window layout won't go below about 500 px and the panel is 480 px wide in logical pixels, so without it the window runs off the right edge. Sites get phone layouts from the user agent.
 - **The screensaver runs in a terminal, so focusing it pops up the on-screen keyboard:** `patches/omarchy/0006-*` turns `org.gnome.desktop.a11y.applications screen-keyboard-enabled` off for the screensaver and back on afterwards. If the keyboard stops appearing, check that key first.
 - **Vendor chroots:** bootstrap binaries such as `servicemanager` use `/system/bin/bootstrap/linker64` as their interpreter. `extract-vendor-chroot` links it to the runtime APEX linker. Run the chroot by path, without `env chroot`.
 - **Quickshell plugins:**
@@ -184,7 +186,7 @@ Each entry gives the gotcha, then the reason or the fix. Details are in the link
 | `device/cheetah/initramfs/init` | Storage guard, USB gadget, SSH, switch to Arch |
 | `kernel/configs/omandroid.config` | Config fragment on top of arm64 `defconfig`, commented by plan |
 | `packages/omandroid-device-cheetah` | Boot-success marker, Wi-Fi and AoC start scripts, udev, modprobe and systemd policy |
-| `packages/omandroid-shell`, `-sensors`, `-gnss`, `-audio`, `neard`, `mesa`, `hyprland`, `omandroid-keyring` | Userspace packages |
+| `packages/omandroid-shell`, `-sensors`, `-gnss`, `-audio`, `-fingerprint`, `-modem` (chroot profile), `libfprint`, `neard`, `mesa`, `hyprland`, `omandroid-keyring` | Userspace packages |
 | `patches/omarchy/` | Omarchy changes waiting to land upstream |
 | `docs/DEVICES.md` | Supported-devices matrix |
 | `~/android/mainline/wt-*`, `out-*` | Kernel worktrees and build outputs (outside the repo) |

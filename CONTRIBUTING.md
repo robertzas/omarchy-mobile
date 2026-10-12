@@ -219,7 +219,7 @@ Each stage has a plan document for cheetah. Use it as the map and the template f
 | 13 | **Suspend** (s2idle, then deep sleep) | sleeps and wakes on Power | [SUSPEND-PLAN.md](device/cheetah/SUSPEND-PLAN.md) |
 | 14 | **AoC** (audio and sensor DSP, started through the GSA and Trusty), then sensors, then speakers and mics | services online; auto-rotate; sound | [AOC-PLAN.md](device/cheetah/AOC-PLAN.md), [USF-PROTOCOL.md](device/cheetah/USF-PROTOCOL.md), [AUDIO-PLAN.md](device/cheetah/AUDIO-PLAN.md) |
 | 15 | **GNSS, NFC, modem, cameras** | a fix; calls and data later | [RADIOS-CAMERA-PLAN.md](device/cheetah/RADIOS-CAMERA-PLAN.md), [GNSS-PLAN.md](device/cheetah/GNSS-PLAN.md), [MODEM-PLAN.md](device/cheetah/MODEM-PLAN.md) |
-| 16 | **Fingerprint** (Trusty, the RPMB, Google's HAL in a chroot) | unlocks Omarchy's lock | [FINGERPRINT-RESEARCH.md](device/cheetah/FINGERPRINT-RESEARCH.md) |
+| 16 | **Fingerprint** (Trusty, the RPMB, Google's HAL in a chroot) | unlocks Omarchy's lock | [FINGERPRINT-PLAN.md](device/cheetah/FINGERPRINT-PLAN.md), [FINGERPRINT-RESEARCH.md](device/cheetah/FINGERPRINT-RESEARCH.md) |
 
 Stages 1-5 make a usable phone on a desk. After stage 2, most stages are independent of each other, so pick what you care about.
 
