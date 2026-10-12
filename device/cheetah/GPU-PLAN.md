@@ -85,6 +85,11 @@ changes belong to ACPM.
 
 ### 1.2 OPP / DVFS table (Google DT, v2 table; kHz)
 
+> **Correction (2026-10-12, `ACPM-PLAN.md` section 3):** this phone runs the
+> **v1** table (11 levels, without 633 and 434 MHz). kbase drops v2 because
+> this ECT's G3D domain has no 633/434 MHz levels; the stock kernel lists the
+> v1 levels as GPU cooling states (`R/dmesg.txt:3989-3999`).
+
 From `gs201-gpu.dtsi:106-127` (v1 table at `:86-104`). The live DT has the same
 values in hex (`R/live.dts:6009-6012`).
 

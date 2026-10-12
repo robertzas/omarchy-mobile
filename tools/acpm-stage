@@ -1,0 +1,197 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# acpm-stage: run one staged gs201 ACPM / GPU DVFS step (device/cheetah/ACPM-PLAN.md)
+# and keep every kernel line on the laptop, even if the phone hangs.
+#
+# A first SSH connection streams /dev/kmsg into logs/acpm-<time>-<stage>.log
+# BEFORE a second one touches the hardware, so the last line written before a
+# hang is already on the laptop. Every step prints what it is about to do into
+# the kernel log first ("acpm-stage: ...").
+#
+# Usage:
+#   tools/acpm-stage [options] STAGE
+#
+# Stages (run in order; each needs the previous one to have passed):
+#   a1   handshake: load exynos_mailbox and acpm_protocol. Reads the APM SRAM
+#        channel table and masks the AP side of the mailbox. Sends nothing.
+#   a2   query: load clk_acpm. Sends one FREQ_GET per DVFS domain and prints
+#        the firmware's rates. The GPU clock stays read-only, Panthor binds.
+#   a3   one step: allow 202 MHz, pin devfreq at 202 MHz (L2 302 MHz), read
+#        the rates back, run a short GPU load, then go back to 151 MHz and
+#        read-only.
+#   a4   devfreq: allow up to --max kHz (default 572000) and let the
+#        simple_ondemand governor run over the full table under GPU load.
+#   off  back to read-only: GPU at 151 MHz, gs201_gpu_max_khz=0.
+#
+# Options:
+#   --watchdog   arm the hardware watchdog (s3c2410, about 15 s) with a feeder
+#                loop on the phone; a full hang then resets the phone by itself
+#                (warm reset, pstore keeps the console) instead of needing a
+#                30 s Power hold
+#   --max KHZ    a4: highest GPU shader rate (default 572000; 848000 = all)
+#   --load SECS  seconds of GPU load in a3/a4 (default 20)
+#   --pstore     after a watchdog reset: save /sys/fs/pstore
+
+set -uo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+SSH="$ROOT/tools/phone-ssh"
+LOGDIR="$ROOT/logs"
+DF=/sys/class/devfreq/28000000.gpu
+CAP=/sys/module/clk_acpm/parameters/gs201_gpu_max_khz
+CLKD=/sys/kernel/debug/clk
+
+watchdog=0 max=572000 load=20 stage= pstore=0
+
+usage() { sed -n '/^# Usage:/,/^#   --pstore/p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
+warn() { printf '\e[33m==> %s\e[0m\n' "$*"; }
+die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
+
+while (($#)); do
+  case "$1" in
+    --watchdog) watchdog=1 ;;
+    --max) max="${2:?}"; shift ;;
+    --load) load="${2:?}"; shift ;;
+    --pstore) pstore=1 ;;
+    -h|--help) usage ;;
+    a1|a2|a3|a4|off) stage="$1" ;;
+    *) usage 1 ;;
+  esac
+  shift
+done
+
+mkdir -p "$LOGDIR"
+stamp=$(date +%Y%m%d-%H%M%S)
+
+# A short, bounded SSH call; returns non-zero if the phone does not answer.
+phone() { timeout $((load + 40)) "$SSH" -o ServerAliveInterval=2 -o ServerAliveCountMax=3 "$@"; }
+mark() { phone "echo 'acpm-stage: $*' > /dev/kmsg"; }
+
+if ((pstore)); then
+  out="$LOGDIR/acpm-pstore-$stamp"
+  mkdir -p "$out"
+  phone 'ls -l /sys/fs/pstore/' || die "phone not reachable"
+  for f in $(phone 'ls /sys/fs/pstore/'); do
+    phone "cat /sys/fs/pstore/$f" > "$out/$f"
+  done
+  say "saved to $out"
+  grep -h 'acpm\|mbox\|panthor' "$out"/console-* 2>/dev/null | tail -20
+  exit 0
+fi
+
+[[ -n "$stage" ]] || usage 1
+log="$LOGDIR/acpm-$stamp-$stage.log"
+
+say "phone check"
+phone 'uname -r' || die "phone not reachable over $SSH"
+phone 'test -e /sys/firmware/devicetree/base/firmware/power-management' ||
+  die "the running DTB has no ACPM node: boot the ACPM kernel first (ACPM-PLAN.md, A0)"
+
+# 1. The log stream. cat (not dmesg) so nothing is buffered on the phone.
+say "streaming the phone's kernel log to $log"
+{
+  echo "# acpm-stage $stamp stage=$stage max=$max watchdog=$watchdog"
+  "$SSH" -T -o ServerAliveInterval=1 -o ServerAliveCountMax=5 'exec cat /dev/kmsg' 2>&1 |
+  while IFS= read -r line; do printf '%s %s\n' "$(date +%T.%3N)" "$line"; done
+  echo "# $(date +%T.%3N) log stream ended (connection closed or phone gone)"
+} >> "$log" &
+logger=$!
+trap 'kill $logger 2>/dev/null' EXIT
+sleep 2
+mark "start $stage" || die "phone stopped answering before the test"
+
+# 2. Optional watchdog: a feeder loop that stops when the phone hangs.
+if ((watchdog)); then
+  say "arming the hardware watchdog (feeder every 2 s)"
+  phone 'nohup sh -c "exec 3>/dev/watchdog0
+    trap \"printf V >&3; exit 0\" TERM
+    while :; do printf k >&3; sleep 2; done" >/dev/null 2>&1 &
+    echo $! > /run/acpm-wd.pid' || warn "could not arm the watchdog"
+fi
+
+# Rates as the firmware reports them (the ACPM clocks are CLK_GET_RATE_NOCACHE,
+# so each read is one FREQ_GET message).
+rates='for c in mif int cpucl0 cpucl1 cpucl2 g3d g3dl2 tpu intcam tnr cam mfc disp bo gpu; do
+  printf "%-7s %s\n" $c "$(cat '$CLKD'/$c/clk_rate 2>/dev/null || echo -)"; done'
+gpu_state="echo \"cap \$(cat $CAP) kHz, devfreq cur \$(cat $DF/cur_freq) min \$(cat $DF/min_freq) max \$(cat $DF/max_freq)\";
+  echo \"g3d \$(cat $CLKD/g3d/clk_rate) g3dl2 \$(cat $CLKD/g3dl2/clk_rate)\""
+# GPU load: vkcube if there is a Wayland session, else glmark2's offscreen DRM run.
+gpu_load="u=\$(loginctl list-users --no-legend | awk 'NR==1{print \$2}');
+  if [ -n \"\$u\" ] && [ -S /run/user/\$(id -u \$u)/wayland-1 ]; then
+    sudo -u \$u XDG_RUNTIME_DIR=/run/user/\$(id -u \$u) WAYLAND_DISPLAY=wayland-1 timeout $load vkcube >/dev/null 2>&1;
+  else timeout $load glmark2-es2-drm --off-screen >/dev/null 2>&1; fi; true"
+
+result=ok
+case "$stage" in
+  a1)
+    mark "about to load exynos_mailbox (writes INTMR0 = 0xffff)"
+    phone 'modprobe exynos_mailbox' || result=fail
+    mark "about to load acpm_protocol (reads the SRAM channel table)"
+    phone 'modprobe acpm_protocol dyndbg=+p; echo modprobe-exit=$?' || result=fail
+    phone 'ls /sys/bus/platform/drivers/exynos-acpm-protocol/ 2>/dev/null | grep -c firmware' | tee -a "$log"
+    ;;
+  a2)
+    phone 'lsmod | grep -q "^acpm_protocol"' || die "run a1 first"
+    mark "about to load clk_acpm (one FREQ_GET per domain)"
+    phone 'modprobe clk_acpm dyndbg=+p; echo modprobe-exit=$?' || result=fail
+    sleep 3
+    say "firmware rates (Hz)"
+    phone "$rates" | tee -a "$log" || result=fail
+    say "Panthor"
+    phone "ls /dev/dri; $gpu_state; cat $DF/available_frequencies" | tee -a "$log" || result=fail
+    ;;
+  a3)
+    phone "test -e $CAP && test -e $DF" || die "run a2 first (clk_acpm loaded, Panthor bound)"
+    mark "about to allow 202 MHz and pin devfreq there (G3DL2 302 MHz, then G3D 202 MHz)"
+    phone "echo 202000 > $CAP && echo 202000000 > $DF/max_freq && echo 202000000 > $DF/min_freq; sleep 1; $gpu_state" | tee -a "$log" || result=fail
+    mark "GPU load ${load}s at 202 MHz"
+    phone "$gpu_load; $gpu_state" | tee -a "$log" || result=fail
+    mark "about to return to 151 MHz (G3D, then G3DL2)"
+    phone "echo 151000 > $CAP && echo 151000000 > $DF/min_freq && echo 151000000 > $DF/max_freq; sleep 1; $gpu_state" | tee -a "$log" || result=fail
+    phone "echo 0 > $CAP; cat $DF/trans_stat" | tee -a "$log" || result=fail
+    ;;
+  a4)
+    phone "test -e $CAP && test -e $DF" || die "run a2 first (clk_acpm loaded, Panthor bound)"
+    mark "about to allow up to $max kHz with simple_ondemand"
+    # min first down, then max up: devfreq rejects min > max
+    phone "echo $max > $CAP && echo 151000000 > $DF/min_freq && echo $((max * 1000)) > $DF/max_freq; $gpu_state" | tee -a "$log" || result=fail
+    mark "GPU load ${load}s"
+    phone "$gpu_load; $gpu_state; cat $DF/trans_stat" | tee -a "$log" || result=fail
+    phone 'for z in /sys/class/thermal/thermal_zone*; do echo "$(cat $z/type) $(cat $z/temp)"; done 2>/dev/null' | tee -a "$log"
+    ;;
+  off)
+    mark "about to return the GPU to 151 MHz and read-only"
+    phone "echo 151000 > $CAP && echo 151000000 > $DF/min_freq && echo 151000000 > $DF/max_freq; sleep 1; echo 0 > $CAP; $gpu_state" | tee -a "$log" || result=fail
+    ;;
+esac
+
+sleep 2
+alive=0
+phone 'true' && alive=1
+if ((alive)); then
+  say "phone alive"
+  if ((watchdog)); then
+    phone 'kill $(cat /run/acpm-wd.pid) && rm /run/acpm-wd.pid' ||
+      warn "could not stop the watchdog feeder: the phone resets in about 15 s unless /dev/watchdog0 is fed"
+  fi
+else
+  result=hang
+  warn "PHONE NOT ANSWERING: the last kernel lines that reached the laptop are below."
+  if ((watchdog)); then
+    warn "Wait about 15 s for the watchdog reset; after boot run: $0 --pstore"
+  else
+    warn "Recover by holding Power about 30 s (a cold reset; pstore will be empty)."
+  fi
+fi
+
+sleep 1
+kill "$logger" 2>/dev/null
+trap - EXIT
+
+echo
+say "summary ($log): $result"
+sed -n "/acpm-stage: start $stage/,\$p" "$log" |
+  grep -E 'acpm|mbox|mailbox|panthor|clk|devfreq|modprobe-exit' |
+  sed -E 's/^([0-9:.]+) [0-9]+,[0-9]+,[0-9]+,[^;]*;/\1 /' | tail -30
