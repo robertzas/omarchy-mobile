@@ -470,6 +470,23 @@ interrupt; no UFS errors; touch, display and GPU work. Then repeat with
 `spm_lvl` 3 once, to learn whether the default level survives (if it does
 not, a gs201 `spm_lvl` 5 default becomes a kernel commit).
 
+**S2 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00287-g3ff963085301):
+passed on the second try.** Wi-Fi unloaded, UFS `spm_lvl` 3 -> 5.
+- **First run:** `rc=0`, but it resumed about 3 s after suspend entry.
+  `pm_wakeup_irq` was 106, the gpio-keys `KEY_VOLUMEUP` line (gpa8-5), and
+  the human reports not touching the button. Volume Up is the one key with
+  no internal pull (`PUD` 0x0, as stock; Volume Down and Power have 0x3),
+  so a false edge as the pins enter their power-down state is possible. It
+  is not proven: two edges were counted on that line, as one press makes.
+  Watch for spurious wakes; if they recur, check gpa8-5's `PUD_PDN` and
+  try a pull-up in the DT.
+- **Second run:** asleep 39 s (wall clock), woken by Volume Up (IRQ 106) as
+  intended. **No UFS error** on resume at `spm_lvl` 5 (S1 at 3 needed a
+  link reset). Bluetooth logged "Opcode 0x0c24 failed: -112" on suspend
+  entry (harmless here; the controller stays up).
+- The `spm_lvl` 5 result argues for making 5 the gs201 default (a kernel
+  commit), pending more cycles.
+
 ### S3: the RTC (PMIC overlay)
 
 ```sh
