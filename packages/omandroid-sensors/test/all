@@ -31,7 +31,8 @@ pass "orientation and tilt"
 
 # D-Bus round trip on a private session bus: test backend -> autorotate (dry run)
 if command -v dbus-run-session >/dev/null; then
-  GIO_USE_VFS=local dbus-run-session -- bash -c '
+  # A private state directory: the user's own rotation lock must not apply
+  XDG_STATE_HOME=$tmp/state GIO_USE_VFS=local dbus-run-session -- bash -c '
     PYTHONPATH=lib python3 lib/sensor_proxy.py --backend test --session & p=$!
     sleep 1
     timeout 8 python3 lib/autorotate.py --session --dry-run 2> '"$tmp"'/rot.log || true
@@ -49,5 +50,7 @@ for f in usr/bin/omandroid-sensor-proxy usr/bin/omandroid-autorotate usr/bin/oma
          usr/share/dbus-1/system.d/net.hadess.SensorProxy.conf; do
   [[ -e $tmp/root/$f ]] || fail "install stages $f"
 done
-[[ -z $(find "$tmp/root" -path '*wants*') ]] || fail "nothing is enabled"
-pass "install stages the package, enables nothing"
+[[ $(find "$tmp/root" -path '*wants*' -name '*.service' -printf '%P\n') == usr/lib/systemd/system/multi-user.target.wants/omandroid-sensor-proxy.service ]] ||
+  fail "only the sensor proxy is enabled"
+[[ -e $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omandroid-sensor-proxy.service ]] || fail "the proxy link resolves"
+pass "install stages the package, enables only the sensor proxy"

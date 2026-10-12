@@ -8,8 +8,8 @@ iio-sensor-proxy's D-Bus API, and rotates Hyprland with the phone.
 
 | File | What |
 |---|---|
-| `omandroid-sensor-proxy` (system service, not enabled) | `net.hadess.SensorProxy` on the system bus: `HasAccelerometer`, `AccelerometerOrientation`, `AccelerometerTilt`, light (lux), proximity, compass; a sensor samples only while a client holds a claim. Loads the AoC's sensor registry once per AoC boot from `/usr/share/omandroid/sensors/registry` (Google's files from the phone's vendor partition, never shipped) and the factory calibration from `persist` (read-only, with debugfs) |
-| `omandroid-autorotate` (user service, not enabled) | claims the accelerometer and sets the monitor's and the touchscreen's transform through `hyprctl` (normal 0, left-up 1, bottom-up 2, right-up 3); `~/.local/state/omandroid/rotation-lock` locks it |
+| `omandroid-sensor-proxy` (system service, enabled at boot after `omandroid-aoc.service`) | `net.hadess.SensorProxy` on the system bus: `HasAccelerometer`, `AccelerometerOrientation`, `AccelerometerTilt`, light (lux), proximity, compass; a sensor samples only while a client holds a claim. Loads the AoC's sensor registry once per AoC boot from `/usr/share/omandroid/sensors/registry` (Google's files from the phone's vendor partition, never shipped) and the factory calibration from `persist` (read-only, with debugfs) |
+| `omandroid-autorotate` (user service, turned on from the rotation lock tile) | claims the accelerometer and sets the monitor's and the touchscreen's transform through `hyprctl` (normal 0, left-up 1, bottom-up 2, right-up 3); `~/.local/state/omandroid/rotation-lock` locks it |
 | `omandroid-usf` | the USF client, for bring-up: sensor list, registry load, sampling |
 
 It provides and conflicts with `iio-sensor-proxy`, whose daemon would take
