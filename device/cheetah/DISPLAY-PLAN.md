@@ -1366,6 +1366,97 @@ tools/phone-ssh '/tmp/hdpms enable'
 - **Stop if** the screen stays black after enable. Recovery: `echo 0 > $P`,
   then `/tmp/hdpms disable; /tmp/hdpms enable`, else reboot.
 
+**D3b-1 result (2026-10-12, `…-00249-g678ee4065295`):** cycle 1 passed.
+Cycles 2 and 3 failed: `hdpms disable` returned "ok" and Hyprland reported
+DPMS off, but no commit reached the CRTC (connector "On", about 121 frames a
+second). The Hyprland log had "drm: Cannot commit when a page-flip is
+awaiting" (aquamarine) once per failed off. In cycle 1 the screen was idle;
+in cycles 2 and 3 a client kept rendering (85 flips in 3 s).
+
+**Analysis (offline, Hyprland v0.56.2 and aquamarine 0.15.0 sources).**
+
+- Hyprland's DPMS off (`CMonitor::setDPMS(false)`) first fades to black.
+  At the end of the fade it calls `commitDPMSState(false)`
+  (`setEnabled(false)` and a commit).
+- If that commit is refused, Hyprland logs "Couldn't commit output … for
+  DPMS = 0, will retry", retries once 2 frames later (16.7 ms at 120 Hz),
+  then gives up with "Couldn't retry committing output". `dpmsStatus` stays
+  false and the output stays on. It never tries again.
+- Aquamarine refuses output commits while a page flip is busy:
+  - `CDRMOutput::commit()` returns false (without a log line) while an
+    asynchronous commit is queued or in flight and can't be cancelled;
+  - a commit that carries a buffer while a flip is awaiting is refused
+    with the logged "Cannot commit when a page-flip is awaiting".
+- A client that keeps rendering keeps a flip pending most of the time, so
+  both tries can land in it. That is generic Hyprland/aquamarine behaviour,
+  not specific to gs-decon. Desktops rarely hit it because DPMS usually
+  comes when the screen is idle.
+- How long our flips stay pending matters, though:
+  - gs-decon completed a flip at the first frame start whose interrupt
+    already saw the shadow update request cleared;
+  - DECON clears it as the frame starts, so an interrupt that read it a
+    moment early would delay the event by a whole frame;
+  - typical drivers send the event at the vblank that latched the update.
+- **The wake path (D3b-1 cycle 1) loses no event:**
+  - the DPMS-off commit only starts after the previous flip's commit is
+    done (DRM stalls a blocking commit on the previous commit's cleanup,
+    which waits for its flip_done);
+  - the park's own shadow update has no event and is waited for before the
+    trigger is masked;
+  - the off commit's own event is sent in `atomic_disable`;
+  - on enable, the trigger is unmasked before the plane update, and the
+    flip is armed in `atomic_flush` and completed by the next frame start,
+    or by the 100 ms timeout if no TE comes.
+
+**Changes:**
+
+- Kernel `5f4808c32` (gs-decon):
+  - at frame start, poll the update request for up to 20 us before
+    deferring the flip, and check again at frame done;
+  - stats gain `flips_late` (flips completed at frame done) and
+    `flip_latency_us_avg/max` (from arming the event to sending it).
+  - At 120 Hz, expect an average of half a frame (≈ 4 ms) and a maximum
+    of about 8.4 ms. A maximum near 16.7 ms, or `flips_late` growing, means
+    DECON clears the request later than assumed.
+- Hyprland patch `patches/hyprland/0001-dpms-keep-retrying-a-refused-dpms-commit.patch`
+  (against v0.56.2, Omarchy-patch style):
+  - keep retrying the refused DPMS commit every 2 frames for up to a
+    second instead of once;
+  - damage the monitor after a retried DPMS-on.
+  - It applies cleanly to v0.56.2 but hasn't been compiled here. It needs a
+    Hyprland package built with it.
+- No driver-side fallback (backlight or idle triggers): with the retry the
+  real commit gets through, and the driver can't tell "off" from "static"
+  without it.
+
+Build: `out-display2`, release `7.3.0-rc6-omandroid-push1-00084-g5f4808c32c52`;
+it merges into `omandroid-int` without conflicts.
+
+**D3b-1b: retest with the new kernel (and, once built, the patched
+Hyprland).** Use `screen_off=1`. Keep an app animating (a video or a
+spinner) and run 10 cycles:
+
+```sh
+tools/phone-ssh "echo 1 > $P"
+tools/phone-ssh '/tmp/hdpms disable'; sleep 3
+tools/phone-ssh "cat $S; cat /sys/class/drm/card*-DSI-1/dpms"
+tools/phone-ssh '/tmp/hdpms enable'; sleep 2
+tools/phone-ssh "grep -E 'for DPMS|page-flip' \$XDG_RUNTIME_DIR/hypr/*/hyprland.log | tail"   # as the user
+```
+
+- Read `flip_latency_us_avg/max` and `flips_late` with the screen on and
+  the app animating, before the cycles.
+- Pass with the patched Hyprland: every cycle reaches `trigger_masked 1`
+  and dpms "Off". The log may show "will retry" but never "Couldn't retry
+  committing output".
+- With the stock Hyprland and only the new kernel, count how many of the
+  10 cycles fail. The log lines say which aquamarine check refused:
+  - "will retry" followed by "Couldn't retry …": the busy-flip window
+    (expected);
+  - no "for DPMS" line at all: the fade's end callback never ran. Report
+    that, since it's a different bug.
+- **Stop if** the screen doesn't come back on enable (as in D3b-1).
+
 **D3b-2: panel sleep.**
 
 ```sh
