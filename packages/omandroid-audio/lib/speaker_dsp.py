@@ -225,7 +225,8 @@ class JsonCtl:
             v = 0
             for b in c['v']:
                 v = (v << 8) | b
-            if name.endswith('HALO_HEARTBEAT') and os.environ.get('FAKE_HB_STUCK') != '1':
+            frozen = os.path.exists(os.environ.get('FAKE_HB_FREEZE_FILE', '/nonexistent'))
+            if name.endswith('HALO_HEARTBEAT') and os.environ.get('FAKE_HB_STUCK') != '1' and not frozen:
                 v += 1           # the firmware's heartbeat moves while it runs
                 c['v'] = list(v.to_bytes(4, 'big'))
                 with open(self.path, 'w') as f:
@@ -627,8 +628,13 @@ def apply_delta(amps, amp):
 
 def cmd_watch(args):
     digital_ceil, analog_ceil = ceilings()
+    # The heartbeat counts the firmware's audio blocks (about 1500 a second
+    # while a stream runs, C9a). A heartbeat that stops during a stream means
+    # the protection algorithm stopped while audio may still pass (C9a: it
+    # froze after a full regmap read and the speakers kept playing). Enforced
+    # in every stage; OMANDROID_SPK_HEARTBEAT=0 only logs it, and only in c8.
     strict_hb = os.environ.get('OMANDROID_SPK_STAGE', 'c8') == 'c9' or \
-        os.environ.get('OMANDROID_SPK_HEARTBEAT', '1') == '2'
+        os.environ.get('OMANDROID_SPK_HEARTBEAT', '1') != '0'
     temp_max = float(os.environ.get('OMANDROID_SPK_TEMP_MAX', '80'))
     amps = Amps(args.card)
     devs = amp_devices()
@@ -702,7 +708,7 @@ def cmd_watch(args):
                     if strict_hb:
                         problems.append(msg)
                     elif not warned:
-                        log(f'watchdog: {msg} (logged only in stage c8)')
+                        log(f'watchdog: {msg} (logged only: OMANDROID_SPK_HEARTBEAT=0)')
                         warned = True
         unreadable = [p for p in problems if ' None' in p]
         if problems and len(unreadable) == len(problems):
@@ -818,7 +824,7 @@ def main(argv):
     env = os.environ.get
     w.add_argument('--interval', type=float, default=float(env('OMANDROID_WATCH_INTERVAL', '1.0')))
     w.add_argument('--grace', type=float, default=float(env('OMANDROID_WATCH_GRACE', '2.0')))
-    w.add_argument('--heartbeat-timeout', type=float, default=float(env('OMANDROID_WATCH_HB_TIMEOUT', '3.0')))
+    w.add_argument('--heartbeat-timeout', type=float, default=float(env('OMANDROID_WATCH_HB_TIMEOUT', '2.0')))
     w.add_argument('--iterations', type=int, default=int(env('OMANDROID_WATCH_ITERATIONS', '0')))
     v = sub.add_parser('verify')
     v.add_argument('--seconds', type=float, default=float(env('OMANDROID_VERIFY_SECONDS', '5.0')))

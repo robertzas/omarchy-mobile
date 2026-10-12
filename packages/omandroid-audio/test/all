@@ -246,7 +246,16 @@ startok w-level; amx cset "name=Bottom Digital PCM Volume" 700 >/dev/null; watch
 startok w-pm; echo auto > "$r/spi/spi6.0/power/control"; watchrun
 ((rc == 1)) && muted || fail "watchdog: an amplifier no longer held awake mutes"
 startok w-hb8; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; wprep=(FAKE_HB_STUCK=1); watchrun
-((rc == 0)) && ! muted && grep -c 'stuck' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: a stuck heartbeat is logged in stage c8"; }
+((rc == 1)) && muted && grep -c 'HALO_HEARTBEAT stuck' "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: a stuck heartbeat during a stream mutes (stage c8 too)"; }
+startok w-hb8-log; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; wprep=(FAKE_HB_STUCK=1 OMANDROID_SPK_HEARTBEAT=0); watchrun
+((rc == 0)) && ! muted && grep -c 'stuck' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: OMANDROID_SPK_HEARTBEAT=0 logs a stuck heartbeat in c8"; }
+# the C9a case: the heartbeat moves, then stops while the stream still runs
+startok w-hb-freeze; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+( sleep 0.5; touch "$r/freeze" ) &
+wprep=(FAKE_HB_FREEZE_FILE=$r/freeze); WATCH_N=40 watchrun; wait
+((rc == 1)) && muted || { cat "$r/watch.out" >&2; fail "watchdog: a heartbeat that stops mid-stream mutes"; }
+startok w-hb9-off; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; wprep=(FAKE_HB_STUCK=1 OMANDROID_SPK_STAGE=c9 OMANDROID_SPK_HEARTBEAT=0); watchrun
+((rc == 1)) && muted || fail "watchdog: the heartbeat cannot be switched off in stage c9"
 startok w-hb9; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; wprep=(FAKE_HB_STUCK=1 OMANDROID_SPK_STAGE=c9); watchrun
 ((rc == 1)) && muted || fail "watchdog: a stuck heartbeat mutes in stage c9"
 # a kernel log error after the watchdog started
