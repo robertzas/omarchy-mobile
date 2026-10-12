@@ -1282,6 +1282,41 @@ Build: `out-display2`, release `7.3.0-rc6-omandroid-push1-00082-g172c08f89a2d`,
 logs `logs/*-display2-d6.log`. W=1 and checkpatch are clean for the three
 files, and it merges into `omandroid-int` without conflicts.
 
+### D3b first try: DPMS off never reached the CRTC (2026-10-12)
+
+With `screen_off=1`, Omarchy's DPMS off
+(`hyprctl dispatch 'hl.dsp.dpms({ action = "disable" })'`) left the CRTC on:
+
+- `trigger_masked` stayed 0, frame_start kept counting at about 120 a
+  second, and `card2-DSI-1/dpms` read "On";
+- Hyprland reported `dpmsStatus` false anyway.
+
+**Cause: gs-decon refused the commit.**
+
+- **What aquamarine 0.15 does:** it turns an output off with a real atomic
+  commit (`src/backend/drm/impl/Atomic.cpp`). The connector's `CRTC_ID` goes
+  to 0, the CRTC gets `ACTIVE` 0 (and `MODE_ID`), and the primary and cursor
+  planes are detached (`FB_ID`/`CRTC_ID` 0). Neither the connector DPMS
+  property nor anything else gs-decon lacks is involved.
+- **Where it failed:** gs-decon's CRTC check called
+  `drm_atomic_helper_check_crtc_primary_plane()` for every CRTC state,
+  including one being turned off. With the plane detached it returned
+  -EINVAL, so the commit failed and the CRTC kept scanning out.
+- **Same bug elsewhere:** `drm_framebuffer_remove()`, when a client exits
+  with its buffer on screen, failed the same way ("atomic remove_fb failed
+  with -22" in dmesg). Session restarts recovered only because the next
+  session's modeset took over.
+
+**Fix:** `7d689978a` checks for the primary plane only on an active CRTC.
+No fallback trigger (bl_power, idle vblanks) is needed: DPMS from Hyprland
+and hypridle now reaches `atomic_disable`, and from there the black frame,
+the drop to 60 Hz and `screen_off`. The CRTC turning off is the
+upstream-standard signal, and a heuristic on the backlight or on flip idle
+would fire on a static screen that is still on.
+
+Build: `out-display2`, release `7.3.0-rc6-omandroid-push1-00083-g7d689978a20e`;
+it merges into `omandroid-int` without conflicts.
+
 ### D3b runbook (each step needs the user)
 
 Merge `omandroid-display2` into int, build, `modules-push`, `push`. Then
@@ -1290,51 +1325,72 @@ check that D6b/D6c still pass: `screen_off` is 0, so nothing else changed.
 Run `tools/phone-ssh dmesg -w` in a second terminal.
 `P=/sys/module/gs_decon/parameters/screen_off`,
 `S=/sys/bus/platform/devices/1c240000.display-controller/stats`.
+On the phone, `/tmp/hdpms disable|enable` runs Omarchy's
+`hyprctl dispatch 'hl.dsp.dpms({ action = "disable" })'` (or `"enable"`) as
+the user. `omarchy-brightness-display off/on` does the same plus `bl_power`
+4/0.
+
+**D3b-0: DPMS reaches the CRTC (screen_off 0).**
+
+```sh
+tools/phone-ssh '/tmp/hdpms disable'; sleep 3
+tools/phone-ssh "cat $S; cat /sys/class/drm/card*-DSI-1/dpms"   # twice, 5 s apart
+tools/phone-ssh '/tmp/hdpms enable'
+```
+
+- Pass while off:
+  - the screen goes black (the parked frame);
+  - `refresh_hz 60`, frame_start counting at about 60 a second;
+  - `flips` stops growing;
+  - no "atomic remove_fb failed" in dmesg.
+- Pass after on: 120 Hz and the picture back.
+- If it still doesn't switch off: `echo 0x10 >
+  /sys/module/drm/parameters/debug` during one `hdpms disable` shows which
+  check refuses (look for `[CRTC:` lines); then `echo 0` to turn it off.
 
 **D3b-1: stop frames while off.**
 
 ```sh
 tools/phone-ssh "echo 1 > $P"
-# power key (screen off), wait 10 s
+tools/phone-ssh '/tmp/hdpms disable'; sleep 5
 tools/phone-ssh "cat $S; grep gs-decon /proc/interrupts"   # twice, 5 s apart
-# power key (screen on)
+tools/phone-ssh '/tmp/hdpms enable'
 ```
 
-- Pass while off: `trigger_masked 1`; the frame_start interrupt count does
-  not move; no TE timeout or FIFO errors in dmesg.
-- Pass after on: the lock screen comes back at once at 120 Hz;
-  `trigger_masked 0`; `flip_timeouts` unchanged. Brightness works.
-- Repeat 10 times.
-- **Stop if** the screen stays black after on. Recovery: `echo 0 > $P`, then
-  a DPMS cycle; else reboot.
+- Pass while off: `trigger_masked 1`; the frame_start count doesn't move;
+  no TE timeout or FIFO errors in dmesg.
+- Pass after on: the screen comes back at once at 120 Hz; `trigger_masked 0`;
+  `flip_timeouts` unchanged; brightness works.
+- Repeat 10 times, then 5 times with the power key (Omarchy's full path,
+  including `bl_power`).
+- **Stop if** the screen stays black after enable. Recovery: `echo 0 > $P`,
+  then `/tmp/hdpms disable; /tmp/hdpms enable`, else reboot.
 
-**D3b-2: panel sleep, from SSH first.** Stop the session
-(`systemctl stop sddm`), then `modetest`/`kmscube` on the card as in D4a-1.
-Or keep Hyprland and use `omarchy-brightness-display off/on` over SSH
-(it needs the session's `HYPRLAND_INSTANCE_SIGNATURE` and `XDG_RUNTIME_DIR`;
-otherwise use the power key).
+**D3b-2: panel sleep.**
 
 ```sh
 tools/phone-ssh "echo 2 > $P"
-tools/phone-ssh 'sudo -u $(id -nu 1000) omarchy-brightness-display off'; sleep 10
+tools/phone-ssh '/tmp/hdpms disable'; sleep 10
 tools/phone-ssh "cat $S"            # panel_asleep 1, trigger_masked 1
-tools/phone-ssh 'sudo -u $(id -nu 1000) omarchy-brightness-display on'
+tools/phone-ssh '/tmp/hdpms enable'
 ```
 
-- Pass: the screen comes back within half a second with correct colours.
-  Dark greys must stay grey, not black: compare the wallpaper and a dark
-  theme against a screenshot. Then 120 Hz (`display-hz`), brightness
-  follows the slider, `panel_asleep 0`.
-- In dmesg: "panel asleep/awake" (with dyndbg), no "cold init failed", no
-  DSIM FIFO timeout, no "staying at 60 Hz".
+- Pass:
+  - the screen comes back within half a second with correct colours.
+    Dark greys must stay grey, not black: compare the wallpaper and a dark
+    theme against a screenshot;
+  - then 120 Hz (`display-hz`), and brightness follows the slider;
+  - `panel_asleep 0`;
+  - no "cold init failed", DSIM FIFO timeout or "staying at 60 Hz" in
+    dmesg.
+- Then 5 cycles with the power key (`bl_power` 4/0 around it: the panel
+  driver holds those while the panel sleeps).
 - **Stop if:**
-  - the panel stays dark. Try a second off/on cycle, since the cold init
-    retries. Then `echo 0 > $P`, then reboot: ABL re-inits the panel;
-  - the colours are wrong after wake. Compare with D6; most likely a panel
-    register the init doesn't write, so read it back with a DCS read once
-    reads exist;
-  - the screen shows garbage before the picture (display on came before
-    the frame).
+  - the panel stays dark. Do one more disable/enable cycle, since the cold
+    init retries. Then `echo 0 > $P`, then reboot: ABL re-inits the panel;
+  - the colours are wrong after wake (a panel register the init doesn't
+    write);
+  - garbage shows before the picture (display on came before the frame).
 
 **D3b-3: power.** Measure `current_now` of the fuel gauge with the screen
 off for two minutes at each `screen_off` value 0/1/2 (USB unplugged,
