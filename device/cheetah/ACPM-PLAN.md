@@ -168,7 +168,7 @@ Rules taken from kbase:
 
 ## 4. What's built
 
-Kernel, `omandroid-acpm` on top of `omandroid` @ `e7cb10fe5` (7 commits):
+Kernel, `omandroid-acpm` on top of `omandroid` @ `e7cb10fe5` (8 commits):
 
 | Commit | What |
 |---|---|
@@ -176,6 +176,7 @@ Kernel, `omandroid-acpm` on top of `omandroid` @ `e7cb10fe5` (7 commits):
 | `dt-bindings: firmware: google,gs101-acpm-ipc: add gs201` | compatible + `google,gs201-acpm.h` (IDs 0–13 = domains, 14 = GPU) |
 | `firmware: samsung: acpm: check the channel table read from SRAM` | rejects a channel count of 0 or > 64 and any table or queue outside the SRAM (a wrong base would otherwise write outside the mapping or divide by zero); one info line "N channels", each channel at debug level |
 | `firmware: samsung: acpm: add gs201 support` | match data: initdata 0xa000, clocks device `gs201-acpm-clk` |
+| `firmware: samsung: acpm: skip channels the AP cannot use` | a channel whose queues are outside the SRAM (or that gets no mailbox channel) is skipped with its raw descriptor printed, instead of failing the probe; `dump_chans=1` prints the whole table (SRAM reads only); "N channels, M usable" |
 | `clk: samsung: acpm: add gs201 with a paired GPU clock` | the 14 domain clocks plus `gpu`: rate = G3D, set_rate moves G3DL2 to the paired level in the safe order. Module parameter `clk_acpm.gs201_gpu_max_khz` (runtime-writable): **0 (default) = read-only**, nothing is sent; otherwise the highest allowed shader rate. gs201 clocks are `CLK_GET_RATE_NOCACHE`: every read asks the firmware |
 | `arm64: dts: ... gs201: add the APM mailbox, SRAM and ACPM` | the three nodes; the mailbox APB clock is a fixed-clock placeholder (no CMU_APM driver yet; Google never enables that gate either) |
 | `arm64: dts: ... gs201: clock the GPU through ACPM DVFS` | GPU `core` clock = `<&acpm_ipc GS201_CLK_ACPM_GPU>`, 12-entry OPP table (151 + v1); the fixed 151 MHz stand-in is gone |
@@ -287,10 +288,21 @@ tools/acpm-stage --watchdog a1
 - **Does:** loads `exynos_mailbox` (one write: AP interrupt mask) and
   `acpm_protocol` (reads the channel table, requests mailbox channels). **No
   message is sent.**
-- **Expect:** `exynos-acpm-protocol firmware:power-management: N channels`
-  (N about 13–16; the DT uses channels up to 13), and with dyndbg one
-  `chan i: poll 1 mlen 16 qlen ...` line per channel. Channel 0 must say
-  `poll 1` and `mlen` ≥ 16. No "Implausible" or "outside the SRAM" error.
+- **Expect:** one `chan i: id .. type .. rx ../../.. indr ../../.. tx ../../.. qlen .. mlen .. poll ..`
+  line per channel (`dump_chans=1`, SRAM reads only), then
+  `N channels, M usable`. Channels whose queues fall outside the SRAM are
+  logged as `skipped` and refused later; only channel 0 (DVFS) must be usable,
+  with `poll 1` and `mlen` ≥ 16. Channel 2 (PMIC) and 9 (TMU) should be usable
+  too, for later work.
+- **First run (2026-10-12, integration kernel `-00161-gc9629d5ab1c3`):** failed
+  safely with "Channel 3 queues outside the SRAM", because the first version
+  rejected the whole table. Nothing was sent; the phone was fine. Google's
+  driver maps the same window (`0x18500000`, `0x48000`: `gs201.dtsi:562`,
+  `R/iomem.txt:76`) and never checks the table, so channel 3 is one the AP
+  doesn't use (it's not in any stock `acpm-ipc-channel`). Fixed by skipping
+  such channels (`firmware: samsung: acpm: skip channels the AP cannot use`).
+  The rerun's dump shows what channel 3 holds (for example a `type 2` =
+  `TYPE_BUFFER` channel, or offsets that are absolute addresses).
 - **Risk:** low. A hang means the mailbox APB clock is gated (risk 1).
 - **Rollback:** `modprobe -r acpm_protocol exynos_mailbox`; reboot.
 

@@ -129,7 +129,7 @@ case "$stage" in
     mark "about to load exynos_mailbox (writes INTMR0 = 0xffff)"
     phone 'modprobe exynos_mailbox' || result=fail
     mark "about to load acpm_protocol (reads the SRAM channel table)"
-    phone 'modprobe acpm_protocol dyndbg=+p; echo modprobe-exit=$?' || result=fail
+    phone 'modprobe acpm_protocol dump_chans=1; echo modprobe-exit=$?' || result=fail
     phone 'ls /sys/bus/platform/drivers/exynos-acpm-protocol/ 2>/dev/null | grep -c firmware' | tee -a "$log"
     ;;
   a2)
