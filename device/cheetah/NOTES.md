@@ -167,3 +167,13 @@ Kernel omandroid-int `7.3.0-rc6-omandroid-push1-00171-g907128673cba` with the **
 - **Haptics and torch:** load at boot (DT default-on).
 - **No failed units.**
 - **On-screen keyboard:** stopped appearing once because `org.gnome.desktop.a11y.applications screen-keyboard-enabled` read false. Set back to true; what cleared it is not known yet.
+
+## 2026-10-12: first sound, Bluetooth pairing, charging (BT3, B3.3)
+
+- **Bluetooth pairing (BT3):** Pixel Buds Pro paired, trusted and connected from the shell's new Bluetooth panel (shell 0.1.11, `omandroid-bt-agent` as the BlueZ pairing agent).
+- **First sound:** A2DP to the earbuds through PipeWire, a 440/660 Hz tone heard. The phone was missing PipeWire's BlueZ plugin (`pipewire-audio`) and `pipewire-pulse`; omandroid-shell 0.1.12 depends on them.
+- **Charging (B3.3):** max77759-charger at 500 mA input, float voltage 4450 mV (stock fv-max), fast charge 1467 mA.
+  - Over 10 minutes: 93 -> 96 % (the bootloader stops at 93 % with 4350 mV), 34.9 -> 35.2 °C (peak 35.5), and the gauge current fell from 1.02 to 0.62 A as it went into CV.
+  - The gauge current is above what a 500 mA input allows. NO_AUTOIBUS is 0, so the chip's automatic input limit may have raised it on this laptop port (open question).
+  - **Not default yet:** it needs the temperature guard (USB-C-PLAN B3) first. At boot the charger driver stays blacklisted and the bootloader's settings apply.
+- Bug: `omandroid-bt-agent` doesn't exit when stdin reaches EOF, which hung a scripted `omandroid-bt-agent </dev/null`. The panel keeps stdin open, so this doesn't affect normal use.
