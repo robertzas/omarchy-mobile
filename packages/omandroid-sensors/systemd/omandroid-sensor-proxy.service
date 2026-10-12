@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# iio-sensor-proxy's D-Bus API from the AoC's sensors. Not enabled: enable it
+# once the AoC comes up at boot (omandroid-aoc.service) and stage C6 passes.
+[Unit]
+Description=Sensor proxy for the AoC's sensors (net.hadess.SensorProxy)
+Requires=omandroid-aoc.service
+After=omandroid-aoc.service dbus.service
+ConditionPathExists=/dev/acd-com.google.usf
+
+[Service]
+Type=dbus
+BusName=net.hadess.SensorProxy
+ExecStart=/usr/bin/omandroid-sensor-proxy
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

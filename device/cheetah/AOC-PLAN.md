@@ -86,13 +86,37 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    services" from the core. Stop: any abort, "blocked" line, "aoc init no
    respond", or the AoC watchdog. Rollback: reboot (the marker then keeps
    the AoC off; `omandroid-aoc-start --retry`).
-2. **C6 first sensor:** copy `V/etc/sensors/registry` to the phone
-   (`/usr/share/omandroid/sensors/registry`, Google's files, never commit),
-   check `/sys/firmware/devicetree/base/chosen/plat` exists (the CDT), then
-   `tools/phone-ssh 'python3 - --load-registry /usr/share/omandroid/sensors/registry /usr/share/omandroid/sensors/registry/append --duration 3' < tools/usf.py`
-   (accelerometer at 50 Hz; persist calibration can be added as a third
-   directory, read with debugfs, read-only). Then a D-Bus service with
-   iio-sensor-proxy's API for rotation.
+2. **C6 first sensor** (after C5 passed in the same boot):
+   ```sh
+   # Google's registry, from the extracted vendor tree (never commit it)
+   tar -C ~/android/omandroid/vendor/google/cheetah/proprietary/vendor/etc/sensors -c registry |
+     tools/phone-ssh 'mkdir -p /usr/share/omandroid/sensors && tar -C /usr/share/omandroid/sensors -x'
+   tools/phone-ssh 'for f in product stage major minor variant; do printf "%s=" $f; od -An -tx1 /sys/firmware/devicetree/base/chosen/plat/$f; done'
+   # C6a: read-only (sensor list, registry state)
+   tools/phone-ssh 'python3 - --check-registry --duration 0' < tools/usf.py
+   # C6b: load the registry into the AoC's RAM, then 3 s of accelerometer at 50 Hz
+   tools/phone-ssh 'python3 - --load-registry /usr/share/omandroid/sensors/registry /usr/share/omandroid/sensors/registry/append --duration 3' < tools/usf.py
+   ```
+   Expect: `plat` present (stock: product 3, stage 6, major 1, minor 0,
+   variant 0); after the load, a sensor list with the LSM6DSV accelerometer
+   and samples near (0, 9.8, 0) m/s² with the phone upright. Only the AoC's
+   RAM changes; an AoC restart (reboot) undoes it. Stop: an empty list after
+   the load (the rails: `omandroid-aoc-start` turns them on before the
+   firmware, check `dmesg | grep rails`), USF errors.
+
+   **C6c, auto-rotate** (package `omandroid-sensors`, build it on the phone
+   with makepkg like the others, or copy `src/` by hand):
+   ```sh
+   tools/phone-ssh 'systemctl start omandroid-sensor-proxy; journalctl -u omandroid-sensor-proxy -b --no-pager | tail -5'
+   tools/phone-ssh 'timeout 10 monitor-sensor --accel 2>&1 | tail -5'     # iio-sensor-proxy's tool, if installed
+   tools/phone-ssh 'U=$(id -nu 1000); runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start omandroid-autorotate'
+   ```
+   Expect: "sensors: accel (handle …), light …, proximity …", then turning
+   the phone rotates the screen and touch. If a direction is mirrored, the
+   transform table in `autorotate.py` needs 1 and 3 swapped (report which).
+   Rollback: `systemctl stop omandroid-sensor-proxy`; the user service
+   restores nothing by itself, so `hyprctl reload` (or rotate back to
+   upright) before stopping it.
 3. **Audio:** port `aoc_alsa` (Google's `alsa/`), machine card with the
    CS35L41 on TDM 0, AUDIO-PLAN section 4 limits, then mics (EP1, PCM 8).
 
