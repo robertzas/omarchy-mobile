@@ -7,7 +7,7 @@ fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
-for f in lib/*.py; do python3 -m py_compile "$f" || fail "$f compiles"; done
+for f in lib/*.py; do python3 -c "import sys; compile(open(sys.argv[1]).read(), sys.argv[1], \"exec\")" "$f" || fail "$f compiles"; done
 pass "python compiles"
 
 python3 -I lib/usf.py --self-test >/dev/null || fail "usf.py self-test"
