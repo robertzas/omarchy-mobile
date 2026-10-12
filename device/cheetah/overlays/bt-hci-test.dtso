@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (BLUETOOTH-PLAN.md, gates BT2-BT3): bt-uart-test plus the
+ * BCM4389 serdev child, so hci_uart (hci_bcm + btbcm) owns the UART, drives
+ * BT_REG_ON and loads brcm/BCM.google,gs201-cheetah.hcd. Apply on top of the
+ * default DTB, not on top of bt-uart-test (both are complete on their own).
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/clock-controller@18000000} {
+	status = "okay";
+};
+
+&{/soc@0/pinctrl@10840000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@181b00c0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@181b00c0/serial@181b0000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@181b00c0/serial@181b0000/bluetooth} {
+	status = "okay";
+};

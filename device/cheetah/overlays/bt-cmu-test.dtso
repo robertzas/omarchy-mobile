@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (BLUETOOTH-PLAN.md, gate BT1.1): turn on just the read-only
+ * CMU_APM clock provider, to read the APM UART clock path the firmware left
+ * (clk_summary) before any UART register is touched.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/clock-controller@18000000} {
+	status = "okay";
+};

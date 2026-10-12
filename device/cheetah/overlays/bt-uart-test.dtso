@@ -1,0 +1,27 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (BLUETOOTH-PLAN.md, gate BT1): turn on the read-only CMU_APM
+ * clock provider, the PERIC0 pin controller (BT_REG_ON / BT_DEV_WAKE on
+ * gpp16) and the APM USI1 UART, with the Bluetooth controller still off, so
+ * the UART comes up as a plain tty (ttySAC0, the first Samsung UART) for
+ * tools/bt-uart-test. Applied to the built gs201-cheetah.dtb with
+ * fdtoverlay. Paths, not labels, so the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/clock-controller@18000000} {
+	status = "okay";
+};
+
+&{/soc@0/pinctrl@10840000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@181b00c0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@181b00c0/serial@181b0000} {
+	status = "okay";
+};

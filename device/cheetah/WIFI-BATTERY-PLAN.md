@@ -315,46 +315,24 @@ tar -C out/vendor-firmware -cf - usr | tools/phone-ssh 'tar -C / -xf -'
 
 ## 3. Bluetooth
 
-| Item | Value | Evidence |
-|---|---|---|
-| UART | **APM USI1 UART** = `serial_18` at **`0x181b0000`**, `/dev/ttySAC18`, GIC SPI **69**, FIFO 256, 32-bit registers | `R/live.dts:9369-9389`; vendor `etc/bluetooth/bt_vendor_overlay.conf` (`UartPort = /dev/ttySAC18`) |
-| Clocks | CMU_APM (`0x18000000`): `DOUT_CLK_APM_USI1_UART` (div 0x1814), gates IPCLK 0x20ac, PCLK 0x20b0 | `GS/drivers/soc/google/cal-if/gs201/cmucal-sfr.c:188,644,1104-1111` |
-| USI mode | sysreg_apm `0x18020000`, SW_CONF at +0x4e0, USI offset 4 (so `samsung,sysreg = <&sysreg_apm 0x4e4>`, to verify) | `R/live.dts:7669`; `G/devices/google/gs201/dts/gs201-usi.dtsi:78,1079-1103` |
-| UART pins | `gpa3-0..3` (ALIVE), function 2 | `R/live.dts:2887-2912` |
-| BT_REG_ON | `gpp16-2` (PERIC0 `pinctrl@10840000`), active high | `R/live.dts:4218,12683` |
-| BT_DEV_WAKE | `gpp16-3`, active high | `R/live.dts:4228,12685` |
-| HOST_WAKE | `gpa6-6` (FAR_ALIVE, SPI 50), both edges, active high | `R/live.dts:3119,12684`; `R/interrupts.txt` "bt_host_wake" |
-| Stock driver | `goog,nitrous` child of the UART (LPM / power only); the HAL opens the tty itself | `R/live.dts:12679-12688` |
+**Moved to `BLUETOOTH-PLAN.md` (2026-10-12)**, which has the hardware table
+with evidence, the kernel work (branch `omandroid-bt`, all off by default)
+and the BT1-BT3 runbook. Bluetooth does not depend on the PCIe/Wi-Fi work.
+What changed against the notes that were here:
 
-Mainline:
-
-- `hci_bcm` + `btbcm` are the right drivers, and the GPIO names
-  (`shutdown`, `device-wakeup`, `host-wakeup`) match. Our commit adds the
-  `brcm,bcm4389-bt` compatible. With no LMP subversion entry, `btbcm` loads
-  `brcm/BCM.google,gs201-cheetah.hcd` (`btbcm.c:661-667`). Add a subversion
-  entry once the controller reports it (W-BT2 prints it).
-- `hci_bcm` takes the host-wake polarity from the interrupt's trigger type
-  (`L/drivers/bluetooth/hci_bcm.c:1233`), so the child node needs
-  `interrupts-extended = <&gpa6 6 IRQ_TYPE_EDGE_RISING>` (active high, as
-  nitrous). The operating speed comes from `max-speed`; the HAL's rate is not
-  in our captures. Start at 115200 for the firmware download, then try
-  3000000, the usual rate for this family.
-- `samsung_tty` knows `google,gs101-uart` only (`samsung_tty.c:2646`).
-  gs201 needs a compatible, but the IP is the same.
-- **Missing:**
-  - a CMU_APM clock driver (no APM IDs in `google,gs201.h`). This is the real
-    blocker: the UART needs its baud clock rate;
-  - a `sysreg_apm` node;
-  - a PERIC0 pinctrl node (`pinctrl@10840000`, alias `pinctrl4`, SPI 664;
-    the bank data exists at `pinctrl-exynos-arm64.c:2248-2269`);
-  - the USI/UART node.
-
-  Whether the APM UART has the `+0xc0` USI_CON wrapper like the PERIC USIs is
-  unconfirmed: Google uses the older `usi-phandle`/`usi-offset` scheme for it.
-- Shortcut for a first test: if ABL leaves the APM UART clock running, a
-  `fixed-clock` with the stock rate would do. Read the rate first; it is not
-  in our captures. The OS can't read CMU_APM without its own driver or devmem,
-  and CMU_APM is an APM-owned block, so treat it like the PMU (no blind devmem).
+- **CMU_APM blocker solved** with a read-only CMU_APM subset in
+  `clk-gs201.c`: real mux/divider tree for the UART, no register writes
+  (read-only mux/divider, no clk_regs, no option write, auto-mode gates).
+  The UART clock should read 197 MHz (Google's LUT); BT1.1 checks it.
+- **USI wrapper confirmed:** the APM UART has the standard USIv2 block at
+  +0xc0 (Google's driver writes `USI_CON` +0xc4 and `USI_OPTION` +0xc8 with
+  CLKREQ_ON), so the upstream `exynos850-usi` driver with `samsung,clkreq-on`
+  handles it. SW_CONF is `sysreg_apm` +0x4e4 (confirmed: stock sysreg node at
+  `0x180204e0`, usi-offset 4).
+- **BT is powered alone:** BT_REG_ON (`gpp16-2`) and WL_REG_ON (`gph2-4`) are
+  separate pins with no shared regulator in the stock DT.
+- `samsung_tty` needs no change: `google,gs201-uart` falls back to
+  `google,gs101-uart`.
 
 ---
 
@@ -504,11 +482,9 @@ must not ship enabled:** `pcie_1` stays `disabled` in the default DTB, and
 
 ### Gates BT1-BT3
 
-BT1: CMU_APM (gates + the UART divider), `sysreg_apm`, PERIC0 pinctrl, and
-the APM UART node, with the UART alone and no BT child. Loopback test
-first. BT2: add the `bluetooth` child, load `hci_uart`, and check that the
-`BCM.*.hcd` download finishes and the subversion prints. BT3: `bluetoothctl`
-scan/pair; LPM through `device-wakeup`/`host-wakeup`.
+See `BLUETOOTH-PLAN.md` section 4: BT1.0 new kernel, BT1.1 CMU_APM read-only
+check, BT1.2 UART loopback, BT1.3 HCI_Reset by hand (`tools/bt-uart-test`),
+BT2 `hci_uart` + firmware patch, BT3 BlueZ scan/pair and low power.
 
 ---
 

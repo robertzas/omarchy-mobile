@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+#
+# bt-uart-test: gate BT1 of device/cheetah/BLUETOOTH-PLAN.md. Runs ON THE
+# PHONE, with the bt-uart-test overlay (APM USI1 UART up as a plain tty, no
+# Bluetooth driver bound). Python standard library only, so nothing to install.
+# Stream it from the laptop:
+#
+#   tools/phone-ssh python3 - loop      < tools/bt-uart-test
+#   tools/phone-ssh python3 - hci       < tools/bt-uart-test
+#
+# Commands:
+#   loop [--tty T]          UART internal loopback (TIOCM_LOOP) at 115200 and
+#                           3000000: proves the UART IP, its pclk and its IRQ.
+#                           The chip stays off.
+#   hci [--tty T] [--baud B] [--on-ms MS]
+#                           power the BCM4389 BT core (BT_DEV_WAKE high, then
+#                           BT_REG_ON high), send HCI_Reset, Read Local Version
+#                           and Broadcom Read Verbose Config, print the answers,
+#                           then BT_REG_ON low again. Proves the pins, the baud
+#                           clock (115200 is the chip's power-on rate) and RTS/CTS.
+#   gpio                    print which gpiochip carries gpp16 (no line changes)
+#
+# Every step prints before it touches anything. Nothing here reads or writes
+# CMU or PMU registers; the only hardware it drives is the tty and two GPIOs.
+
+import array
+import fcntl
+import os
+import select
+import struct
+import sys
+import termios
+import time
+
+DEF_TTY = "/dev/ttySAC0"
+BT_BANK = "gpp16"
+BT_REG_ON = 2      # gpp16-2, active high
+BT_DEV_WAKE = 3    # gpp16-3, active high
+
+
+def say(msg):
+    print("==> " + msg, flush=True)
+
+
+def die(msg):
+    print("error: " + msg, file=sys.stderr, flush=True)
+    sys.exit(1)
+
+
+# ---- ioctl numbers (asm-generic, arm64) ------------------------------------
+
+def _ioc(direction, typ, nr, size):
+    return (direction << 30) | (size << 16) | (typ << 8) | nr
+
+
+def _iowr(typ, nr, size):
+    return _ioc(3, typ, nr, size)
+
+
+def _ior(typ, nr, size):
+    return _ioc(2, typ, nr, size)
+
+
+TIOCM_LOOP = 0x8000
+TIOCM_RTS = 0x004
+TIOCMBIS = 0x5416
+TIOCMBIC = 0x5417
+TIOCMGET = 0x5415
+
+# <linux/gpio.h> character device, uAPI v2
+GPIO_GET_CHIPINFO_IOCTL = _ior(0xB4, 0x01, 68)
+GPIO_V2_LINE_REQUEST_SIZE = 592
+GPIO_V2_GET_LINE_IOCTL = _iowr(0xB4, 0x07, GPIO_V2_LINE_REQUEST_SIZE)
+GPIO_V2_LINE_SET_VALUES_IOCTL = _iowr(0xB4, 0x0F, 16)
+GPIO_V2_LINE_FLAG_OUTPUT = 1 << 3
+GPIO_V2_LINE_ATTR_ID_OUTPUT_VALUES = 2
+
+BAUD = {115200: termios.B115200, 921600: termios.B921600,
+        3000000: termios.B3000000}
+
+
+# ---- tty --------------------------------------------------------------------
+
+def open_tty(path, baud, rtscts):
+    if baud not in BAUD:
+        die(f"unsupported baud {baud}")
+    say(f"open {path} raw 8N1 {baud} rtscts={int(rtscts)}")
+    fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    attr = termios.tcgetattr(fd)
+    attr[0] = 0                                   # iflag
+    attr[1] = 0                                   # oflag
+    attr[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+    if rtscts:
+        attr[2] |= termios.CRTSCTS
+    attr[3] = 0                                   # lflag
+    attr[4] = attr[5] = BAUD[baud]
+    attr[6][termios.VMIN] = 0
+    attr[6][termios.VTIME] = 0
+    termios.tcsetattr(fd, termios.TCSANOW, attr)
+    termios.tcflush(fd, termios.TCIOFLUSH)
+    return fd
+
+
+def set_baud(fd, baud):
+    attr = termios.tcgetattr(fd)
+    attr[4] = attr[5] = BAUD[baud]
+    termios.tcsetattr(fd, termios.TCSANOW, attr)
+
+
+def mctrl(fd, req, bits):
+    fcntl.ioctl(fd, req, struct.pack("I", bits))
+
+
+def read_exact(fd, n, timeout):
+    buf = b""
+    end = time.monotonic() + timeout
+    while len(buf) < n:
+        left = end - time.monotonic()
+        if left <= 0:
+            break
+        r, _, _ = select.select([fd], [], [], left)
+        if r:
+            buf += os.read(fd, n - len(buf))
+    return buf
+
+
+def hexs(b):
+    return " ".join(f"{x:02x}" for x in b)
+
+
+# ---- gpio (uAPI v2) ---------------------------------------------------------
+
+def find_chip(label):
+    for name in sorted(os.listdir("/dev")):
+        if not name.startswith("gpiochip"):
+            continue
+        path = "/dev/" + name
+        try:
+            fd = os.open(path, os.O_RDWR)
+        except OSError:
+            continue
+        buf = bytearray(68)
+        fcntl.ioctl(fd, GPIO_GET_CHIPINFO_IOCTL, buf)
+        chip_label = buf[32:64].split(b"\0")[0].decode()
+        lines = struct.unpack_from("I", buf, 64)[0]
+        if chip_label == label:
+            return fd, path, lines
+        os.close(fd)
+    return None, None, 0
+
+
+class Lines:
+    """Request lines of one chip as outputs, initially low."""
+
+    def __init__(self, chip_fd, offsets, consumer):
+        req = bytearray(GPIO_V2_LINE_REQUEST_SIZE)
+        struct.pack_into(f"{len(offsets)}I", req, 0, *offsets)
+        req[256:256 + len(consumer)] = consumer.encode()
+        # config: flags, num_attrs, padding, attrs[0] = output values all 0
+        struct.pack_into("QI", req, 288, GPIO_V2_LINE_FLAG_OUTPUT, 1)
+        struct.pack_into("IIQQ", req, 288 + 32,
+                         GPIO_V2_LINE_ATTR_ID_OUTPUT_VALUES, 0, 0,
+                         (1 << len(offsets)) - 1)
+        struct.pack_into("I", req, 560, len(offsets))      # num_lines
+        fcntl.ioctl(chip_fd, GPIO_V2_GET_LINE_IOCTL, req)
+        self.fd = struct.unpack_from("i", req, 588)[0]
+        self.offsets = offsets
+        self.bits = 0
+
+    def set(self, offset, value):
+        i = self.offsets.index(offset)
+        self.bits = (self.bits | (1 << i)) if value else (self.bits & ~(1 << i))
+        vals = bytearray(struct.pack("QQ", self.bits, 1 << i))
+        fcntl.ioctl(self.fd, GPIO_V2_LINE_SET_VALUES_IOCTL, vals)
+
+    def close(self):
+        os.close(self.fd)
+
+
+# ---- commands -----------------------------------------------------------------
+
+def cmd_loop(tty):
+    fd = open_tty(tty, 115200, rtscts=False)
+    ok = True
+    try:
+        say("set TIOCM_LOOP (UCON loopback: TX is fed back to RX inside the UART)")
+        mctrl(fd, TIOCMBIS, TIOCM_LOOP)
+        for baud in (115200, 3000000):
+            set_baud(fd, baud)
+            termios.tcflush(fd, termios.TCIOFLUSH)
+            pattern = bytes(range(256))
+            say(f"{baud}: write 256 bytes")
+            os.write(fd, pattern)
+            got = read_exact(fd, len(pattern), 2.0)
+            if got == pattern:
+                say(f"{baud}: PASS, 256 bytes back intact")
+            else:
+                ok = False
+                say(f"{baud}: FAIL, got {len(got)} bytes; first: {hexs(got[:16])}")
+    finally:
+        mctrl(fd, TIOCMBIC, TIOCM_LOOP)
+        os.close(fd)
+    say("loopback " + ("PASS" if ok else "FAIL"))
+    return 0 if ok else 1
+
+
+def hci_cmd(fd, opcode, params=b"", timeout=2.0):
+    pkt = bytes([0x01, opcode & 0xff, opcode >> 8, len(params)]) + params
+    say(f"HCI cmd 0x{opcode:04x}: {hexs(pkt)}")
+    os.write(fd, pkt)
+    head = read_exact(fd, 3, timeout)
+    if len(head) < 3:
+        say(f"  no answer ({len(head)} bytes: {hexs(head)})")
+        return None
+    body = read_exact(fd, head[2], timeout)
+    evt = head + body
+    say(f"  event: {hexs(evt)}")
+    if head[0] != 0x04 or head[1] != 0x0e or len(body) < 4:
+        say("  not a Command Complete event")
+        return None
+    if body[1] | (body[2] << 8) != opcode:
+        say("  Command Complete for another opcode")
+        return None
+    if body[3] != 0:
+        say(f"  status 0x{body[3]:02x}")
+        return None
+    return body[3:]          # status + return parameters
+
+
+def cmd_hci(tty, baud, on_ms):
+    chip_fd, path, _ = find_chip(BT_BANK)
+    if chip_fd is None:
+        die(f"no gpiochip labelled {BT_BANK}: is the PERIC0 pin controller enabled?")
+    say(f"{BT_BANK} is {path}; request lines {BT_REG_ON} (BT_REG_ON) and "
+        f"{BT_DEV_WAKE} (BT_DEV_WAKE) as outputs, low")
+    lines = Lines(chip_fd, [BT_REG_ON, BT_DEV_WAKE], "bt-uart-test")
+    fd = open_tty(tty, baud, rtscts=True)
+    rc = 1
+    try:
+        say("BT_DEV_WAKE high (keep the controller awake)")
+        lines.set(BT_DEV_WAKE, 1)
+        say("BT_REG_ON high (power the BT core); Wi-Fi's WL_REG_ON is not touched")
+        lines.set(BT_REG_ON, 1)
+        time.sleep(on_ms / 1000)
+        junk = read_exact(fd, 64, 0.1)
+        if junk:
+            say(f"bytes after power-on (ignored): {hexs(junk)}")
+        termios.tcflush(fd, termios.TCIFLUSH)
+
+        if hci_cmd(fd, 0x0c03) is None:              # HCI_Reset
+            say("HCI_Reset FAIL. If 0 bytes: check RTS/CTS (try --baud 3000000 "
+                "only if the chip was left running), BT_REG_ON, the baud clock")
+            return 1
+        say("HCI_Reset PASS")
+
+        ver = hci_cmd(fd, 0x1001)                    # Read Local Version
+        if ver and len(ver) >= 9:
+            hci_ver, hci_rev, lmp_ver, manuf, subver = struct.unpack_from("<BHBHH", ver, 1)
+            say(f"version: HCI {hci_ver} rev 0x{hci_rev:04x} LMP {lmp_ver} "
+                f"manufacturer {manuf} LMP subversion 0x{subver:04x} "
+                f"({(subver >> 13) & 7}.{(subver >> 8) & 0x1f}.{subver & 0xff})")
+
+        cfg = hci_cmd(fd, 0xfc79)                    # BCM Read Verbose Config
+        if cfg and len(cfg) >= 2:
+            say(f"BCM chip id {cfg[1]} (btbcm prints this as 'BCM: chip id')")
+        rc = 0
+    finally:
+        say("BT_REG_ON low, BT_DEV_WAKE low")
+        lines.set(BT_REG_ON, 0)
+        lines.set(BT_DEV_WAKE, 0)
+        lines.close()
+        os.close(chip_fd)
+        os.close(fd)
+    say("hci " + ("PASS" if rc == 0 else "FAIL"))
+    return rc
+
+
+def cmd_gpio():
+    chip_fd, path, lines = find_chip(BT_BANK)
+    if chip_fd is None:
+        die(f"no gpiochip labelled {BT_BANK}")
+    os.close(chip_fd)
+    say(f"{BT_BANK}: {path}, {lines} lines")
+    return 0
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        print("usage: bt-uart-test loop|hci|gpio [--tty T] [--baud B] [--on-ms MS]\n"
+              "(see the header of tools/bt-uart-test)")
+        return 0
+    cmd, args = argv[0], argv[1:]
+    opts = {"--tty": DEF_TTY, "--baud": "115200", "--on-ms": "200"}
+    while args:
+        key = args.pop(0)
+        if key not in opts or not args:
+            die(f"bad option {key}")
+        opts[key] = args.pop(0)
+    if cmd == "loop":
+        return cmd_loop(opts["--tty"])
+    if cmd == "hci":
+        return cmd_hci(opts["--tty"], int(opts["--baud"]), int(opts["--on-ms"]))
+    if cmd == "gpio":
+        return cmd_gpio()
+    die(f"unknown command {cmd}")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
