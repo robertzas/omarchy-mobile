@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""gnss-capture: record the phone's NMEA with host timestamps, and summarize
+a GNSS run (time to first fix, satellites per constellation, accuracy).
+
+On the phone (stdlib only):
+
+  gnss-capture record --out FILE [--seconds N] [--socket PATH]
+      Connects to omandroid-gnss's NMEA socket (which starts the receiver
+      when Location is on), writes "<unix time> <sentence>" lines to FILE,
+      and leaves after N seconds; the receiver then stops on its own about a
+      minute later, which is part of what a run checks.
+
+  gnss-capture summary FILE [--start UNIXTIME]
+      TTFF from --start (default: the first sentence), satellites in view
+      and used per constellation, C/N0, HDOP, the scatter of the fixes in
+      metres, and gpsd's own power estimate ($PGLOR PWR) when present.
+
+The summary never prints coordinates, so it can go into a plan; FILE holds
+positions and stays on the phone (or in logs/, which is not committed).
+device/cheetah/GNSS-PLAN.md, G4b.
+"""
+
+import argparse
+import math
+import os
+import socket
+import sys
+import time
+
+SOCK = "/run/omandroid-gnss/nmea.sock"
+
+# NMEA talker -> constellation
+TALKERS = {"GP": "GPS", "GL": "GLONASS", "GA": "Galileo", "GB": "BeiDou",
+           "BD": "BeiDou", "GQ": "QZSS", "QZ": "QZSS", "GI": "NavIC",
+           "IR": "NavIC", "GN": "multi"}
+# NMEA 4.11 system ID (GSA/GSV field) -> constellation
+SYSIDS = {"1": "GPS", "2": "GLONASS", "3": "Galileo", "4": "BeiDou",
+          "5": "QZSS", "6": "NavIC"}
+
+
+def record(args):
+    deadline = time.monotonic() + args.seconds if args.seconds else None
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    for _ in range(60):
+        try:
+            s.connect(args.socket)
+            break
+        except OSError:
+            time.sleep(1)
+    else:
+        sys.exit(f"cannot connect to {args.socket} (omandroid-gnss on?)")
+    s.settimeout(5)
+    buf = b""
+    with open(args.out, "a", buffering=1) as f:
+        f.write(f"# start {time.time():.1f}\n")
+        while deadline is None or time.monotonic() < deadline:
+            try:
+                d = s.recv(4096)
+            except socket.timeout:
+                continue
+            if not d:
+                f.write(f"# eof {time.time():.1f}\n")
+                break
+            buf += d
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                f.write(f"{time.time():.1f} {line.decode('ascii', 'replace').strip()}\n")
+        f.write(f"# end {time.time():.1f}\n")
+
+
+def fields(sentence):
+    body = sentence[1:].split("*", 1)[0]
+    return body.split(",")
+
+
+def summary(args):
+    start = args.start
+    first = None
+    fix_t = None
+    fix_kind = None
+    in_view = {}        # constellation -> {prn: max cn0}
+    signals = {}        # (constellation, signal id) -> set(prn)
+    used = {}           # constellation -> max satellites used in one epoch
+    hdops = []
+    fixes = []          # (lat, lon) in degrees
+    pwr = None
+    epoch_used = {}
+    last_t = None
+    for raw in open(args.file, encoding="ascii", errors="replace"):
+        if raw.startswith("# start") and start is None:
+            start = float(raw.split()[2])
+            continue
+        parts = raw.split(" ", 1)
+        if len(parts) != 2 or not parts[1].startswith("$"):
+            continue
+        t, s = float(parts[0]), parts[1].strip()
+        first = t if first is None else first
+        f = fields(s)
+        tag = f[0]
+        if tag.startswith("PGLOR") and len(f) > 4 and f[2] == "PWR" and f[3].startswith("mA"):
+            try:
+                pwr = float(f[4])
+            except ValueError:
+                pass
+            continue
+        talker, kind = tag[:2], tag[2:]
+        if kind == "GSV" and len(f) >= 4:
+            sysname = TALKERS.get(talker, talker)
+            sig = f[-1] if (len(f) - 4) % 4 == 1 else ""
+            for i in range(4, len(f) - 3, 4):
+                prn, cn0 = f[i], f[i + 3]
+                if not prn:
+                    continue
+                d = in_view.setdefault(sysname, {})
+                try:
+                    c = float(cn0) if cn0 else 0.0
+                except ValueError:
+                    c = 0.0
+                d[prn] = max(d.get(prn, 0.0), c)
+                signals.setdefault((sysname, sig), set()).add(prn)
+        elif kind == "GSA" and len(f) >= 18:
+            if t != last_t:
+                for k, v in epoch_used.items():
+                    used[k] = max(used.get(k, 0), v)
+                epoch_used, last_t = {}, t
+            sysname = SYSIDS.get(f[18], None) if len(f) > 18 else None
+            sysname = sysname or TALKERS.get(talker, talker)
+            n = sum(1 for p in f[3:15] if p)
+            epoch_used[sysname] = epoch_used.get(sysname, 0) + n
+        elif kind == "GGA" and len(f) >= 9:
+            q = f[6]
+            if q and q != "0":
+                if fix_t is None:
+                    fix_t, fix_kind = t, "GGA quality " + q
+                try:
+                    hdops.append(float(f[8]))
+                except ValueError:
+                    pass
+                try:
+                    lat = float(f[2][:2]) + float(f[2][2:]) / 60
+                    lon = float(f[4][:3]) + float(f[4][3:]) / 60
+                    lat = -lat if f[3] == "S" else lat
+                    lon = -lon if f[5] == "W" else lon
+                    fixes.append((lat, lon))
+                except (ValueError, IndexError):
+                    pass
+        elif kind == "RMC" and len(f) >= 3 and f[2] == "A" and fix_t is None:
+            fix_t, fix_kind = t, "RMC status A"
+    for k, v in epoch_used.items():
+        used[k] = max(used.get(k, 0), v)
+
+    if first is None:
+        print("no NMEA sentences")
+        return
+    start = first if start is None else start
+    print(f"sentences from {first - start:+.1f} s after start")
+    if fix_t is None:
+        print("first fix: none")
+    else:
+        print(f"first fix: {fix_t - start:.1f} s after start ({fix_kind})")
+    print("in view (max C/N0 dB-Hz, count of satellites with C/N0 >= 30):")
+    for sysname in sorted(in_view):
+        d = in_view[sysname]
+        strong = sum(1 for c in d.values() if c >= 30)
+        print(f"  {sysname:8} {len(d):3} satellites, max {max(d.values()):.0f}, strong {strong}")
+    sigs = sorted(k for k in signals if k[1])
+    if sigs:
+        print("signals (NMEA 4.11 signal IDs):")
+        for sysname, sig in sigs:
+            print(f"  {sysname:8} signal {sig}: {len(signals[(sysname, sig)])} satellites")
+    if used:
+        print("used in a fix (max per epoch): " +
+              ", ".join(f"{k} {v}" for k, v in sorted(used.items())))
+    if hdops:
+        hd = sorted(hdops)
+        print(f"HDOP: median {hd[len(hd) // 2]:.1f}, best {hd[0]:.1f} ({len(hd)} fixes)")
+    if len(fixes) >= 10:
+        tail = fixes[len(fixes) // 2:]    # after the first half: settled
+        mlat = sum(p[0] for p in tail) / len(tail)
+        mlon = sum(p[1] for p in tail) / len(tail)
+        k = 6371000 * math.pi / 180
+        d = sorted(math.hypot((p[0] - mlat) * k, (p[1] - mlon) * k * math.cos(math.radians(mlat)))
+                   for p in tail)
+        print(f"scatter of the last {len(tail)} fixes around their mean: "
+              f"median {d[len(d) // 2]:.1f} m, 95% {d[int(len(d) * 0.95) - 1]:.1f} m "
+              "(meaningful only if the phone did not move)")
+    if pwr is not None:
+        print(f"gpsd's power estimate ($PGLOR PWR, last): {pwr:.1f} mA")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("record")
+    r.add_argument("--out", required=True)
+    r.add_argument("--seconds", type=int, default=0)
+    r.add_argument("--socket", default=SOCK)
+    s = sub.add_parser("summary")
+    s.add_argument("file")
+    s.add_argument("--start", type=float)
+    args = ap.parse_args()
+    if args.cmd == "record":
+        record(args)
+    else:
+        summary(args)
+
+
+if __name__ == "__main__":
+    main()
