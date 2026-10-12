@@ -25,6 +25,13 @@ import usf
 REGISTRY_DIRS = ('/usr/share/omandroid/sensors/registry',
                  '/usr/share/omandroid/sensors/registry/append')
 PERSIST_REGISTRY = '/sensors/registry'
+# The AoC probes its physical sensors once, when the registry is loaded. On a
+# boot where the registry was loaded about a second after the AoC came up, the
+# LSM6DSV accelerometer (I3C) never appeared while the I2C sensors did; loaded
+# minutes later, all of them appeared. Give the AoC this long after its
+# firmware load (omandroid-aoc-start's marker) before loading the registry.
+AOC_LOADED_MARKER = '/run/omandroid/aoc-firmware-loaded'
+AOC_SETTLE_S = float(os.environ.get('OMANDROID_AOC_SETTLE_S', '15'))
 SENSOR_ORIENTATION = 24      # fused azimuth, pitch, roll in degrees
 # Google's lux for automatic brightness, from the TMD3719 under the panel: a
 # reading a second, which follows the room and not the panel's own light.
@@ -77,6 +84,20 @@ def display_state():
     except ValueError:
         dbv = 0
     return usf.DISP_ON, 60, dbv
+
+
+def aoc_settle(marker=AOC_LOADED_MARKER, settle=AOC_SETTLE_S, now=time.time, sleep=time.sleep):
+    """Wait until the AoC's firmware was loaded at least `settle` seconds ago.
+    Returns the seconds waited (0 without the marker: a start by hand)."""
+    try:
+        age = now() - os.stat(marker).st_mtime
+    except OSError:
+        return 0.0
+    wait = max(0.0, min(settle - age, settle))
+    if wait > 0:
+        log(f'waiting {wait:.1f} s for the AoC to settle before loading the sensor registry')
+        sleep(wait)
+    return wait
 
 
 def persist_device():
@@ -139,6 +160,7 @@ class UsfBackend:
         reg = self.client.get_server(usf.UUID_REGISTRY)
         if ('loaded', '1') in self.client.registry_get(reg, '/'):
             return
+        aoc_settle()
         with tempfile.TemporaryDirectory() as cal:
             factory_calibration(cal)
             dirs = [d for d in REGISTRY_DIRS if os.path.isdir(d)] + [cal]

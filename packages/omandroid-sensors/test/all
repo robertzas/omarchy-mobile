@@ -29,6 +29,19 @@ assert sp.tilt(0, 0, -9.8) == 'face-up'
 PY
 pass "orientation and tilt"
 
+# the AoC settle wait before the registry load
+PYTHONPATH=lib python3 - "$tmp" <<'PY' || fail "AoC settle wait"
+import os, sys
+import usf_backend as b
+m = os.path.join(sys.argv[1], 'marker')
+slept = []
+assert b.aoc_settle(m, 15, now=lambda: 1000.0, sleep=slept.append) == 0.0   # no marker
+open(m, 'w').close(); os.utime(m, (990.0, 990.0))
+assert b.aoc_settle(m, 15, now=lambda: 1000.0, sleep=slept.append) == 5.0 and slept == [5.0]
+assert b.aoc_settle(m, 15, now=lambda: 1100.0, sleep=slept.append) == 0.0
+PY
+pass "AoC settle wait"
+
 # D-Bus round trip on a private session bus: test backend -> autorotate (dry run)
 if command -v dbus-run-session >/dev/null; then
   # A private state directory: the user's own rotation lock must not apply
