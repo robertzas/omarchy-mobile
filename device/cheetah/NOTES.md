@@ -199,3 +199,20 @@ On omandroid-int `7.3.0-rc6-omandroid-push1-00247-gc779a9f42a1d`, with the aoc-b
 - **What didn't work:** mailbox command 91 START leaves the A32 held (GSA state 4). RELEASE_RESET (5) runs it, but the firmware stays silent.
 - Also learned: reading the AoC PCU (0x19a00000) while the A32 is in reset aborts.
 - **Next (AOC-PLAN):** an automatic start path, the AoC IPC core and character devices, a USF sensor client (auto-rotate), then aoc_alsa for the speakers and mics.
+
+## 2026-10-12: GNSS runs Google's stack, NMEA flowing (G3d)
+
+On omandroid-int `7.3.0-rc6-omandroid-push1-00253-g48b42df9b5c7` with the gnss-pmic-test and gnss-test overlays, plus the vendor-chroot gnss profile:
+
+- **Daemons:** stock `servicemanager`, `lhd` and `gpsd` run in the vendor chroot.
+- **Chip bring-up:** lhd powers the BCM4776 within about 1.5 s. Driver events show "nstandby <- 1", "power on", "ttyBCM opened by lhd", then the SensorHub.patch download (TX frames of 943-2834 bytes). lhd reports **ESW:READY**.
+- **Traffic:** about 20k packets and 155 KB received, 0 TX failures.
+- **NMEA:** gpsd answers `$pglirm,req_pos`. 3113 NMEA lines in 90 s indoors, RMC status V and 0 satellites (no fix indoors, as expected).
+- **Shutdown:** the rails go off when lhd closes /dev/ttyBCM.
+- **Fixes on the way:**
+  - The runner used `env chroot` and had a recursive stop trap.
+  - The bootstrap `linker64` was missing.
+  - The SIT RIL client is stubbed (gpsd aborts without a modem).
+  - lhd's absent-sensor-service lookups no longer storm.
+  - The driver forced standby while lhd was starting the chip.
+- **Next:** G4 outdoors for a fix, then GeoClue/gpsd for apps.
