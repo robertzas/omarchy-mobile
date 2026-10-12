@@ -300,11 +300,9 @@ Failure clues:
   expected errors.
 - **lhd never opened `/dev/ttyBCM`:** the chip stayed in standby with its
   rails off, and the stop was clean.
-- **Why:** lhd does not touch the chip on its own. It talks to gpsd over
-  named pipes in `/data/vendor/gps` (`.pipe.gpsd_to_lhd`,
-  `.pipe.chd_to_lhd`, strings in `lhd`). It powers the chip and loads the
-  patch when gpsd needs it, and resets the chip when gpsd exits ("Gpsd has
-  terminated! force reset mcu"). So lhd alone idling is correct.
+- **What we thought (corrected under G3c):** that lhd waits for gpsd
+  before touching the chip. In fact lhd starts the chip at start-up and
+  failed within a second; the 25 s sample missed it.
 - **`/sys/bbd/lk_enable`:** lhd's "killer" switch. Google's GPL bbd driver
   (the one stock runs) has no such attribute either, so stock lhd logs the
   same error. No stub is needed.
@@ -350,6 +348,98 @@ If it fails:
 - "no control pipe ... after 60 s": gpsd never created `glgpsctrl`. Send
   the `ls -l` of the gps directory.
 - No NMEA but lhd powered the chip: send both files.
+
+**G3c result (2026-10-12, profile `7c281bf`):**
+- The RIL stub worked (no SIT RIL failure); one sensor lookup.
+- gpsd took the control-pipe request, lhd spent 220 ms on it, then gpsd
+  logged `OnChipReset: GPSD exit`.
+- The pins showed powered 0 at 30 s and after; no NMEA.
+
+**Why, found offline (lhd verbose, under qemu, `LogLevel=*:V` with
+`LogEnabled=true`, `Log=LOGCAT`):** lhd starts the chip on its own at
+start-up. G3's "lhd waits for gpsd" was wrong; the pin sampling just
+missed it. Its sequence (`BrcmGpsHalGpio::Standby/Normal`, then
+`Bbd::Open`):
+1. nstandby 0, then 1;
+2. 20 ms ("Power enable delay");
+3. open `/dev/bbd_control` and `/dev/ttyBCM`;
+4. `BBD:PassThru=1`, auto-baud, patch download.
+
+Our driver broke that order in two ways:
+1. Writing nstandby=1 while `/dev/ttyBCM` was closed failed with `EPERM`
+   (supplies followed the open).
+2. Opening `/dev/ttyBCM` then powered the supplies and **forced nstandby
+   low**.
+
+So the chip sat in standby while lhd tried to sync with its ROM. lhd then
+declares the chip crashed and resets it (`ESW:CRASHED`, gpsd
+`OnChipReset`).
+
+**Fix, kernel `omandroid-gnss` @ `7f4083e7c`:** raising nstandby now
+powers the supplies itself, and drops them when nstandby falls with nobody
+holding the device. The open finds the chip powered and leaves nstandby
+alone. The same commit adds bring-up logging (module parameter `events`, on
+by default):
+- `/dev/ttyBCM` open/close and by whom;
+- power on/off;
+- every nstandby write with the state it found;
+- wake handshake failures, rate limited;
+- host requests with empty frames;
+- the first 16 SSI frames of each session.
+
+`ssi_dump=1` hex-dumps transfers from the next open. The profile now
+makes lhd log verbosely (`OMANDROID_GNSS_LHD_LOG`, default `*:V`).
+
+What else was checked:
+- **Word size:** 8-bit vs Google's 32-bit DMA words gives the same bytes
+  on the wire; Google's controller swaps bytes for 32-bit words, so its
+  byte stream is the same.
+- **Read command byte:** 0x70 is what stock sends.
+- **host_req interrupt:** delivered as on stock (level, re-armed by the
+  worker).
+- **Handshake:** none of these explain a failure in the first 220 ms;
+  standby does.
+
+### G3d: lhd + gpsd with kernel events and a 200 ms pin sampler
+
+Needs the new module: merge `omandroid-gnss` (`7f4083e7c`) into int,
+build, then `bin/omandroid modules && bin/omandroid modules-push`. No
+reboot is needed, since only the module changed. Reinstall the profile.
+
+```sh
+tools/phone-ssh 'install -m644 /dev/stdin /usr/lib/omandroid-vendor/profiles/gnss.conf' < vendor-chroot/profiles/gnss.conf
+tools/phone-ssh 'rmmod bcm4775x_gnss 2>/dev/null; modprobe bcm4775x-gnss; cat /sys/module/bcm4775x_gnss/parameters/events'
+#   expect Y
+tools/phone-ssh 'P=/sys/kernel/debug/spi5.0/pins; F=/var/lib/omandroid-vendor/gnss/data/vendor/gps/nmea_out;
+  mkdir -p $(dirname $F); [ -p $F ] || mkfifo -m 600 $F;
+  /usr/lib/omandroid-vendor/omandroid-vendor-chroot gnss check; dmesg -C;
+  (timeout 100 cat $F > /tmp/g3d-nmea.txt &);
+  (OMANDROID_VENDOR_LOGLEVEL=2 timeout 90 /usr/lib/omandroid-vendor/omandroid-vendor-chroot gnss start > /tmp/g3d.log 2>&1 &);
+  # 200 ms samples for the first 15 s (lhd starts the chip within a second or two), then every 5 s
+  for i in $(seq 75); do printf "%s %s\n" "$(date +%s.%N | cut -c1-14)" "$(grep -E "^(powered|nstandby|packets|tx_fail)" $P | tr "\n" " ")"; sleep 0.2; done > /tmp/g3d-pins.txt;
+  for i in $(seq 16); do printf "%s %s\n" "$(date +%s.%N | cut -c1-14)" "$(grep -E "^(powered|nstandby|packets|tx_fail)" $P | tr "\n" " ")"; sleep 5; done >> /tmp/g3d-pins.txt;
+  echo "== pins (changes only)"; awk "{k=\$0; sub(/^[^ ]* /,\"\",k)} k!=last {print; last=k}" /tmp/g3d-pins.txt;
+  for r in /sys/class/regulator/regulator.*; do case $(cat $r/name) in vdd_gnss*) echo $(cat $r/name) $(cat $r/state);; esac; done;
+  pgrep -a "lhd|gpsd" || echo "none left";
+  echo "== kernel"; dmesg | grep -iE "bcm4775|spi5|ttyBCM" | head -60;
+  echo "== nmea"; wc -l /tmp/g3d-nmea.txt; grep -E "GSV|RMC|GGA" /tmp/g3d-nmea.txt | tail -8;
+  echo "== lhd"; grep -E "\[lhd\]" /tmp/g3d.log | grep -vE "SetCfgValue|^\[lhd\] $" | head -120;
+  echo "== rest"; grep -E "omandroid-vendor|OnChipReset|ESW|CRASH|terminat" /tmp/g3d.log | head -20'
+```
+
+Pass:
+- **Kernel:** "nstandby <- 0", "nstandby <- 1 … unpowered" followed by
+  "power on", "ttyBCM opened by lhd", then rx/tx frames with non-zero
+  sizes.
+- **Pins:** `powered 1`, `nstandby 1` while lhd runs; packets rising,
+  `tx_fail 0`.
+- **lhd:** the patch download finishes (`ESW:READY`), with no
+  `ROM SYNC failure` and no `ESW:CRASHED`.
+- **NMEA:** GSV sentences.
+- **After:** one "stopping", nothing left, `powered 0`, rails disabled.
+
+If it still fails, the kernel event lines plus lhd's verbose log show
+which step: wake handshake, empty frames, or transfer errors.
 
 ### G4: a fix outdoors, unattended, rails off afterwards
 
