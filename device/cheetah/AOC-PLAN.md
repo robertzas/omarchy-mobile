@@ -1095,8 +1095,13 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      1. Sense paths, read-only, during a 10 s burst (`burst /tmp/mt20.wav
         1.0` in one terminal, and in another, 3 s into it):
         ```sh
-        tools/phone-ssh 'for r in /sys/kernel/debug/regmap/spi6.[01]*; do echo $r; grep -E "^0*(2018|4c48|4c4c|4c50|4c54|4c58):" $r/registers; done'
+        tools/phone-ssh 'for r in /sys/kernel/debug/regmap/spi6.[01]*; do echo $r;
+          awk -F": " "{a = strtonum(\"0x\" \$1)} a == 0x2018 || (a >= 0x4c48 && a <= 0x4c58) {print} a > 0x10100 {exit}" $r/registers; done'
         ```
+        **Never read past 0x10100** (the awk stops there, as
+        `tools/aoc-*-diag` do): the full file goes on into the DSP's
+        memories and core registers, and reading them froze the protection
+        algorithm of both amplifiers (C9a result below).
         Expect PWR_CTRL2 (2018) bits 12 and 13 set (VMON, IMON on),
         4c48 = 0x18, 4c4c = 0x19 (DSP inputs VMON/IMON), 4c58 = 0x3a
         (TEMPMON). Stop: VMON/IMON off during playback (the model would be
@@ -1112,6 +1117,57 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
         `tools/phone-ssh 'omandroid-speaker-protection verify'`. Expect
         "verified: … heartbeat moving, coil temperatures …" and "stamp
         written". Stop: "not verified" (send its reason).
+     **C9a result (first run, 2026-10-12, 7.3.0-rc6-omandroid-push1-00306,
+     omandroid-audio 0.2.1): stopped at step 3.**
+     - Step 1 passed: 0x2018 = 0x3721 (VMON, IMON on), DSP1 RX3-RX7 =
+       0x18, 0x19, 0x28, 0x29, 0x3a on both amplifiers.
+     - Step 2: state 0, HALO_STATE 2, CAL_SET_STATUS 2, errorno 0,
+       25.00-25.02 °C, maximum excursion 0.28 mm top / 0.45 mm bottom, the
+       heartbeat moving about 1500 a second (the firmware's 32-sample audio
+       blocks). Then the top heartbeat stopped about 5 s into the burst and
+       the bottom one about 3 s later, while the stream still ran.
+     - Step 3: through both -10 dBFS bursts every DSP value stayed frozen
+       (heartbeat, temperature, excursion), state still 0, and both bursts
+       were clearly audible. The top amplifier then acknowledged the pause
+       at stream stop; the bottom did not.
+     - **Cause: step 1's `grep` over the whole regmap `registers` file.**
+       The file lists every readable register, which for this driver goes
+       on past the amplifier's registers into the DSP's XM, YM and program
+       memories and its core registers (all readable and volatile in
+       `cs35l41-lib.c`). A read reads the hardware, the top amplifier's file
+       first, then the bottom's: the two stops are seconds apart in that
+       order, about the time each read takes to get there. Reading the
+       DSP's memories and core registers while it runs stopped its
+       algorithm. The firmware still answered the mailbox, and audio still
+       passed. So the speakers played **unprotected** from then on. Our
+       control reads were not stale: these controls are volatile in the
+       regmap and the driver reads the DSP while it runs, which is why the
+       values moved until the freeze. The fix is the step's command: never
+       read past 0x10100 while a DSP runs. Recovery: `systemctl restart
+       omandroid-speaker-protection` (it rebinds the amplifiers, which
+       resets the chips).
+     - **The watchdog did not mute: by our design.** In stage c8 a stuck
+       heartbeat was only logged, once. 0.2.2 mutes on it in every stage,
+       within about 2 s of the last change (2 s grace at stream start); only
+       `OMANDROID_SPK_HEARTBEAT=0` turns it back into a log line, and not in
+       c9. Its test reproduces C9a's case (moving, then frozen mid-stream).
+     - **Power 0** is real resolution, not a decoding error: one count of
+       SPK_OUTPUT_POWER is about 80 µW on the stock HAL's scale, and at
+       digital 657 / analog 6 with a -20 dBFS signal the output is around
+       tens of µW. It should read non-zero from the louder C9d steps.
+
+     **C9a, second run** (omandroid-audio 0.2.2; `systemctl restart
+     omandroid-speaker-protection` first, so both DSPs start fresh): steps
+     1 (with the bounded read), 2, 3 and 4 as above, with `monitor` running
+     through all three bursts. Expect the heartbeat to keep moving through
+     every stream (about 1500 a second, also in the silence PipeWire plays
+     after a file ends) and the watchdog to stay quiet. Then a check for
+     false mutes: real media in Chromium, paused and resumed a few times
+     over a minute; PipeWire keeps the PCM running with silence or closes
+     it, and in both cases the watchdog must not mute. Stop: any mute with
+     "HALO_HEARTBEAT stuck" (send the watchdog journal and the `monitor`
+     lines), or a heartbeat that stops while `monitor` says RUN.
+
    - **C9b the stock media delta, at C8 levels** (risk low-medium: the
      first write into the protection firmware's parameters; listening):
      1. `burst` a piece of real music the human chooses (copied to the
