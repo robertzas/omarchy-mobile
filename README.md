@@ -1,6 +1,8 @@
 # Omandroid
 
-Native Omarchy on Google Pixel phones: Arch Linux ARM, Hyprland and Omarchy's own packages running directly on the phone with a mainline kernel, and Android apps in Waydroid. First device: Pixel 7 Pro (cheetah, gs201). What works on each phone: [docs/DEVICES.md](docs/DEVICES.md).
+Native Omarchy on Google Pixel phones: Arch Linux ARM, Hyprland and Omarchy's own packages running directly on the phone with a mainline kernel, with Android apps in Waydroid as a later goal. First device: Pixel 7 Pro (cheetah, gs201).
+
+**Status (2026-10-12):** a pocket computer, not yet a phone. Display at 120 Hz, GPU, touch, Wi-Fi, Bluetooth audio, battery, haptics, torch, sensors with auto-rotate and the speakers (at a capped volume) work. Calls, SMS, mobile data, cameras, fingerprint unlock and sleep on screen-off are in progress. What works on each phone: [docs/DEVICES.md](docs/DEVICES.md). What's missing and the plan to get there: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 Plan: https://claude.ai/code/artifact/060038bc-beff-497e-9643-4f322318b2be
 
@@ -8,15 +10,17 @@ Plan: https://claude.ai/code/artifact/060038bc-beff-497e-9643-4f322318b2be
 
 | Path | What it is |
 | --- | --- |
-| `bin/omandroid` | Native Omarchy tooling: `capture`, `kernel`, `kernel-shell` |
-| `packages/` | pacman packages: `omandroid-shell` (the phone profile for Omarchy's shell), `omandroid-device-cheetah` (Pixel 7 Pro support), `omandroid-sensors` (sensors and auto-rotate through the AoC), `omandroid-gnss` (location on demand), `omandroid-audio` (PipeWire and speaker protection), `omandroid-fingerprint` with a patched `libfprint`, patched `mesa` and `hyprland`. `tools/phone-install-package` builds one on the phone and installs it |
+| `bin/omandroid` | Build and flash tooling: `capture`, `kernel`, `modules`, `initramfs`, `images`, `flash`, `push`, `kexec`, `fastboot` |
+| `tools/` | Staged bring-up and capture tools, on-phone probes, firmware extraction from the user's factory image, package and repository helpers |
+| `packages/` | pacman packages: `omandroid-shell` (the phone profile for Omarchy's shell), `omandroid-device-cheetah` (Pixel 7 Pro support), `omandroid-sensors` (sensors and auto-rotate through the AoC), `omandroid-gnss` (location on demand), `omandroid-audio` (PipeWire and speaker protection), `omandroid-fingerprint` with a patched `libfprint`, `omandroid-modem` (the modem's vendor chroot profile), `neard`, `omandroid-keyring` (the `[omandroid]` repository's signing key), patched `mesa` and `hyprland`. `tools/phone-install-package` builds one on the phone and installs it |
 | `patches/omarchy/` | Changes to Omarchy for touch devices, to send upstream (`bridge-*` ones are stopgaps for the phone's older Omarchy) |
 | `bin/lineage-ref` | Builds LineageOS for the phone. Used as a rooted reference Android (M0) and, later, for Waydroid images |
 | `kernel/configs/` | Our kernel config fragment, merged on top of arm64 `defconfig` |
-| `device/cheetah/` | Pixel 7 Pro bring-up notes and device trees |
+| `device/cheetah/` | Pixel 7 Pro bring-up notes, one plan per subsystem, overlays and the initramfs |
 | `omandroid.conf` | Shared settings (source dir, jobs, container image). Override in `omandroid.local.conf` |
 | `docker/` | Ubuntu 24.04 build environment |
 | `docs/DEVICES.md` | Supported-devices matrix |
+| `docs/ROADMAP.md` | Where things stand and the plan to a working phone |
 
 Large trees live outside the repo, under `~/android/`:
 
@@ -37,4 +41,4 @@ Large trees live outside the repo, under `~/android/`:
 
 ## Contributing
 
-Bringing up another Pixel, fixing a driver or improving the phone shell: start with [CONTRIBUTING.md](CONTRIBUTING.md). It covers the safety model (stock Android stays on slot A, the read-only storage guard, backups, dead-man switches), the build and flash loop, a step-by-step guide to bringing up a new device, and how to submit kernel and package changes. AI coding agents should also read [AGENTS.md](AGENTS.md). The status of each device is in [docs/DEVICES.md](docs/DEVICES.md).
+Bringing up another Pixel, fixing a driver or improving the phone shell: start with [CONTRIBUTING.md](CONTRIBUTING.md). It covers the safety model (stock Android stays on slot A, the read-only storage guard, backups, dead-man switches), the build and flash loop, a step-by-step guide to bringing up a new device, and how to submit kernel and package changes. AI coding agents should also read [AGENTS.md](AGENTS.md). The status of each device is in [docs/DEVICES.md](docs/DEVICES.md), and what's next in [docs/ROADMAP.md](docs/ROADMAP.md).

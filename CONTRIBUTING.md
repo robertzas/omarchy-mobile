@@ -4,6 +4,7 @@
 Omandroid runs native Omarchy on Google Pixel phones: Arch Linux ARM, Hyprland and Omarchy's own packages on a mainline Linux kernel, with no Android underneath. It works today on the Pixel 7 Pro (`cheetah`, Google Tensor G2 / `gs201`). We want help with two things: bringing up more Pixels, and getting our device-tree and driver work merged upstream.
 
 - **Supported devices and their status:** [docs/DEVICES.md](docs/DEVICES.md)
+- **What's missing and the order we plan to tackle it:** [docs/ROADMAP.md](docs/ROADMAP.md)
 - **AI coding agents:** read [AGENTS.md](AGENTS.md) as well. It has the rules and the gotchas we learned the hard way.
 - **What has been learned on real hardware:** [device/cheetah/NOTES.md](device/cheetah/NOTES.md), newest first.
 
