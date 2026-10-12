@@ -1262,6 +1262,20 @@ def self_test(verbose=False):
     rc = run(tr, rate_hz=100, duration=0.03, check_registry=True, get_time=True, out=open(os.devnull, 'w'))
     sent_ids = [decode_envelope(decode_msg(m)[1])['id'] for m in tr.sent]
     check(rc == 0 and REQ_REGISTRY_GET in sent_ids and REQ_GET_TIME in sent_ids, 'opt-in reads')
+    # the sensor list grows after the registry loads: poll until it is stable
+    class Growing:
+        def __init__(self):
+            self.lists = [[], [], [5], [5, 6], [5, 6]]
+            self.calls = 0
+        def sensor_list(self, mgr):
+            self.calls += 1
+            return self.lists.pop(0) if len(self.lists) > 1 else self.lists[0]
+    g = Growing()
+    check(wait_sensor_list(g, 2, 5, out=open(os.devnull, 'w'), step=0) == [5, 6] and g.calls == 5,
+          'sensor list poll until stable')
+    g = Growing()
+    check(wait_sensor_list(g, 2, 0, out=open(os.devnull, 'w'), step=0) == [] and g.calls == 1,
+          'sensor list read once')
     check(decode_registry_get_resp(build_table([(0, 'tables', [[(0, 'bytes', b'loaded\0'), (1, 'bytes', b'1\0')]])]))
           == [('loaded', '1')], 'registry get resp')
 
@@ -1359,8 +1373,33 @@ def load_registry(c, dirs, cdt, out=sys.stdout, panel_props=None):
     print('registry "/" loaded=1 (CDT %#x)' % cdt, file=out)
 
 
+def wait_sensor_list(c, mgr, wait, out=sys.stdout, step=0.5):
+    """The sensor handles, once the list stops growing.
+
+    The AoC creates its sensors asynchronously once the registry is loaded
+    ("Registry Loaded" -> "Physical Devices Ready" -> "Virtual Devices Ready"
+    -> "USF Ready" in UsfStartupMgr), so a list read right after "/" loaded=1
+    is empty. Android's HAL waits 500 ms after Connect (which loads the
+    registry) before its first SensorList and retries once on error
+    (SensorHal::Init, sensor_list after sleep_for(500000000 ns)). Here: poll
+    every `step` seconds for up to `wait` seconds until two reads in a row
+    return the same non-empty list. wait=0 reads once."""
+    deadline = time.monotonic() + wait
+    t0 = time.monotonic()
+    prev = None
+    while True:
+        handles = c.sensor_list(mgr)
+        if wait <= 0 or (handles and handles == prev) or time.monotonic() >= deadline:
+            return handles
+        if handles != prev:
+            print('%.1f s: %d sensors' % (time.monotonic() - t0, len(handles)), file=out)
+        prev = handles
+        time.sleep(step)
+
+
 def run(tr, rate_hz=50.0, duration=3.0, sensor_type=SENSOR_ACCEL, index=0, check_registry=False,
-        get_time=False, out=sys.stdout, client_id=0x4C494E58, registry_dirs=None):
+        get_time=False, out=sys.stdout, client_id=0x4C494E58, registry_dirs=None, wait=0.0,
+        list_only=False):
     c = UsfClient(tr)
     # 1. "handshake": there is no transport-level hello; the first request is
     #    a GetServer for the sensor manager on the fixed server-manager handle 1.
@@ -1383,7 +1422,7 @@ def run(tr, rate_hz=50.0, duration=3.0, sensor_type=SENSOR_ACCEL, index=0, check
         print('sensor-core time %d ns, host boottime midpoint %d ns (offset %d)'
               % (core, (t0 + t1) // 2, (t0 + t1) // 2 - core), file=out)
     # 3. sensor list + info
-    handles = c.sensor_list(mgr)
+    handles = wait_sensor_list(c, mgr, wait, out)
     print('%d sensors' % len(handles), file=out)
     infos = {}
     for h in handles:
@@ -1399,9 +1438,11 @@ def run(tr, rate_hz=50.0, duration=3.0, sensor_type=SENSOR_ACCEL, index=0, check
                  info['max_period_ns'], info['registry_path']), file=out)
     cands = sorted((i['index'], h) for h, i in infos.items() if i['type'] == sensor_type)
     if not handles:
-        print('empty sensor list: the AoC registry is probably not loaded '
-              '(Android\'s HAL sends RegistryLoadScript + RegistrySet "/" loaded=1 at boot)', file=out)
+        print('empty sensor list: the AoC registry is not loaded, or its sensors are not '
+              'created yet (poll longer with --wait; check "/" with --check-registry)', file=out)
         return 2
+    if list_only:
+        return 0
     if not cands:
         print('no sensor of type %d' % sensor_type, file=out)
         return 2
@@ -1451,6 +1492,9 @@ def main(argv=None):
     ap.add_argument('--index', type=int, default=0, help='sensor index among sensors of that type')
     ap.add_argument('--check-registry', action='store_true', help='read-only RegistryGet of "/"')
     ap.add_argument('--get-time', action='store_true', help='read-only GetTime from the time server')
+    ap.add_argument('--wait', type=float, default=5.0,
+                    help='seconds to poll the sensor list until it stops growing (0: read once)')
+    ap.add_argument('--list', action='store_true', help='list the sensors only, do not sample')
     ap.add_argument('--load-registry', nargs='+', metavar='DIR',
                     help='load the *.reg scripts of each DIR into the AoC registry, then set "/" loaded=1')
     ap.add_argument('-v', '--verbose', action='store_true', help='hexdump all channel traffic')
@@ -1463,7 +1507,7 @@ def main(argv=None):
         tr = ChannelTransport(a.device, None if a.no_nwu else a.device + NWU_SUFFIX, verbose=a.verbose)
     try:
         return run(tr, a.rate, a.duration, a.type, a.index, a.check_registry, a.get_time,
-                   registry_dirs=a.load_registry)
+                   registry_dirs=a.load_registry, wait=a.wait, list_only=a.list)
     finally:
         tr.close()
 

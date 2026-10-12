@@ -104,8 +104,37 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    the load (the rails: `omandroid-aoc-start` turns them on before the
    firmware, check `dmesg | grep rails`), USF errors.
 
+   **C6b result (first run):** the seven `cheetah_*.reg` scripts and the two
+   `append/` ones loaded, `"/" loaded=1` (CDT 0x36100), then "0 sensors".
+   Loading every script is what the HAL does and is right: each script
+   starts with CDT filter lines that the AoC checks against the CDT sent with
+   it (`?+0x30000:0xFFFF0000`, minus `0x32xxx` proto and `0x33xxx` EVT, in
+   `cheetah_dvt.reg`), so for 0x36100 only `cheetah_dvt.reg` applies and the
+   other six are dropped, not merged. The list was read at once, though:
+   the AoC creates its sensors asynchronously after `loaded=1` (Registry
+   Loaded, Physical Devices Ready, Virtual Devices Ready, USF Ready), and
+   Android's HAL waits 500 ms after loading before its first SensorList,
+   then retries once (`SensorHal::Init`). `usf.py` now polls the list
+   (`--wait`, default 5 s) until it stops growing, and `--list` skips the
+   sampling.
+
+   **C6b-2** (the same boot as C6b: the registry is already loaded, so do
+   not load it again):
+   ```sh
+   tools/phone-ssh 'python3 - --check-registry --list --wait 10' < tools/usf.py
+   tools/phone-ssh 'python3 - --wait 10 --duration 3' < tools/usf.py      # accelerometer, 50 Hz
+   ```
+   Expect `"/" properties [('loaded', '1')]`, "N.N s: M sensors" lines as
+   the list grows, then a few dozen sensors (LSM6DSV accelerometer, gyroscope,
+   two MMC5633, ICP20100, TMD3719, VD6282 and Google's fused ones) and
+   samples near (0, 9.8, 0) m/s² upright. If the list stays empty after
+   10 s: `dmesg | grep -iE "aoc|usf" | tail -30` and stop. A clean retry is
+   a reboot, `omandroid-aoc-start`, then C6b with the new `usf.py` (it now
+   polls after the load). The persist calibration is not needed for a first
+   reading (the service loads it read-only; never copy it into the repo).
+
    **C6c, auto-rotate** (package `omandroid-sensors`, build it on the phone
-   with makepkg like the others, or copy `src/` by hand):
+   with makepkg like the others, or copy `lib/` by hand):
    ```sh
    tools/phone-ssh 'systemctl start omandroid-sensor-proxy; journalctl -u omandroid-sensor-proxy -b --no-pager | tail -5'
    tools/phone-ssh 'timeout 10 monitor-sensor --accel 2>&1 | tail -5'     # iio-sensor-proxy's tool, if installed
