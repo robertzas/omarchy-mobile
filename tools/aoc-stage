@@ -37,12 +37,18 @@
 #        (carve-out + 32 MiB, boot breadcrumbs) and of the IPC area
 #   release  GSA_AOC_RELEASE_RESET (5): only after a start that left GSA
 #        state 4 without a control block (AOC-PLAN.md C4b-2)
+#   trusty   load Trusty (trusty_core, trusty_log, trusty_ipc, then
+#        trusty_virtio) and check /dev/trusty-ipc-dev0; needs the /trusty node
+#        (overlay fingerprint-trusty). Before c2 --trusty.
+#   mbox     read-only: the three AoC mailboxes (AP side), in the kernel log
 #   rails    turn the five AoC LDOs on (gs201_aoc_rails enable=1; stock
 #        voltages, never changed). Before c4a, for C4b-3.
 #
 # Options:
 #   --watchdog   arm the hardware watchdog (about 15 s) with a feeder loop on the
 #                phone; a hang then resets the phone by itself
+#   --trusty     c2: AoC state commands through Trusty's hwmgr.aoc (gsa
+#                without aoc_cmd_mbox); run the trusty stage first
 #   --fw FILE    aoc.bin to copy for c4a (default: the extracted stock vendor one)
 #   --pstore     after a watchdog reset: save /sys/fs/pstore
 #
@@ -59,7 +65,7 @@ DBG=/sys/kernel/debug/aoc
 GSADBG=/sys/kernel/debug/17c90000.gsa
 MARKER=/var/lib/omandroid/aoc-bringup-started
 
-watchdog=0 stage= pstore=0
+watchdog=0 stage= pstore=0 trusty=0
 
 usage() { sed -n '/^# Usage:/,/^#   --pstore/p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
@@ -70,9 +76,10 @@ while (($#)); do
   case "$1" in
     --watchdog) watchdog=1 ;;
     --fw) FW="${2:?}"; shift ;;
+    --trusty) trusty=1 ;;
     --pstore) pstore=1 ;;
     -h|--help) usage ;;
-    c2|c2p|c3|c4a|c4b|stop|diag|ramdump|release|rails) stage="$1" ;;
+    c2|c2p|c3|c4a|c4b|stop|diag|ramdump|release|rails|trusty|mbox) stage="$1" ;;
     *) usage 1 ;;
   esac
   shift
@@ -126,11 +133,12 @@ fi
 
 # Load the three modules once; aoc_cmd_mbox: AoC state commands on the GSA
 # mailbox (C1 showed command 91 answers); s2mpu_probe: GSA S2MPU CTRL0 in debugfs.
+if ((trusty)); then mb=N; mbp=0; else mb=Y; mbp=1; fi
 load_modules='if lsmod | grep -q "^gsa "; then
-    grep -q Y /sys/module/gsa/parameters/aoc_cmd_mbox || { lsmod | grep -q "^gs201_aoc_boot " || rmmod gsa; };
+    grep -q '$mb' /sys/module/gsa/parameters/aoc_cmd_mbox || { lsmod | grep -q "^gs201_aoc_boot " || rmmod gsa; };
   fi;
-  lsmod | grep -q "^gsa " || modprobe gsa aoc_cmd_mbox=1 s2mpu_probe=1;
-  grep -q Y /sys/module/gsa/parameters/aoc_cmd_mbox || echo "gsa is loaded without aoc_cmd_mbox=1: reboot";
+  lsmod | grep -q "^gsa " || modprobe gsa aoc_cmd_mbox='$mbp' s2mpu_probe=1;
+  grep -q '$mb' /sys/module/gsa/parameters/aoc_cmd_mbox || echo "gsa is loaded in the other aoc_cmd_mbox mode: reboot";
   lsmod | grep -q "^gs201_aoc_sysmmu " || modprobe gs201_aoc_sysmmu;
   lsmod | grep -q "^gs201_aoc_boot " || modprobe gs201_aoc_boot;
   test -d '$DBG' && echo modules-ok'
@@ -179,6 +187,20 @@ case "$stage" in
     sleep 3
     phone "dmesg | grep -c 'blocked' ; cat $DBG/info" | tee -a "$log" || result=fail
     [[ $result == ok ]] && phone "rm -f $MARKER; sync"
+    ;;
+  trusty)
+    phone 'grep -q okay /sys/firmware/devicetree/base/trusty/status 2>/dev/null' ||
+      die "the /trusty node is not enabled: add the fingerprint-trusty overlay"
+    mark "about to load trusty_core (first calls into the secure world)"
+    phone 'modprobe trusty_core; echo modprobe-exit=$?; dmesg | grep -i "trusty" | tail -3' | tee -a "$log" || result=fail
+    mark "about to load trusty_log, trusty_ipc, trusty_virtio"
+    phone 'modprobe trusty_log; modprobe trusty_ipc && modprobe trusty_virtio; sleep 1;
+      ls -l /dev/trusty-ipc-dev0; dmesg | grep -iE "trusty|virtio" | tail -6' | tee -a "$log" || result=fail
+    ;;
+  mbox)
+    phone "test -d $DBG" || die "run c2 first"
+    mark "about to read the AoC mailboxes (reads only)"
+    phone "cat $DBG/mbox" | tee -a "$log" || result=fail
     ;;
   diag)
     phone "test -d $DBG" || die "run c2 first"

@@ -4,8 +4,9 @@
 Status (2026-10-12): **C1, C2, C3 and C4a passed on the phone; C4b (start)
 did not finish** (section 0.2): the GSA accepted `START` but reported state
 4, and the firmware never wrote its control block. C4b-2 (diagnostics,
-setup re-apply, release reset) is built; its first try hit an abort reading
-the AoC PCU (fixed, section 7 C4b-2), and the rerun is next. Kernel branch
+setup re-apply, release reset) ran cleanly: the mailbox `START` cannot
+start the firmware (section 0.3). Next is C4t: the same start through
+Trusty's `hwmgr.aoc`, as stock does. Kernel branch
 `omandroid-aoc` in `~/android/mainline/wt-aoc` (out dir
 `~/android/mainline/out-aoc`), on `omandroid` @ `7b0f8b5d1` plus the Trusty
 commits of `omandroid-fingerprint`. Everything new is disabled by default.
@@ -192,6 +193,50 @@ checks the magic (`aoc_mbox_rx_callback()` → `aoc_fw_ready()`) and then
 drops `aoc_req` (`aoc_did_become_online()`, `GA/aoc.c:1358-1440`). No ACPM
 message, no AP doorbell first.
 
+### 0.3 C4b-2 result: the GSA-direct start is not enough; use Trusty
+
+C4b-2 rerun (int 00238, `deb7b47bd`): no abort, no fault, no watchdog.
+After the load the System MMU translates VID 0 (global ctrl 0x25, VID 0
+ctrl 0x9, our table), the AoC S2MPU stays 0 through the start, `START`
+gives state 4 again, the IPC area keeps our parameters, the ramdump header
+has no "AOCDUMP" and no breadcrumbs (0x300-0x32f zero). `RELEASE_RESET` (5)
+gives state 2 ("running"), twice, but still nothing: no control block, no
+breadcrumbs, no System MMU fault (`int` 0).
+
+What Google's driver does that we did not, compared line by line
+(6.1 `GA/aoc.c` `aoc_fw_callback()` and Google's 5.10 aoc.c at commit
+222ba49, the version that drives this firmware generation through Trusty):
+
+| Step | 5.10 driver | 6.1 driver | Ours |
+|---|---|---|---|
+| `aoc_req` = 1 before the load | yes | yes | yes |
+| AoC S2MPU | CTRL0 read at probe, written back after a restart | (pKVM) | 0 before the load, stays 0 |
+| System MMU windows | `aoc_configure_sysmmu()` at probe, non-secure domain via samsung-iommu (VID 0) | IOMMU driver | same windows, VID 0, before the load |
+| body copy, GSA load (90), parameter block | yes | yes | yes |
+| `START` | `gsa_send_aoc_cmd()` → **Trusty `hwmgr.aoc`** | same | **mailbox 91** |
+| mailboxes | AP-side masks only; the firmware writes its control block first and rings after | same | not set up |
+
+The only material difference left is **who sends `START`**. The mailbox
+path answers, but not like Trusty's: `START` leaves state 4, and an explicit
+`RELEASE_RESET` runs the A32 without any visible progress. The System MMU
+has a secure half (`sysmmu,secure_base = <0x1a0a0000>`, secure fault
+interrupt SPI 119) that only the secure world can program and whose faults
+never reach Linux. The likeliest reading: Trusty's `hwmgr.aoc` service does
+secure-side setup for the authenticated image (its secure translation,
+security state of the AoC's masters) before it has the GSA start the AoC,
+and the bare mailbox command skips it. An A32 that runs with that missing
+would fault silently on the secure side, which is exactly what we see.
+
+So the **Trusty path is now the main path**: load with the mailbox (as
+stock), state commands through `hwmgr.aoc`. `gsa.c` already speaks it
+(`CONFIG_GOOGLE_GSA_TRUSTY`, default when `aoc_cmd_mbox=0`), and the Trusty
+driver is the fingerprint port (gate F2 not yet run), already in
+`omandroid-aoc`. It is also the order stock uses (`R/dmesg.txt:5886`, "TZ:
+com.android.trusty.gsa.hwmgr.aoc connected" right before the AoC comes up).
+
+The rails (all off) stay a separate variable: change one thing at a time,
+Trusty first, rails after if needed.
+
 What is mandatory, in boot order:
 
 | Piece | Why | Source | Our status |
@@ -369,6 +414,7 @@ merges cleanly into `omandroid-int` @ `741b6ed1d` (`git merge-tree`).
 | `3a71f0471` soc: google: add the gs201 AoC supplies over ACPM | `gs201-aoc-rails.c` (`CONFIG_GS201_AOC_RAILS`): reads S2MPG12/13 CHIPID and the five LDOs; sets their enable bits only with `enable=1`, never a voltage | module, no DT |
 | `973b54b71` arm64: dts: ... gs201: add the AoC and its System MMU | `sysmmu@1a090000` (SPI 118), `aoc@181d0000` | `disabled` |
 | `0e5c2082d`, `edfb4e5df`, `aa453aaee`, `c868f906b` C4b diagnostics | System MMU "lost" check and reprogram, VID 0 fault registers in the dump; the AoC node gains the PCU (`0x19a00000`) and the watchdog interrupt (SPI 116); the boot driver logs S2MPU, PCU reset control, System MMU, IPC words and ramdump breadcrumbs around `START`, re-applies a cleared S2MPU/System MMU setup first (`reapply=1`), and gains `cmd` (any GSA AoC command) and `ramdump` (hex dump) | - |
+| `01be75e8a`, `d9cc04ae4`, `7bea582c5` AoC mailbox view | the AoC node gains the three mailbox ranges; debugfs `mbox` (and `diag_mbox=1` around start) reads masks, raw status and shared registers, AP side | - |
 | `deb7b47bd` gate the PCU read, no lock in read-only views | after the PCU read aborted (C4b-2 first try) | - |
 | `2f785843b`, `615b5188a` unload | `gsa_unload_aoc_fw_image()` (cmd 92 or Trusty `UNLOAD_IMG`); debugfs `unload` (shutdown, unload, System MMU off, as `aoc_take_offline()`) | - |
 
@@ -643,20 +689,66 @@ a boot.
 Send the logs (`logs/aoc-*-diag.log`, `-c4b.log`, `-ramdump.log`,
 `-release.log`).
 
-### C4b-3: rails first (separate boot, if C4b-2 shows the A32 running but no control block)
+### C4t: start through Trusty (next)
+
+Rebuild int with `omandroid-aoc` @ `7bea582c5` (merge again; adds the
+mailbox view) and push with **both** overlays, `aoc-boot-test` and
+`fingerprint-trusty` (enables `/trusty`), plus the usual ones. The Trusty
+modules stay blacklisted (`omandroid-fingerprint.conf`, or add
+`blacklist trusty_core/trusty_log/trusty_ipc/trusty_virtio` to
+`omandroid-aoc-bringup.conf`). Note: `modprobe gsa` loads `trusty_core` and
+`trusty_ipc` as dependencies, so load Trusty first, on purpose.
 
 ```sh
 tools/phone-ssh 'rm -f /var/lib/omandroid/aoc-bringup-started'
-tools/aoc-stage --watchdog c2
+tools/aoc-stage --watchdog trusty        # FINGERPRINT-RESEARCH.md F2, the first SMCs into Trusty
+tools/aoc-stage --watchdog --trusty c2   # gsa without aoc_cmd_mbox: state via hwmgr.aoc
+tools/aoc-stage mbox                     # baseline: AoC mailboxes, AP side (read-only)
+tools/aoc-stage --watchdog c4a           # load: mailbox 90, as stock
+tools/aoc-stage --watchdog c4b           # START through Trusty hwmgr.aoc
+tools/aoc-stage diag; tools/aoc-stage mbox; tools/aoc-stage ramdump
+tools/aoc-stage stop                     # SHUTDOWN through Trusty (back to "loaded")
+```
+
+- **trusty, expect** (stock `R/dmesg.txt:737-890`): "trusty version:
+  Project: cloudripper …", "selected api version: 5" (or lower),
+  `/dev/trusty-ipc-dev0`, "trusty_ipc virtio0: is online".
+  **Stop:** a hang (watchdog), "failed" lines, no `trusty-ipc-dev0`.
+- **c2 --trusty, expect:** `gsa aoc state 0 (inactive)` through Trusty;
+  dmesg "TZ: com.android.trusty.gsa.hwmgr.aoc connected" (stock prints the
+  same, `R/dmesg.txt:5886`). **Stop:** "TZ: connect failed" (the service is
+  not there: report).
+- **c4a, expect:** as before, state 1 (loaded).
+- **c4b, expect:** "AoC command 1 (Trusty): 2", "GSA state 2 (running)",
+  then "firmware up: 82 services", `control` with `fw 14022723-polygon`.
+  `mbox` may show bits in `intsr1` (the AoC's doorbells) and the ramdump
+  header may gain breadcrumbs. **Stop:** state 4 again (then the secure
+  setup is not the answer: report), any "blocked" line, the watchdog
+  interrupt.
+- If it comes up but stalls later, or does not come up with Trusty: C4b-3
+  below, with the rails on before the load.
+- Rollback: `tools/aoc-stage stop`, or reboot.
+
+The mailbox view (`mbox`) has not been read on the phone yet: it reads the
+AP side of three APM-domain mailboxes, the same kind of block as the
+AP-to-APM mailbox ACPM uses every boot. If it aborts, drop it (the
+watchdog resets the phone).
+
+### C4b-3: rails first (separate boot, if C4t starts the A32 but no control block appears)
+
+```sh
+tools/phone-ssh 'rm -f /var/lib/omandroid/aoc-bringup-started'
+tools/aoc-stage --watchdog trusty
+tools/aoc-stage --watchdog --trusty c2
 tools/aoc-stage rails         # LDO7S, LDO5S and the mic LDOs on, stock voltages
 tools/aoc-stage --watchdog c4a
 tools/aoc-stage --watchdog c4b
-tools/aoc-stage diag
+tools/aoc-stage diag; tools/aoc-stage mbox
 ```
 
-- **Expect:** "LDO… : enabled, ctrl now 0xac" (LDO7S; LDO5S 0xbc, the mic rails 0xec), then
-  the read-back "on". Rails stay on until a cold boot (stock keeps them on
-  all the time).
+- **Expect:** "LDO… : enabled, ctrl now 0xac" (LDO7S; LDO5S 0xbc, the mic
+  rails 0xec), then the read-back "on". Rails stay on until a cold boot
+  (stock keeps them on all the time).
 
 ### C4c: clean restart (optional, after C4b)
 
