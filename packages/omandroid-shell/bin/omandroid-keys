@@ -92,15 +92,23 @@ short_press() {
       omarchy-brightness-display off
     fi
   else
-    # Screen off first, as on Android: the lock comes up behind the dark panel.
-    omarchy-brightness-display off
+    # Dark at once, as on Android, but only by the backlight: Omarchy's lock
+    # waits for a working screen ("screen-stabilizing"), so powering the panel
+    # off first made the lock light it again for a moment. Lock behind the dark
+    # panel, then power it off and put the brightness back for the next wake.
+    local device level=
+    device=$(omarchy-hw-display 2>/dev/null)
+    if [[ -n $device ]]; then
+      level=$(brightnessctl -d "$device" get 2>/dev/null)
+      brightnessctl -q -d "$device" set 0
+    fi
     omarchy-system-lock
-    # Once the lock is up, make sure nothing woke the display meanwhile.
     for _ in $(seq 30); do
       omarchy-shell lock status 2>/dev/null | grep -q '"secure":true' && break
       sleep 0.1
     done
-    screen_off || omarchy-brightness-display off
+    omarchy-brightness-display off
+    [[ -n $level ]] && brightnessctl -q -d "$device" set "$level"
   fi
 }
 

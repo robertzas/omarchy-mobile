@@ -43,3 +43,9 @@ o.launch_on_start("omandroid-onboarding --nudge")
 -- lock can end it before it does, which left the keyboard off for good. No
 -- screensaver runs at login, so turn it on here.
 o.launch_on_start("gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true")
+
+-- Hardware keys don't wake the screen, as on Android: power wakes it through
+-- omandroid-keys, which decides from the screen's state when it is released.
+-- With Omarchy's key_press_enables_dpms, the press itself lit the screen and
+-- the release then turned it off again. Touch still wakes it.
+hl.config({ misc = { key_press_enables_dpms = false } })
