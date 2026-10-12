@@ -10,10 +10,12 @@
 #      sensors, the three microphone LDOs), stock voltages, as stock powers
 #      them before the load. --no-rails skips this.
 #   4. The AoC System MMU, mailboxes, core and service front ends
-#      (aoc_channel_dev before aoc_char_dev, so named services bind first).
+#      (aoc_channel_dev and the sound card's aoc_alsa_dev before aoc_char_dev,
+#      so named services bind first: aoc_char_dev takes any service that is
+#      still free, the audio control channels too, and the card then never
+#      probes).
 #   5. The firmware load (aoc.bin, from the firmware search path), then wait
 #      for the services and the sensor channel.
-#   6. The sound card (aoc_alsa_dev), when the DTB has one.
 # A marker is written and synced before any of it, and removed at the end. If
 # a boot hangs here, the next one finds the marker and leaves the AoC off;
 # "omandroid-aoc-start --retry" tries again.
@@ -95,7 +97,7 @@ if ((rails)); then
 fi
 
 # 4. AoC drivers
-for m in gs201_aoc_sysmmu mailbox_wc aoc_core aoc_channel_dev aoc_char_dev; do
+for m in gs201_aoc_sysmmu mailbox_wc aoc_core aoc_channel_dev aoc_alsa_dev aoc_char_dev; do
   modprobe "$m" || fail "$m failed"
 done
 [[ -w $node/firmware ]] || fail "the AoC core did not bind ($node/firmware missing)"
@@ -108,8 +110,6 @@ for _ in $(seq 75); do
     log "up: $(head -1 "$node/services"), firmware $(cat "$node/revision" 2>/dev/null | head -1)"
     for _ in $(seq 25); do [[ -c /dev/acd-com.google.usf ]] && break; sleep 0.2; done
     [[ -c /dev/acd-com.google.usf ]] || log "no /dev/acd-com.google.usf (sensors unavailable)"
-    # 6. The sound card, once the AoC's audio services are there
-    modprobe aoc_alsa_dev || log "aoc_alsa_dev failed (no sound card)"
     finish; exit 0
   fi
   sleep 0.2
