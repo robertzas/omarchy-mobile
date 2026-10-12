@@ -27,10 +27,13 @@ for _ in {1..60}; do
 done
 [[ $info == *"current settings:"* ]] || { echo "$hci never finished its setup" >&2; exit 1; }
 
-# Set Public Address needs the controller powered off; bluetoothd may
-# already have powered it on, so cycle it if so.
+# Set Public Address needs the controller powered off. Set on a controller
+# that has never been powered, though, the kernel withdraws the index to
+# reconfigure it and it never comes back (seen at every boot). So power it
+# on once first, then cycle it around the change, and leave it on.
 powered=$(grep -c 'current settings:.*powered' <<< "$info" || true)
-((powered)) && btmgmt --index "$index" power off > /dev/null
+((powered)) || btmgmt --index "$index" power on > /dev/null
+btmgmt --index "$index" power off > /dev/null
 btmgmt --index "$index" public-addr "$addr" > /dev/null
-((powered)) && btmgmt --index "$index" power on > /dev/null
+btmgmt --index "$index" power on > /dev/null
 exit 0
