@@ -47,6 +47,7 @@ Item {
     opened = true
     refreshDnd()
     brightness.refresh()
+    torch.refresh()
   }
 
   // Host-initiated close (`shell hide`).
@@ -67,6 +68,7 @@ Item {
       wifi: wifi.enabled,
       bluetooth: bluetooth.enabled,
       doNotDisturb: dnd.enabled,
+      torch: torch.available ? torch.enabled : null,
       brightness: brightness.available ? brightness.percent : null,
       volume: audio.available ? Math.round(audio.volume * 100) : null,
       wifiPanel: wifiPicker.opened
@@ -260,15 +262,47 @@ Item {
     function toggle() {}
   }
 
-  // STUB: torch. The rear flash LED has no mainline driver on the Pixel 7
-  // Pro. Once it appears under /sys/class/leds (a *:flash or *:torch LED),
-  // switch it with `brightnessctl -d <led> set 1|0`.
+  // The rear flash LED in torch mode (leds-lm3644, white:torch). "100%" is
+  // the device tree's torch cap, not the chip's maximum. brightnessctl goes
+  // through logind's SetBrightness when it can't write sysfs itself, which
+  // the active session may do for leds devices.
   QtObject {
     id: torch
-    readonly property bool available: false
-    readonly property bool enabled: false
-    readonly property string status: "No flash LED"
-    function toggle() {}
+
+    property bool available: false
+    property bool enabled: false
+    readonly property string status: !available ? "No flash LED" : enabled ? "On" : "Off"
+
+    function refresh() {
+      if (!torchRead.running) torchRead.running = true
+    }
+
+    function toggle() {
+      if (!available || torchWrite.running) return
+      torchWrite.command = ["brightnessctl", "--device=white:torch", "--quiet", "set", enabled ? "0" : "100%"]
+      torchWrite.running = true
+    }
+  }
+
+  Process {
+    id: torchRead
+    command: ["brightnessctl", "--device=white:torch", "--machine-readable", "info"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        // device,class,current,percent%,max
+        var parts = String(text || "").trim().split(",")
+        var current = parts.length >= 3 ? parseInt(parts[2], 10) : NaN
+        torch.available = isFinite(current)
+        torch.enabled = isFinite(current) && current > 0
+      }
+    }
+    onExited: function(exitCode) { if (exitCode !== 0) torch.available = false }
+  }
+
+  Process {
+    id: torchWrite
+    onExited: torch.refresh()
   }
 
   // ---------------------------------------------------------------- brightness
