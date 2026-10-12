@@ -1,0 +1,393 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Omandroid's Bluetooth pairing agent, for the quick-settings Bluetooth panel.
+
+Quickshell.Bluetooth can pair, connect and forget but registers no BlueZ
+agent, so it can't answer a numeric comparison, a passkey or a PIN, and it
+doesn't expose RSSI, appearance, class or the error behind a failed pair.
+The panel runs this while it is open; it speaks JSON lines:
+
+  stdout  {"event": "ready", "adapter": "/org/bluez/hci0"}
+          {"event": "device", "address", "rssi", "appearance", "class"}
+          {"event": "removed", "address"}
+          {"event": "request", "id", "type", "address", ...}
+              type: confirm (passkey), authorize, pin, passkey,
+                    display-passkey (passkey, entered), display-pin (pin)
+          {"event": "cancel"}
+          {"event": "result", "op": "pair"|"connect", "address", "ok",
+           "stage", "error", "message"}
+          {"event": "error", "message"}
+  stdin   {"cmd": "pair"|"connect"|"cancel-pair", "address"}
+          {"cmd": "reply", "id", "accept", "value"}
+          {"cmd": "discover", "on"}
+
+It registers as the default agent (KeyboardDisplay) and holds a discovery
+session; both end when the panel closes stdin or the process exits, and BlueZ
+drops the discovery session with our D-Bus connection anyway. PINs and
+passkeys travel over stdin and D-Bus only and are never printed.
+"""
+
+import json
+import os
+import signal
+import sys
+
+BLUEZ = "org.bluez"
+AGENT_PATH = "/org/omandroid/bluetooth/agent"
+AGENT_IFACE = "org.bluez.Agent1"
+DEVICE_IFACE = "org.bluez.Device1"
+ADAPTER_IFACE = "org.bluez.Adapter1"
+PROPS_IFACE = "org.freedesktop.DBus.Properties"
+EXTRA_KEYS = ("RSSI", "Appearance", "Class")
+
+
+# ---------------------------------------------------------------- pure helpers
+
+def parse_command(line):
+    """One stdin line -> a command dict, or None."""
+    try:
+        value = json.loads(line)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(value, dict) or not isinstance(value.get("cmd"), str):
+        return None
+    return value
+
+
+def reply_value(kind, value):
+    """Check a typed answer: a PIN is 1-16 characters, a passkey 0-999999.
+    Returns the value to hand BlueZ, or None if it can't answer."""
+    if kind == "pin":
+        text = str(value if value is not None else "")
+        return text if 1 <= len(text) <= 16 else None
+    if kind == "passkey":
+        text = str(value if value is not None else "")
+        if not text.isdigit() or len(text) > 6:
+            return None
+        return int(text)
+    return True
+
+
+def device_extras(address, props):
+    """The fields Quickshell doesn't expose, as a device event."""
+    def plain(key):
+        value = props.get(key)
+        return None if value is None else int(value)
+    return {"event": "device", "address": str(address),
+            "rssi": plain("RSSI"), "appearance": plain("Appearance"), "class": plain("Class")}
+
+
+def error_event(op, address, stage, error):
+    name = error.get_dbus_name() if hasattr(error, "get_dbus_name") else type(error).__name__
+    message = error.get_dbus_message() if hasattr(error, "get_dbus_message") else str(error)
+    return {"event": "result", "op": op, "address": address, "ok": False,
+            "stage": stage, "error": name or "", "message": message or ""}
+
+
+def emit(event):
+    sys.stdout.write(json.dumps(event) + "\n")
+    sys.stdout.flush()
+
+
+# ---------------------------------------------------------------- D-Bus side
+
+def main():
+    import dbus
+    import dbus.mainloop.glib
+    import dbus.service
+    from gi.repository import GLib
+
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    bus = dbus.SystemBus()
+    loop = GLib.MainLoop()
+
+    class Rejected(dbus.DBusException):
+        _dbus_error_name = "org.bluez.Error.Rejected"
+
+    class Canceled(dbus.DBusException):
+        _dbus_error_name = "org.bluez.Error.Canceled"
+
+    def managed_objects():
+        manager = dbus.Interface(bus.get_object(BLUEZ, "/"), "org.freedesktop.DBus.ObjectManager")
+        return manager.GetManagedObjects()
+
+    def find_adapter():
+        for path, interfaces in managed_objects().items():
+            if ADAPTER_IFACE in interfaces:
+                return str(path)
+        return None
+
+    def device_path(address):
+        for path, interfaces in managed_objects().items():
+            device = interfaces.get(DEVICE_IFACE)
+            if device and str(device.get("Address", "")).upper() == str(address).upper():
+                return str(path)
+        return None
+
+    def address_of(path):
+        try:
+            props = dbus.Interface(bus.get_object(BLUEZ, path), PROPS_IFACE)
+            return str(props.Get(DEVICE_IFACE, "Address"))
+        except dbus.DBusException:
+            return ""
+
+    adapter_path = find_adapter()
+    if not adapter_path:
+        emit({"event": "error", "message": "No Bluetooth adapter"})
+        return 1
+
+    pending = {}
+    next_id = [1]
+
+    def ask(kind, device, ok, err, **fields):
+        request_id = next_id[0]
+        next_id[0] += 1
+        pending[request_id] = (kind, ok, err)
+        event = {"event": "request", "id": request_id, "type": kind, "address": address_of(device)}
+        event.update(fields)
+        emit(event)
+
+    class Agent(dbus.service.Object):
+        @dbus.service.method(AGENT_IFACE, in_signature="", out_signature="")
+        def Release(self):
+            pass
+
+        @dbus.service.method(AGENT_IFACE, in_signature="o", out_signature="s", async_callbacks=("ok", "err"))
+        def RequestPinCode(self, device, ok, err):
+            ask("pin", device, ok, err)
+
+        @dbus.service.method(AGENT_IFACE, in_signature="os", out_signature="")
+        def DisplayPinCode(self, device, pincode):
+            emit({"event": "request", "id": 0, "type": "display-pin", "address": address_of(device), "pin": str(pincode)})
+
+        @dbus.service.method(AGENT_IFACE, in_signature="o", out_signature="u", async_callbacks=("ok", "err"))
+        def RequestPasskey(self, device, ok, err):
+            ask("passkey", device, ok, err)
+
+        @dbus.service.method(AGENT_IFACE, in_signature="ouq", out_signature="")
+        def DisplayPasskey(self, device, passkey, entered):
+            emit({"event": "request", "id": 0, "type": "display-passkey", "address": address_of(device),
+                  "passkey": int(passkey), "entered": int(entered)})
+
+        @dbus.service.method(AGENT_IFACE, in_signature="ou", out_signature="", async_callbacks=("ok", "err"))
+        def RequestConfirmation(self, device, passkey, ok, err):
+            ask("confirm", device, ok, err, passkey=int(passkey))
+
+        @dbus.service.method(AGENT_IFACE, in_signature="o", out_signature="", async_callbacks=("ok", "err"))
+        def RequestAuthorization(self, device, ok, err):
+            ask("authorize", device, ok, err)
+
+        # Services on a device we paired with are fine; anything else is not.
+        @dbus.service.method(AGENT_IFACE, in_signature="os", out_signature="")
+        def AuthorizeService(self, device, uuid):
+            try:
+                props = dbus.Interface(bus.get_object(BLUEZ, device), PROPS_IFACE)
+                if bool(props.Get(DEVICE_IFACE, "Paired")) or bool(props.Get(DEVICE_IFACE, "Trusted")):
+                    return
+            except dbus.DBusException:
+                pass
+            raise Rejected("Not paired")
+
+        @dbus.service.method(AGENT_IFACE, in_signature="", out_signature="")
+        def Cancel(self):
+            for request_id in list(pending):
+                _, _, err = pending.pop(request_id)
+                err(Canceled("Canceled"))
+            emit({"event": "cancel"})
+
+    agent = Agent(bus, AGENT_PATH)
+    agent_manager = dbus.Interface(bus.get_object(BLUEZ, "/org/bluez"), "org.bluez.AgentManager1")
+    agent_manager.RegisterAgent(AGENT_PATH, "KeyboardDisplay")
+    agent_manager.RequestDefaultAgent(AGENT_PATH)
+
+    adapter = dbus.Interface(bus.get_object(BLUEZ, adapter_path), ADAPTER_IFACE)
+    discovery = {"wanted": True, "running": False}
+
+    def start_discovery():
+        if not discovery["wanted"] or discovery["running"]:
+            return True
+        def started():
+            discovery["running"] = True
+        def failed(error):
+            # NotReady while powering up, InProgress if someone else holds a
+            # session: try again on the next tick.
+            if "InProgress" in error.get_dbus_name():
+                discovery["running"] = True
+        adapter.StartDiscovery(reply_handler=started, error_handler=failed)
+        return True
+
+    def stop_discovery():
+        discovery["wanted"] = False
+        if discovery["running"]:
+            discovery["running"] = False
+            try:
+                adapter.StopDiscovery()
+            except dbus.DBusException:
+                pass
+
+    def adapter_changed(interface, changed, invalidated, path=None):
+        path = str(path)
+        if interface == ADAPTER_IFACE and "Discovering" in changed and not bool(changed["Discovering"]):
+            discovery["running"] = False
+        # RSSI moves constantly during discovery: update a cache from the
+        # change itself rather than asking BlueZ again.
+        if interface == DEVICE_IFACE and path in extras and any(key in changed for key in EXTRA_KEYS):
+            address, props = extras[path]
+            for key in EXTRA_KEYS:
+                if key in changed:
+                    props[key] = changed[key]
+            emit(device_extras(address, props))
+
+    extras = {}
+
+    def added(path, interfaces):
+        device = interfaces.get(DEVICE_IFACE)
+        if device and str(path).startswith(adapter_path + "/"):
+            props = {key: device[key] for key in EXTRA_KEYS if key in device}
+            extras[str(path)] = (str(device.get("Address", "")), props)
+            emit(device_extras(device.get("Address", ""), props))
+
+    def removed(path, interfaces):
+        extras.pop(str(path), None)
+        if DEVICE_IFACE in interfaces:
+            # The address is gone with the object; it's the path's tail.
+            tail = str(path).rsplit("/", 1)[-1]
+            if tail.startswith("dev_"):
+                emit({"event": "removed", "address": tail[4:].replace("_", ":")})
+
+    bus.add_signal_receiver(adapter_changed, dbus_interface=PROPS_IFACE, signal_name="PropertiesChanged",
+                            bus_name=BLUEZ, path_keyword="path")
+    bus.add_signal_receiver(added, dbus_interface="org.freedesktop.DBus.ObjectManager",
+                            signal_name="InterfacesAdded", bus_name=BLUEZ)
+    bus.add_signal_receiver(removed, dbus_interface="org.freedesktop.DBus.ObjectManager",
+                            signal_name="InterfacesRemoved", bus_name=BLUEZ)
+
+    for path, interfaces in managed_objects().items():
+        added(path, interfaces)
+
+    # ------------------------------------------------------------ commands
+
+    def device_call(address, op):
+        path = device_path(address)
+        if not path:
+            emit({"event": "result", "op": op, "address": address, "ok": False, "stage": op,
+                  "error": "org.bluez.Error.DoesNotExist", "message": "Device not found"})
+            return None
+        return path
+
+    def connect(address, path, op):
+        device = dbus.Interface(bus.get_object(BLUEZ, path), DEVICE_IFACE)
+        device.Connect(
+            reply_handler=lambda: emit({"event": "result", "op": op, "address": address, "ok": True, "stage": "connect"}),
+            error_handler=lambda error: emit(error_event(op, address, "connect", error)),
+            timeout=40)
+
+    def pair(address):
+        path = device_call(address, "pair")
+        if not path:
+            return
+        device = dbus.Interface(bus.get_object(BLUEZ, path), DEVICE_IFACE)
+        props = dbus.Interface(bus.get_object(BLUEZ, path), PROPS_IFACE)
+
+        def paired():
+            try:
+                props.Set(DEVICE_IFACE, "Trusted", dbus.Boolean(True))
+            except dbus.DBusException:
+                pass
+            connect(address, path, "pair")
+
+        def failed(error):
+            if "AlreadyExists" in error.get_dbus_name():
+                paired()
+            else:
+                emit(error_event("pair", address, "pair", error))
+
+        device.Pair(reply_handler=paired, error_handler=failed, timeout=90)
+
+    def handle(command):
+        cmd = command.get("cmd")
+        address = str(command.get("address", ""))
+        if cmd == "pair":
+            pair(address)
+        elif cmd == "connect":
+            path = device_call(address, "connect")
+            if path:
+                connect(address, path, "connect")
+        elif cmd == "cancel-pair":
+            path = device_path(address)
+            if path:
+                try:
+                    dbus.Interface(bus.get_object(BLUEZ, path), DEVICE_IFACE).CancelPairing()
+                except dbus.DBusException:
+                    pass
+        elif cmd == "reply":
+            entry = pending.pop(command.get("id"), None)
+            if not entry:
+                return
+            kind, ok, err = entry
+            if not command.get("accept"):
+                err(Rejected("Rejected"))
+                return
+            value = reply_value(kind, command.get("value"))
+            if value is None:
+                err(Rejected("Bad input"))
+            elif kind == "pin":
+                ok(dbus.String(value))
+            elif kind == "passkey":
+                ok(dbus.UInt32(value))
+            else:
+                ok()
+        elif cmd == "discover":
+            if command.get("on"):
+                discovery["wanted"] = True
+                start_discovery()
+            else:
+                stop_discovery()
+
+    buffer = [b""]
+
+    def on_stdin(fd, condition):
+        data = os.read(fd, 4096) if condition & GLib.IO_IN else b""
+        if not data:
+            loop.quit()
+            return False
+        buffer[0] += data
+        while b"\n" in buffer[0]:
+            line, buffer[0] = buffer[0].split(b"\n", 1)
+            command = parse_command(line.decode("utf-8", "replace"))
+            if command:
+                handle(command)
+        return True
+
+    GLib.io_add_watch(sys.stdin.fileno(), GLib.IO_IN | GLib.IO_HUP | GLib.IO_ERR, on_stdin)
+    try:
+        from gi.repository import GLibUnix
+        signal_add = GLibUnix.signal_add
+    except ImportError:
+        signal_add = GLib.unix_signal_add
+    signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, loop.quit)
+    signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, loop.quit)
+    GLib.timeout_add_seconds(2, start_discovery)
+    start_discovery()
+
+    emit({"event": "ready", "adapter": adapter_path})
+    try:
+        loop.run()
+    finally:
+        stop_discovery()
+        try:
+            agent_manager.UnregisterAgent(AGENT_PATH)
+        except dbus.DBusException:
+            pass
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except ImportError as error:
+        emit({"event": "error", "message": "Pairing helper needs python-dbus and python-gobject: %s" % error})
+        sys.exit(1)
+    except Exception as error:  # report, don't trace: the panel shows this
+        emit({"event": "error", "message": "Pairing helper failed: %s" % error})
+        sys.exit(1)

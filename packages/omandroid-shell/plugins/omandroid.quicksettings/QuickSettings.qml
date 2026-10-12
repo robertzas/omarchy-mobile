@@ -14,7 +14,8 @@ import qs.Ui
 // Pull-down quick settings for the phone. The sheet drops from the top edge
 // over the status bar: a clock header, six toggle tiles, then brightness and
 // volume. Tap outside it, swipe it up, or press Escape to put it away. The
-// Wi-Fi tile's chevron (or a long-press) opens the picker in WifiPanel.qml.
+// Wi-Fi and Bluetooth tiles' chevrons (or a long-press) open the panels in
+// WifiPanel.qml and BluetoothPanel.qml.
 //
 // Backends are the same ones Omarchy's desktop panels drive: Quickshell's
 // NetworkManager and BlueZ services, omarchy-bluetooth-power, PipeWire, the
@@ -33,17 +34,19 @@ Item {
 
   // ---------------------------------------------------------------- lifecycle
 
-  // A payload of {"page": "wifi"} opens the Wi-Fi picker instead of the sheet.
+  // A payload of {"page": "wifi"} or {"page": "bluetooth"} opens that panel
+  // instead of the sheet.
   function open(payloadJson) {
     var payload = {}
     try { payload = JSON.parse(payloadJson || "{}") || {} } catch (error) {}
-    if (payload.page === "wifi") {
-      wifiPicker.open()
+    if (payload.page === "wifi" || payload.page === "bluetooth") {
+      openPage(payload.page)
       // Let the host finish delivering this open before it hears a hide.
       Qt.callLater(root.dismiss)
       return
     }
     wifiPicker.close()
+    bluetoothPanelItem.close()
     opened = true
     refreshDnd()
     brightness.refresh()
@@ -71,8 +74,21 @@ Item {
       torch: torch.available ? torch.enabled : null,
       brightness: brightness.available ? brightness.percent : null,
       volume: audio.available ? Math.round(audio.volume * 100) : null,
-      wifiPanel: wifiPicker.opened
+      wifiPanel: wifiPicker.opened,
+      bluetoothPanel: bluetoothPanelItem.opened
     })
+  }
+
+  // `shell call omandroid.quicksettings openBluetooth ''`: the same as the
+  // Bluetooth tile's chevron. `bluetoothPanel ''` returns its state as JSON.
+  function openBluetooth() {
+    if (!bluetooth.available) return "unavailable"
+    openBluetoothPanel()
+    return bluetoothPanelItem.snapshot()
+  }
+
+  function bluetoothPanel() {
+    return bluetoothPanelItem.snapshot()
   }
 
   // `shell call omandroid.quicksettings openWifi ''`: the same as the tile's
@@ -147,18 +163,37 @@ Item {
   // window, so the sheet goes away and the picker stays up on its own; its
   // back glyph brings the sheet back.
   function openWifiPanel() {
-    wifiPicker.open()
+    openPage("wifi")
     root.dismiss()
+  }
+
+  function openBluetoothPanel() {
+    openPage("bluetooth")
+    root.dismiss()
+  }
+
+  // One page at a time.
+  function openPage(page) {
+    if (page === "wifi") {
+      bluetoothPanelItem.close()
+      wifiPicker.open()
+    } else {
+      wifiPicker.close()
+      bluetoothPanelItem.open()
+    }
+  }
+
+  // A page's back glyph: close it and bring the sheet back.
+  function backToSheet(page) {
+    page.close()
+    var summoned = root.shell && typeof root.shell.summon === "function" && root.shell.summon(root.pluginId, "{}")
+    if (!summoned) root.open("{}")
   }
 
   WifiPanel {
     id: wifiPicker
     device: wifi.device
-    onBackRequested: {
-      wifiPicker.close()
-      var summoned = root.shell && typeof root.shell.summon === "function" && root.shell.summon(root.pluginId, "{}")
-      if (!summoned) root.open("{}")
-    }
+    onBackRequested: root.backToSheet(wifiPicker)
   }
 
   // ---------------------------------------------------------------- Bluetooth
@@ -194,6 +229,16 @@ Item {
       bluetoothPendingTimeout.restart()
       Quickshell.execDetached(["omarchy-bluetooth-power", enabled ? "off" : "on"])
     }
+  }
+
+  // The panel behind the Bluetooth tile's chevron or a long-press; its own
+  // window, like the Wi-Fi picker.
+  BluetoothPanel {
+    id: bluetoothPanelItem
+    adapter: bluetooth.adapter
+    powerPending: bluetooth.pending
+    onBackRequested: root.backToSheet(bluetoothPanelItem)
+    onPowerToggleRequested: bluetooth.toggle()
   }
 
   Timer {
@@ -535,7 +580,9 @@ Item {
             active: bluetooth.enabled
             available: bluetooth.available
             busy: bluetooth.pending
+            details: true
             onClicked: bluetooth.toggle()
+            onDetailsRequested: root.openBluetoothPanel()
           }
 
           Tile {

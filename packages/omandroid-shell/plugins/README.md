@@ -14,7 +14,7 @@ logical at scale 3).
 | Plugin | Kind | What it is |
 | --- | --- | --- |
 | `omandroid.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings |
-| `omandroid.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: six toggle tiles, brightness and volume; Wi-Fi picker |
+| `omandroid.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: six toggle tiles, brightness and volume; Wi-Fi picker and Bluetooth panel |
 | `omandroid.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
 
@@ -84,7 +84,7 @@ scrim, swipe the sheet up, or press Escape to close it.
 | Tile | Backend |
 | --- | --- |
 | Wi-Fi | `Networking.wifiEnabled` (NetworkManager); status shows the SSID. The chevron or a long-press opens the Wi-Fi picker (below) |
-| Bluetooth | `omarchy-bluetooth-power on/off`, the same rfkill path as Omarchy's Bluetooth panel |
+| Bluetooth | `omarchy-bluetooth-power on/off`, the same rfkill path as Omarchy's Bluetooth panel. The chevron or a long-press opens the Bluetooth panel (below) |
 | Mobile data | **Stub**: no modem backend (ModemManager wiring is the TODO) |
 | Rotation lock | **Stub**: no accelerometer / iio-sensor-proxy and no rotation daemon yet |
 | Torch | **Stub**: the flash LED has no mainline driver; once a `*:flash`/`*:torch` LED appears in `/sys/class/leds`, drive it with `brightnessctl -d` |
@@ -131,6 +131,49 @@ Limits: hidden networks and 802.1X (enterprise) networks can't be joined from
 here yet; an out-of-range saved profile is matched to its network by profile
 name, which is the SSID unless someone renamed it.
 
+### Bluetooth panel
+
+`BluetoothPanel.qml`, built the same way: a tap on the Bluetooth tile still
+toggles power (through `omarchy-bluetooth-power`), the chevron or a
+long-press opens the panel, the back glyph returns to quick settings.
+
+* **Use Bluetooth** switch, then **Make visible to other devices** with the
+  phone's own name; visibility lasts two minutes (a countdown shows) and ends
+  when the panel closes.
+* **Paired devices**: connected first, then by name, with battery when BlueZ
+  has it. **Available devices**: what discovery finds, named devices strongest
+  first; address-only devices fold behind "Show N unnamed devices". Discovery
+  runs only while the panel is open; the refresh glyph restarts it.
+* Icons come from the LE appearance, then the class of device, then BlueZ's
+  icon name: headphones, speaker, keyboard, mouse, gamepad, phone, computer,
+  watch, or a plain Bluetooth glyph.
+* **Tap** an available device to pair, trust and connect; a paired one to
+  connect; the connected one for its actions. **Long-press** a paired device
+  for Connect/Disconnect, Rename and Forget. Failures (pairing failed or
+  rejected, connection refused, out of range, timeouts) show in a banner and
+  on the row.
+* **Pairing prompts**: Just Works needs nothing; numeric comparison shows the
+  six digits with Pair/Cancel; a keyboard shows the passkey to type, lighting
+  up digits as they're typed; a PIN or passkey request gets a field above the
+  on-screen keyboard. A device pairing *to* the phone gets the same sheets.
+
+Quickshell.Bluetooth provides the devices, power, visibility, disconnect,
+forget and rename, but no pairing agent, RSSI, device class or failure
+reasons. So while the panel is open it runs `omandroid-bt-agent` (python3
+with python-dbus and python-gobject): it registers a KeyboardDisplay agent as
+the default, holds the discovery session (BlueZ ends it when the helper
+exits), reports RSSI/appearance/class, and runs Pair, Trusted and Connect so
+errors come back with BlueZ's reason. It talks JSON lines on stdin/stdout;
+PINs travel only over stdin and D-Bus and are never printed. If the helper
+can't start, the banner says so and the panel falls back to Quickshell's own
+discovery and Just Works pairing. The pure logic is in `BluetoothModel.js`
+(`test/bluetooth-model.js`); the helper's pure parts are tested by
+`test/bt-agent.py`.
+
+Limits: no file transfer or per-profile toggles (media/calls); the panel only
+answers the agent while it is open, so pairing *to* the phone needs the panel
+up (which visibility does anyway).
+
 IPC:
 
 | Call | Effect |
@@ -141,6 +184,9 @@ IPC:
 | `omarchy-shell shell summon omandroid.quicksettings '{"page":"wifi"}'` | Open the Wi-Fi picker |
 | `omarchy-shell shell call omandroid.quicksettings openWifi ''` | The same; returns the picker's state, or `unavailable` |
 | `omarchy-shell shell call omandroid.quicksettings wifiPanel ''` | JSON: picker open, device, connected SSID, networks in range, saved out of range, action, failure, sheet |
+| `omarchy-shell shell summon omandroid.quicksettings '{"page":"bluetooth"}'` | Open the Bluetooth panel |
+| `omarchy-shell shell call omandroid.quicksettings openBluetooth ''` | The same; returns the panel's state, or `unavailable` |
+| `omarchy-shell shell call omandroid.quicksettings bluetoothPanel ''` | JSON: panel open, adapter name, power, discovering, visible, helper, paired, available (with RSSI and type), unnamed count, action, failure, sheet, pairing phase |
 | `omarchy-shell shell call omandroid.quicksettings toggleTile <name>` | Same as tapping a tile. Names: `wifi`, `bluetooth`, `mobile-data`, `rotation-lock`, `torch`, `dnd`. Returns the new state, `unavailable` or `unknown` |
 
 ## omandroid.launcher

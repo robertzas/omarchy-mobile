@@ -7,7 +7,7 @@ pkgdesc="Omandroid's phone profile for the Omarchy shell: status bar, quick sett
 arch=(any)
 url="https://github.com/derekross/omandroid"
 license=(MIT)
-depends=(omarchy bash squeekboard)
+depends=(omarchy bash squeekboard bluez python python-dbus python-gobject)
 install=omandroid-shell.install
 
 package() {

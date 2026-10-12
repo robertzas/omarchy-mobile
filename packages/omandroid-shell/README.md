@@ -9,6 +9,7 @@ Omandroid's phone profile for Omarchy's own shell. It isn't a fork: these are or
 | `plugins/omandroid.launcher` | Home bar: app search, app grid and a prompt to the user's Omarchy default agent |
 | `profile/shell.json` | The phone layout the setup seeds once |
 | `bin/omandroid-setup-user` | Omandroid's per-user setup (Omarchy lifecycle `setup-user`) |
+| `bin/omandroid-bt-agent` | BlueZ pairing agent and discovery helper the quick-settings Bluetooth panel runs while open |
 
 The package contract follows omarchy-mac's: `./install DESTDIR` stages files and enables nothing, `test/all` runs the package's own tests, and `version` holds the version.
 

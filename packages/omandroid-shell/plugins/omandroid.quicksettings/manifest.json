@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "author": "Omandroid",
   "license": "MIT",
-  "description": "Pull-down quick settings sheet for the phone: touch-sized toggles for Wi-Fi, Bluetooth, mobile data, rotation lock, torch and do-not-disturb, plus brightness and volume sliders, and a Wi-Fi network picker behind the Wi-Fi tile.",
+  "description": "Pull-down quick settings sheet for the phone: touch-sized toggles for Wi-Fi, Bluetooth, mobile data, rotation lock, torch and do-not-disturb, plus brightness and volume sliders, a Wi-Fi network picker behind the Wi-Fi tile and a Bluetooth panel behind the Bluetooth tile.",
   "kinds": ["panel"],
   "keepLoaded": true,
   "entryPoints": {

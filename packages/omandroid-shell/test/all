@@ -39,16 +39,21 @@ if command -v node >/dev/null; then
     node --check "$js" || fail "$js parses"
   done
   node test/wifi-model.js || fail "Wi-Fi model"
+  node test/bluetooth-model.js || fail "Bluetooth model"
 else
-  pass "Wi-Fi model # SKIP no node"
+  pass "Wi-Fi and Bluetooth models # SKIP no node"
 fi
 
-# The Wi-Fi password goes over NetworkManager's D-Bus or nmcli's stdin, never
-# argv or the log.
-if grep -nE 'console\.(log|info|warn|debug|error)\([^)]*(psk|password|secret)' plugins/omandroid.quicksettings/*.qml; then
-  fail "the Wi-Fi password is never logged"
+# The Bluetooth pairing helper parses, and its pure parts work without D-Bus.
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omandroid-bt-agent || fail "omandroid-bt-agent parses"
+python3 -B test/bt-agent.py || fail "omandroid-bt-agent helpers"
+
+# The Wi-Fi password and Bluetooth PINs go over D-Bus or a helper's stdin,
+# never argv or the log.
+if grep -nE 'console\.(log|info|warn|debug|error)\([^)]*(psk|password|secret|pin|passkey|codeField)' plugins/omandroid.quicksettings/*.qml; then
+  fail "passwords and PINs are never logged"
 fi
-pass "the Wi-Fi password is never logged"
+pass "passwords and PINs are never logged"
 
 bash -n bin/omandroid-setup-user || fail "omandroid-setup-user parses"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
