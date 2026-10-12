@@ -1020,6 +1020,9 @@ Read it this way:
 
 ### 7.6 W2 runbook: brcmfmac, firmware, interface, scan
 
+**Superseded by 9.4** for W2.2-W2.3 (the first W2 run failed; section 9 has
+the cause and the fixed runbook). W2.1 (firmware to the phone) still applies.
+
 The firmware comes from the user's own factory image, extracted on the
 laptop by `tools/extract-vendor-firmware` (2.2), into `out/` (gitignored).
 It is never committed or packaged.
@@ -1389,7 +1392,9 @@ What each pass looks like (lines from the summary, `14520000.pcie:` /
     `powerctl` after every reset** (otherwise the backplane faults from a
     cold boot).
 
-  Our firmware is 20.101.90. Plan W2 with this list.
+  Our firmware is 20.101.90. Plan W2 with this list. **Done for W2 in
+  section 9** (sequence numbers, packet ID 0, slot clearing, power domains;
+  host-memory indices were already in brcmfmac); the rest is for W3.
 - **S2MPU (W4).** Reportedly, touching any
   S2MPU register other than CTRL0 reset the SoC, and S2MPUs come back with
   CTRL0 = 1 after a power-domain cycle. Reading CTRL0 (W1.1) stays fine.
@@ -1397,3 +1402,211 @@ What each pass looks like (lines from the summary, `14520000.pcie:` /
 - **pstore and `quiet`.** The capture tool raises the console level at run
   time. To keep boot-time messages in pstore as well, `quiet` would have to
   leave the DT bootargs. Not done, because it is a user-visible boot change.
+
+---
+
+## 9. W2 on the phone: "Invalid shared RAM address 0xffffffff", the cause and the fixes (2026-10-12)
+
+`L` = upstream brcmfmac as of `4487813cb` (before the fixes),
+`W` = Google's `private/google-modules/wlan/bcm4389/`, `R` = the stock
+captures. Log: `logs/w2-brcmfmac-20261012-0016.log` (W1 link log:
+`logs/wifi-w1-20261012-001501-s5.log`).
+
+### 9.1 What happened
+
+W1 passed: Gen.2 x1 on try 1, `01:00.0 [14e4:4441]` rev 03, BAR0 64K,
+BAR2 4M, and brcmfmac took the restricted DMA pool. Then `modprobe
+brcmfmac`:
+
+```
+brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac4389c1-pcie for chip BCM4389/3
+brcmfmac 0000:01:00.0: brcmf_pcie_download_fw_nvram: Invalid shared RAM address 0xffffffff
+brcmfmac 0000:01:00.0: brcmf_pcie_setup: Dongle setup failed
+ieee80211 phy0: brcmf_fw_crashed: Firmware has halted or crashed
+WARNING: kernel/workqueue.c:4409 at __flush_work+0x27c/0x2a4
+ ... brcmf_bus_cancel_reset_work <- brcmf_pcie_remove <- brcmf_pcie_setup
+```
+
+The failure line came 390 ms after the firmware request, download
+included, so on one of the first 50 ms polls: the word at what brcmfmac
+took for the top of RAM changed to 0xffffffff once the ARM ran. The phone rebooted about
+5 minutes later; the log stream (still running) ends with `sd ...:
+Synchronizing SCSI cache`, an orderly kernel restart, not a watchdog bite
+(a bite prints nothing). The capture tool's disarm was fragile anyway and
+its log stream leaked; both are fixed (9.3).
+
+### 9.2 Cause: brcmfmac sized the RAM at 256 KiB instead of 2688 KiB
+
+| | brcmfmac (`L`) | Broadcom/Google (`W`, `R`) |
+|---|---|---|
+| SYSMEM coreinfo decode | SOCRAM layout: banks = bits 7:4 (`L/.../chip.c:158-160,669`), banks counted from index 0 (`chip.c:672`) | RAM banks = bits 4:0, ROM banks = bits 9:5 (bits 23:16 / 31:24 from core rev 12), RAM banks start after the ROM banks (`W/siutils.c:7045-7057`, `W/include/sbsysmem.h:115-123`) |
+| BCM4389 coreinfo 0x115 | 1 bank, and it is ROM bank 0 | 8 ROM + 21 RAM banks of 128 KiB (`R/dmesg.txt:5468-5490`) |
+| RAM | 0x200000 + **0x40000** | 0x200000 + **0x2a0000** = 2752512 (`R/dmesg.txt:5490`; base `W/dhd_pcie.c:2336-2349`, `W/include/sbchipc.h:4245`) |
+
+Evidence from our own failure: the WARNING's register dump (callee-saved
+registers left by the inlined download code) holds `x24 = 0xe8b4174b`, the
+NVRAM length token (stock prints the same token, `R/dmesg.txt:6986`), and
+`x26 = 0x23a2d0` = 0x240000 - 23856, the NVRAM address for a 256 KiB RAM.
+So brcmfmac wrote the NVRAM, the random seed and the "top of RAM"
+handshake word (`L/.../pcie.c:1722-1744`) at 0x23a1c8-0x23ffff, inside the
+1.7 MB firmware image it had just copied to 0x200000 (code and data run to
+0x3ae944, `_end` in `fw_bcmdhd.map`). The firmware started on corrupted code and died, and the
+read of 0x23fffc returned 0xffffffff (`L/.../pcie.c:1779`). Nothing in the
+PCIe link or the DMA pool was at fault.
+
+Two more defects sit right behind it, and would have failed the next try:
+
+- **The RAM does not fit the BAR.** With the right size, RAM ends at
+  0x49ffff, but brcmfmac maps BAR2 (4 MiB) 1:1 from backplane address 0
+  (`L/.../pcie.c:568-578,1818`), so the NVRAM, the seed and the handshake
+  word would land past its ioremap(). bcmdhd moves the BAR1 window (PCI
+  config 0x84) for every access (`W/dhd_pcie.c:6143-6260,2458`,
+  `W/include/pcicfg.h:489`) and resets it to 0 before the download
+  (`W/dhd_pcie.c:10105`); stock writes the seed at 0x49a248
+  (`R/dmesg.txt:6987`).
+- **Power domains.** bcmdhd treats the 4389 as a multi-backplane chip
+  (`W/include/siutils.h:963-969`): it requests all four save/restore
+  domains (PCIe, ARM/backplane, MAC aux, MAC main) in the PCIe core's
+  `powerctl` (BAR0 + 0x2000 + 0x1e8, request bits 11:8, status 19:16)
+  before a reset (`W/dhd_pcie.c:832-857,2778`, PCIe core rev 72 is in
+  `W/dhd_pcie.h:153-155`, `R/dmesg.txt:6988`), and asserts the ARM domain
+  in the DAR copy (0xa0c) because "ARM fails to boot" from cold without it
+  (`W/dhd_pcie.c:735-748,2505-2513`). It also sets the CA7's BAR
+  coherent-access bits, config 0x88 bits 9:8 (`W/dhd_pcie.c:2219-2223`).
+  brcmfmac does none of this. A warm chip can hide it.
+
+And three protocol details, needed once the firmware runs:
+
+- **H2D sequence numbers.** bcmdhd puts `seqnum % 253` (seqnum from 254) in
+  the `epoch` byte of every message on the control and rxpost submit rings
+  (`W/include/bcmmsgbuf.h:38-39`, `W/dhd_msgbuf.c:1816-1824,5900,10883`);
+  brcmfmac leaves it 0. The 20.101.90 image contains the trap string
+  "h2d livelock error".
+- **Packet ID 0** is "invalid" to bcmdhd and never used
+  (`W/dhd_msgbuf.c:2278,2760,2901`); brcmfmac hands it out after a wrap.
+- **Stale slot bytes.** brcmfmac fills ioctl and flow-ring create/delete
+  messages field by field on reused slots; with the epoch byte now
+  meaningful, the slots are cleared first (buffer posts already were).
+
+The WARNING is a plain brcmfmac bug: `drvr->bus_reset` is only
+`INIT_WORK`ed in `brcmf_bus_started()` (`L/.../core.c:1303`), but the
+remove path that the failed setup triggers cancels it unconditionally
+(`core.c:1190`).
+
+### 9.3 What changed (all offline)
+
+Kernel, branch `omandroid-pcie` in `wt-pcie`, one upstream-style commit each:
+
+| Commit | Change |
+|---|---|
+| `eaa318f86` wifi: brcmfmac: chip: size the BCM4389 SYSMEM from its RAM banks | bcmdhd's coreinfo decode for the 4389 (both layouts), ROM banks skipped; logs `SYSMEM rev N coreinfo 0x...: R ROM, N RAM banks` at debug INFO. Other SYSMEM chips unchanged |
+| `f43633f62` wifi: brcmfmac: pcie: move the BAR1 window for RAM beyond the BAR | every TCM access goes through one helper; when RAM ends beyond the BAR the window (config 0x84) moves under a spinlock; block copies split at window edges and into 4 KiB pieces; window reset before download and after reset. No change for chips whose RAM fits |
+| `dc88c3c73` wifi: brcmfmac: pcie: request the BCM4389 power domains after reset | for 14e4:4441 only: request all four domains (+ DAR ARM domain) once the BARs are mapped, before and after the watchdog reset; set the BAR coherent bits. The requests stay on while bound (idle power, to release later) |
+| `a8d467176` wifi: brcmfmac: msgbuf: put sequence numbers in H2D control messages | epoch on control + rxpost submit messages, set when a message is final; ioctl and flow-ring create/delete slots cleared first |
+| `2766d0ecf` wifi: brcmfmac: msgbuf: never use packet ID 0 | |
+| `2733238b7` wifi: brcmfmac: don't cancel the bus reset work before it exists | the WARNING |
+
+All build clean with `W=1`. Config: `CONFIG_BRCMDBG=y` (brcmfmac's debug
+messages, off unless `debug=` is set). Builds: `logs/kernel-w2fix.log`,
+`modules-w2fix.log`, `images-w2fix.log` (out-pcie, both overlays re-applied,
+plain DTB in `.default`).
+
+`tools/wifi-w1-capture`:
+
+- the watchdog feeder runs in its own session (`setsid`), writes the magic
+  'V' and closes `/dev/watchdog0` on TERM/INT/HUP at once (no waiting for
+  `sleep`), and disarms itself after `--wait` + 120 s at the latest;
+- the end of the run, Ctrl-C, or any exit disarms: stop the feeder, wait
+  until it is gone, then `printf V > /dev/watchdog0` (open + magic close),
+  and check dmesg for "watchdog did not stop". `--disarm` does only that;
+- the log stream's ssh is now killed with the rest of the pipeline (it used
+  to outlive the run);
+- `--brcmfmac` (stage 5 only): load brcmfmac with `debug=0x80004` (PCIe +
+  INFO) on the fresh link, under the same watchdog and capture, and wait for
+  `Firmware: BCM4389` or a failure line.
+
+Not done here (W3 or later): D2H XOR-checksum verification (the firmware
+uses it, `R/dmesg.txt:7120`; brcmfmac relies on PCIe write ordering, fine
+with DMA'd indices), the v1 join parameters and the host-built 802.3/LLC TX
+header (association and data, not scan), in-band device wake, releasing
+the power requests once the firmware runs, and the ABL MAC address (1.6).
+
+### 9.4 W2 runbook (on the phone; each step has its rollback)
+
+From the omandroid repo, phone in Arch over USB.
+
+```sh
+export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
+
+# W2.0  new kernel + modules (out-pcie, DTB already has both test overlays)
+bin/omandroid modules-push && bin/omandroid push          # slot B, reboots
+tools/phone-ssh 'uname -r; ls /usr/lib/firmware/updates/brcm/ | grep 4389c1;
+  grep -H . /usr/lib/modprobe.d/omandroid-wifi.conf; dmesg | grep "restricted DMA pool"'
+#   pass: release 7.3.0-rc6-omandroid-push1-00068-g2733238b74d0; .bin .txt .clm_blob present;
+#         blacklist lists pcie_gs201 and brcmfmac; "created restricted DMA pool ... 16 MiB"
+#   rollback: unset KERNEL_DIR KERNEL_OUT; bin/omandroid modules-push && bin/omandroid push
+
+# W2.1  link + brcmfmac in one run, watchdog armed, every line on the laptop
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
+#   (the summary prints the brcmf lines; the full log is logs/wifi-w1-<time>-s5.log)
+#   rollback: tools/phone-ssh 'modprobe -r brcmfmac; modprobe -r pcie_gs201'
+#   if the phone hangs: the watchdog resets it in ~15 s; then tools/wifi-w1-capture --pstore
+#   if the run is interrupted: tools/wifi-w1-capture --disarm
+```
+
+W2.1 lines, in order (`brcmfmac: ` prefix and `0000:01:00.0` omitted):
+
+| Line | Pass | If not |
+|---|---|---|
+| W1 lines up to `link up on try 1`, `PCIe Gen.2 x1 link up` | as W1 | W1 regressed: stop, compare with `logs/wifi-w1-20261012-001501-s5.log` |
+| `assigned reserved memory node wifi-dma-pool` | present | DTB lost the overlay (9.5 rollback, re-apply) |
+| `brcmf_pcie_srpwr_request power domains up, powerctl 0x...` | `value & 0x000f0f00 == 0x000f0f00` (request and status bits for all four; the top nibble is the domain ID) | `power domains not up, powerctl 0x...`: note the value; continue, it may still load. `power control reads 0xffffffff`: the chip is not answering on BAR0: stop |
+| `brcmf_chip_sysmem_ramsize SYSMEM rev N coreinfo 0x00000115: 8 ROM, 21 RAM banks` | exactly 8 and 21 | other coreinfo: write it down, stop (decode is wrong for this rev) |
+| `brcmf_chip_get_raminfo RAM: base=0x200000 size=2752512 (0x2a0000)` | 2752512 | anything else: stop |
+| `brcmf_pcie_tcm_win_setup RAM 0x200000-0x49ffff does not fit the 4096 KiB BAR, moving its window` | present | missing: the window code is off, the NVRAM goes past the BAR: stop |
+| `using brcm/brcmfmac4389c1-pcie for chip BCM4389/3` | rev 3 | |
+| `Download FW brcm/brcmfmac4389c1-pcie.google,gs201-cheetah.bin`, `Download NVRAM ...txt`, `Download random seed`, `Bring ARM in running state`, `Wait for FW init` | all | no NVRAM line: the .txt is missing |
+| `Shared RAM addr: 0x003eabf0` | about 0.6 s after "Wait for FW init"; stock had 0x3eabf0 (`R/dmesg.txt:7100`) | `FW failed to initialize` (5 s): the firmware never came up, look at the console lines (`brcmf_pcie_bus_console_read`) just before; `Invalid shared RAM address 0x...`: write the value down |
+| `PCIe protocol version 7` | 5-7 | `Unsupported PCIE version 8/9`: see 1.6 |
+| `Using host memory indices`, `max rx buf post ...` | present | "Using TCM indices" also works, just slower |
+| `brcmf_c_preinit_dcmds: Firmware: BCM4389/3 wl0: ... version 20.101.90 (wlan=r1098710 c1 release2) FWID 01-3f632e0d` | present | a trap or `h2d livelock error` in the console: the epoch fix is not enough, keep the log |
+| `CLM version = Google.C10sub6` | present | `no clm_blob available`: the .clm_blob name is wrong (1.6) |
+| no `WARNING`, no `Firmware has halted` | | |
+
+```sh
+# W2.2  the interface
+tools/phone-ssh 'iw dev; ip link show wlan0; cat /sys/kernel/debug/ieee80211/phy*/revinfo 2>/dev/null'
+#   pass: "Interface wlan0", "type managed", a MAC addr; revinfo: "chip: BCM4389/3 (...)",
+#         "clmver: Google.C10sub6"
+#   rollback: tools/phone-ssh 'modprobe -r brcmfmac'
+
+# W2.3  scan (no association; the MAC is whatever the chip reports, 1.6)
+tools/phone-ssh 'ip link set wlan0 up && iw dev wlan0 scan | grep -E "^BSS|SSID:|signal:|freq:" | head -40'
+tools/phone-ssh 'dmesg | grep -iE "brcmf.*(error|fail|trap|timeout)|livelock|halted" | tail'
+#   pass: nearby networks on 2.4 and 5 GHz (6 GHz may appear), signal -30..-90 dBm;
+#         the dmesg grep is empty. Run the scan twice: the second must work too.
+#   rollback: tools/phone-ssh 'ip link set wlan0 down; modprobe -r brcmfmac; modprobe -r pcie_gs201'
+
+# W2.4  unload/reload (the remove path and the power requests after reset)
+tools/phone-ssh 'modprobe -r brcmfmac && sleep 1 && dmesg | tail -5 | grep -c WARNING;
+  modprobe brcmfmac debug=0x80004 && sleep 8 && iw dev | grep -c wlan0'
+#   pass: 0 WARNINGs, then 1 (wlan0 back on a warm chip)
+#   rollback: as W2.3
+```
+
+If W2.1 hangs the phone (no reset after the watchdog either), recover with
+a 30 s Power hold, then boot the default DTB (9.5).
+
+### 9.5 Rollback
+
+- **brcmfmac only:** `tools/phone-ssh 'modprobe -r brcmfmac'`. The chip keeps
+  running until `modprobe -r pcie_gs201` drops WL_REG_ON.
+- **PCIe off, same kernel:** `D=$KERNEL_OUT/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb;
+  cp "$D.default" "$D"; bin/omandroid images && bin/omandroid push`.
+- **Back to the main kernel:** unset `KERNEL_DIR`/`KERNEL_OUT`, then
+  `bin/omandroid modules-push && bin/omandroid push` (`~/android/mainline/out`,
+  no PCIe).
+- **A leftover watchdog:** `tools/wifi-w1-capture --disarm`.
+- Nothing is written to the chip's OTP or to any phone partition other than
+  the boot images; the firmware files stay in `/usr/lib/firmware/updates/brcm/`
+  (remove with the 7.6 W2.1 rollback).

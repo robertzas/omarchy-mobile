@@ -17,7 +17,17 @@
 #   --watchdog       arm the hardware watchdog (s3c2410, about 15 s) with a
 #                    feeder loop on the phone. A full hang then resets the phone
 #                    by itself (warm reset, so pstore keeps the console), instead
-#                    of needing a 30 s Power hold (cold, RAM lost).
+#                    of needing a 30 s Power hold (cold, RAM lost). When the run
+#                    ends (or this script is interrupted) the feeder is stopped
+#                    and the watchdog closed with the magic 'V', which stops it.
+#                    The feeder also disarms by itself after --wait + 120 s, so
+#                    a lost laptop cannot leave it armed.
+#   --disarm         only stop a leftover feeder and the watchdog, then exit
+#   --brcmfmac       stage 5 only (gate W2): once the link is up, also load
+#                    brcmfmac, under the same watchdog and log capture, and wait
+#                    for "Firmware: BCM4389" or a failure line
+#   --brcm-debug HEX brcmfmac debug mask for --brcmfmac (default 0x80004 =
+#                    PCIE + INFO; needs CONFIG_BRCMDBG, else it is ignored)
 #   --no-trace       load without trace=1
 #   --ia 0|1         pcie_gs201 use_ia (default 1)
 #   --cmu-acg-off    pcie_gs201 cmu_acg_off=1 (clear CMU_HSI2 automatic clock gating)
@@ -33,7 +43,8 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SSH="$ROOT/tools/phone-ssh"
 LOGDIR="$ROOT/logs"
 
-watchdog=0 trace=1 ia=1 acg=0 tcxo=0 delay=20 wait_s=30 stage= pstore=0
+watchdog=0 trace=1 ia=1 acg=0 tcxo=0 delay=20 wait_s=30 stage= pstore=0 disarm_only=0
+brcm=0 brcm_debug=0x80004
 
 usage() { sed -n '/^# Usage:/,/^# See /p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
@@ -50,6 +61,9 @@ while (($#)); do
     --delay) delay="${2:?}"; shift ;;
     --wait) wait_s="${2:?}"; shift ;;
     --pstore) pstore=1 ;;
+    --disarm) disarm_only=1 ;;
+    --brcmfmac) brcm=1 ;;
+    --brcm-debug) brcm_debug="${2:?}"; shift ;;
     -h|--help) usage ;;
     [0-5]) stage="$1" ;;
     *) usage 1 ;;
@@ -62,6 +76,56 @@ stamp=$(date +%Y%m%d-%H%M%S)
 
 # A short, bounded SSH call; returns non-zero if the phone does not answer.
 phone() { timeout 15 "$SSH" -o ServerAliveInterval=2 -o ServerAliveCountMax=3 "$@"; }
+
+# Kill a process and all its descendants (the log pipeline has an ssh in it).
+kill_tree() {
+  local p
+  for p in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$p"; done
+  kill "$1" 2>/dev/null
+}
+
+# The watchdog feeder, run on the phone in its own session (setsid), so the end
+# of an SSH connection cannot take it down without the magic close. On TERM,
+# INT or HUP, and after $1 seconds at the latest, it writes 'V' and closes the
+# device: the s3c2410 driver supports the magic close and nowayout is off, so
+# the watchdog stops. "sleep & wait" lets a signal in at once.
+WD_FEEDER='exec 3>/dev/watchdog0 || exit 1
+echo $$ > /run/wifi-w1-wd.pid
+stop() { printf V >&3; exec 3>&-; rm -f /run/wifi-w1-wd.pid; exit 0; }
+trap stop TERM INT HUP
+end=$(( $(date +%s) + $1 ))
+while [ "$(date +%s)" -lt "$end" ]; do
+  printf k >&3
+  sleep 2 & wait $!
+done
+stop'
+
+wd_arm() {
+  printf '%s\n' "$WD_FEEDER" | phone 'cat > /run/wifi-w1-wd.sh' &&
+    phone "setsid -f sh /run/wifi-w1-wd.sh $((wait_s + 120)) </dev/null >/dev/null 2>&1; sleep 1;
+      test -s /run/wifi-w1-wd.pid && echo feeder pid \$(cat /run/wifi-w1-wd.pid)"
+}
+
+# Stop the feeder (magic close), wait until it is gone, then open and
+# magic-close the device once more in case nothing holds it: an open starts
+# the watchdog and the 'V' + close stops it again, so it ends stopped either way.
+wd_disarm() {
+  phone 'p=$(cat /run/wifi-w1-wd.pid 2>/dev/null)
+    if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
+      kill -TERM "$p"
+      for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$p" 2>/dev/null || break; sleep 0.5; done
+      if kill -0 "$p" 2>/dev/null; then echo "feeder $p still running"; exit 1; fi
+    fi
+    rm -f /run/wifi-w1-wd.pid /run/wifi-w1-wd.sh
+    printf V > /dev/watchdog0 || { echo "/dev/watchdog0 busy or missing"; exit 1; }
+    if dmesg | tail -20 | grep -q "watchdog did not stop"; then echo "kernel: watchdog did not stop"; exit 1; fi
+    echo "watchdog disarmed"'
+}
+
+if ((disarm_only)); then
+  wd_disarm || die "could not disarm: the phone resets in about 15 s if the watchdog is still armed"
+  exit 0
+fi
 
 if ((pstore)); then
   out="$LOGDIR/wifi-w1-pstore-$stamp"
@@ -76,6 +140,7 @@ if ((pstore)); then
 fi
 
 [[ -n "$stage" ]] || usage 1
+((brcm == 0)) || [[ "$stage" == 5 ]] || die "--brcmfmac needs stage 5"
 
 log="$LOGDIR/wifi-w1-$stamp-s$stage.log"
 
@@ -89,8 +154,10 @@ read -r ndev nblk nloaded <<<"$(echo $pre)"
 [[ "$ndev" == 2 ]] || die "14520000.pcie and 14550000.phy must exist (W1.2 DTB with the overlay); found $ndev"
 [[ "$nblk" != 0 ]] || warn "omandroid-wifi.conf blacklist missing on the phone (W1.0)"
 if [[ "$nloaded" != 0 ]]; then
-  say "pcie_gs201 is loaded; unloading it first"
-  phone 'modprobe -r pcie_gs201' || die "could not unload pcie_gs201"
+  say "pcie_gs201 is loaded; unloading it (and brcmfmac) first"
+  phone 'modprobe -r brcmfmac 2>/dev/null; modprobe -r pcie_gs201' || die "could not unload pcie_gs201"
+elif ((brcm)); then
+  phone 'modprobe -r brcmfmac 2>/dev/null; true'
 fi
 
 say "phone: printk level 8 (so the pstore console keeps info lines), PHY driver params"
@@ -113,7 +180,16 @@ say "streaming the phone's kernel log to $log"
   echo "# $(date +%T.%3N) log stream ended (connection closed or phone gone)"
 } >> "$log" &
 logger=$!
-trap 'kill $logger 2>/dev/null' EXIT
+wd_armed=0
+cleanup() {
+  if ((wd_armed)); then
+    wd_disarm || warn "could not disarm the watchdog: if the phone is up it resets in about 15 s"
+    wd_armed=0
+  fi
+  kill_tree "$logger"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 sleep 2
 phone "echo 'wifi-w1-capture: start stage $stage' > /dev/kmsg" ||
@@ -121,11 +197,8 @@ phone "echo 'wifi-w1-capture: start stage $stage' > /dev/kmsg" ||
 
 # 2. Optional watchdog: a feeder loop that stops when the phone hangs.
 if ((watchdog)); then
-  say "arming the hardware watchdog (feeder every 2 s)"
-  phone 'nohup sh -c "exec 3>/dev/watchdog0
-    trap \"printf V >&3; exit 0\" TERM
-    while :; do printf k >&3; sleep 2; done" >/dev/null 2>&1 &
-    echo $! > /run/wifi-w1-wd.pid' || warn "could not arm the watchdog"
+  say "arming the hardware watchdog (feeder every 2 s, disarms itself after $((wait_s + 120)) s)"
+  if wd_arm; then wd_armed=1; else warn "could not arm the watchdog"; fi
 fi
 
 # 3. The test.
@@ -149,14 +222,34 @@ done
 wait "$modprobe_pid" 2>/dev/null
 sleep 2
 
+# 4b. Gate W2: brcmfmac on the link that just came up, still under the watchdog.
+if ((brcm)) && since_start | grep -q 'link up on try'; then
+  say "modprobe brcmfmac debug=$brcm_debug"
+  phone "echo 'wifi-w1-capture: start brcmfmac' > /dev/kmsg; modprobe brcmfmac debug=$brcm_debug; echo modprobe-exit=\$?" &
+  modprobe_pid=$!
+  start=$(date +%s)
+  while (( $(date +%s) - start < wait_s )); do
+    sleep 1
+    if since_start | sed -n '/wifi-w1-capture: start brcmfmac/,$p' |
+       grep -q 'Firmware: BCM4389\|Dongle setup failed\|FW failed to initialize\|Invalid shared RAM\|brcmf_pcie_probe.*failed\|Unsupported PCIE version'; then
+      break
+    fi
+  done
+  wait "$modprobe_pid" 2>/dev/null
+  sleep 3
+fi
+
 alive=0
 phone 'true' && alive=1
 
 if ((alive)); then
   say "phone alive"
-  if ((watchdog)); then
-    phone 'kill $(cat /run/wifi-w1-wd.pid) && rm /run/wifi-w1-wd.pid' ||
-      warn "could not stop the watchdog feeder: the phone resets in about 15 s unless /dev/watchdog0 is fed"
+  if ((wd_armed)); then
+    say "disarming the watchdog"
+    if wd_disarm; then wd_armed=0; else
+      warn "could not disarm the watchdog: the phone resets in about 15 s unless /dev/watchdog0 is fed"
+      warn "retry with: $0 --disarm"
+    fi
   fi
   say "UFS still reading (root device, 4 MiB direct I/O)"
   phone 'dd if=$(findmnt -no SOURCE /) of=/dev/null bs=1M count=4 iflag=direct 2>&1 | tail -1' ||
@@ -169,7 +262,8 @@ if ((alive)); then
 else
   warn "PHONE NOT ANSWERING: the last kernel lines that reached the laptop are below."
   warn "The line after the last 'trace: about to ...' is the access that hung."
-  if ((watchdog)); then
+  if ((wd_armed)); then
+    wd_armed=0   # nothing to disarm on a hung phone; the reset is the point
     warn "Wait about 15 s for the watchdog reset; after boot run: $0 --pstore"
   else
     warn "Recover by holding Power about 30 s (a cold reset; pstore will be empty)."
@@ -177,10 +271,10 @@ else
 fi
 
 sleep 1
-kill "$logger" 2>/dev/null
-trap - EXIT
+cleanup
+trap - EXIT INT TERM
 
 echo
 say "summary ($log)"
-since_start | grep -E 'gs201|pcie|wifi-w1-capture' | sed -E 's/^([0-9:.]+) [0-9]+,[0-9]+,[0-9]+,[^;]*;/\1 /' | tail -25
+since_start | grep -E 'gs201|pcie|brcmf|ieee80211|wifi-w1-capture|WARNING|Call trace' | sed -E 's/^([0-9:.]+) [0-9]+,[0-9]+,[0-9]+,[^;]*;/\1 /' | tail -n $((brcm ? 60 : 25))
 [[ -n "$result" ]] || warn "no end marker seen within ${wait_s}s"
