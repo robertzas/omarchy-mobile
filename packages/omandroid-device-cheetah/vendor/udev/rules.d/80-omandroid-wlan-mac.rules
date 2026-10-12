@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: MIT
+# Omandroid: set the Wi-Fi MAC from the bootloader before NetworkManager
+# takes the link (omandroid-wlan-mac).
+ACTION=="add", SUBSYSTEM=="net", DRIVERS=="brcmfmac", RUN+="/usr/bin/omandroid-wlan-mac %k"

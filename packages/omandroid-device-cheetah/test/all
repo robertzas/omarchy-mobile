@@ -34,7 +34,8 @@ pass "bootctl dry run plans one byte and writes nothing"
 ./install "$tmp/root" "$tmp/build"
 for f in usr/bin/omandroid-bootctl usr/bin/reboot-to usr/bin/omandroid-boot-success usr/bin/omandroid-setup-system \
          usr/lib/systemd/system/omandroid-boot-success.service usr/lib/systemd/network/20-usb-gadget.network \
-         usr/lib/udev/rules.d/10-omandroid-storage.rules usr/lib/NetworkManager/conf.d/10-omandroid-usb.conf usr/lib/systemd/logind.conf.d/10-omandroid-power-key.conf usr/lib/udev/rules.d/20-omandroid-gpu-always-on.rules; do
+         usr/lib/udev/rules.d/10-omandroid-storage.rules usr/lib/NetworkManager/conf.d/10-omandroid-usb.conf usr/lib/systemd/logind.conf.d/10-omandroid-power-key.conf usr/lib/udev/rules.d/20-omandroid-gpu-always-on.rules \
+         usr/bin/omandroid-wlan-mac usr/lib/udev/rules.d/80-omandroid-wlan-mac.rules; do
   [[ -e $tmp/root/$f ]] || fail "install stages $f"
 done
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omandroid-boot-success.service") == ../omandroid-boot-success.service ]] \
