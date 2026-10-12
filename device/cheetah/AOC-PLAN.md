@@ -174,6 +174,32 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    from persist, read-only) and waits up to 10 s for the sensors. Expect
    "up: Services : 82", then "sensors: accel (handle …), light …,
    proximity …", `loaded=1` and the sensor list, then rotation.
+
+   **C6c result (2026-10-12, 7.3.0-rc6-omandroid-push1-00269-ga874b95ca381,
+   device-cheetah 0.1.18): passed.** "up: Services : 82", then "sensors:
+   accel (handle 30), light (handle 44), proximity (handle 23), compass
+   (handle 53)". A claim of the accelerometer read `right-up`/`tilted-up`,
+   and turning the phone rotated the screen and touch in every direction.
+   With the phone lying flat the orientation stays `undefined`, as with
+   iio-sensor-proxy (neither axis passes 35°), so read it with the phone
+   upright. Two boot problems were fixed first:
+   - `aoc_alsa_dev` autoloads from the sound card node and pulls in
+     `aoc_core`, `gsa` and Trusty, where `aoc_core` waits unbound (mailbox
+     -517). The start script took the loaded module for "already started"
+     and refused. 0.1.18 blacklists `aoc_alsa_dev`/`aoc_alsa_dev_util`,
+     loads the sound card after the services are up, and tracks the
+     firmware load with a marker in `/run`.
+   - A copy of `omandroid-aoc.conf` left in `/etc/modprobe.d` from bring-up
+     overrode the package's file of the same name: delete it (and
+     `omandroid-aoc-bringup.conf`).
+
+   **Don't `rmmod` the AoC modules.** Removing `aoc_alsa_dev`,
+   `aoc_alsa_dev_util`, `aoc_core`, `gs201_aoc_sysmmu` and `gsa` while
+   `aoc_core` waited for deferred probe oopsed the deferred-probe worker
+   (`__device_attach_driver` on a freed driver: one of them leaves a
+   driver on the bus). The device lock it held then hung every reboot in
+   `device_shutdown`, which the shutdown watchdog doesn't cover: it needed
+   a held power key. Open: find which exit path doesn't unregister.
 3. **C7 audio** (kernel `omandroid-aoc` @ `33b28cee6` or later: the AoC
    sound card, `aoc_alsa_dev`/`aoc_alsa_dev_util`, ported from Google's
    driver, with the speaker limits in code; the amplifier description from
