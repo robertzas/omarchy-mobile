@@ -181,6 +181,28 @@ tools/phone-ssh 'udevadm control --reload; udevadm trigger -s block -c change;
 #   pass: all 1. (persist stays writable for the fingerprint work's own plan; nothing here writes it.)
 ```
 
+**M0 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00283-gafa4d777403d).**
+This root has no `/dev/disk/by-partlabel`, so find each partition by its
+`PARTNAME` instead:
+`d=$(grep -l "^PARTNAME=$p\$" /sys/class/block/*/uevent | head -1 | cut -d/ -f5)`.
+- **M0.1: mismatch, explained, new backup.** `modem_a` matched the
+  2026-10-11 backup. `efs`, `efs_backup`, `modem_userdata` and `persist`
+  differed: stock Android booted once on slot A after the backup (a
+  fallback during bring-up), and its modem stack writes those. `modem_b`
+  also differed, and now has exactly `modem_a`'s contents; nothing in our
+  Linux writes it (all six read `ro=1` and none is mounted). The old backup
+  still matches its own `SHA256SUMS`, so it was intact. A fresh read-only
+  copy of the six went to
+  `~/android/reference/cheetah-partition-backup-20261012-radio/` (off-repo,
+  mode 600), and its checksums match the M0.1 reads. Compare against that
+  one from now on; a stock boot will change the NV partitions again.
+- **M0.2:** `e8000000-e9ffffff` and `ea400000-eabfffff` are reserved;
+  `f6200000` is not listed.
+- **M0.3:** gpa0-2/3 and gpa8-2/4 inputs, low, `PUD` 0x1; gpa8-3
+  (`cp2ap_wake_up`) input, low, `PUD` 0x3 (keep it).
+- **M0.4** runs on the M2 boot: `modem-link-test` enables the HSI1 pin
+  controller too.
+
 ### M2: link only (int + `omandroid-modem`, overlay `modem-link-test`)
 
 No firmware is involved and nothing reaches the NV partitions. The modem's
