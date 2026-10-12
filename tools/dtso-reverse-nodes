@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""dtso-reverse-nodes: reverse the order of the child nodes inside every node of
+a device tree overlay's "&{/} { ... };" block, at every depth.
+
+libfdt's overlay apply (fdtoverlay, as bin/omandroid uses it) adds each new
+subnode as the first child of its parent, so a subtree that an overlay creates
+comes out with its children in reverse order. Order matters where a driver
+numbers things by node order: ASoC numbers a card's PCMs in DAI link order,
+and the AoC sound card's PCM number is its AoC entry point. Writing the
+overlay's new subtrees reversed makes the applied tree match the source order.
+
+Usage: dtso-reverse-nodes IN.dtso OUT.dtso
+"""
+import sys
+
+
+def parse(lines, i, depth):
+    """Items (('prop', [lines]) or ('node', head, [items], tail)) until the
+    closing '};' of the current node; returns (items, next index)."""
+    items, pending = [], []
+    while i < len(lines):
+        s = lines[i].strip()
+        if s == '};':
+            return items, pending, i
+        if s == '' or s.startswith('//') or s.startswith('/*') or s.startswith('*'):
+            pending.append(lines[i]); i += 1; continue
+        if s.endswith('{'):
+            head = pending + [lines[i]]; pending = []
+            kids, trail, j = parse(lines, i + 1, depth + 1)
+            items.append(('node', head, kids, trail + [lines[j]]))
+            i = j + 1
+            continue
+        items.append(('prop', pending + [lines[i]])); pending = []
+        i += 1
+    return items, pending, i
+
+
+def emit(items, out):
+    props = [it for it in items if it[0] == 'prop']
+    nodes = [it for it in items if it[0] == 'node']
+    for it in props:
+        out.extend(it[1])
+    for it in reversed(nodes):
+        out.extend(it[1])
+        emit(it[2], out)
+        out.extend(it[3])
+
+
+def main(src, dst):
+    lines = open(src).read().split('\n')
+    start = next(i for i, l in enumerate(lines) if l.strip() == '&{/} {')
+    items, trail, end = parse(lines, start + 1, 1)
+    out = lines[:start + 1]
+    emit(items, out)
+    out += trail + lines[end:]
+    open(dst, 'w').write('\n'.join(out))
+
+
+if __name__ == '__main__':
+    if len(sys.argv) != 3:
+        sys.exit(__doc__)
+    main(sys.argv[1], sys.argv[2])

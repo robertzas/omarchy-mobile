@@ -206,10 +206,34 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    omandroid-sensors 0.1.3 waits until the AoC's firmware was loaded at
    least 15 s ago (the start script's `/run/omandroid/aoc-firmware-loaded`;
    `OMANDROID_AOC_SETTLE_S` overrides it) before loading the registry.
-   Check on the next boot: `journalctl -u omandroid-sensor-proxy -b` shows
-   "waiting … s for the AoC to settle", then "sensors: accel …". If the
-   accelerometer is still missing, C7d-5a's AoC log covers the sensor
-   probe too (read it soon after boot).
+   **Result (00285 kernel): not enough.** The proxy waited 13.8 s and still
+   found light, proximity and compass without the accelerometer. The AoC
+   log (`/dev/acd-logging` holds everything since AoC boot, 16 KB here)
+   has no sensor probe lines at its default level. Two candidates are left:
+   the AoC needs much longer than 15 s after boot before the LSM6DSV
+   probes, or the factory calibration from persist (which the proxy adds
+   and `usf.py --load-registry` does not) is what drops the
+   accelerometer; C6b-2 (stock scripts only) and C6c (proxy) both found
+   it, but on C6c check whether the proxy actually read persist
+   (`journalctl -u omandroid-sensor-proxy -b -N | grep loaded` for that
+   boot).
+
+   **C6d** (read-only apart from the AoC's registry RAM): before the
+   reboot, `systemctl disable omandroid-sensor-proxy` (the AoC itself still
+   starts at boot). Two minutes after boot, start the proxy by hand: the same
+   load as at boot (stock scripts, then persist), only later:
+   ```sh
+   tools/phone-ssh 'systemctl start omandroid-sensor-proxy; sleep 15; journalctl -u omandroid-sensor-proxy -b --no-pager | grep -E "loaded|sensors:"'
+   ```
+   - accelerometer listed: boot timing; the fix is a longer settle (the
+     log shows how long the AoC had been up);
+   - accelerometer missing: the persist calibration is the suspect (C6b-2
+     found it with the stock scripts only). On the next boot, with the proxy
+     still disabled, load the stock scripts only
+     (`python3 - --load-registry /usr/share/omandroid/sensors/registry /usr/share/omandroid/sensors/registry/append --list --wait 10 < tools/usf.py`)
+     and send the list, plus the names of the persist files the proxy
+     loaded (not their contents).
+   Rollback: `systemctl enable omandroid-sensor-proxy`.
 
    **Don't `rmmod` the AoC modules.** Removing `aoc_alsa_dev`,
    `aoc_alsa_dev_util`, `aoc_core`, `gs201_aoc_sysmmu` and `gsa` while
@@ -468,6 +492,67 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      Stop on anything louder than the tone, an amplifier error, an AoC
      watchdog or a SysMMU line. Rollback: the script resets the route and
      Top Analog; `echo 1 > /sys/module/aoc_alsa_dev_util/parameters/ep_setup2`.
+
+     **C7d-5a result (2026-10-12, 7.3.0-rc6-omandroid-push1-00285-ge821a4becdea):
+     root cause found in the AoC's own log.**
+     ```
+     F1: ERR: controller_audio_output.cc, 1912: Mode Playback is not supported by Entrypoint 47
+     F1: ERR: controller_audio_output.cc, 2005: Entrypoint 47 cannot be configured
+     F1: ERR: controller.cc, 906: AudioOutCtrl: ipc: audio_output_co, cmd ID: 0x00ce, tag: 0x10, rc: -1
+     F1: ERR: controller_audio_output.cc, 1764: Entrypoint 47 cannot be enabled
+     ```
+     The driver takes the AoC entry point from the PCM device number
+     (`entry_point_idx = pcm->device`, Google's "TODO: refactor needed on
+     mapping between device number and entrypoint"), and the capture use
+     case too (`UC_AUDIO_RECORD` is 8, EP1 capture). ASoC numbers a card's
+     PCMs in DAI link order. `fdtoverlay` (libfdt) inserts every node an
+     overlay creates as the first child of its parent, so the card's links
+     came out reversed: BE links first, then EP6..EP1 capture, then
+     EP8..EP1 playback, which made EP6 playback PCM 47 and EP1 capture
+     PCM 44. Capture "worked" through the generic path, not the record use
+     case. The AoC also answers a rejected command with rc -1, which the
+     driver does not treat as an error (it only flags 4-byte replies).
+     The snapshots read Audio DSP State 1 (Playback), DSP Mode 0, Sink 0
+     Processing State 1, Speaker Sink Channel Bitmap 32.
+
+     Fixes:
+     - `aoc-sound-test.dtso` is now written with every new subtree in
+       reverse (`tools/dtso-reverse-nodes`), so the applied card has the
+       stock link order: EP1-EP8 playback are PCM 0-7, EP1-EP6 capture PCM
+       8-13, as in Google's HAL configuration (checked by applying the three
+       overlays with `fdtoverlay` and listing the links; only phandle
+       numbers differ from before). **The DTB changes.**
+     - kernel `71c7777b0` (`aoc_alsa_dev_util.ko`): the PCM driver refuses
+       to open an EP playback or capture PCM whose number does not match its
+       link id, logging "… is PCM N, expected PCM M: the card's DAI links are
+       not in the stock order", instead of configuring another entry point.
+
+   - **C7d-6** (DTB with the new `aoc-sound-test`, kernel `omandroid-aoc` @
+     `71c7777b0`; fresh boot; C7b and the C7d tone step first):
+     1. Numbering, read-only:
+        ```sh
+        tools/phone-ssh 'head -2 /proc/asound/card0/pcm5p/info /proc/asound/card0/pcm8c/info; dmesg | grep -c "not in the stock order"'
+        ```
+        Expect `id: EP6 playback` for pcm5p, `id: EP1 capture` for pcm8c,
+        and 0. Stop otherwise (the overlay was not rebuilt).
+     2. First sound, top amplifier, -20 dB digital, analog 6:
+        ```sh
+        tools/phone-ssh 'AOCLOG=1 EP=6 MODES="copy" bash -s' < tools/aoc-audio-diag > logs/c7d6a.txt 2>&1
+        ```
+        Expect in the AoC log "Enabling Audio Output Source 5 in Mode
+        Playback" and no "Entrypoint … cannot", `irq` lines with "read"
+        growing, Rx moving in the snapshots, and a quiet 1.5 s 1 kHz tone
+        from the top speaker. Stop: no sound with "read" growing (report the
+        amplifier registers), anything louder than the tone, distortion, an
+        amplifier error, an AoC watchdog.
+     3. The ring after a played stream: run step 2 again in the same boot.
+        Expect "prepared: written N read N" (the AoC drained the ring), and
+        the tone again. If "prepared" shows written ahead of read by a whole
+        ring, report it: the prepare-time reset then needs the AoC's flush.
+     4. Bottom amplifier: as C7d (swap Top and Bottom, Bottom Analog ≤ 10),
+        with `aoc-audio-diag` adapted or by hand under `timeout 5`.
+     5. Microphones again (C7c with PCM 8, which is now the AoC record use
+        case): expect a 3 s file that is not all zeros.
 
 ## 0. Top findings
 
