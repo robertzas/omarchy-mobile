@@ -480,6 +480,9 @@ to test brcmfmac through it before the S2MPU work. **Until W4 is done, Wi-Fi
 must not ship enabled:** `pcie_1` stays `disabled` in the default DTB, and
 `pcie_gs201` and `brcmfmac` stay blacklisted in `omandroid-device-cheetah`.
 
+What W1-W2 found about the HSI2 SysMMU and S2MPU (registers that abort,
+the working DMA setup) is in 9.14, "W4".
+
 ### Gates BT1-BT3
 
 See `BLUETOOTH-PLAN.md` section 4: BT1.0 new kernel, BT1.1 CMU_APM read-only
@@ -2206,3 +2209,161 @@ tools/phone-ssh 'modprobe -r brcmfmac && sleep 1 && modprobe brcmfmac debug=0x80
 ```
 
 Rollback as 9.5 (`--disarm` for a leftover watchdog).
+
+### 9.14 W2 passed; reload, MAC address, W3 and W4 (2026-10-12)
+
+**W2 passed on 00088** (`logs/wifi-w1-20261012-093326-s5.log`):
+firmware 20.101.90 and CLM Google.C10sub6 loaded, D2H completions arrive,
+`brcmf_pcie_intr` on `gs201-pcie-intx` reached 176, no trap, and a scan
+found 2.4 and 5 GHz networks (-61/-70 dBm). The interface is `wlp1s0`
+(predictable naming), with a random MAC.
+
+#### Driver-only reload (W2.4 failed)
+
+`modprobe -r brcmfmac_wcc brcmfmac; modprobe brcmfmac` with `pcie_gs201`
+loaded gives "FW failed to initialize". A full-stack reload works, because
+WL_REG_ON cycles. brcmfmac resets the chip with the ChipCommon watchdog
+(`brcmf_pcie_reset_device()`, at probe and at remove). Broadcom's driver
+never does that on this chip: it uses a function level reset at attach
+and at remove (`W/dhd_pcie.c` `dhdpcie_dongle_reset()` →
+`dhd_bus_perform_flr()`: set Initiate FLR, 70 ms, clear it, poll config
+0x88 bit 13, restore config space; stock does it at every Wi-Fi on,
+`R/dmesg.txt:6717-6805`).
+
+| Commit (wt-pcie) | Change |
+|---|---|
+| `1b668f01f` wifi: brcmfmac: pcie: reset the BCM4389 with an FLR | FLR instead of the watchdog for 14e4:4441, between the power-domain requests; watchdog as fallback |
+
+Build: `logs/{kernel,modules,images}-w2flr.log`, release
+`7.3.0-rc6-omandroid-push1-00089-g1b668f01f21d`; standard test DTB,
+`.default` plain.
+
+```sh
+export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
+bin/omandroid modules-push && bin/omandroid push
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5       # W2 again: must still pass
+tools/phone-ssh 'dmesg | grep -c "FLR done"'                   # >= 1 (probe)
+# W2.4: driver-only reload, twice
+tools/phone-ssh 'for i in 1 2; do modprobe -r brcmfmac_wcc brcmfmac; sleep 1; modprobe brcmfmac debug=0x80000; sleep 8;
+  ip -br link | grep -c wlp1s0; done; dmesg | grep -E "FLR|FW failed|TRAP|Firmware: BCM4389" | tail'
+#   pass: "1" twice, a "FLR done" per remove and per probe, "Firmware: BCM4389/3 ..." each time
+#   fail "FLR did not complete, config 0x88 = ...": note the value (FLR not accepted; the
+#   driver falls back to the watchdog, so the old failure comes back)
+#   rollback: modprobe -r brcmfmac_wcc brcmfmac; modprobe -r pcie_gs201
+```
+
+#### The real MAC address
+
+- **Where stock gets it:** from the bootloader. ABL writes a
+  `/chosen/config` node into the DT at every boot, with `wlan_mac1` and
+  `bt_addr` as text strings (stock: `R/live.dts:12655-12668`). Google's
+  driver reads `/chosen/config/wlan_mac1`, and rejects it if it is locally
+  administered (`W/dhd_custom_google.c:138-235`, `GET_CUSTOM_MAC_ENABLE`
+  is on in `W/Kbuild:111`). Nothing comes from `persist`, an
+  `.macaddr` file or the cmdline.
+- The chip's own address is random because the NVRAM has none and the OTP
+  isn't read (1.6). brcmfmac only reads `local-mac-address` from a node
+  that is compatible with `brcm,bcm4329-fmac`
+  (`L/drivers/net/wireless/broadcom/brcm80211/brcmfmac/of.c:124-131`);
+  ours is `pci14e4,4441`. Even then, the value only exists at boot.
+- **Check on the phone (prints nothing sensitive):**
+  ```sh
+  tools/phone-ssh 'test -s /proc/device-tree/chosen/config/wlan_mac1 && echo wlan_mac1 present;
+    test -s /proc/device-tree/chosen/config/bt_addr && echo bt_addr present'
+  ```
+- **Proposal: a udev rule in `omandroid-device-cheetah`.** It runs before
+  NetworkManager touches the link. Nothing is stored, and the value is
+  never printed.
+  - `/usr/lib/udev/rules.d/80-omandroid-wlan-mac.rules`:
+    ```
+    ACTION=="add", SUBSYSTEM=="net", DRIVERS=="brcmfmac", RUN+="/usr/lib/omandroid/wlan-mac %k"
+    ```
+  - `/usr/lib/omandroid/wlan-mac` (MIT):
+    ```sh
+    #!/bin/sh
+    # Set the Wi-Fi MAC from the bootloader's /chosen/config/wlan_mac1, as Android does.
+    f=/proc/device-tree/chosen/config/wlan_mac1
+    [ -s "$f" ] || exit 0
+    mac=$(tr -d '\000' < "$f" | tr 'A-F' 'a-f')
+    case "$mac" in ??:??:??:??:??:??) ;; *) exit 0 ;; esac
+    ip link set dev "$1" down 2>/dev/null
+    ip link set dev "$1" address "$mac"
+    ```
+  - NetworkManager keeps the current address with its default
+    `cloned-mac-address` (`preserve`), and only randomises the MAC while
+    scanning. To test by hand before packaging:
+    `tools/phone-ssh '/usr/lib/omandroid/wlan-mac wlp1s0; ip -br link show wlp1s0 | cut -c1-30'`
+    (check that the address changed, without pasting it anywhere).
+  - Bluetooth's `bt_addr` is the same kind of value, for the BT plan.
+
+#### W3 runbook: associate (needs Derek's OK first; W4 is not done)
+
+Omarchy uses **NetworkManager** (with wpa_supplicant) for Wi-Fi:
+`/usr/share/omarchy/install/hardware/network.sh` disables iwd, and
+`install/config/enable-services.sh` enables NetworkManager. Its UI is the
+shell's network panel (`omarchy-shell shell toggle omarchy.network`). Our
+`omandroid-device-cheetah` only keeps NetworkManager off `usb0`.
+
+```sh
+# W3.0  state: NM running and managing wlp1s0, Wi-Fi radio on
+tools/phone-ssh 'systemctl is-active NetworkManager wpa_supplicant; nmcli radio wifi; nmcli -t dev | grep wlp1s0'
+#   pass: active/active (wpa_supplicant is D-Bus activated, may say inactive until used), enabled,
+#         "wlp1s0:wifi:disconnected"
+# W3.1  scan through NM
+tools/phone-ssh 'nmcli dev wifi rescan; sleep 5; nmcli -f SSID,SECURITY,SIGNAL,CHAN dev wifi list | head -20'
+# W3.2  WPA2-PSK (password asked on the phone's terminal, not on the command line)
+tools/phone-ssh -t 'nmcli --ask dev wifi connect "<SSID>" ifname wlp1s0'
+tools/phone-ssh 'nmcli -t -f GENERAL.STATE,IP4.ADDRESS dev show wlp1s0; ping -c 3 -I wlp1s0 1.1.1.1'
+#   pass: "100 (connected)", an address, 0% loss
+# W3.3  throughput, short (no long runs before W4)
+tools/phone-ssh 'curl -o /dev/null -w "%{speed_download}\n" https://speed.cloudflare.com/__down?bytes=50000000'
+# W3.4  WPA3-SAE (an SAE or transition-mode network)
+tools/phone-ssh -t 'nmcli --ask dev wifi connect "<SAE-SSID>" ifname wlp1s0'
+# W3.5  from the UI: omarchy-shell shell toggle omarchy.network, pick a network
+# rollback: nmcli dev disconnect wlp1s0; nmcli con delete "<SSID>"; then the 9.5 module unloads
+```
+
+What a failure looks like:
+- **The four-way handshake never completes** (NM: "password wrong", or
+  `wlp1s0: 4-Way Handshake failed`). brcmfmac may be using the firmware
+  supplicant. Omarchy already handles this for Apple's Broadcom parts
+  (`install/hardware/apple/fix-brcmfmac-supplicant.sh`). Try:
+  `modprobe -r brcmfmac_wcc brcmfmac; modprobe brcmfmac feature_disable=0x82000`
+  (FWSUP 0x2000 + FWAUTH 0x80000 off, wpa_supplicant does the handshake).
+- **Association works but no data, or the firmware traps on TX.** These
+  are the two items left from 8.5: the v1 join parameters, and the host
+  building the 802.3/LLC header. Keep the log and the console lines.
+- **D2H completions corrupted under load.** This would be the XOR-checksum
+  sync brcmfmac doesn't check (1.6). Look for "invalid" or "unknown
+  msgtype" lines.
+
+#### W4: what W1-W2 taught us about the HSI2 DMA path
+
+- **SysMMU HSI2 (0x145c0000):** `VERSION` 0x80200001, `CTRL` 0x24.
+  - Bit 0 (enable, Google's `CTRL_ENABLE` = 0x5) is clear, so it is
+    bypassed.
+  - `CFG`, `STATUS` and `INT_STATUS` read 0.
+  - **Reading 0x70 (`FAULT_AR_ADDR` in the whi map) is a synchronous
+    external abort** on this version. It left `pcie_gs201` unremovable
+    until a reboot. The fault registers of this version are elsewhere.
+    Read nothing past 0x60 until the v8.2 map is known.
+- **S2MPU HSI2 (0x145e0000):** `CTRL0` = 0, all traffic allowed
+  (`G/drivers/soc/google/pkvm-s2mpu/common/hyp/s2mpu.c:183-195`).
+  - Nothing else in it has been read. Stock programs it from EL2 (pKVM),
+    so the other registers may not be reachable from EL1.
+  - Probe groups 3-5 exist in `pcie_gs201` (`hsi2_probe`), one group per
+    run under the watchdog. Expect a reset as the possible outcome.
+- **DMA works with no IOMMU,** coherent (IOCC on), from a restricted pool
+  below 4 GiB (`alloc-ranges` 0x80000000-0xffffffff in the DT, 9.10). The
+  chip reads and writes there. W4 can therefore confine VID-of-PCIe-ch1 to
+  one 16 MiB window below 4 GiB. With 1 GiB S2MPU granules that means an
+  L2 table for the gigabyte at 3-4 GiB (`L1ENTRY_ATTR` gran 4K/64K + an
+  L2 table), and UFS shares the S2MPU (other VIDs or the same table).
+- **Order for W4:**
+  1. Find out from EL1, read-only, under the watchdog, which S2MPU
+     registers are reachable (group 3 first).
+  2. If the per-VID L1/L2 registers are writable from EL1, program them
+     with the pool only.
+  3. If they are not, the remaining options are 1.5's other routes: pKVM
+     with Google's S2MPU module, or the PCIe SysMMU path that stock uses
+     (VID 1, a page table that maps only the pool).
