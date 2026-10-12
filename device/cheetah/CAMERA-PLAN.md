@@ -669,6 +669,19 @@ tools/camera-stage k
 - **Rollback:** push the previous int images (`$D.default` of the int build)
   or let the boot fall back to slot A.
 
+**K result (2026-10-12, 7.3.0-rc6-omandroid-push1-00345-g606b84c7a9fd: int
+606b84c7a with omandroid-camera 6cb2be364 merged, overlays as before, no
+camera-pwr-test, device-cheetah 0.1.25): passed.** All four camera modules
+are present; the package's blacklist is active (`gpio_s2mpg13`,
+`slg51002_regulator`, `gs201_cam_power`, `gs201_cam_probe`), so the
+bring-up copy of K1 isn't needed. `/dev/dma_heap` lists
+`default_cma_region`, `display-pool`, `reserved` and `system`. Two
+`camera-stage` bugs found and fixed since: `k` printed "no camera
+blacklist" after listing it (a glob that didn't match made grep fail), and
+the tool never exited (killing the log-stream subshell left its ssh
+running); the stream now runs in its own process group and is stopped,
+with the watchdog feeder, from an exit trap.
+
 ### CAM1: domain status, then CSIS registers (gs201-cam-probe). Risk: medium
 
 The module only reads. CAM1.1 reads three PMU registers through the
@@ -701,6 +714,17 @@ tools/camera-stage --watchdog --reg link0 p2
   0xffffffff or 0 from a link: stop, compare with the HAL register table
   (section 4.1).
 - **Rollback:** none needed (the module only reads; camera-stage unloads it).
+
+**CAM1 result (2026-10-12, same kernel): passed.** CAM1.1
+(`step=pmu`): CSIS_STATUS 0x1, PDP_STATUS 0x1, PHY_CTRL_MIPI_DCPHY_S4S4S4S4
+0x0, "pd-csis on, pd-pdp on, DC-PHY isolated": ABL leaves both camera
+domains on and our kernel doesn't turn them off, and the PHYs stay
+isolated until a driver releases them. `rmmod` clean. CAM1.2
+(`step=link0`): CSIS link 0 version **0x05040000**, a plausible version
+word; it matches the DC-PHY version 0x0504 that Google's GPL PHY settings
+are written for. The phone was fine afterwards. Still to read, one per
+boot, when convenient: links 1-7, `wdma`; `phybias` only once the PHY
+driver has released the isolation (CAM3b).
 
 ### CAM2: the camera power path, one change per boot. Risk: low to medium
 

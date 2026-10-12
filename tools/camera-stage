@@ -75,7 +75,7 @@ mkdir -p "$LOGDIR"
 stamp=$(date +%Y%m%d-%H%M%S)
 
 # A short, bounded SSH call; returns non-zero if the phone does not answer.
-phone() { timeout 60 "$SSH" -o ServerAliveInterval=2 -o ServerAliveCountMax=3 "$@"; }
+phone() { timeout 60 "$SSH" -o ServerAliveInterval=2 -o ServerAliveCountMax=3 "$@" </dev/null; }
 mark() { phone "echo 'camera-stage: $*' > /dev/kmsg"; }
 
 if ((pstore)); then
@@ -108,15 +108,29 @@ need_blacklist() {
 loaded() { phone "grep -c '^$1 ' /proc/modules >/dev/null"; }
 
 # 1. The log stream. cat (not dmesg) so nothing is buffered on the phone.
+#    It runs in its own process group (setsid) so cleanup can stop the ssh
+#    and the timestamp loop together; killing only the subshell left the
+#    ssh running and the tool never exited.
 say "streaming the phone's kernel log to $log"
-{
-  echo "# camera-stage $stamp stage=$stage reg=$reg regs=$regs watchdog=$watchdog"
-  "$SSH" -T -o ServerAliveInterval=1 -o ServerAliveCountMax=5 'exec cat /dev/kmsg' 2>&1 |
-  while IFS= read -r line; do printf '%s %s\n' "$(date +%T.%3N)" "$line"; done
-  echo "# $(date +%T.%3N) log stream ended (connection closed or phone gone)"
-} >> "$log" &
+echo "# camera-stage $stamp stage=$stage reg=$reg regs=$regs watchdog=$watchdog" >> "$log"
+setsid bash -c '
+  "$1" -T -o ServerAliveInterval=1 -o ServerAliveCountMax=5 "exec cat /dev/kmsg" 2>&1 </dev/null |
+  while IFS= read -r line; do printf "%s %s\n" "$(date +%T.%3N)" "$line"; done
+  echo "# $(date +%T.%3N) log stream ended (connection closed or phone gone)"' _ "$SSH" >> "$log" 2>&1 &
 logger=$!
-trap 'kill $logger 2>/dev/null' EXIT
+wd_armed=0
+cleanup() {
+  # stop the watchdog feeder first if it is still ours to stop
+  if ((wd_armed)); then
+    timeout 10 "$SSH" -o ServerAliveInterval=2 -o ServerAliveCountMax=2 \
+      'test -e /run/camera-wd.pid && kill $(cat /run/camera-wd.pid) && rm -f /run/camera-wd.pid' \
+      </dev/null >/dev/null 2>&1 || true
+    wd_armed=0
+  fi
+  kill -TERM -- -"$logger" 2>/dev/null
+  wait "$logger" 2>/dev/null
+}
+trap cleanup EXIT INT TERM
 sleep 2
 mark "start $stage" || die "phone stopped answering before the test"
 
@@ -125,8 +139,8 @@ if ((watchdog)); then
   say "arming the hardware watchdog (feeder every 2 s)"
   phone 'nohup sh -c "exec 3>/dev/watchdog0
     trap \"printf V >&3; exit 0\" TERM
-    while :; do printf k >&3; sleep 2; done" >/dev/null 2>&1 &
-    echo $! > /run/camera-wd.pid' || warn "could not arm the watchdog"
+    while :; do printf k >&3; sleep 2; done" </dev/null >/dev/null 2>&1 &
+    echo $! > /run/camera-wd.pid' </dev/null && wd_armed=1 || warn "could not arm the watchdog"
 fi
 
 # Read-only views. Regmap debugfs over ACPM (never the PMU: AGENTS.md).
@@ -143,7 +157,9 @@ case "$stage" in
     phone 'echo "release $(uname -r)";
       for m in gs201_cam_probe gs201_cam_power gpio_s2mpg13 slg51002_regulator; do
         printf "%-20s %s\n" $m "$(modinfo -n $m 2>/dev/null || echo MISSING)"; done;
-      grep -h "^blacklist" /etc/modprobe.d/omandroid-camera*.conf /usr/lib/modprobe.d/omandroid-camera.conf 2>/dev/null || echo "no camera blacklist";
+      n=0; for f in /etc/modprobe.d/omandroid-camera*.conf /usr/lib/modprobe.d/omandroid-camera.conf; do
+        [ -e "$f" ] || continue; echo "$f:"; grep "^blacklist" "$f"; n=$((n + 1)); done;
+      [ $n -gt 0 ] || echo "no camera blacklist";
       ls /dev/dma_heap/ 2>&1; grep -i cma /proc/meminfo' | tee -a "$log" || result=fail
     if phone "$overlay_on"; then say "camera-pwr-test: in the DTB"; else say "camera-pwr-test: not in the DTB"; fi
     ;;
@@ -216,12 +232,13 @@ alive=0
 phone 'true' && alive=1
 if ((alive)); then
   say "phone alive"
-  if ((watchdog)); then
-    phone 'kill $(cat /run/camera-wd.pid) && rm /run/camera-wd.pid' ||
+  if ((wd_armed)); then
+    phone 'kill $(cat /run/camera-wd.pid) && rm /run/camera-wd.pid' </dev/null && wd_armed=0 ||
       warn "could not stop the watchdog feeder: the phone resets in about 15 s unless /dev/watchdog0 is fed"
   fi
 else
   result=hang
+  wd_armed=0
   warn "PHONE NOT ANSWERING: the last kernel lines that reached the laptop are below."
   if ((watchdog)); then
     warn "Wait about 15 s for the watchdog reset; after boot run: $0 --pstore"
@@ -231,8 +248,8 @@ else
 fi
 
 sleep 1
-kill "$logger" 2>/dev/null
-trap - EXIT
+cleanup
+trap - EXIT INT TERM
 
 echo
 say "summary ($log): $result"
