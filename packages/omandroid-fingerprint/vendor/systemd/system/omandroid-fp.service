@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Google's fingerprint HAL, Trusty's storage proxy, KeyMint and Gatekeeper in
+# a minimal chroot, plus omandroid-fp-bridge, which fprintd's omandroid_udfps
+# driver talks to (device/cheetah/FINGERPRINT-PLAN.md). Not enabled by the
+# package: the first run writes Trusty's secure storage (the RPMB), which
+# the plan gates on the user's say-so (F4).
+[Unit]
+Description=Omandroid fingerprint (vendor HAL and bridge)
+Documentation=file:///usr/share/doc/omandroid/FINGERPRINT-PLAN.md
+# Trusty comes up with the AoC (omandroid-aoc-start loads trusty_*)
+After=omandroid-aoc.service systemd-modules-load.service
+ConditionPathExists=/usr/lib/omandroid-fp/root
+ConditionPathExists=/dev/trusty-ipc-dev0
+# a HAL that keeps dying must not loop forever against the TA
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+ExecStart=/usr/lib/omandroid-fp/omandroid-fp-chroot start bridge
+KillMode=control-group
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,35 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Static checks for omandroid-fingerprint: syntax, the prebuilt bionic
+# programs, and the staged layout.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { echo "FAIL: $*" >&2; exit 1; }
+for f in lib/omandroid-fp-chroot install; do bash -n "$f" || fail "syntax: $f"; done
+for f in lib/omandroid-tipc-probe lib/omandroid-fp-ctl; do
+  python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$f" || fail "python: $f"
+done
+for f in prebuilt/omandroid-fp-shim.so prebuilt/omandroid-fp-bridge; do
+  [[ -f $f ]] || fail "$f missing: build it on the computer first (fingerprint/Makefile)"
+  [[ $(head -c 20 "$f" | od -An -tx1 | tr -d ' \n') == 7f454c46020101* ]] || fail "$f is not a 64-bit ELF"
+  [[ $(od -An -tx1 -j18 -N2 "$f" | tr -d ' \n') == b700 ]] || fail "$f is not aarch64"
+done
+grep -c /system/bin/linker64 prebuilt/omandroid-fp-bridge >/dev/null ||
+  fail "the bridge is not a bionic executable"
+stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
+./install "$stage"
+for f in usr/lib/omandroid-fp/omandroid-fp-chroot usr/lib/omandroid-fp/omandroid-tipc-probe \
+         usr/lib/omandroid-fp/omandroid-fp-ctl \
+         usr/lib/omandroid-fp/props.conf usr/lib/omandroid-fp/omandroid-fp-shim.so \
+         usr/lib/omandroid-fp/omandroid-fp-bridge usr/lib/systemd/system/omandroid-fp.service \
+         usr/lib/systemd/system/fprintd.service.d/omandroid-udfps.conf; do
+  [[ -e $stage/$f ]] || fail "not staged: $f"
+done
+# nothing Google's may be staged
+[[ -z $(find "$stage" -path '*/root/*' -print -quit) ]] || fail "vendor files staged"
+if command -v systemd-analyze >/dev/null; then
+  out=$(systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/omandroid-fp.service" 2>&1 || true)
+  out=$(grep -v -e 'not executable' -e 'No such file' -e 'is not a regular file' -e '^$' <<<"$out" || true)
+  [[ -z $out ]] || fail "unit: $out"
+fi
+echo "omandroid-fingerprint: ok"

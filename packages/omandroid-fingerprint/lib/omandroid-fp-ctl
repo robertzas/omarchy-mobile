@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""omandroid-fp-ctl: talk to omandroid-fp-bridge by hand (bring-up, tests).
+
+    omandroid-fp-ctl [--socket PATH] [--timeout S] COMMAND [ARG]
+
+COMMAND is one of the bridge's: ENROLL, AUTH, LIST, DELETE <id>,
+RESETLOCKOUT, STATUS (case does not matter). Prints every line the bridge
+sends until the command's last one, then exits 0 for a success (ENROLLED,
+MATCH, LIST, DELETED, OK) and 1 otherwise. Ctrl-C (or the timeout) sends
+CANCEL first. Root only, like the socket. While it is connected, fprintd's
+driver cannot use the bridge (one client at a time).
+"""
+import socket
+import sys
+import time
+
+SOCKET = "/run/omandroid-fp/sock/bridge.sock"
+DONE_OK = ("ENROLLED", "MATCH", "LIST", "DELETED", "OK")
+DONE_FAIL = ("NOMATCH", "LOCKOUT", "ERROR")
+
+
+def main(argv):
+    path, timeout, words = SOCKET, 60.0, []
+    args = iter(argv)
+    for a in args:
+        if a == "--socket":
+            path = next(args)
+        elif a == "--timeout":
+            timeout = float(next(args))
+        elif a in ("-h", "--help"):
+            print(__doc__.strip())
+            return 0
+        else:
+            words.append(a)
+    if not words:
+        sys.exit("usage: omandroid-fp-ctl [--socket PATH] [--timeout S] COMMAND [ARG]")
+    command = " ".join([words[0].upper()] + words[1:])
+
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(path)
+    f = s.makefile("rw", encoding="ascii", newline="\n")
+    print(f"<- {f.readline().strip()}")  # READY x y r
+    f.write(command + "\n")
+    f.flush()
+    deadline = time.monotonic() + timeout
+    cancelled = False
+    try:
+        while True:
+            s.settimeout(max(0.1, deadline - time.monotonic()))
+            try:
+                line = f.readline()
+            except (socket.timeout, TimeoutError):
+                if cancelled:
+                    print("no answer to CANCEL")
+                    return 1
+                print("timeout: sending CANCEL")
+                f.write("CANCEL\n")
+                f.flush()
+                cancelled = True
+                deadline = time.monotonic() + 5
+                continue
+            if not line:
+                print("the bridge closed the connection")
+                return 1
+            line = line.strip()
+            print(f"<- {line}")
+            word = line.split(" ", 1)[0]
+            if word in DONE_OK and not (word == "OK" and command != "RESETLOCKOUT"
+                                        and command != "STATUS"):
+                return 0
+            if word in DONE_FAIL:
+                return 1
+    except KeyboardInterrupt:
+        f.write("CANCEL\n")
+        f.flush()
+        s.settimeout(5)
+        try:
+            print(f"<- {f.readline().strip()}")
+        except (socket.timeout, TimeoutError):
+            pass
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

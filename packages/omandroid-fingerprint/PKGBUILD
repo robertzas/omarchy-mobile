@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+pkgname=omandroid-fingerprint
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omandroid fingerprint for the Pixel 7 Pro: Google's HAL in a chroot, bridged to fprintd"
+arch=(aarch64)
+url="https://github.com/derekross/omandroid"
+license=(MIT)
+depends=(bash python util-linux coreutils systemd kmod)
+optdepends=('fprintd: fingerprint unlock and sudo through PAM'
+            'libfprint: the Omandroid build, with the omandroid_udfps driver')
+install=omandroid-fingerprint.install
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}
