@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (SUSPEND-PLAN.md, stage S3): turn on the S2MPG12 main PMIC
+ * node, for its RTC (the wake-up timer of the suspend tests). The driver only
+ * touches the RTC and the PMIC's interrupt masks. Applied to the built
+ * gs201-cheetah.dtb with fdtoverlay. Paths, not labels, so the base DTB
+ * needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/firmware/power-management/pmic-1} {
+	status = "okay";
+};
