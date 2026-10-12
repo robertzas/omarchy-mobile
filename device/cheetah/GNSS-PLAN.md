@@ -10,6 +10,11 @@ S2MPG13 node, USI5/SPI5 and (for NFC) the HSI1 pin controller and the NFC
 node are only turned on by the overlays below. RADIOS-CAMERA-PLAN.md
 section 2 has the hardware survey this builds on.
 
+Later status: G0-G3d passed on the phone; the package (G5) is installed.
+omandroid-gnss 0.2.0 (section 7, offline): constellations, assistance
+(LTO timer, SUPL opt-in), time/position injection, graceful stop; its
+outdoor test is G4b in 7.6.
+
 Path abbreviations:
 
 - `L/` = our kernel, branch `omandroid-gnss` (`~/android/mainline/wt-gnss`)
@@ -120,7 +125,10 @@ there from `vendor-chroot/`). Google's files are not in it.
 | Path (in `packages/omandroid-gnss/`) | What |
 |---|---|
 | `lib/omandroid-vendor-chroot` | shared runner, `PROFILE check / start / ns / run`; grown from `fingerprint/omandroid-fp-chroot` (same tmpfs chroot, property store, shim, binderfs, supervision); profiles hold what differs |
-| `profiles/gnss.conf` | binds `/dev/ttyBCM`, `/dev/bbd_*` and the `nstandby` attribute; writes lhd.conf/gps.xml from the image with the nstandby path, `/data` logs, logcat logging, `PpsEnable=false`; refreshes the LTO file on the host; resolves `HOSTS` into the chroot's hosts file; runs `lhd`, then `gpsd`, and asks for positions over the control pipe |
+| `profiles/gnss.conf` | binds `/dev/ttyBCM`, `/dev/bbd_*` and the `nstandby` attribute; writes lhd.conf/gps.xml from the image with the nstandby path, `/data` logs, logcat logging, `PpsEnable=false`, and the settings of section 7; refreshes the LTO file on the host; resolves `HOSTS` into the chroot's hosts file; runs `lhd`, then `gpsd`; injects time (and an optional position), then asks for positions over the control pipe; `profile_stop` ends the request before the stop signal |
+| `lib/omandroid-gnss-conf` | reads `/etc/omandroid/gnss.conf` (validated keys only, never executed) |
+| `lib/omandroid-gnss-lto`, `omandroid-gnss-lto.{service,timer}` | the orbit predictions download (section 7.2) |
+| `etc/omandroid/gnss.conf` | the user's settings: `ASSISTANCE`, `INJECT_TIME`, `REF_POSITION`, `SUPL` (section 7.5) |
 | `gnss/props.conf` | `ro.hardware` and the DNS properties |
 | `bionic/` | `Makefile` and sources for the shim (from `fingerprint/shim`) and two stubs (`libcom.android.tethering.connectivity_native.so` for `libandroid_net`, `libomandroid-sitril-gps.so` preloaded in place of the SIT RIL). Built on the computer into `bionic/prebuilt/`, which is not committed |
 | `lib/omandroid-gnss-start` | hang-safe start (marker file, as `omandroid-wifi-start`), `modprobe sec_acpm bcm4775x-gnss`, then the runner |
@@ -136,6 +144,7 @@ Elsewhere in the repo:
 | Path | What |
 |---|---|
 | `tools/extract-vendor-chroot` | `-p gnss`: lhd, gpsd, SensorHub.patch, configs, servicemanager, CA store and the library closure, from the user's factory image |
+| `tools/gnss-capture` | on the phone: records NMEA from the socket with timestamps; `summary` gives TTFF, satellites per constellation, HDOP and fix scatter, never coordinates (G4b) |
 | `device/cheetah/overlays/gnss-pmic-test.dtso`, `gnss-test.dtso` | G1, G2 |
 
 Offline results: `tools/extract-vendor-chroot -p gnss` on
@@ -483,53 +492,9 @@ tools/phone-ssh 'systemctl stop g4-gnss g4-nmea; cat /sys/kernel/debug/spi5.0/pi
 
 ### G4b: outdoors with assistance (LTO), multi-GNSS check
 
-Like G4, still with the hand-installed runner (G5's package replaces it
-afterwards). New since G4 (commits `2873e27`, `cf392de`):
-- the chroot gets a hosts file, filled on the host at start;
-- the profile downloads `lto2.dat` (4-day orbits) on the host with curl;
-- gpsd's own log goes to logcat, so to the journal.
-
-The phone needs internet at start (Wi-Fi in range) for the LTO download.
-Without it the run still works, as a cold start.
-
-```sh
-# laptop, after git pull: runner + profile (the tree, shim and stubs are unchanged)
-tools/phone-ssh 'install -m755 /dev/stdin /usr/lib/omandroid-vendor/omandroid-vendor-chroot' < packages/omandroid-gnss/lib/omandroid-vendor-chroot
-tools/phone-ssh 'install -m644 /dev/stdin /usr/lib/omandroid-vendor/profiles/gnss.conf' < packages/omandroid-gnss/profiles/gnss.conf
-# drivers as in G3 step 3 (sec_acpm past 60 s uptime), then, USB connected:
-tools/phone-ssh 'F=/var/lib/omandroid-vendor/gnss/data/vendor/gps/nmea_out;
-  mkdir -p $(dirname $F); [ -p $F ] || mkfifo -m 600 $F;
-  systemd-run --unit=g4b-nmea --property=RuntimeMaxSec=1000 sh -c "cat $F > /var/tmp/g4b-nmea.txt";
-  systemd-run --unit=g4b-gnss --property=RuntimeMaxSec=900 \
-    /usr/lib/omandroid-vendor/omandroid-vendor-chroot gnss start;
-  sleep 30; journalctl -u g4b-gnss --no-pager | grep -E "LTO:|resolve|hosts" ; cat /sys/kernel/debug/spi5.0/pins'
-#   expect: "LTO: downloaded ~120000 bytes" (or "less than a day old"), no
-#   "cannot resolve", powered 1. Unplug; outdoors, clear sky, 10-15 min; reconnect.
-tools/phone-ssh 'systemctl is-active g4b-gnss g4b-nmea; cat /sys/kernel/debug/spi5.0/pins;
-  N=/var/tmp/g4b-nmea.txt; wc -l $N;
-  echo "== talkers"; cut -c2-6 $N | sort | uniq -c | sort -rn | head -20;
-  echo "== first fix"; grep -m1 -E "^\\\$G.RMC,[^,]*,A," $N; grep -m3 -E "^\\\$G.GGA" $N | tail -1;
-  echo "== last GSA"; grep -E "^\\\$G.GSA" $N | tail -4;
-  echo "== assistance"; journalctl -u g4b-gnss --no-pager | grep -iE "lto|xtra|supl|glpals|assist|almanac|ephem" | head -30;
-  echo "== gpsd tail"; journalctl -u g4b-gnss --no-pager | tail -40'
-# stop early at any time: systemctl stop g4b-gnss g4b-nmea  (rails go off at close)
-```
-
-Pass: both units inactive, `powered: 0`; RMC with status `A`; gpsd's log
-mentions the LTO file being read or injected.
-
-Reading the talkers:
-- `GN` RMC/GGA/GSA with more than one GSA per epoch (one per system),
-  or `GL`/`GA`/`GB` sentences: several constellations are in use. Nothing
-  to change.
-- Only `GP` everywhere and a fix: the fix may still use other systems.
-  gpsd's NMEA output may describe GPS satellites only. Stock gps.xml has
-  no constellation keys, so the engine runs on its built-in defaults,
-  which are stock's. Optional second run with the same commands plus
-  `--setenv=OMANDROID_GNSS_NMEA411=1` on the `g4b-gnss` line. This sets
-  `EnableNmeaV411` in `<gll>`; 4.11 GSA/GSV carry a system ID field.
-- Only `GP` and no fix after 15 min with a clear sky: send the journal.
-  The assistance lines show whether LTO was used.
+Superseded before it ran: the hand-installed runner is gone, and assistance,
+injection and the outdoor test moved into the package (0.2.0). The runbook
+is now section 7.6.
 
 ### G5: the package (Location on demand)
 
@@ -710,8 +675,8 @@ drain with GNSS running and idle (POWER-PLAN.md) before enabling at boot.
 1. ~~ABL's LDO9S-11S state~~: off, at stock voltages (G1).
 2. Does gpsd's job mode produce NMEA on `nmea_out` (G4)? If not, the bridge
    must speak the HAL's control pipe.
-3. Does bionic's resolver work without netd with `ANDROID_DNS_MODE=local` and
-   `net.dns1`? If not, LTO/SUPL fail and the first fix is slower (cold start).
+3. ~~Does bionic's resolver work without netd?~~ No (qemu, checkpoint): the
+   runner writes the few hosts gpsd needs into the chroot's hosts file.
 4. GeoClue authorization on Omarchy: GeoClue needs an agent per user
    (G5). The package runs GeoClue's demo agent and lets a few apps through
    without asking; others get a notification, whose Allow/Deny actions
@@ -804,3 +769,334 @@ R1).
 - **G5 package:** `packages/omandroid-gnss` (section 3), default-off.
   `vendor-chroot/` moved into it. The runbooks are G4b and G5 in
   section 4.
+
+## 7. Fast first fix and power (omandroid-gnss 0.2.0, offline 2026-10-12)
+
+Goal: the first outdoor fix as fast and reliable as the hardware allows,
+with nothing privacy-relevant on by default, and the chip fully off when no
+one asks for a position. Nothing in this section has run on the phone yet;
+G4b (7.6) tests it. Sources: the stock `gps.xml` and `lhd.conf` from the
+user's extract (`X/`) and static analysis of stock gpsd (its strings, its
+symbol table from `.gnu_debugdata`, and the config and control-pipe parsers
+read with llvm-objdump). No Google code or config is in the repository; the
+profile edits the user's own copy at start, as before.
+
+### 7.1 Constellations and dual frequency
+
+- gpsd reads constellation switches in two places:
+  - `<hal>` accepts `EnableBeidou`, `EnableGalileo` and `EnableNavic`
+    (not `EnableGlonass`: that is why it asserted there, checkpoint);
+  - `<gll_features>` takes the full set: `EnableGlonass`, `EnableGalileo`,
+    `EnableBeidou`, `EnableNavic`, `BestGnssMix` and the `Enable*AutoSwitch`
+    keys. Both write the same engine settings.
+- Each setting has three states: on, off, and "not set" (the engine
+  default). gpsd's built-in defaults have GLONASS, Galileo and BeiDou **on**
+  and NavIC off; stock `gps.xml` turns NavIC on and sets
+  `EnableQzsAutoSwitch=false` and `EnableGloAutoSwitch=false` (QZSS and
+  GLONASS tracked always, not switched by region), `EnableNicAutoSwitch=true`
+  (NavIC only where it is useful).
+- So stock already runs GPS + GLONASS + Galileo + BeiDou + QZSS (+ NavIC).
+  The G4 output with only `GP` talkers was the windowsill (two GPS
+  satellites in view), not a disabled constellation.
+- Dual frequency is stock's too: `<gll>` `MultiCarrRFMode=..._L1_L5`,
+  `MultiCarrLnaMask=L1_EXT_ON|L5_EXT_ON`, separate L5 RF path losses and an
+  L5 bias, and a per-PRN GPS carrier table. That is L1/E1/B1I plus L5/E5a.
+  BeiDou B1C stays off (`EnableB1C=false`), as on stock.
+- **Change (0.2.0):** the profile names `EnableGlonass`, `EnableGalileo`
+  and `EnableBeidou` = true in `<gll_features>`. This equals the defaults;
+  it makes the intent visible in our config and fails loudly at start
+  (`die`) if a future image has no `<gll_features>` line to extend. Stock's
+  keys stay as they are.
+
+### 7.2 Assistance: orbit predictions (LTO), RTO/RTI, SUPL
+
+How stock gets the LTO file:
+- `gps.xml` `<hal>`: `LtoDir=/data/vendor/gps/`, `LtoFileName=lto2.dat`,
+  `LtoSyncThresholdDays=1`, `HttpSyncLto=true`.
+- `HttpSyncLto` (alias `SyncLto`) means: when the file is older than the
+  threshold, gpsd asks the **Android framework** to download it, through
+  the HAL's PSDS (formerly XTRA) download request; the framework fetches it
+  and hands the data back. `HttpDirectSyncLto` would make gpsd download it
+  itself; stock leaves that off.
+- The address gpsd knows for it (its `LtoConfig` default):
+  `gllto2.glpals.com/4day/v5/latest/lto2.dat` (Broadcom's server; about
+  120 KB of orbit predictions for four days).
+- gpsd reads `lto2.dat` from `LtoDir` when its engine starts. The
+  control pipe also has an `lto` command (reload), unused here.
+- Separately, with `RtoEnable`/`RtiEnable` (both true on stock) gpsd
+  downloads short-term orbits and satellite health itself, over plain HTTP:
+  `gllto.glpals.com:80/rto.dat` and `/rtistatus5.dat` (its built-in
+  defaults).
+- gpsd's HTTP requests are `GET <path> HTTP/1.0` with a `Host:` header,
+  nothing else: no account, no identifier.
+
+Ours (0.2.0):
+- `omandroid-gnss-lto` downloads `lto2.dat` on the host with curl into the
+  chroot's `/data/vendor/gps/`, keeping the server's modification time
+  (`-R`), with `If-Modified-Since`, when:
+  - `ASSISTANCE=1` (default);
+  - the file is older than `LTO_MAX_AGE_HOURS` (20);
+  - there is a default route that is not cellular (`LTO_CELLULAR=0`).
+  It rejects anything under 20 KB or starting with `<` (an error page) and
+  replaces the file atomically.
+- `omandroid-gnss-lto.timer` checks every 4 h (`Persistent`, 20 min random
+  delay; no `WakeSystem`, so it never wakes a suspended phone). It is
+  enabled and disabled with the Location switch. The profile runs the same
+  script before gpsd starts (20 s limit, quiet when offline).
+- gpsd keeps doing RTO/RTI itself; the chroot's hosts file now lists only
+  `gllto.glpals.com` for that. `ASSISTANCE=0` turns RTO, RTI and the LTO
+  sync request off and downloads nothing.
+- Tested on the laptop: 122363 bytes, then "0 h old", then a 304 from the
+  server with the age limit at 0.
+- Privacy: Broadcom's server sees the phone's IP address and when it
+  downloads, as for any HTTP fetch. That is what stock does too, so it is
+  on by default and switchable.
+
+SUPL (`acSuplServer=supl.google.com`, port 7275, TLS, `SuplEnable=true` on
+stock):
+- What a SUPL session carries: the device's IP address to the server; a
+  SET ID (on Android the SIM's IMSI or MSISDN, which gpsd asks from the
+  framework); the serving cell (stock already sends dummy cell info,
+  `SuplDummyCellInfo=true`; with no modem there is none anyway); and in
+  MS-assisted mode measurements from which the **server computes the
+  position**. With no framework and no SIM, what gpsd sends as SET ID is
+  untested (it has a default test IMSI for automatic SLP configuration and
+  fixed-SET-ID options).
+- What it would add here: ephemeris and a coarse reference position from
+  cell IDs. With no cell IDs and LTO/RTO present, the gain is small.
+- **Change (0.2.0):** SUPL is **off by default** (`SuplEnable=false`, and
+  the server is not in the chroot's hosts file, so even a stray attempt
+  cannot resolve it). The profile refuses to start if the generated
+  `gps.xml` does not say `SuplEnable="false"` while `SUPL=0`. `SUPL=1`
+  restores stock behaviour with `SUPL_SERVER` (default
+  `supl.google.com:7275`); other public SUPL servers can be set there.
+  Experimental: whether gpsd's SUPL works without the framework's data
+  connection callbacks is unknown.
+
+### 7.3 Time and position injection
+
+How stock does it: Android's location service injects NTP time
+(`IGnss.injectTime`) and the network location (`injectLocation`,
+`injectBestLocation`) through the HAL that gpsd implements. On the Pixel,
+`gps.xml` sets `IgnoreInjectedSystemTime=true`, so gpsd ignores the
+framework's time and keeps its own; injected locations are used.
+
+Without the framework, gpsd's **control pipe** (`CtrlPipe`, the one we
+already use for `req_pos`) has the same aiding. Its command table:
+`req_pos`, `req_pos_single`, `stop`, `clear`, `set_aid`, `ref_time`,
+`startup`, `lto`, `rto`, `rti`, `req_aid`, and test commands. Parameters
+come as name,value pairs after the command:
+- `$pglirm,ref_time,utc,<ms since 1970 UTC>,unc_ms,<ms>` (also
+  `week`/`tow` in GPS time). gpsd logs `IRMSetRefTime:: ulUtcOffsetMs = ...`.
+  This path is the engine's own reference-time input, not the HAL's
+  `injectTime`, so `IgnoreInjectedSystemTime` does not apply.
+- `$pglirm,set_aid,pos,Lat,<deg>,Lon,<deg>,Alt,<m>,HorAcc,<m>,VerAcc,<m>,AgeSec,<s>`
+  (gpsd's defaults: 50 m altitude, 10 km / 3 km uncertainty). Values are
+  parsed as single-precision floats.
+
+Ours (0.2.0), sent before `req_pos`, each with its own bounded open:
+- `INJECT_TIME=1` (default): the system time, only when the clock is
+  NTP-synchronized (`timedatectl` NTPSynchronized, or timesyncd's
+  `/run/systemd/timesync/synchronized`), with 1 s uncertainty. No network
+  traffic of its own. Why it should help: with the rails off between
+  sessions the chip keeps no time, and on a cold start the time
+  uncertainty decides how much code phase must be searched. G4b checks
+  that the value gpsd logs matches the phone's clock; if it is wrong,
+  `INJECT_TIME=0`.
+- `REF_POSITION=lat,lon[,accuracy_m]` (opt-in, empty by default): a
+  coarse position the user chooses (a city is enough; 30 km default
+  uncertainty). It never leaves the phone.
+- Not done: GeoClue's Wi-Fi position. GeoClue would have to be asked as a
+  client (from a root service, with its agent rules), and on Arch its Wi-Fi
+  source sends nearby access points to an online service, which is a
+  privacy decision of its own. gpsd also keeps its last fix in its own
+  storage, which covers the common case of starting where the last session
+  ended.
+- **Keeping that state (0.2.0):** gpsd's state file (`gldata.sto` in
+  `/data/vendor/gps`, persistent under `/var/lib/omandroid-vendor/gnss`)
+  only helps if gpsd gets to write it. Until now the stop killed the
+  namespace at once. `omandroid-gnss.service` now has
+  `ExecStop=omandroid-vendor-chroot gnss stop`, which runs the profile's
+  `profile_stop` on the host before systemd signals anything: it sends
+  `$pglirm,stop,omandroid` and waits 2 s, with a reader on the NMEA FIFO
+  meanwhile (the bridge may already have left). G4b checks the file's
+  time stamp.
+
+### 7.4 Power: when the chip is on
+
+| State | What runs | Chip |
+|---|---|---|
+| Location off | nothing (socket and LTO timer disabled) | rails off, nstandby low |
+| Location on, no client | the socket (systemd), the LTO timer | rails off; after the first use `sec_acpm` and `bcm4775x-gnss` stay loaded, but the supplies follow nstandby and `/dev/ttyBCM` (2.1), and host_req is armed only while open |
+| A GeoClue client wants exact positions | bridge, lhd, gpsd | on: lhd raises nstandby, which powers the three rails; 1 Hz session |
+| Last client gone | bridge counts 60 s (checked every 5 s), exits; the stack stops (`StopWhenUnneeded`): `ExecStop` ends the request (up to 4 s), SIGTERM, the namespace dies, `/dev/ttyBCM` closes | rails off within about 70 s of the last client |
+| `omandroid-gnss force` | as with a client, until `unforce` | on |
+
+- G3d measured the off path: `powered 0`, nstandby 0 and all three
+  `vdd_gnss_*` disabled after the stop, every time.
+- What keeps the chip on, by design: any GeoClue client asking for exact
+  accuracy (GeoClue starts its NMEA source only for those), a `force`, and
+  `gnss-capture record` (it is a socket client). Linux gpsd on the pty is
+  not a client: it needs `force`.
+- The LTO timer costs one short HTTP request every 4 h, and a download
+  about once a day, only while Location is on.
+- To verify on the phone (7.6): that GeoClue drops its socket connection
+  when its last client stops (the bridge logs "client gone (0)"), and the
+  rails' state 70 s later.
+- Running cost: no rail-level meter here. gpsd prints its own estimate in
+  `$PGLOR,...,PWR,mA,...` sentences when they are enabled; `gnss-capture
+  summary` reports the last one. A battery A/B (`tools/power-ab`, running
+  vs. idle) belongs in POWER-PLAN.md before Location is used for long
+  sessions.
+
+### 7.5 Settings (`/etc/omandroid/gnss.conf`)
+
+| Key | Default | Effect |
+|---|---|---|
+| `ASSISTANCE` | 1 | LTO download (timer + at start), gpsd's RTO/RTI; 0 = none of it |
+| `LTO_URL` | `http://gllto2.glpals.com/4day/v5/latest/lto2.dat` | |
+| `LTO_MAX_AGE_HOURS` | 20 | |
+| `LTO_CELLULAR` | 0 | 1 = also over a modem link |
+| `INJECT_TIME` | 1 | system time to gpsd when NTP-synchronized |
+| `REF_POSITION` | empty | opt-in `lat,lon[,accuracy_m]` |
+| `SUPL` | 0 | opt-in; `SUPL_SERVER` (`supl.google.com:7275`) |
+
+- The file is parsed, never sourced: only these keys, each checked against
+  a pattern (bad values are logged and ignored). `OMANDROID_GNSS_<KEY>` in
+  the environment overrides it (tests, `systemd-run --setenv`).
+- Changes apply at the receiver's next start.
+- `pacman` keeps local edits (`backup=`). An upgrade from 0.1.x enables the
+  LTO timer if Location is on.
+- `test/all` checks the parser (defaults, quoting, comments, refused
+  values, the environment), the shipped file's defaults, and, when the
+  user's extract is on the machine, the generated `gps.xml` (SUPL off by
+  default, RTO kept, the three constellation keys in `<gll_features>`,
+  stock's L1+L5 mode unchanged, well-formed; SUPL on with a custom server;
+  `ASSISTANCE=0`). The generated file differs from stock only in the
+  intended lines (diffed).
+
+### 7.6 G4b: first fix outdoors with assistance (package 0.2.0)
+
+Preconditions: the int kernel with both GNSS overlays (as since G3); G5's
+package installed. G5-2 (GeoClue) need not have passed: this test talks to
+the socket directly. Uptime over a minute (the regulator rule, 2.2). Risk:
+low. The chip path is G4's; new are the control-pipe `ref_time` before
+`req_pos`, `stop` at `ExecStop`, `SuplEnable=false`, and three
+`<gll_features>` keys equal to the defaults. Every run is time-limited and
+ends with the rails off whether it worked or not.
+
+Logs: the NMEA file holds positions. Keep it on the phone or in `logs/`
+(gitignored), never commit or paste it; paste only `gnss-capture summary`
+output and journal lines checked for identifiers.
+
+**Step 0 (laptop, read-only on the phone): install.**
+
+```sh
+make -C packages/omandroid-gnss/bionic CLANG=$HOME/android/omandroid/prebuilts/clang/host/linux-x86/clang-r596125/bin/clang \
+  BIONIC=$HOME/android/omandroid/bionic/libc CHROOT=$HOME/android/vendor-chroot-work/gnss/root   # if prebuilt/ is gone
+packages/omandroid-gnss/test/all && tools/phone-install-package packages/omandroid-gnss
+tools/phone-ssh 'cat > /var/tmp/gnss-capture && chmod 755 /var/tmp/gnss-capture' < tools/gnss-capture
+tools/phone-ssh 'pacman -Q omandroid-gnss; cut -d. -f1 /proc/uptime; grep -vE "^#|^$" /etc/omandroid/gnss.conf;
+  timedatectl show -p NTPSynchronized; ip -o route get 1.1.1.1; omandroid-gnss status'
+```
+
+- Expect: `omandroid-gnss 0.2.0`; uptime over 60; `ASSISTANCE=1`,
+  `INJECT_TIME=1`, `REF_POSITION=`, `SUPL=0`; `NTPSynchronized=yes`;
+  a route (Wi-Fi or USB); location on or off, receiver no, chip powered no.
+- `NTPSynchronized=no`: the run still works, without time injection. Note
+  it in the result.
+- Stop if the package does not install or `status` shows the chip
+  powered with no receiver running.
+- Rollback: `pacman -U` the 0.1.1 package from the pacman cache.
+
+**Step 1 (indoors, USB connected, about 3 min): plumbing, injection, stop.**
+
+```sh
+tools/phone-ssh 'omandroid-gnss on; systemctl start omandroid-gnss-lto.service;
+  journalctl -u omandroid-gnss-lto -n 3 --no-pager -o cat; omandroid-gnss status | grep -i orbit'
+#   expect: "downloaded N bytes via <wlan or usb>" (N ~120000) or "... h old"; status "orbit predictions (LTO): <20 h old"
+tools/phone-ssh 'T=$(date +%s); echo "start $T"; /var/tmp/gnss-capture record --out /var/tmp/g4b-0.nmea --seconds 60; sleep 80;
+  omandroid-gnss status; cat /sys/kernel/debug/spi5.0/pins | grep -E "^(powered|nstandby)";
+  journalctl -u omandroid-gnss -u omandroid-gnss-nmea --since @$T --no-pager -o cat |
+    grep -E "omandroid-vendor\[gnss\]|omandroid-gnss|IRMSetRefTime|IrmSetAid|LTO|lto2|Rto|Rti|OnChipReset|CRASH" | head -60;
+  ls -l --time-style=+%T /var/lib/omandroid-vendor/gnss/data/vendor/gps/;
+  /var/tmp/gnss-capture summary /var/tmp/g4b-0.nmea'
+```
+
+Pass:
+- The journal shows, in order: "LTO: ..."/the lto script's line, "time:
+  injected the system time", gpsd's `IRMSetRefTime:: ulUtcOffsetMs = V`
+  with V within a few thousand of `T*1000` (printed as "start T"),
+  "control pipe: req_pos", the bridge's "client connected (1)" and "first
+  NMEA sentence received", then "client gone (0)", "no client for 60 s",
+  "control pipe: stop; 2 s for gpsd to finish", "stopping".
+- gpsd mentions the LTO file being opened/read (an `LTO file [...]` or
+  `LTO age` line).
+- After: receiver no, chip powered no, `powered: 0`, `nstandby: 0`.
+- `gldata.sto` (or whatever gpsd's state file is) has a time stamp from
+  the stop. If no such file exists, record the directory listing:
+  gpsd may keep its state elsewhere.
+- The summary shows sentences (indoors, no fix is fine).
+
+Stop conditions and what they mean:
+- `IRMSetRefTime` value far from `T*1000` (seconds instead of
+  milliseconds, or a leap-second-sized offset): set `INJECT_TIME=0` in
+  `/etc/omandroid/gnss.conf` and report the line.
+- gpsd exits right after start (`OnChipReset`, "a service exited"): retry
+  once with `INJECT_TIME=0`; if it still exits, roll back to 0.1.1 (the
+  `<gll_features>` lines are then suspect) and send the journal.
+- Chip still powered 80 s after the capture ended: `omandroid-gnss off`,
+  check the rails, send the journal; do not go outdoors.
+
+**Step 2 (outdoors, unplugged, 15 min): the first fix.**
+
+```sh
+tools/phone-ssh 'systemctl start omandroid-gnss-lto.service; date +%s > /var/tmp/g4b-1.start;
+  systemd-run --unit=g4b-1 --property=RuntimeMaxSec=960 /var/tmp/gnss-capture record --out /var/tmp/g4b-1.nmea --seconds 900;
+  sleep 20; omandroid-gnss status'
+#   expect: receiver running yes, chip powered yes
+```
+
+Unplug. Put the phone outdoors with a clear view of the sky, screen up,
+not moving (the scatter figure assumes it), for 15 minutes. Bring it back
+and reconnect (USB-C-PLAN R1: replug rescue).
+
+**Step 3 (collect; read-only).**
+
+```sh
+tools/phone-ssh 'S=$(cat /var/tmp/g4b-1.start); systemctl is-active g4b-1; omandroid-gnss status;
+  /var/tmp/gnss-capture summary /var/tmp/g4b-1.nmea --start $S;
+  echo "== talkers"; cut -d" " -f2 /var/tmp/g4b-1.nmea | cut -c2-6 | sort | uniq -c | sort -rn | head -20;
+  echo "== engine"; journalctl -u omandroid-gnss --since @$S --no-pager -o cat |
+    grep -iE "time:|position:|IRMSetRefTime|lto|rto|rti|supl|OnChipReset|CRASH|stop" | head -40'
+tools/phone-ssh 'cat /var/tmp/g4b-1.nmea' > logs/g4b-1.nmea      # private: positions
+tools/phone-ssh 'journalctl -u omandroid-gnss -u omandroid-gnss-nmea --since @$(cat /var/tmp/g4b-1.start) --no-pager' > logs/g4b-1.journal
+```
+
+Record in this plan (date, `uname -r`, package version, sky, Wi-Fi or USB
+for the LTO download):
+- **TTFF**: "first fix: N s after start". Expect well under a minute with
+  fresh LTO, injected time and an open sky; a few minutes means the
+  assistance did not take (check the engine lines).
+- **Satellites per constellation**: in view, strong (C/N0 >= 30) and used.
+  Expect GPS, GLONASS, Galileo and BeiDou, QZSS if in view. Signal IDs
+  appear only with NMEA 4.11 (below).
+- **Accuracy**: HDOP median, and the scatter of the settled fixes
+  (median and 95 %, in metres).
+- gpsd's power estimate if a `$PGLOR PWR` line came out.
+- Pass: `g4b-1` inactive, receiver no, chip powered no; a fix; at least
+  two constellations used.
+
+**Step 4 (optional, each a separate run of steps 2-3, 3-5 min):**
+- **Hot start:** right after step 2, again outdoors. Expect a fix within
+  seconds if gpsd kept its state (7.3).
+- **NMEA 4.11** (system and signal IDs, so L5/E5a show as their own
+  signals): `systemctl set-environment OMANDROID_GNSS_NMEA411=1` before the
+  run, `systemctl unset-environment OMANDROID_GNSS_NMEA411` after.
+- **Without time injection**, if TTFF looked slow: `INJECT_TIME=0` in
+  `/etc/omandroid/gnss.conf`, then back.
+- **SUPL** only with the human's explicit go (it contacts the SUPL server,
+  7.2): `SUPL=1`, then back to `SUPL=0`.
+
+Rollback for any step: `omandroid-gnss off` (stops everything and disables
+the socket and timer); `pacman -U` the 0.1.1 package.
