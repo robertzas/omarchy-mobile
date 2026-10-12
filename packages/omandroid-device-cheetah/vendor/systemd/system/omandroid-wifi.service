@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Wi-Fi at boot (gate W4). Shipped disabled: it is enabled by a
+# multi-user.target.wants link only once W4 has passed and the default DTB
+# enables pcie_1, the Wi-Fi DMA pool and the PCIe System MMU.
+[Unit]
+Description=Bring up Wi-Fi behind its DMA window (hang-safe)
+After=local-fs.target systemd-modules-load.service
+ConditionPathExists=/proc/device-tree/soc@0/sysmmu@145c0000
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omandroid-wifi-start
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

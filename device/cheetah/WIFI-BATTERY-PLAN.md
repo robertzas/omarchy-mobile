@@ -2528,3 +2528,148 @@ comparisons:
 - `feature_disable=0x2000`: firmware supplicant off (FWSUP is bit 13 in
   this kernel's list; Omarchy's Apple value 0x82000 also turns off bit 19,
   which in this kernel is SAE, so don't reuse it here).
+
+### 9.17 W4: the DMA firewall (2026-10-12, offline; started)
+
+W3 passed on omandroid-int 00131 (WPA2, 5 GHz, DHCP, real MAC, 50 MB at
+19 MB/s, no timeouts or traps). W4 must confine the BCM4389's DMA before
+Wi-Fi may load at boot.
+
+#### Which route, with evidence
+
+- **The HSI2 PCIe System MMU is PCIe-only, and stock uses it for the
+  Wi-Fi chip.**
+  - `sysmmu@145C0000` is `samsung,pcie-sysmmu`, `port-name =
+    "PCIe_CH1"`, `pcie-vid-num = <1>`, SPI 446 (`R/live.dts:12157-12170`).
+  - Stock's PCIe node has `use-sysmmu = "true"` (`R/live.dts:12107-12149`).
+  - The UFS node references no SysMMU (only the shared S2MPU), so turning
+    this SysMMU on cannot affect UFS. This settles the "UFS shares HSI2"
+    worry for this route.
+- **The SysMMU is a v8.1 ("whi" variant).**
+  - Our `VERSION` 0x80200001 decodes with Google's macros
+    (`MMU_RAW_VER` = bits 31:17, major = 8, minor = 1;
+    `G/drivers/iommu/exynos-pcie-iommu-whi.h:191-194`).
+  - For v7 and later, its fault registers are at 0x1010/0x1014/0x1018,
+    not 0x70 (`exynos-pcie-iommu-whi.c:422-428,518-525`). That is why
+    reading 0x70 aborted.
+  - Table format:
+    - one first-level table for a 36-bit IOVA: 65536 entries of 1 MiB,
+      256 KiB, 256 KiB-aligned ("36bit VA FLPD must be aligned in 256KB");
+    - sections are `(pa >> 4) | 2`, plus bit 6 for shareable
+      (`whi.h:28-89`, `whi.c:1348-1360`);
+    - the base goes in `PT_BASE_PPN_VID(n)` (0x800c + n·0x1000) as
+      `pa >> 12`.
+  - Enable sequence (`__sysmmu_enable_nocount()`, `whi.c:164-200`):
+    1. `TLB_CFG(0)` = 0;
+    2. write the table base, then flush the VID;
+    3. `CTRL |= 0x5`;
+    4. `CTRL_VID(n) |= 1` (bit 3 = stall on fault);
+    5. flush again.
+  - The table is written by the CPU and walked by the SysMMU
+    non-coherently (Google cleans it with `dma_sync_single_for_device`).
+  - Upstream's `exynos-iommu` does not cover this PCIe variant.
+- **We don't need a translating IOMMU, only a window.**
+  - The Wi-Fi DMA pool is now below 4 GiB (0xff000000, 16 MiB; 9.10).
+  - A first-level table that maps exactly those 16 sections 1:1
+    (IOVA = PA) leaves brcmfmac and the DMA API untouched.
+  - Every other address becomes a translation fault, and the SysMMU
+    interrupt reports it. That is the firewall.
+  - It is small, self-contained, and the same hardware path stock uses.
+- **S2MPU: possible later, not needed first.**
+  - Google's own EL1 driver for the gs101 S2MPUs programs `L1ENTRY_ATTR`
+    and `CTRL0` directly from EL1 (`G/drivers/soc/google/s2mpu/s2mpu-lib.c:160-178`),
+    so the block is not EL2-only by design.
+  - But `s2mpu_hsi2` is `always-on` and pKVM-owned in stock
+    (`R/live.dts:9638-9645`), and UFS shares it.
+  - Reachability from EL1 is still unproven: probe groups 3-5 exist, one
+    per watchdog run.
+  - It would be a second layer: per-VID GB permissions, with the 3-4 GiB
+    gigabyte cut down by an L2 table. **Not needed for W4's goal.**
+- **pKVM:** out of scope. It is a large change of the boot model.
+
+#### What was built (branch `omandroid-w4` off `omandroid-pcie`)
+
+| Commit | Change |
+|---|---|
+| `be2c591e3` dt-bindings: iommu: add the Google gs201 PCIe System MMU as a DMA window | `google,gs201-pcie-sysmmu`: reg, interrupts, 2 clocks, `memory-region`, `google,vid` |
+| `43d687e72` PCI: dwc: gs201: add a System MMU DMA window for the GEN4A_1 controller | `pcie_gs201_sysmmu`, a standalone platform driver. `mode=0` (default) only logs the registers; `mode=1` maps `memory-region` 1:1 and enables VID translation; `mode=2` enables it with an empty table (negative test). Fault IRQ logs `blocked READ/WRITE at …`. Stall-on-fault is off unless `stall=1`; sections are shareable (`shareable=1`) |
+| `cb50d430a` arm64: dts: …gs201: add the PCIe GEN4A_1 System MMU | `pcie_1_sysmmu` (`sysmmu@145c0000`, SPI 446, `CLK_GOUT_HSI2_SYSMMU_HSI2_CLK_S1/S2`, VID 1), **disabled**; cheetah points it at `wifi_dma_pool` |
+| `434a1be2e` PCI: dwc: gs201: probe the SysMMU v7+ fault registers | `hsi2_probe` group 6: 0x870, 0x874, 0x1010, 0x1014, 0x1018, 0x2004, 0x2008 |
+
+- omandroid repo:
+  - `CONFIG_PCIE_GS201_SYSMMU=m`;
+  - overlay `device/cheetah/overlays/wifi-dma-firewall-test.dtso`
+    (enables the node);
+  - `wifi-w1-capture --hsi2-probe` now also takes a list (`2,6`).
+- Boot pieces, **committed disabled** in `omandroid-device-cheetah`:
+  - `bin/omandroid-wifi-start` and `vendor/systemd/system/omandroid-wifi.service`;
+  - no wants link, so the service is installed but not enabled;
+  - the script writes and syncs a marker
+    (`/var/lib/omandroid/wifi-bringup-started`) before touching the
+    hardware, and skips Wi-Fi on a boot that finds it;
+  - order: `pcie_gs201_sysmmu mode=1`, then check it is bound, then
+    `pcie_gs201`, then `brcmfmac`, then wait up to 30 s for the
+    interface, then remove the marker;
+  - `--retry` clears the marker;
+  - the `omandroid-wifi.conf` blacklist stays (explicit modprobe works).
+- Builds: `logs/{kernel,modules,images}-w4a.log`, release
+  `7.3.0-rc6-omandroid-push1-00096-g434a1be2ee09`.
+  - The images carry the **standard test DTB** (pcie + pool; firewall node
+    disabled).
+  - `gs201-cheetah.dtb.firewall` is the same plus the firewall overlay,
+    for F2.
+
+#### Staged runbook
+
+Each step is one run. Stop at the first surprise. **⚠** marks steps that can
+hang the SoC: recovery is the watchdog (if armed) or a 30 s Power hold.
+
+```sh
+export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
+O=$KERNEL_OUT D=$O/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb
+bin/omandroid modules-push && bin/omandroid push            # standard test DTB (no firewall node)
+
+# F1 ⚠ read-only: SysMMU VID registers (group 2) and the v7+ fault/TLB registers (group 6)
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac --hsi2-probe 2,6 5
+#   pass: every "hsi2 probe: about to read X" is followed by "X = 0x…"
+#   expect: CTRL_VID1 bit 0 = 0 (not translating), PT_BASE_PPN_VID1 = 0 or a stale value,
+#           FAULT_* = 0, TLB_CFG0 = some default
+#   a read that aborts ("synchronous external abort") or hangs: note the register, do not
+#   go on to F2 with that register in the driver (tell me which)
+#   Wi-Fi still works in this run (nothing was changed)
+```
+
+F2-F4 come only after F1 passes. Each needs the firewall DTB (`cp "$D.firewall" "$D"; bin/omandroid images && bin/omandroid push`) and the order *firewall, then PCIe, then brcmfmac*:
+
+```sh
+# F2  log only (mode=0): the driver binds, reads the same registers, changes nothing
+tools/phone-ssh 'modprobe pcie_gs201_sysmmu; dmesg | grep gs201-pcie-sysmmu'
+#   pass: "probe: version 0x80200001 (v8.1) ctrl 0x24 …" and "VID 1 ctrl … pt_base …"
+# F3 ⚠ enforce (mode=1), then Wi-Fi as W3
+tools/phone-ssh 'modprobe -r pcie_gs201_sysmmu; modprobe pcie_gs201_sysmmu mode=1; dmesg | grep gs201-pcie-sysmmu | tail -4'
+#   pass: "allowing 0x00000000ff000000..0x0000000100000000 (16 sections)", "enforcing: … VID 1 ctrl 0x…1 …"
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
+tools/phone-ssh -t 'nmcli con up nevermore'; tools/phone-ssh 'curl -o /dev/null -w "%{speed_download}\n" https://speed.cloudflare.com/__down?bytes=50000000; dmesg | grep -c "blocked"'
+#   pass: connects, ~19 MB/s as in W3, 0 "blocked" lines
+#   "blocked … at 0x…" during normal use: some buffer lives outside the pool: send the line
+# F4 ⚠ the negative test (mode=2, empty table): proves VID 1 really carries the Wi-Fi DMA
+tools/phone-ssh 'modprobe -r brcmfmac_wcc brcmfmac; modprobe -r pcie_gs201; modprobe -r pcie_gs201_sysmmu;
+  modprobe pcie_gs201_sysmmu mode=2'
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
+#   pass: brcmfmac fails to come up AND "blocked READ at 0x00000000ff……" lines appear; the SoC stays fine
+#   brcmfmac comes up anyway with no "blocked" lines: the Wi-Fi traffic is not on VID 1 → stop (the
+#   firewall would be a no-op); tell me
+# rollback for all: modprobe -r brcmfmac_wcc brcmfmac pcie_gs201 pcie_gs201_sysmmu;
+#   DTB: cp "$D.default" "$D" + both test overlays (9.4), or bin/omandroid images from a fresh kernel build
+```
+
+#### After F2-F4 pass (not now)
+
+1. Default DTB: enable `pcie_1`, `pcie_1_phy`, `wifi_dma_pool` and
+   `pcie_1_sysmmu` (one DT commit), plus `options pcie_gs201_sysmmu mode=1`
+   in a modprobe.d file.
+2. Enable `omandroid-wifi.service`: add the
+   `multi-user.target.wants/omandroid-wifi.service` link in
+   `omandroid-device-cheetah`. Keep the blacklist, so the stack only ever
+   loads through the guarded script.
+3. Optional second layer: the S2MPU, after probe groups 3-5.

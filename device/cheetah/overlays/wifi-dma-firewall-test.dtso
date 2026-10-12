@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (gate W4): enable the PCIe GEN4A_1 System MMU node, so
+ * pcie_gs201_sysmmu binds to it. The driver's mode parameter decides what it
+ * does (0: log the registers only, 1: allow only the Wi-Fi DMA pool, 2: an
+ * empty table). Apply after wifi-pcie-test.dtso and wifi-dma-pool-test.dtso.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/sysmmu@145c0000} {
+	status = "okay";
+};

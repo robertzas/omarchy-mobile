@@ -1,0 +1,60 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Bring up Wi-Fi at boot, hang-safe (gate W4, device/cheetah/WIFI-BATTERY-PLAN.md).
+#
+# Order: the PCIe System MMU DMA window first (the chip may only reach its DMA
+# pool), then the PCIe controller (powers the chip, trains the link), then
+# brcmfmac. A marker file is written and synced before anything touches the
+# hardware, and removed once the interface exists. If the phone hangs during
+# bring-up, the next boot finds the marker and skips Wi-Fi; remove it by hand
+# (or run "omandroid-wifi-start --retry") to try again.
+#   omandroid-wifi-start [--retry]
+set -uo pipefail
+
+state=/var/lib/omandroid
+marker=$state/wifi-bringup-started
+firewall=/sys/bus/platform/drivers/gs201-pcie-sysmmu
+
+log() { echo "omandroid-wifi: $*"; }
+
+[[ ${1:-} == --retry ]] && rm -f "$marker"
+
+if [[ -e $marker ]]; then
+  log "the last bring-up ($(cat "$marker" 2>/dev/null)) never finished; Wi-Fi stays off this boot."
+  log "after checking the previous boot's log, retry with: omandroid-wifi-start --retry"
+  exit 0
+fi
+
+mkdir -p "$state"
+date -Is > "$marker"
+sync -f "$marker" 2>/dev/null || sync
+
+finish() { rm -f "$marker"; sync -f "$state" 2>/dev/null || sync; }
+
+# 1. The DMA window must be enforcing before the link exists.
+if ! modprobe pcie_gs201_sysmmu mode=1; then
+  log "the DMA window driver did not load; not powering the Wi-Fi chip"
+  finish; exit 1
+fi
+if ! compgen -G "$firewall/*.sysmmu" >/dev/null; then
+  log "the DMA window is not bound (DT node disabled?); not powering the Wi-Fi chip"
+  finish; exit 1
+fi
+
+# 2. Link, then the driver. Explicit modprobe works despite the autoload blacklist.
+modprobe pcie_gs201 || { log "pcie_gs201 failed"; finish; exit 1; }
+modprobe brcmfmac || { log "brcmfmac failed"; finish; exit 1; }
+
+# 3. Done once brcmfmac has an interface.
+for _ in $(seq 60); do
+  for dev in /sys/class/net/*; do
+    if [[ $(readlink -f "$dev/device/driver" 2>/dev/null) == */brcmfmac ]]; then
+      log "up: ${dev##*/}"
+      finish; exit 0
+    fi
+  done
+  sleep 0.5
+done
+log "no Wi-Fi interface after 30 s (the hardware answered; see dmesg)"
+finish
+exit 1
