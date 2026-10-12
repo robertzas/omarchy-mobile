@@ -2673,3 +2673,53 @@ tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
    `omandroid-device-cheetah`. Keep the blacklist, so the stack only ever
    loads through the guarded script.
 3. Optional second layer: the S2MPU, after probe groups 3-5.
+
+### 9.18 F1 results; probe hang explained (2026-10-12)
+
+F1 on omandroid-int 00143 (contains `434a1be2e`):
+- Group 2: `CTRL_VID0` 0, `CFG_VID0` 0x00020000, `PT_BASE_PPN_VID0` 0,
+  and the same for VID1 (0, 0x00020000, 0). **Neither VID translates.**
+- Group 6: `CAPA0_V7` 0x41085800, `CAPA1_V7` 0x0000f011, `FAULT_ADDR_VA`,
+  `FAULT_INFO0/1` 0, `TLB_CFG0` 0.
+- **`TLB_MATCH_CFG0` (0x2008) never printed a value.** A few minutes
+  later `modprobe -r pcie_gs201` hung in D state, the same as after the
+  0x70 abort in E1.
+
+**Cause of the hang:** the probe parameter held a mutex across its reads,
+and `pcie_gs201`'s remove() takes the same mutex. A read that aborts kills
+the writing task with the mutex held, so remove() waits forever. Fixed in
+`49b341b4a` (wt-pcie `omandroid-w4`):
+- the mutex is replaced by a ready flag;
+- every probe line is logged at KERN_ERR, so a brcmfmac debug flood can't
+  push it out of the log;
+- 0x2008 is gone from group 6. Google's driver only ever touches
+  `TLB_MATCH_CFG(1)`, under `MULTI_TLB`/TLB pinning.
+
+**Registers `pcie_gs201_sysmmu` touches, against the v8.1 map:**
+
+| Offset | Register | Access | Evidence |
+|---|---|---|---|
+| 0x0000 | CTRL | read, write `\| 0x5` (mode ≥ 1), restore on remove | read OK (E1); `__sysmmu_enable_nocount()` |
+| 0x0004 | CFG | read | read OK (E1) |
+| 0x0008 | STATUS | read | read OK (E1) |
+| 0x0034 | VERSION | read | read OK (E1) |
+| 0x0060 | INT_STATUS | read (dump; IRQ) | read OK (E1) |
+| 0x0064 | INT_CLEAR | write (IRQ only) | Google's IRQ handler, all versions |
+| 0x1010, 0x1014 | FAULT_ADDR_VA, FAULT_INFO0 | read (IRQ only) | read OK (F1); Google's v7+ path |
+| 0x2004 | TLB_CFG(0) | write 0 (mode ≥ 1) | read OK (F1); Google's `__sysmmu_init_config()` |
+| 0x8000+0x1000·vid | CTRL_VID | read, write (mode ≥ 1) | read OK (F1) |
+| 0x8004+… | CFG_VID | read | read OK (F1) |
+| 0x800c+… | PT_BASE_PPN_VID | read, write (mode ≥ 1) | read OK (F1) |
+| 0x8010+… | FLUSH_VID | write (mode ≥ 1) | Google's `__sysmmu_tlb_invalidate_all()` |
+
+**F2 (mode=0) only reads VERSION, CTRL, CFG, STATUS, INT_STATUS, CTRL_VID1,
+CFG_VID1 and PT_BASE_PPN_VID1, and all of them read fine in E1/F1.** There
+is nothing risky in it.
+
+Build: `logs/{kernel,modules,images}-w4b.log`, release
+`7.3.0-rc6-omandroid-push1-00097-g49b341b4a7bb`; standard test DTB in the
+images, `gs201-cheetah.dtb.firewall` beside it. Merge `omandroid-w4`
+(now `49b341b4a`) into omandroid-int, then F2-F4 as in 9.17. Also in
+`wifi-w1-capture`: the `grep -q` checks are now `grep -c … >/dev/null`.
+With `pipefail` and a large log, `grep -q` exiting early SIGPIPEd
+`since_start` and silently skipped steps.

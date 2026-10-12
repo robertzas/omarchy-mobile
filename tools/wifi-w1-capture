@@ -224,7 +224,7 @@ since_start() { sed -n "/wifi-w1-capture: start stage $stage/,\$p" "$log"; }
 result=
 while (( $(date +%s) - start < wait_s )); do
   sleep 1
-  if since_start | grep -q 'stopped after stage\|link up on try\|Device not found\|Link failed\|stage [0-9] failed\|failed to initialize host'; then
+  if since_start | grep -c 'stopped after stage\|link up on try\|Device not found\|Link failed\|stage [0-9] failed\|failed to initialize host' >/dev/null; then
     result=done; break
   fi
 done
@@ -232,7 +232,7 @@ wait "$modprobe_pid" 2>/dev/null
 sleep 2
 
 # 4b. Gate W2: brcmfmac on the link that just came up, still under the watchdog.
-if ((brcm)) && since_start | grep -q 'link up on try'; then
+if ((brcm)) && since_start | grep -c 'link up on try' >/dev/null; then
   say "modprobe brcmfmac debug=$brcm_debug"
   phone "echo 'wifi-w1-capture: start brcmfmac' > /dev/kmsg; modprobe brcmfmac debug=$brcm_debug; echo modprobe-exit=\$?" &
   modprobe_pid=$!
@@ -240,7 +240,7 @@ if ((brcm)) && since_start | grep -q 'link up on try'; then
   while (( $(date +%s) - start < wait_s )); do
     sleep 1
     if since_start | sed -n '/wifi-w1-capture: start brcmfmac/,$p' |
-       grep -q 'Firmware: BCM4389\|Dongle setup failed\|FW failed to initialize\|Invalid shared RAM\|brcmf_pcie_probe.*failed\|Unsupported PCIE version'; then
+       grep -c 'Firmware: BCM4389\|Dongle setup failed\|FW failed to initialize\|Invalid shared RAM\|brcmf_pcie_probe.*failed\|Unsupported PCIE version' >/dev/null; then
       break
     fi
   done
@@ -249,7 +249,7 @@ if ((brcm)) && since_start | grep -q 'link up on try'; then
 fi
 
 # 4c. HSI2 DMA path registers, one group at a time (each logged before it is read).
-if [[ $hsi2 != 0 ]] && since_start | grep -q 'link up on try'; then
+if [[ $hsi2 != 0 ]] && since_start | grep -c 'link up on try' >/dev/null; then
   if [[ $hsi2 == *,* ]]; then groups=${hsi2//,/ }; else groups=$(seq 1 "$hsi2"); fi
   for g in $groups; do
     say "hsi2 probe group $g"
