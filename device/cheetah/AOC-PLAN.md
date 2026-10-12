@@ -117,8 +117,79 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    Rollback: `systemctl stop omandroid-sensor-proxy`; the user service
    restores nothing by itself, so `hyprctl reload` (or rotate back to
    upright) before stopping it.
-3. **Audio:** port `aoc_alsa` (Google's `alsa/`), machine card with the
-   CS35L41 on TDM 0, AUDIO-PLAN section 4 limits, then mics (EP1, PCM 8).
+3. **C7 audio** (kernel `omandroid-aoc` @ `33b28cee6` or later: the AoC
+   sound card, `aoc_alsa_dev`/`aoc_alsa_dev_util`, ported from Google's
+   driver, with the speaker limits in code; the amplifier description from
+   `omandroid-audio` merged in). Merging into int has one conflict in
+   `gs201.dtsi`: int's `usi5`/`spi_5` (GNSS) and the branch's
+   `usi7`/`spi_7` (amplifiers) were added at the same place; keep both,
+   `usi5` first. Config: `CONFIG_GS201_AOC_ALSA=m`, `CONFIG_SND_SOC_CS35L41_SPI=m`.
+   Overlays: `aoc-core-test`, `audio-amps-test`, `aoc-sound-test` (the
+   stock sound card with the amplifiers as TDM 0 codecs, generated from
+   the stock tree; top amplifier slot 0, bottom slot 1).
+
+   **Limits in code** (`aoc_alsa_card.c`, `aoc_speaker_limits()`, logged
+   at card probe): "Top/Bottom Digital PCM Volume" capped at 817 (0 dB) and
+   set to 657 (-20 dB); "Top/Bottom Analog PCM Volume" capped at 10 (17
+   only with `speaker_protection=1`, never before C9). Boost peak 2.5 A,
+   1 µH, 30 µF come from the DT (`cirrus,boost-*`). AUDIO-PLAN section 4
+   applies on top: earpiece (top amp) analog ≤ 6, 1 kHz bursts of 1-2 s,
+   never below 300 Hz, ≤ 30 s without protection.
+
+   No step here uses `devmem`. The phone's `/usr/local/bin/devmem` is our
+   `tools/devmem.c` (`devmem ADDRESS [VALUE]`): a second argument WRITES, so
+   never pass a width (`devmem ADDR 32` writes 0x20), and never read PMU
+   registers from userspace. PCM numbers follow the link order in the
+   overlay (EP1-EP8 playback are 0-7, EP1 capture is 8); check them with
+   `aplay -l; arecord -l` in C7b before using them.
+
+   - **C7a amplifiers, read-only:** `AUDIO-PLAN.md` A2 (IDs over spidev)
+     and A3 (driver probe, no card), unchanged. Stop as there.
+   - **C7b card, no sound** (C5 passed this boot):
+     ```sh
+     tools/phone-ssh 'modprobe snd-soc-cs35l41-spi; modprobe aoc_alsa_dev_util; modprobe aoc_alsa_dev; sleep 3;
+       cat /proc/asound/cards; aplay -l; arecord -l; dmesg | grep -E "aoc_speaker_limits|cs35l41|aoc_snd|aoc-snd" | tail -20'
+     ```
+     Expect a card with driver `aoc-snd-card`, both amplifiers ("Cirrus
+     Logic CS35L41 (35a40), Revision: B2"), and four `aoc_speaker_limits`
+     lines ending in `: 0`. **Stop** if any limit line is not `: 0` (the
+     control was not found, so the limit is not in force): no sound tests.
+   - **C7c microphones** (rails on: `omandroid-aoc-start` turned them on):
+     ```sh
+     tools/phone-ssh 'C=$(awk "/aoc-snd-card/{print \$1; exit}" /proc/asound/cards);
+       amixer -c $C cset name="EP1 TX Mixer INTERNAL_MIC_TX" 1;
+       amixer -c $C cset name="BUILDIN MIC ID CAPTURE LIST" 0,3,2,-1;
+       amixer -c $C cset name="MIC DC Blocker" 1; amixer -c $C cset name="MIC Record Soft Gain (dB)" 22;
+       arecord -D hw:$C,8 -f S16_LE -r 48000 -c 2 -d 3 /tmp/mic.wav; ls -l /tmp/mic.wav'
+     ```
+     (control names from the stock `mixer_paths.xml`, `handset-mic` and
+     `audio-recordC`; PCM 8 is the first capture front end, EP1.) Expect a
+     3 s file that is not all zeros (tap the phone while it records).
+   - **C7d first sound, top amplifier alone, DSP bypassed, -20 dB:**
+     ```sh
+     tools/phone-ssh 'python3 - <<"PY"
+     import math, struct, wave
+     w = wave.open("/tmp/tone.wav", "wb"); w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000)
+     a = int(32767 * 0.1)  # -20 dBFS
+     w.writeframes(b"".join(struct.pack("<hh", s, s) for s in (int(a * math.sin(2 * math.pi * 1000 * n / 48000)) for n in range(72000))))
+     w.close()
+     PY'
+     tools/phone-ssh 'C=$(awk "/aoc-snd-card/{print \$1; exit}" /proc/asound/cards);
+       amixer -c $C cset name="Bottom Digital PCM Volume" 0; amixer -c $C cset name="Bottom Analog PCM Volume" 0;
+       amixer -c $C cset name="Top PCM Source" ASP; amixer -c $C cset name="Top Analog PCM Volume" 6;
+       amixer -c $C cget name="Top Digital PCM Volume";
+       amixer -c $C cset name="TDM_0_RX Mixer EP6" 1;
+       aplay -D hw:$C,5 /tmp/tone.wav; dmesg | grep -iE "cs35l41|aoc" | tail -10'
+     ```
+     Expect a quiet 1.5 s 1 kHz tone from the **top** speaker (the
+     earpiece grille): that also confirms top = chip select 0. Then the same
+     for the bottom amplifier (swap Top and Bottom; Bottom Analog ≤ 10).
+     **Stop:** no sound or the wrong speaker (report; do not raise the
+     gain), any CS35L41 error or IRQ line, distortion, a warm phone. Never
+     raise "Digital PCM Volume" above 657 or loop the tone before C9.
+     Rollback: `amixer … cset name="TDM_0_RX Mixer EP6" 0`, then
+     `rmmod aoc_alsa_dev aoc_alsa_dev_util snd_soc_cs35l41_spi` (the amps go
+     back into reset).
 
 ## 0. Top findings
 

@@ -856,9 +856,9 @@ bursts are timed to frames (`burst_delay_*hz`). A panel that stays at a fixed
    `D = get_server(UUID_DISPLAY_INFO)`.
 3. At once, send `display_info(D, brightness=<DBV>, status=<1 on | 0 off |
    2 AOD>, refresh_rate=<60|120; 0 off; 30 LP>, op_hz=120, display_id=0)`,
-   with leakage and luma 0 (no histogram). On this port the DBV is the
-   `pixel-panel` backlight's `brightness`, which is written straight to DCS
-   0x51. Send `op_hz=60` only if the panel runs in NS mode.
+   with leakage and luma 0 (no histogram). The DBV is the value the panel
+   driver writes to DCS 0x51 (the backlight's `brightness`). Send
+   `op_hz=60` only if the panel runs in NS mode.
 4. Send it again on every change of DBV, on/off/AOD, refresh rate or op_hz.
    After an AoC restart, look `D` up again and resend the current state, as
    `Reconnect` does.
