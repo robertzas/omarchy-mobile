@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 LIBCONNECTIVITY_NATIVE {
   global:
     AConnectivityNative_getNetworkBlockedReason;

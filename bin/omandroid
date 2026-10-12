@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # omandroid: Omandroid development tool (native Omarchy on Pixel).
 set -euo pipefail
 

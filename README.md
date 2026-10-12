@@ -31,7 +31,8 @@ Large trees live outside the repo, under `~/android/`:
 ## Ground rules
 
 - We only ever flash the boot images and userdata. Never `bootloader`, `radio`, `devinfo`, `persist` or calibration partitions.
-- Every file we write carries an SPDX header: GPL-2.0 for kernel code, MIT for the rest. Ports of Google's Apache-2.0 code keep that license and Google's notice (`tools/omandroid-bootctl.c`).
+- **Licensing:** this repository is MIT ([LICENSE](LICENSE)) except where a file's SPDX header says otherwise. Kernel patches (and the board dtbo source) are GPL-2.0. The port of Google's Apache-2.0 boot-control code keeps that licence and Google's notice (`packages/omandroid-device-cheetah/src/omandroid-bootctl.c`). Every file we write carries an SPDX header.
+- Google's proprietary firmware and binaries are never committed: our scripts extract them from the user's own factory image.
 - No code from unlicensed sources. Google's GPL kernel, upstream Linux, postmarketOS and Mesa are fine.
 
 ## Contributing

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Omandroid build environment: Ubuntu LTS with the LineageOS build packages.
 FROM ubuntu:24.04
 

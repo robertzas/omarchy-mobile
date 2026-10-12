@@ -280,9 +280,12 @@ Add a row to [docs/DEVICES.md](docs/DEVICES.md) in the same PR as your device no
 
 ## 7. Licensing and vendor firmware
 
-- **Kernel code is GPL-2.0** (`SPDX-License-Identifier: GPL-2.0-only` or `GPL-2.0`, as the subsystem uses), and so are DTS files and overlays that go into the kernel.
-- **Everything else in this repository is MIT** unless its header says otherwise: the tools, packages, docs, overlays and the initramfs. Each package carries a `LICENSE` file. Every file starts with an SPDX header.
-- **Exceptions keep their upstream licence.** Ports of Google's Apache-2.0 code keep that licence and Google's notice (`omandroid-bootctl.c`, alongside `LICENSE.Apache-2.0`). PKGBUILDs derived from Arch's are 0BSD. Patches to Mesa, Hyprland and Omarchy are under those projects' licences.
+- **This repository is MIT** ([LICENSE](LICENSE)), except where a file's SPDX header says otherwise. That covers the tools, packages, docs, bring-up overlays, the initramfs and the fingerprint and GNSS chroot pieces. Packages that are installed on their own also carry their own MIT `LICENSE`. Every file of ours starts with an SPDX header; new files get `SPDX-License-Identifier: MIT`.
+- **Kernel patches are GPL-2.0** (`GPL-2.0-only`, or whatever the subsystem uses), and so are the DTS files that go into the kernel. In this repository, the board `dtbo` source ([`cheetah-m1-overlay.dts`](device/cheetah/cheetah-m1-overlay.dts)) is GPL-2.0-only for the same reason.
+- **Exceptions keep their upstream licence:**
+  - the port of Google's Apache-2.0 boot-control code keeps that licence and Google's notice ([`omandroid-bootctl.c`](packages/omandroid-device-cheetah/src/omandroid-bootctl.c), with `LICENSE.Apache-2.0` beside it);
+  - PKGBUILDs derived from Arch's are 0BSD;
+  - patches to Mesa, Hyprland and Omarchy are under those projects' licences.
 - **Only use code from properly licensed sources.** Google's GPL kernel, upstream Linux, postmarketOS and Mesa are fine. Leaked or unlicensed code is not, and neither is decompiled proprietary code: describe protocols (as [USF-PROTOCOL.md](device/cheetah/USF-PROTOCOL.md) does), don't copy code.
 - **Google's proprietary firmware and binaries are never committed, attached or redistributed.** That covers Wi-Fi, Bluetooth, haptics, AoC and GNSS firmware, vendor HALs and libraries, calibration and tuning files. Our scripts take them from **the user's own factory image** on the user's own machine:
   - [`tools/extract-vendor-firmware`](tools/extract-vendor-firmware): firmware, renamed to what mainline drivers request;

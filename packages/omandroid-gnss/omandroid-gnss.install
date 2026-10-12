@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 post_install() {
   echo "omandroid-gnss: Location is off. Needs the vendor files in /usr/lib/omandroid-vendor/gnss"
   echo "  (tools/extract-vendor-chroot -p gnss on your computer), the gnss DT overlays,"
