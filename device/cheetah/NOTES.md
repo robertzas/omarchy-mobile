@@ -132,3 +132,19 @@ Made on the development laptop to give the phone internet over USB. Revert when 
 - Fixes that got it there (WIFI-BATTERY-PLAN 9.13-9.16): host ready rung once, FLR on probe and remove, versioned join parameters (JOIN_V1), host-built 802.3/LLC TX headers (HOST_SFHLLC), and re-polling the D2H rings after each INTx.
 - The interface uses the bootloader's MAC (omandroid-device-cheetah 0.1.5); NetworkManager randomises it only while scanning.
 - Still a test setup: Wi-Fi stays blacklisted at boot and is loaded by hand until W4 (S2MPU confinement). No long transfers before W4.
+
+## 2026-10-12: Bluetooth, haptics and torch bring-up (BT1.1-1.3, H1-H3, T1-T3)
+
+Kernel omandroid-int `7.3.0-rc6-omandroid-push1-00145-ga868e7333752` with the bring-up overlays (bt-cmu-test, bt-uart-test, haptics-i2c, haptics, torch-i2c, torch).
+
+- **BT1.1:** `dout_apm_usi1_uart` 197 MHz from `pll_alv_div2_apm` (394 MHz). UART gates 0x180020ac/0x180020b0/0x18002100 read 0x00200000: bit 21 (the gate bit the driver uses) set, manual mode off, so the clocks run.
+- **BT1.2:** UART loopback passes at 115200 and 3000000 baud.
+- **BT1.3:** HCI_Reset answered; HCI 10 / LMP 10 (Bluetooth 5.2), LMP subversion 0x6209, Broadcom chip id 170.
+- **H1:** CS40L26 ID 0x40a260, revision 0xa1. The first I2C read NAKs while the chip wakes from hibernation; the second answers.
+- **H2:** firmware 0x1800d4 rev 7.2.91 running, `cs40l26_vibra` input device. Two kernel fixes were needed:
+  - i2c-exynos5 gave every message a fixed 100 ms, so the 20 KiB firmware block timed out ("tx timeout"); the timeout now scales with the message length.
+  - cs_dsp's write sequence treated `cs_dsp_coeff_write_ctrl()` returning 1 ("changed") as an error.
+- **H3:** buzzes at 300 ms / 40% and 600 ms / 70% felt by hand, no mailbox errors.
+- **T1/T2:** LM3644TT (ID 0x04), 17 torch steps, 2550-49110 uA per channel; the camera EEPROM at 0x50 answers on the same bus.
+- **T3:** brightness 1 and 9 for 2 s each, both seen, no fault flags.
+- Shutdown hangs now end in a watchdog reset after a minute (`RebootWatchdogSec=1min`, omandroid-device-cheetah 0.1.6).
