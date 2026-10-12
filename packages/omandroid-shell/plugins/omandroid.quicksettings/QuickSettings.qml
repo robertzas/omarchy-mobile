@@ -13,7 +13,8 @@ import qs.Ui
 
 // Pull-down quick settings for the phone. The sheet drops from the top edge
 // over the status bar: a clock header, six toggle tiles, then brightness and
-// volume. Tap outside it, swipe it up, or press Escape to put it away.
+// volume. Tap outside it, swipe it up, or press Escape to put it away. The
+// Wi-Fi tile's chevron (or a long-press) opens the picker in WifiPanel.qml.
 //
 // Backends are the same ones Omarchy's desktop panels drive: Quickshell's
 // NetworkManager and BlueZ services, omarchy-bluetooth-power, PipeWire, the
@@ -32,7 +33,17 @@ Item {
 
   // ---------------------------------------------------------------- lifecycle
 
+  // A payload of {"page": "wifi"} opens the Wi-Fi picker instead of the sheet.
   function open(payloadJson) {
+    var payload = {}
+    try { payload = JSON.parse(payloadJson || "{}") || {} } catch (error) {}
+    if (payload.page === "wifi") {
+      wifiPicker.open()
+      // Let the host finish delivering this open before it hears a hide.
+      Qt.callLater(root.dismiss)
+      return
+    }
+    wifiPicker.close()
     opened = true
     refreshDnd()
     brightness.refresh()
@@ -57,8 +68,21 @@ Item {
       bluetooth: bluetooth.enabled,
       doNotDisturb: dnd.enabled,
       brightness: brightness.available ? brightness.percent : null,
-      volume: audio.available ? Math.round(audio.volume * 100) : null
+      volume: audio.available ? Math.round(audio.volume * 100) : null,
+      wifiPanel: wifiPicker.opened
     })
+  }
+
+  // `shell call omandroid.quicksettings openWifi ''`: the same as the tile's
+  // chevron. `wifiPanel ''` returns the picker's state as JSON.
+  function openWifi() {
+    if (!wifi.available) return "unavailable"
+    openWifiPanel()
+    return wifiPicker.snapshot()
+  }
+
+  function wifiPanel() {
+    return wifiPicker.snapshot()
   }
 
   // `shell call omandroid.quicksettings toggleTile <name>`: the same
@@ -114,6 +138,24 @@ Item {
 
     function toggle() {
       if (available) Networking.wifiEnabled = !Networking.wifiEnabled
+    }
+  }
+
+  // The picker behind the tile's chevron or a long-press. It is its own
+  // window, so the sheet goes away and the picker stays up on its own; its
+  // back glyph brings the sheet back.
+  function openWifiPanel() {
+    wifiPicker.open()
+    root.dismiss()
+  }
+
+  WifiPanel {
+    id: wifiPicker
+    device: wifi.device
+    onBackRequested: {
+      wifiPicker.close()
+      var summoned = root.shell && typeof root.shell.summon === "function" && root.shell.summon(root.pluginId, "{}")
+      if (!summoned) root.open("{}")
     }
   }
 
@@ -446,7 +488,9 @@ Item {
             status: wifi.status
             active: wifi.enabled
             available: wifi.available
+            details: true
             onClicked: wifi.toggle()
+            onDetailsRequested: root.openWifiPanel()
           }
 
           Tile {

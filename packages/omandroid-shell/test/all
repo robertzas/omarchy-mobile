@@ -21,6 +21,35 @@ if grep -rnE '(^|[^.[:alnum:]_])Color\.' plugins --include=*.qml; then
 fi
 pass "palette references are qualified"
 
+# QML has to parse; qmlformat is the Qt tool that fails on a syntax error
+# without needing the shell's own imports to resolve.
+qmlformat=$(command -v qmlformat || command -v /usr/lib/qt6/bin/qmlformat || true)
+if [[ -n $qmlformat ]]; then
+  for qml in plugins/*/*.qml; do
+    "$qmlformat" "$qml" >/dev/null 2>&1 || fail "$qml parses"
+  done
+  pass "plugin QML parses"
+else
+  pass "plugin QML parses # SKIP no qmlformat"
+fi
+
+# Pure-JS models, under Node when it's there.
+if command -v node >/dev/null; then
+  for js in plugins/*/*.js; do
+    node --check "$js" || fail "$js parses"
+  done
+  node test/wifi-model.js || fail "Wi-Fi model"
+else
+  pass "Wi-Fi model # SKIP no node"
+fi
+
+# The Wi-Fi password goes over NetworkManager's D-Bus or nmcli's stdin, never
+# argv or the log.
+if grep -nE 'console\.(log|info|warn|debug|error)\([^)]*(psk|password|secret)' plugins/omandroid.quicksettings/*.qml; then
+  fail "the Wi-Fi password is never logged"
+fi
+pass "the Wi-Fi password is never logged"
+
 bash -n bin/omandroid-setup-user || fail "omandroid-setup-user parses"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ./install "$tmp/root"

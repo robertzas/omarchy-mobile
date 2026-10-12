@@ -14,7 +14,7 @@ logical at scale 3).
 | Plugin | Kind | What it is |
 | --- | --- | --- |
 | `omandroid.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings |
-| `omandroid.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: six toggle tiles, brightness and volume |
+| `omandroid.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: six toggle tiles, brightness and volume; Wi-Fi picker |
 | `omandroid.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
 
@@ -83,7 +83,7 @@ scrim, swipe the sheet up, or press Escape to close it.
 
 | Tile | Backend |
 | --- | --- |
-| Wi-Fi | `Networking.wifiEnabled` (NetworkManager); status shows the SSID |
+| Wi-Fi | `Networking.wifiEnabled` (NetworkManager); status shows the SSID. The chevron or a long-press opens the Wi-Fi picker (below) |
 | Bluetooth | `omarchy-bluetooth-power on/off`, the same rfkill path as Omarchy's Bluetooth panel |
 | Mobile data | **Stub**: no modem backend (ModemManager wiring is the TODO) |
 | Rotation lock | **Stub**: no accelerometer / iio-sensor-proxy and no rotation daemon yet |
@@ -97,6 +97,40 @@ and do nothing when tapped. Their `toggle()` bodies are deliberately empty.
 
 The plugin is `keepLoaded` so the sheet can animate out before it unmaps.
 
+### Wi-Fi picker
+
+`WifiPanel.qml`, after Android's Internet panel. A tap on the Wi-Fi tile still
+toggles the radio; the chevron at the tile's right edge, or a long-press
+anywhere on it, swaps the sheet for the picker. It is its own window on the
+top layer with normal exclusion (like the launcher's drawer), so it sits
+between the status bar and the on-screen keyboard. The back glyph returns to
+quick settings; tapping outside or Escape closes it.
+
+* **Use Wi-Fi** switch, then the connected network, then everything in range
+  strongest first, with a signal glyph and a lock on secured networks. Saved
+  profiles show "Saved"; saved profiles out of range get their own section.
+* **Rescans** on open, from the refresh glyph, and on a pull-down of the list.
+* **Tap** an open or saved network to connect; a secured new one asks for the
+  password in a sheet (masked, with show/hide, Connect/Cancel, Enter submits)
+  above the on-screen keyboard. Failures show in a banner and on the row; a
+  wrong password reopens the sheet.
+* **Long-press** a connected or saved network (or tap the connected one) for
+  Disconnect and Forget.
+
+Backends: `Quickshell.Networking` for the device (found by type, never by
+name), the scanner, `connect()`, `connectWithPsk()`, `disconnect()`,
+`forget()` and `connectionFailed`. nmcli covers what it lacks: saved profiles
+out of range (`nmcli -t -f NAME,UUID,TYPE connection show`, forgotten with
+`nmcli connection delete uuid`), and connecting with a password on a
+Quickshell without `connectWithPsk`, where the password goes to
+`nmcli --ask` on stdin. The password is never in argv or the log. The pure
+logic (sorting, signal buckets, sections, nmcli parsing, failure text) is in
+`WifiModel.js`, tested by `test/wifi-model.js`.
+
+Limits: hidden networks and 802.1X (enterprise) networks can't be joined from
+here yet; an out-of-range saved profile is matched to its network by profile
+name, which is the SSID unless someone renamed it.
+
 IPC:
 
 | Call | Effect |
@@ -104,6 +138,9 @@ IPC:
 | `omarchy-shell shell toggle omandroid.quicksettings '{}'` | Open or close |
 | `omarchy-shell shell summon omandroid.quicksettings '{}'` / `hide omandroid.quicksettings` | Open / close |
 | `omarchy-shell shell call omandroid.quicksettings state ''` | JSON: open state, Wi-Fi, Bluetooth, DND, brightness, volume |
+| `omarchy-shell shell summon omandroid.quicksettings '{"page":"wifi"}'` | Open the Wi-Fi picker |
+| `omarchy-shell shell call omandroid.quicksettings openWifi ''` | The same; returns the picker's state, or `unavailable` |
+| `omarchy-shell shell call omandroid.quicksettings wifiPanel ''` | JSON: picker open, device, connected SSID, networks in range, saved out of range, action, failure, sheet |
 | `omarchy-shell shell call omandroid.quicksettings toggleTile <name>` | Same as tapping a tile. Names: `wifi`, `bluetooth`, `mobile-data`, `rotation-lock`, `torch`, `dnd`. Returns the new state, `unavailable` or `unknown` |
 
 ## omandroid.launcher
