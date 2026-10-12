@@ -33,3 +33,9 @@ o.bind("XF86AudioLowerVolume", "Screenshot chord", "omandroid-keys volume-down",
 -- A fresh phone (no name and email, or no PIN): a notification offers the
 -- onboarding that Omarchy's installer does on a computer.
 o.launch_on_start("omandroid-onboarding --nudge")
+
+-- The screensaver turns the on-screen keyboard off while it runs and back on
+-- when it exits (patches/omarchy/0006). A session restart, a reboot or the
+-- lock can end it before it does, which left the keyboard off for good. No
+-- screensaver runs at login, so turn it on here.
+o.launch_on_start("gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true")
