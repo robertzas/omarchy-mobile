@@ -555,6 +555,16 @@ the human says go; record the result here with the date and `uname -r`.
 ### CAM0: read-only, current int kernel (not yet run). Risk: none
 
 ```sh
+**CAM0 partial result (2026-10-12, 7.3.0-rc6-omandroid-push1-00306-g60d3ca176c80),
+read-only.** `clk_summary`: the CMU's sensor clocks (`mout/gout/dout_cmu_cis_clk5..7`
+seen) are registered at 24.576 MHz, enable count 0, hardware enable Y, so ABL
+leaves them running with no consumer. No `/dev/dma_heap` (CONFIG_DMABUF_HEAPS
+and the system/CMA heaps are off in our config), CMA 124 MiB total, about
+68 MiB free; no `/dev/video*` or `/dev/media*`; libcamera not installed. Not
+yet done: the pin states (need the reset/MCLK pin names from the plan's
+table) and LDO12S, which needs the pmic-2 regmap (bound only while the GNSS
+power stack runs, as FINGERPRINT-PLAN FB2 found).
+
 # CAM0.1 clocks as ABL left them (software state only)
 tools/phone-ssh 'grep -iE "cis_clk|csis" /sys/kernel/debug/clk/clk_summary'
 #   expect: CIS_CLK0-3 and CSIS_NOC listed; record enable count and rate
