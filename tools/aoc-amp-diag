@@ -1,0 +1,88 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# aoc-amp-diag: AOC-PLAN.md stage C7d-7, run ON THE PHONE as root:
+#   tools/phone-ssh 'AMP=bottom CH=LR bash -s' < tools/aoc-amp-diag > logs/c7d7.txt 2>&1
+# Plays a 2 s, 1 kHz, -20 dBFS tone through AoC EP6 (PCM 5) to TDM 0 with
+# stock's back end format (TDM_0_RX Four, S32_LE, SR_48K), on the amplifiers
+# named by AMP (top, bottom or both; the others are muted: digital 0, analog
+# 0), on the channels named by CH (L, R or LR; the other channel is silent).
+# 0.8 s into the tone it dumps every DAPM widget of both amplifiers, their
+# key registers (regmap debugfs, read only) and the DAPM/CS35L41 debug log.
+# Limits as C7d: digital at most 657 (-20 dB), analog 6 (top) or 10
+# (bottom; 6 is used for both). The route and the analog gains are set back to 0 at the end.
+# No devmem.
+set -u
+AMP=${AMP:-bottom}
+CH=${CH:-LR}
+C=$(awk '/aoc-snd-card/{print $1; exit}' /proc/asound/cards)
+[[ -n $C ]] || { echo "no aoc-snd-card"; exit 1; }
+grep -q '^id: EP6 playback' /proc/asound/card$C/pcm5p/info 2>/dev/null ||
+  { echo "PCM 5 is not EP6 playback"; exit 1; }
+card=/sys/kernel/debug/asoc/$(ls /sys/kernel/debug/asoc | grep -m1 aoc)
+echo "card $C ($card), AMP=$AMP CH=$CH"
+
+python3 - "$CH" <<'PY'
+import math, struct, sys, wave
+ch = sys.argv[1]
+a = int(32767 * 0.1)
+w = wave.open('/tmp/amp-tone.wav', 'wb'); w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000)
+frames = []
+for n in range(96000):
+    s = int(a * math.sin(2 * math.pi * 1000 * n / 48000))
+    frames.append(struct.pack('<hh', s if 'L' in ch else 0, s if 'R' in ch else 0))
+w.writeframes(b''.join(frames)); w.close()
+PY
+
+mix() { amixer -c "$C" -q cset name="$1" "$2" || echo "amixer $1 = $2 failed"; }
+for p in TDM_0_RX TDM_0_TX; do
+  mix "$p Chan" Four; mix "$p Format" S32_LE; mix "$p Sample Rate" SR_48K
+done
+for side in Top Bottom; do
+  on=0
+  [[ $AMP == both || ${AMP,,} == ${side,,} ]] && on=1
+  mix "$side PCM Source" ASP
+  if ((on)); then
+    mix "$side Digital PCM Volume" 657
+    mix "$side Analog PCM Volume" 6
+  else
+    mix "$side Digital PCM Volume" 0
+    mix "$side Analog PCM Volume" 0
+  fi
+done
+mix 'TDM_0_RX Mixer EP6' 1
+
+dyn=/sys/kernel/debug/dynamic_debug/control
+[[ -w $dyn ]] && echo 'file soc-dapm.c +p; file cs35l41.c +p; file cs35l41-lib.c +p' > "$dyn"
+mark="aoc-amp-diag $$ $(date +%s)"
+echo "$mark" > /dev/kmsg
+
+timeout 5 aplay -D "hw:$C,5" /tmp/amp-tone.wav &
+sleep 0.8
+echo "== during $(date +%T.%N)"
+for a in /sys/kernel/debug/regmap/spi*.*; do
+  echo "-- $a"
+  awk -F': ' '{a = strtonum("0x" $1)}
+    a == 0x2014 || a == 0x2018 || a == 0x2c04 || a == 0x4800 || a == 0x4804 ||
+    a == 0x4808 || a == 0x4820 || a == 0x4840 || a == 0x4c00 || a == 0x6000 ||
+    a == 0x6c04 || a == 0x10010 || a == 0x10018 || a == 0x10090 {print}
+    a > 0x10100 {exit}' "$a/registers"
+done
+for comp in "$card"/spi*; do
+  echo "-- DAPM $comp"
+  for f in "$comp"/dapm/*; do
+    [[ -f $f ]] || continue
+    echo "[$(basename "$f")]"; sed 's/^/  /' "$f"
+  done
+done
+for f in "$card"/aoc_path/dapm/*TDM_0_RX*; do
+  [[ -f $f ]] && { echo "[aoc_path $(basename "$f")]"; sed 's/^/  /' "$f"; }
+done
+wait; echo "aplay exit $?"
+
+mix 'TDM_0_RX Mixer EP6' 0
+mix 'Top Analog PCM Volume' 0
+mix 'Bottom Analog PCM Volume' 0
+[[ -w $dyn ]] && echo 'file soc-dapm.c -p; file cs35l41.c -p; file cs35l41-lib.c -p' > "$dyn"
+echo "== dmesg"
+dmesg | sed -n "/$mark/,\$p" | grep -vE 'MBOX_TX_QUEUE_LEN' | tail -300

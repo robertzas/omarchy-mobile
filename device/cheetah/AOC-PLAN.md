@@ -585,6 +585,42 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      5. Microphones again (C7c with PCM 8, which is now the AoC record use
         case): expect a 3 s file that is not all zeros.
 
+     **C7d-6 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00290-g66446bf5b725,
+     device-cheetah 0.1.22): first sound.** PCM 5 is EP6 playback and PCM 8
+     EP1 capture. The top speaker played the -20 dB tone (heard); the AoC
+     drained the ring (Tx = Rx = 291840, a PCM interrupt every 80 ms, 15360
+     bytes each), and a second stream started from a drained ring ("written
+     4194304 read 4194304"). Microphones on PCM 8 with the C7c controls:
+     speech and taps at RMS 350-1100, peaks to 15013, both channels. The
+     bottom amplifier never powered up: mid-tone, spi6.1 had GLOBAL_EN 0,
+     AMP_EN 0 and no RX slot enabled (0x4800 0), while spi6.0 (muted) had
+     all three, though both took hw_params (same SP_FORMAT, PLL locked).
+     "AoC Speaker Sink Channel Bitmap" is read-only: the endpoints bound to
+     the speaker sink (32 = EP6), not a channel setting.
+
+   - **C7d-7, bottom amplifier** (same kernel; no new build). Both amplifiers
+     are codecs of the one TDM_0_RX back end, with the same routes and DT
+     setup, so the question is which DAPM widget of spi6.1 stays off.
+     `tools/aoc-amp-diag` sets stock's back end format first (TDM_0_RX and
+     TDM_0_TX: Four, S32_LE, SR_48K; with the driver default, S16_LE stereo,
+     the amplifiers get 16-bit words in 32-bit slots), mutes the other
+     amplifier, plays a 2 s tone at -20 dB digital, analog 6, and 0.8 s in
+     dumps every DAPM widget of both amplifiers (state and paths), their
+     registers and the DAPM and CS35L41 debug log (dynamic debug, if built).
+     1. Bottom alone:
+        `tools/phone-ssh 'AMP=bottom CH=LR bash -s' < tools/aoc-amp-diag > logs/c7d7a.txt 2>&1`.
+        If it plays: go on. If not: send the log (look at "Bottom AMP
+        Playback", "Bottom ASPRX1", "Bottom PCM Source", "Bottom Main AMP",
+        "Bottom SPK": the first one that is Off with an active input is the
+        break; also any "Enable(1) failed" or PUP_DONE line).
+     2. Channel map: `AMP=both CH=L` (expect the top speaker only), then
+        `AMP=both CH=R` (expect the bottom only), into c7d7b/c7d7c.txt. Stock
+        puts left on the top (slot 0) and right on the bottom (slot 1).
+     3. Both: `AMP=both CH=LR` (c7d7d.txt), quiet tone from both.
+     Stop: anything louder than the tone, distortion, an amplifier error or
+     IRQ storm, a warm phone. Rollback: the script sets the route and both
+     analog gains to 0; the TDM_0 format controls can stay (stock values).
+
 4. **C8 speaker protection, UCM and PipeWire** (package `omandroid-audio`
    0.1.0; after C7d-6 passed: stock PCM numbers, the AoC drains EP6). Goal:
    the speaker is "Built-in Audio Speaker" in PipeWire and the microphones
