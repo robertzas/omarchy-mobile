@@ -1,8 +1,11 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 #
-# aoc-audio-diag: AOC-PLAN.md stages C7d-3 and C7d-4, run ON THE PHONE as root:
+# aoc-audio-diag: AOC-PLAN.md stages C7d-3 to C7d-5, run ON THE PHONE as root:
 #   tools/phone-ssh 'EP=6 MODES="copy" bash -s' < tools/aoc-audio-diag > logs/c7d4.txt 2>&1
+# SETUP2=0 or 1 sets aoc_alsa_dev_util's ep_setup2 first (unset: leave it).
+# AOCLOG=1 records the AoC firmware's own log (/dev/acd-logging, read only)
+# while it runs and prints its text at the end.
 # Plays /tmp/tone.wav (C7d) for at most 5 s per mode on the top amplifier
 # through AoC endpoint EP (default 6), in each of MODES ("copy", "mmap";
 # default "mmap copy", the C7d-3 order), and snapshots before, during and
@@ -13,6 +16,8 @@
 set -u
 EP=${EP:-6}
 MODES=${MODES:-mmap copy}
+SETUP2=${SETUP2:-}
+AOCLOG=${AOCLOG:-0}
 svc=audio_playback$((EP - 1))
 C=$(awk '/aoc-snd-card/{print $1; exit}' /proc/asound/cards)
 [[ -n $C ]] || { echo "no aoc-snd-card"; exit 1; }
@@ -41,6 +46,10 @@ snap() {
       a == 0x6c04 || a == 0x10010 || a == 0x10018 || a == 0x10090 || a == 0x10098 {print}
       a > 0x10100 {exit}' "$a/registers"
   done
+  for n in 'Audio DSP State' 'Audio DSP Mode' 'Audio Sink 0 Processing State' \
+           'AoC Speaker Sink Channel Bitmap'; do
+    echo "$n: $(amixer -c "$C" cget name="$n" 2>/dev/null | sed -n 's/^  : values=//p')"
+  done
   find /sys/kernel/debug/asoc -path '*/dapm/*' \( -name 'Main AMP' -o -name ASPRX1 -o -name SPK -o -name bias_level \) \
     -exec sh -c 'echo "$1: $(head -1 "$1")"' _ {} \; 2>/dev/null
 }
@@ -54,6 +63,16 @@ amixer -c "$C" cget name='Top Digital PCM Volume' | tail -1
 mix "TDM_0_RX Mixer EP$EP" 1
 [[ -w /sys/module/aoc_alsa_dev_util/parameters/ring_debug ]] &&
   echo 1 > /sys/module/aoc_alsa_dev_util/parameters/ring_debug
+
+if [[ -n $SETUP2 ]]; then
+  echo "$SETUP2" > /sys/module/aoc_alsa_dev_util/parameters/ep_setup2 || echo "no ep_setup2 parameter"
+fi
+echo "ep_setup2: $(cat /sys/module/aoc_alsa_dev_util/parameters/ep_setup2 2>/dev/null)"
+log=/tmp/aoc-firmware-log.bin
+if [[ $AOCLOG == 1 && -c /dev/acd-logging ]]; then
+  timeout 30 cat /dev/acd-logging > "$log" &
+  logpid=$!
+fi
 
 snap before
 for mode in $MODES; do
@@ -70,5 +89,10 @@ for mode in $MODES; do
 done
 
 mix "TDM_0_RX Mixer EP$EP" 0
+if [[ -n ${logpid:-} ]]; then
+  sleep 1; kill "$logpid" 2>/dev/null; wait "$logpid" 2>/dev/null
+  echo "== AoC firmware log ($(stat -c %s "$log") bytes)"
+  strings -n 6 "$log" | tail -300
+fi
 mix 'Top Analog PCM Volume' 0
 dmesg | grep -iE 'alsa|aoc|cs35l41|mbox|sysmmu' | grep -v MBOX_TX_QUEUE_LEN | tail -60

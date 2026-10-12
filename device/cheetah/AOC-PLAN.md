@@ -193,6 +193,24 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      overrode the package's file of the same name: delete it (and
      `omandroid-aoc-bringup.conf`).
 
+   **Accelerometer missing when the AoC starts at boot** (2026-10-12,
+   00283 kernel, device-cheetah 0.1.20): the AoC started at about 4.8 s and
+   the proxy loaded the registry at about 5.7 s. Light, proximity and the
+   magnetometers (I2C) came up; the LSM6DSV (I3C) did not, even after a
+   proxy restart at 225 s. On the earlier boot the registry was loaded
+   minutes after the AoC started, and all of them came up. The AoC probes
+   its physical sensors once, when the registry loads (the restart found it
+   loaded and skipped it), so a probe that fails at that moment stays
+   failed until the AoC restarts. The rails were on in both cases. Most
+   likely the I3C sensor is probed before the AoC's I3C bus is ready.
+   omandroid-sensors 0.1.3 waits until the AoC's firmware was loaded at
+   least 15 s ago (the start script's `/run/omandroid/aoc-firmware-loaded`;
+   `OMANDROID_AOC_SETTLE_S` overrides it) before loading the registry.
+   Check on the next boot: `journalctl -u omandroid-sensor-proxy -b` shows
+   "waiting … s for the AoC to settle", then "sensors: accel …". If the
+   accelerometer is still missing, C7d-5a's AoC log covers the sensor
+   probe too (read it soon after boot).
+
    **Don't `rmmod` the AoC modules.** Removing `aoc_alsa_dev`,
    `aoc_alsa_dev_util`, `aoc_core`, `gs201_aoc_sysmmu` and `gsa` while
    `aoc_core` waited for deferred probe oopsed the deferred-probe worker
@@ -384,6 +402,72 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      Stop: anything louder than the tone, distortion, an amplifier error,
      an AoC watchdog or a SysMMU line. Rollback: the script sets the route
      and Top Analog back to 0 itself.
+
+     **C7d-4 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00283-gafa4d777403d,
+     fresh boot): the ring fix works, the AoC still reads nothing.**
+     - EP6 (`audio_playback5`, 4 MiB ring), copy mode: "prepared: written 0
+       read 0", "started: written 96000 read 0", then "stopping: written
+       96000 read 0" 8 s later. aplay ended with EIO. No `irq` line: the AoC
+       raised no PCM interrupt.
+     - EP2 (`audio_playback1`, 16 KiB ring): 15360 bytes written before the
+       start, never read; the next write found 1024 bytes free (-EFAULT).
+     - A second EP6 run in the same boot: "prepared: written 4194304": the
+       reset advances a partly used ring (wp 96000) to its start, which reads
+       as full again. Use each endpoint once per boot until the AoC reads.
+     - A click when the amplifier powers up (silence on TDM 0).
+
+     **Compared with Google's older driver.** Google's gs-5.10 android14
+     AoC driver (google-modules/aoc 222ba49, aoc-ipc 61ee513), written for
+     older AoC firmware, against our gs-6.1 import:
+     - the ring core (`aoc_ipc_core.c`) is the same, including the reset in
+       prepare, so the firmware is expected to flush the ring at entry
+       point setup; ours neither flushes nor reads;
+     - the bind (0x010f), entry point setup (0x00ce) and source start
+       (0x00c9) commands and their structures are the same;
+     - gs-6.1 adds CMD_AUDIO_OUTPUT_EP_SETUP2 (0x012a: buffer and period
+       size) after 0x00ce; gs-5.10 never sends it;
+     - nothing else reaches the AoC: the card sends no commands at probe,
+       and the `TDM_0_RX` Chan/Format/Rate controls only feed the codec;
+     - the module order differs only in time (there the ALSA modules and
+       the card load before the firmware; ours load after it is online,
+       before `aoc_char_dev`, so the audio services still bind to ALSA).
+
+     Our firmware is 14022723. Its strings include "Attempt to start
+     playback without configuration", "Entrypoint %s is not configured and
+     cannot be started" and "Entrypoint %u cannot be configured": the AoC
+     logs why an entry point does not run. Google's `aocd` forwards that log
+     from `/dev/acd-logging`, which our `aoc_char_dev` already exposes.
+
+   - **C7d-5** (kernel `omandroid-aoc` @ `e8929e1b2`, modules only:
+     `aoc_alsa_dev_util.ko`, which adds `ep_setup2`; fresh boot; C7b and
+     the C7d tone step first). `tools/aoc-audio-diag` now also reads the
+     AoC's "Audio DSP State", "Audio DSP Mode", "Audio Sink 0 Processing
+     State" and "AoC Speaker Sink Channel Bitmap" in every snapshot, and with
+     `AOCLOG=1` records the AoC firmware log while it runs (read only).
+     1. **C7d-5a, the AoC's own account** (EP6, both setup commands, as
+        before):
+        ```sh
+        tools/phone-ssh 'AOCLOG=1 EP=6 MODES="copy" bash -s' < tools/aoc-audio-diag > logs/c7d5a.txt 2>&1
+        ```
+        Expect the same failure, now with AoC log lines around the
+        entry point setup and start (look for "Entrypoint", "configur",
+        "Binding", "Enabling Audio Output Source", "sink"). Check the log
+        excerpt for identifiers before quoting it.
+     2. **C7d-5b, without EP_SETUP2** (a ring not used this boot: EP2):
+        ```sh
+        tools/phone-ssh 'AOCLOG=1 SETUP2=0 EP=2 MODES="copy" bash -s' < tools/aoc-audio-diag > logs/c7d5b.txt 2>&1
+        ```
+        Pass: "read" grows in the `irq` lines and a short quiet tone plays
+        (EP2 is the stock low-latency endpoint, also routed to TDM 0). Then
+        EP_SETUP2 is what stops this firmware, and its values (or its
+        ordering) are the next thing to fix.
+     3. Only if both fail and the log does not say why: compare with an
+        older AoC firmware from an older factory image of the user's own
+        (`tools/extract-vendor-firmware`), with `SETUP2=0`, on a later boot.
+
+     Stop on anything louder than the tone, an amplifier error, an AoC
+     watchdog or a SysMMU line. Rollback: the script resets the route and
+     Top Analog; `echo 1 > /sys/module/aoc_alsa_dev_util/parameters/ep_setup2`.
 
 ## 0. Top findings
 
