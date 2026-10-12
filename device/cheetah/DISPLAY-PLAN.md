@@ -1418,13 +1418,14 @@ in cycles 2 and 3 a client kept rendering (85 flips in 3 s).
   - At 120 Hz, expect an average of half a frame (≈ 4 ms) and a maximum
     of about 8.4 ms. A maximum near 16.7 ms, or `flips_late` growing, means
     DECON clears the request later than assumed.
-- Hyprland patch `patches/hyprland/0001-dpms-keep-retrying-a-refused-dpms-commit.patch`
+- Hyprland patch `packages/hyprland/0001-dpms-keep-retrying-a-refused-dpms-commit.patch` (packaged in `packages/hyprland`)
   (against v0.56.2, Omarchy-patch style):
   - keep retrying the refused DPMS commit every 2 frames for up to a
     second instead of once;
   - damage the monitor after a retried DPMS-on.
-  - It applies cleanly to v0.56.2 but hasn't been compiled here. It needs a
-    Hyprland package built with it.
+  - Packaged as `hyprland`/`hyprpm` 0.56.2-5.1 (Omarchy's 0.56.2-5 plus
+    this patch). It compiled in a full x86_64 test build. Phone build,
+    install and rollback: `packages/hyprland/README.md`.
 - No driver-side fallback (backlight or idle triggers): with the retry the
   real commit gets through, and the driver can't tell "off" from "static"
   without it.

@@ -1,0 +1,133 @@
+# SPDX-License-Identifier: 0BSD
+#
+# Omandroid build of Hyprland for the Pixel 7 Pro.
+#
+# Derived from Omarchy's aarch64 hyprland PKGBUILD, 0.56.2-5
+# (https://github.com/omacom-io/omarchy-pkgs, pkgbuilds/hyprland at
+# 3a0d01876fc9), itself Arch Linux's hyprland PKGBUILD split into hyprland
+# and hyprpm and carrying software-renderer.patch. Omandroid changes:
+#  - 0001-dpms-keep-retrying-a-refused-dpms-commit.patch: Hyprland retried a
+#    refused DPMS commit once, so DPMS off was lost whenever a client kept
+#    a page flip in flight (device/cheetah/DISPLAY-PLAN.md, D3b-1). Drop it
+#    once upstream retries.
+#  - pkgrel 5.1, so it sorts above Omarchy's 0.56.2-5; [omandroid] comes
+#    before [omarchy] in pacman.conf, so pacman takes this build either way.
+#  - build() runs the two cmake steps of `make release` itself, with
+#    CMAKE_SKIP_RPATH (Arch's Makefile sed) and the job count from MAKEFLAGS
+#    instead of nproc: a full -j8 can run the phone out of memory.
+#
+# Maintainer of the original: Caleb Maclennan; contributors
+# ThatOneCalculator, Brenno Lemos, Gabriel Fox.
+
+pkgname=(hyprland hyprpm)
+pkgver=0.56.2
+pkgrel=5.1
+pkgdesc='a highly customizable dynamic tiling Wayland compositor (Omandroid: DPMS retry)'
+arch=(aarch64)
+url="https://github.com/hyprwm/Hyprland"
+license=(BSD-3-Clause)
+depends=(cairo # libcairo.so
+         aquamarine libaquamarine.so
+         libgcc # libgcc_s.so
+         'libstdc++' # libstdc++.so
+         glibc # libc.so libm.so
+         glib2 libgio-2.0.so libgobject-2.0.so
+         glslang # libglslang-default-resource-limits.so libglslang.so
+         hyprcursor libhyprcursor.so
+         hyprgraphics libhyprgraphics.so
+         hyprland-guiutils
+         hyprlang libhyprlang.so
+         hyprutils libhyprutils.so
+         hyprwire libhyprwire.so
+         lcms2 liblcms2.so
+         libdrm # libdrm.so
+         libglvnd libEGL.so libGLESv2.so
+         libinput # libinput.so
+         libx11
+         libxcb # libxcb-dri3.so libxcb-present.so libxcb-render.so libxcb-res.so libxcb-shm.so libxcb.so libxcb-xfixes.so libxcb-xinput.so
+         libxcomposite # libxcb-composite.so
+         libxcursor # libXcursor.so
+         libxfixes
+         libxkbcommon libxkbcommon.so
+         libxrender
+         lua # liblua.so
+         mesa # libgbm.so
+         muparser # libmuparser.so
+         opengl-driver
+         pango libpango-1.0.so libpangocairo-1.0.so
+         pixman libpixman-1.so
+         re2 libre2.so
+         tomlplusplus libtomlplusplus.so
+         util-linux-libs libuuid.so
+         wayland libwayland-server.so
+         wayland-protocols
+         xcb-proto
+         xcb-util
+         xcb-util-errors # libxcb-errors.so
+         xcb-util-image
+         xcb-util-keysyms
+         xcb-util-renderutil # libxcb-render-util.so
+         xcb-util-wm # libxcb-ewmh.so  libxcb-icccm.so
+         xorg-xwayland)
+makedepends=(cmake
+             glaze
+             hyprland-protocols
+             hyprwayland-scanner
+             meson
+             ninja
+             xorgproto)
+optdepends=('hyprpm: build and install plugins'
+            'hyprshutdown: clean logout and shutdown helper'
+            'xdg-desktop-portal-hyprland: xdg-desktop-portal backend for hyprland')
+provides=(wayland-compositor)
+_archive="Hyprland-$pkgver"
+source=("$_archive.tar.gz::$url/releases/download/v$pkgver/source-v$pkgver.tar.gz"
+        software-renderer.patch
+        0001-dpms-keep-retrying-a-refused-dpms-commit.patch)
+sha256sums=('03ad3f5ef152ff44116ffd56fcf808486211ecabf4f0ba567108ee746ba5cd2e'
+            '380bb6d61c36d6c68bcccf242131f5b259734e8570ea39b3bc519b9ed137eddd'
+            '6d73c17e1a41cf9e1719c617db8c84ea4841b09445bfdf53e19f8383678a0c64')
+
+prepare() {
+	ln -sf hyprland-source "$_archive"
+	cd "$_archive"
+	# Backport of hyprwm/Hyprland#16343 (Omarchy's); drop once the packaged release includes it
+	patch -Np1 --fuzz=0 -i "$srcdir/software-renderer.patch"
+	# Omandroid: retry a refused DPMS commit for up to a second
+	patch -Np1 --fuzz=0 -i "$srcdir/0001-dpms-keep-retrying-a-refused-dpms-commit.patch"
+	sed -i -e '/find_package.glaze/s/7...<8 //' {.,hyprpm,start}/CMakeLists.txt
+}
+
+build() {
+	cd "$_archive"
+	# `make release`, with Arch's CMAKE_SKIP_RPATH and our job count
+	local jobs
+	jobs=$(grep -oE -- '-j ?[0-9]+' <<<"${MAKEFLAGS:-}" | tr -dc 0-9)
+	cmake --no-warn-unused-cli -DCMAKE_BUILD_TYPE:STRING=Release \
+		-DCMAKE_INSTALL_PREFIX:STRING=/usr -DCMAKE_SKIP_RPATH=ON -S . -B ./build
+	cmake --build ./build --config Release --target all -j"${jobs:-4}"
+}
+
+package_hyprland() {
+	cd "$_archive"
+	make DESTDIR="$pkgdir" install
+	rm -fv "$pkgdir/usr/include/hyprland/src/version.h.in"
+	find "$pkgdir" -name '*hyprpm*' -delete
+	install -Dm0644 -t "$pkgdir/usr/share/licenses/$pkgname/" LICENSE
+}
+
+package_hyprpm() {
+	pkgdesc='Plugin manager for Hyprland'
+	depends=(cmake
+	         cpio
+	         glaze
+	         hyprland
+	         hyprland-protocols
+	         hyprwayland-scanner
+	         meson)
+	cd "$_archive"
+	make DESTDIR="$pkgdir" install
+	find "$pkgdir" -type f,l -not -name '*hyprpm*' -delete
+	find "$pkgdir" -type d -empty -delete
+	install -Dm0644 -t "$pkgdir/usr/share/licenses/$pkgname/" LICENSE
+}
