@@ -511,3 +511,67 @@ drain with GNSS running and idle (POWER-PLAN.md) before enabling at boot.
 5. PPS: mainline `pps-gpio` on gpp15-1 for time sync, later.
 6. Move the fingerprint profile onto the shared runner once it has run on
    the phone (it needs its RPMB, panel and Trusty hooks as profile functions).
+
+## Checkpoint 2026-10-12
+
+**Done (on the phone):**
+- G0-G3d passed. lhd powers the chip in about 1.5 s, the patch loads
+  (`ESW:READY`), there are no transfer errors, gpsd runs a session
+  (control-pipe `req_pos`), NMEA reaches the FIFO, and the rails go off
+  cleanly at close.
+- G4 (windowsill, unplugged, about 8 min): 17834 NMEA lines, at most 2 GPS
+  satellites in view, RMC always V, no fix. Only GP talkers.
+
+**Done (offline, not yet run on the phone):**
+- Runner + gnss profile: the chroot gets a hosts file, and HOSTS are
+  resolved on the host at start (`gllto2.glpals.com`, `gllto.glpals.com`,
+  `supl.google.com`).
+  - bionic can't resolve names without netd. This was tested under qemu:
+    `getaddrinfo` fails in both resolver modes, and works with
+    `/system/etc/hosts`.
+  - The LTO file is reachable over plain HTTP from the laptop: 121603
+    bytes from `http://gllto2.glpals.com/4day/v5/latest/lto2.dat`.
+- gps.xml facts for multi-GNSS:
+  - `<hal>` rejects unknown keys and asserts (`EnableGlonass` there kills
+    gpsd);
+  - `<gll>` silently ignores unknown keys, so a key placed there proves
+    nothing;
+  - gpsd knows `EnableGlonass`, `EnableGalileo`, `EnableBeidou` and
+    `EnableNmeaV411`, but which section they belong to is not known yet.
+  - Nothing is changed for constellations yet. The GP-only output may
+    simply be the poor sky view: GSV lists tracked satellites only on a
+    cold start without assistance.
+
+**Half done:**
+- **G5 design** (not written):
+  - a systemd socket unit for `/run/omandroid-gnss/nmea.sock`;
+  - the bridge started by GeoClue connecting, exiting after an idle period
+    with no clients;
+  - `omandroid-gnss.service` with `StopWhenUnneeded=yes`, so the stack and
+    the rails run only while GeoClue has a client;
+  - an `omandroid-gnss on|off|status` command;
+  - a new `packages/omandroid-gnss` package, default-off, with the small
+    bionic `.so` files (shim, stubs) prebuilt from `vendor-chroot/Makefile`.
+- **Multi-GNSS:** find the section for the Enable* keys, e.g. by trying
+  each one in `<gll_features>` under qemu and watching gpsd's parser.
+
+**Next steps:**
+1. On the phone: reinstall the runner and profile (`9cb…` below) and
+   repeat G4 with Wi-Fi in range. Expect assistance downloads in gpsd's
+   log (LTO/SUPL) and a faster fix.
+2. Compare talker IDs with a clear sky view before changing constellation
+   settings.
+3. G5 as designed above.
+
+**Ready to run on the phone** (after `git pull`; the tree, shim and stubs
+are unchanged):
+
+```sh
+tools/phone-ssh 'install -m755 /dev/stdin /usr/lib/omandroid-vendor/omandroid-vendor-chroot' < vendor-chroot/omandroid-vendor-chroot
+tools/phone-ssh 'install -m644 /dev/stdin /usr/lib/omandroid-vendor/profiles/gnss.conf' < vendor-chroot/profiles/gnss.conf
+# then the G3d command (section 4); check that the log has no "cannot resolve" lines and
+# look for LTO/SUPL activity in the gpsd lines, then G4 as before (with Wi-Fi in range)
+```
+
+After any unplug/replug, reboot or use the USB rescue watcher (USB-C-PLAN
+R1).

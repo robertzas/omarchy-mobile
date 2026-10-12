@@ -70,6 +70,7 @@ BINDER=no
 NO_SERVICES=""
 BINS=()		# the Android binaries the profile runs (paths in the chroot)
 PRELOADS=()	# extra libraries from $STUBS preloaded after the shim
+HOSTS=()	# host names the daemons look up: resolved on the host at start
 RUN=/run/omandroid-vendor/$PROFILE
 profile_check() { :; }
 profile_setup() { :; }
@@ -184,6 +185,29 @@ setup_dev() {
   write_props "$dev/__omandroid_props__"
 }
 
+# bionic resolves names through netd, which is not here; with
+# ANDROID_DNS_MODE=local it still reads /system/etc/hosts. So resolve the
+# profile's HOSTS on the host now and give the chroot a hosts file: a tmpfs
+# over /system/etc with the image's entries bound back in.
+setup_hosts() {
+  ((${#HOSTS[@]})) || return 0
+  local etc=$ROOT/system/etc f=$RUN/hosts e h ip
+  {
+    echo "127.0.0.1 localhost"
+    echo "::1 ip6-localhost"
+    for h in "${HOSTS[@]}"; do
+      ip=$(getent ahostsv4 "$h" 2>/dev/null | awk 'NR == 1 { print $1 }')
+      if [[ -n $ip ]]; then echo "$ip $h"; else say "cannot resolve $h now (no network?)"; fi
+    done
+  } > "$f"
+  mount -t tmpfs -o mode=0755,nosuid,nodev,noexec system-etc "$etc"
+  for e in "$IMAGE/system/etc"/*; do
+    [[ ${e##*/} == hosts ]] && continue
+    bind "$e" "$etc/${e##*/}" ro
+  done
+  bind "$f" "$etc/hosts" ro
+}
+
 # Build the chroot in the current (private) mount namespace.
 setup() {
   local s
@@ -209,6 +233,7 @@ setup() {
   mkdir -p "$STATE/data"
   chmod 0700 "$STATE"
   bind "$STATE/data" "$ROOT/data"
+  setup_hosts
   setup_dev
   profile_setup
   mount -o remount,ro "$ROOT/sys"
