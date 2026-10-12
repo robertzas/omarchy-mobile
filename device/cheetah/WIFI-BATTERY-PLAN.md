@@ -1006,7 +1006,7 @@ Why nothing was logged:
    - Our clk-gs201 writes `CMU_HSI2 CONTROLLER_OPTION` (`0x14400800`) =
      `0xf1000000` at boot (bit 28 = global HWACG, `clk-exynos-arm64.c:104-112`).
    - Google's gs201 probe clears bit 28 for ch1 ("Disable automatic clock
-     gating on OSCCLK", `GW/pcie-exynos-rc.c:2690-2712`), and the controller's
+     gating on OSCCLK", `GW/pcie-exynos-rc.c:2673-2716`), and the controller's
      Q-channel by default allows APB/AXI gating in Detect.Quiet (`QCH_SEL`
      bits, `GW/pcie-exynos-rc.h:64-85`).
    - UFS shares this CMU. So it stays off unless stage 2 or 3 still hangs
