@@ -1325,6 +1325,102 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
         amplifiers.
      Rollback for every step: `omandroid-speaker-protection mute`, stage c8
      levels in `/etc/omandroid/speaker.conf`, restart.
+
+     **C9d-2 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00317-gdea700f6eec2,
+     omandroid-audio 0.2.3, speaker_protection=1).**
+     - Step 1: the 1 kHz tone at 657/6, delta on and then off, was clean
+       both times (no scratchiness). R_selected=CAL_R yes on both
+       amplifiers, vmon low 1 on both, 25.00-25.02 °C, state 0, halo 2,
+       cal 2, power raw 0.
+     - Step 2 (737/10, delta off): mt10 top 25.00 → 25.43 °C, bottom → 25.17;
+       the 1 kHz tone at -13 dBFS top → 25.36, bottom → 25.15. vmon low 1
+       every second on both. By ear: "loud and sounded good", "okay".
+     - Step 3a (657/17, delta off), mt20: the **top showed vmon low 0 every
+       second (sensing active)** and read a plausible 25.01 → 25.23 °C. The
+       bottom stayed at vmon low 1, 25.00 → 25.12. By ear: "quieter but
+       staticky". The run stopped there: the tone at 657/17 and 737/17
+       never ran.
+     - **Reading.** The firmware senses the coil only when the amplifier's
+       analog gain is near what its tuning expects. At analog 10 it never
+       sensed, even at the step-2 level that equals step 3's output. At
+       analog 17 the top sensed at a 13 dB lower output, and read
+       plausibly. So C9d's 80 °C came from sensing at 817/10, off the gain
+       the model expects. Candidate 1 holds: the model wants stock's
+       analog 17. The calibration is fine (R_selected = CAL_R).
+
+     **Everyday level until stock's gains: stage `media`, 737/10 on both,
+     media delta on (omandroid-audio 0.3.0, the new default).**
+     - Inside AUDIO-PLAN.md section 4's limits even with the DSP bypassed
+       (digital ≤ 817, analog ≤ 10). It is 17 dB below stock's media
+       output (817/17.5 dB), about 1/50 of the power.
+     - For the top amplifier (the earpiece) it is 7 dB below stock's
+       in-call earpiece level (full-scale voice at 7.5 dB, DSP bypassed).
+     - **What protects the speakers at this level.** The firmware does not
+       sense the coil here (vmon low 1), so its thermal estimate runs from
+       the signal alone, without the resistance check. Its excursion
+       limiter, feed-forward from the signal, still runs. Both assume
+       stock's analog gain, so they overestimate the real output by 7 dB
+       and err on the safe side.
+     - **What the watchdog guarantees.** Both DSPs run the protection
+       firmware with the calibration applied: heartbeat, state, error,
+       CAL_SET_STATUS.
+     - **The honest residual risk.** If the firmware's open-loop model were
+       wrong for this speaker, nothing would catch slow overheating at
+       sustained full volume. The power is so far below stock's
+       sustained-music levels that this is unlikely to matter. Low risk;
+       the human chose it by ear.
+     - **Stage c8** (657, analog 6 top) stays for bring-up. **Stage c9**
+       (stock) needs the stamp and `speaker_protection=1`, as before.
+     - **The media delta** is on by default whenever its two files are
+       installed.
+
+     **The static at 657/17.** At -20 dB digital and +17.5 dB analog the
+     signal reaches the DAC 20 dB lower than at stock's 817/17. Everything
+     after the digital volume is then amplified 7 dB more than at analog
+     10: the amplifier's own noise and the DSP output's low-level noise.
+     That is hiss heard as "static", and it shrinks as the digital level
+     goes up: at 737/17 by 10 dB, at 817/17 by 20 dB.
+     - Stock also runs **DRE** (dynamic range enhancement, "DRE DRE Switch"
+       1 at init in `mixer_paths.xml`). DRE lowers the amplifier's noise
+       floor on quiet passages; we leave it off.
+     - omandroid-audio 0.3.0 can turn it on (`OMANDROID_SPK_DRE=1`, default
+       off); C9d-3 compares.
+     - If static remains at 817/17 with DRE on and real music, it is not
+       noise floor. The amplifier's hardware noise gate (stock DT:
+       `hw-noise-gate-select = 63`) and the protection's own actions are
+       next.
+
+   - **C9d-3 to stock gains with sensing** (omandroid-audio 0.3.0; stage
+     c9; rules as in C9; stop at any reading above 45 °C, a jump of more
+     than 5 °C within a burst, vmon low 1 at analog 17 during a -20 dBFS
+     burst on either amplifier, or R_selected NO):
+     0. Install and restore the default config (risk low):
+        ```sh
+        tools/phone-install-package packages/omandroid-audio
+        tools/phone-ssh 'cp /etc/omandroid/speaker.conf.pacnew /etc/omandroid/speaker.conf 2>/dev/null; grep -v "^#" /etc/omandroid/speaker.conf; systemctl restart omandroid-speaker-protection; omandroid-speaker-protection status | head -1'
+        ```
+        Expect "ok: stage media … Top 737/10, Bottom 737/10" and, at the
+        next stream, "stock media delta applied" twice in the watchdog
+        journal. This is the everyday level from now on.
+     1. The rest of C9d-2 step 3, delta off, DRE off: 657/17 with the 1 kHz
+        tone at -13 dBFS RMS, then 737/17 with mt20, mt10 and the tone.
+        Expect vmon low 0 on both amplifiers at least at 737/17, R_selected
+        yes, and temperatures that rise by tenths of a degree with the
+        signal and fall back after.
+     2. DRE: 737/17 with mt20 and real music, `OMANDROID_SPK_DRE=1` versus
+        unset. The human listens for static, and the monitor lines must
+        stay as in 1.
+     3. 737/17 with the media delta on (unset `OMANDROID_SPK_MEDIA_DELTA`
+        or set it to 1). Same expectations.
+     4. 817/17, delta on, DRE as chosen in 2: mt20, then mt10, then real
+        music at 50/75/100 % sink volume, each ≤ 10 s, 60 s apart, with
+        monitor. Expect sensing on both, plausible temperatures and no
+        over-counts. This is stock's media setting.
+     5. Then C9e (balance) and C9f (real use) at 817/17. If both pass, make
+        c9 at 817/17 the package default, and move
+        `options aoc_alsa_dev speaker_protection=1` into the package.
+     Rollback for every step: `omandroid-speaker-protection mute`, then the
+     default config (stage media) and a restart.
    - **C9e balance** (at the last step that passed; risk medium):
      `burst /tmp/mtL.wav 1.0`, then `burst /tmp/mtR.wav 1.0`, with the
      phone upright in front of the listener at about 30 cm (and, if
