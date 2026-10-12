@@ -81,6 +81,8 @@ shift $((OPTIND - 1))
 [[ $# -eq 1 ]] || { usage >&2; exit 2; }
 SRC=$(readlink -f "$1")
 [[ -f "$SRC" ]] || die "no such file: $1"
+# Absolute, because the checksum step runs from inside the staging dir
+OUT=$(realpath -m -- "$OUT")
 
 if [[ -n "$WORK" ]]; then
   mkdir -p "$WORK"
