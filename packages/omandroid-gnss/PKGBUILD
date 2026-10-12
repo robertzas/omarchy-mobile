@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+pkgname=omandroid-gnss
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omandroid GNSS for the Pixel 7 Pro: Broadcom's lhd/gpsd in a vendor chroot, NMEA to GeoClue on demand"
+arch=(aarch64)
+url="https://github.com/derekross/omandroid"
+license=(MIT)
+depends=(bash python curl util-linux coreutils systemd)
+optdepends=('geoclue: location for apps (Firefox, Maps, Weather)'
+            'gpsd: NMEA for gpsd clients through /run/omandroid-gnss/nmea-tty')
+backup=(etc/geoclue/conf.d/90-omandroid-gnss.conf)
+install=omandroid-gnss.install
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}

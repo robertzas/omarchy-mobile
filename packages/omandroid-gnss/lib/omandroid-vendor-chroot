@@ -118,20 +118,20 @@ check() {
   [[ -x $CHROOT_BIN ]] || { say "no chroot(1) on the host (coreutils)"; ok=0; }
   [[ -d $IMAGE/vendor && -d $IMAGE/apex/com.android.runtime ]] ||
     { say "no image in $IMAGE (tools/extract-vendor-chroot -p $PROFILE)"; ok=0; }
-  [[ -f $SHIM ]] || { say "no shim at $SHIM (vendor-chroot/Makefile)"; ok=0; }
+  [[ -f $SHIM ]] || { say "no shim at $SHIM (make -C packages/omandroid-gnss/bionic)"; ok=0; }
   if [[ $BINDER == yes ]]; then
     grep -qw binder /proc/filesystems || { say "kernel has no binderfs"; ok=0; }
   fi
   if [[ -f $IMAGE/../STUBS ]]; then
     local s
     while read -r s; do
-      [[ -z $s || -f $STUBS/$s ]] || { say "no stub $STUBS/$s (vendor-chroot/Makefile)"; ok=0; }
+      [[ -z $s || -f $STUBS/$s ]] || { say "no stub $STUBS/$s (make -C packages/omandroid-gnss/bionic)"; ok=0; }
     done < "$IMAGE/../STUBS"
   fi
   if ((${#PRELOADS[@]})); then
     local p
     for p in "${PRELOADS[@]}"; do
-      [[ -f $STUBS/$p ]] || { say "no preload $STUBS/$p (vendor-chroot/Makefile)"; ok=0; }
+      [[ -f $STUBS/$p ]] || { say "no preload $STUBS/$p (make -C packages/omandroid-gnss/bionic)"; ok=0; }
     done
   fi
   local bins=("${BINS[@]}")

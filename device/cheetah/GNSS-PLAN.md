@@ -114,31 +114,42 @@ loading `sec_acpm` after the 30 s.
 
 ## 3. Userspace (omandroid repo)
 
+All of it is the `packages/omandroid-gnss` package (default-off; it moved
+there from `vendor-chroot/`). Google's files are not in it.
+
+| Path (in `packages/omandroid-gnss/`) | What |
+|---|---|
+| `lib/omandroid-vendor-chroot` | shared runner, `PROFILE check / start / ns / run`; grown from `fingerprint/omandroid-fp-chroot` (same tmpfs chroot, property store, shim, binderfs, supervision); profiles hold what differs |
+| `profiles/gnss.conf` | binds `/dev/ttyBCM`, `/dev/bbd_*` and the `nstandby` attribute; writes lhd.conf/gps.xml from the image with the nstandby path, `/data` logs, logcat logging, `PpsEnable=false`; refreshes the LTO file on the host; resolves `HOSTS` into the chroot's hosts file; runs `lhd`, then `gpsd`, and asks for positions over the control pipe |
+| `gnss/props.conf` | `ro.hardware` and the DNS properties |
+| `bionic/` | `Makefile` and sources for the shim (from `fingerprint/shim`) and two stubs (`libcom.android.tethering.connectivity_native.so` for `libandroid_net`, `libomandroid-sitril-gps.so` preloaded in place of the SIT RIL). Built on the computer into `bionic/prebuilt/`, which is not committed |
+| `lib/omandroid-gnss-start` | hang-safe start (marker file, as `omandroid-wifi-start`), `modprobe sec_acpm bcm4775x-gnss`, then the runner |
+| `lib/omandroid-gnss-nmea` | reads the FIFO, serves checksummed sentences on `/run/omandroid-gnss/nmea.sock` (GeoClue; the socket comes from systemd) and a pty at `/run/omandroid-gnss/nmea-tty` (Linux gpsd); `--idle-exit 60` |
+| `vendor/systemd/system/` | `omandroid-gnss-nmea.socket` (the Location switch), `omandroid-gnss-nmea.service` (BindsTo the stack), `omandroid-gnss.service` (StopWhenUnneeded), `omandroid-gnss-force.service`, `omandroid-gnss-location@.service` |
+| `bin/omandroid-gnss` | `on`, `off`, `force`, `unforce`, `status [--json]` |
+| `polkit/50-omandroid-gnss.rules` | the active local user may start `omandroid-gnss-location@{on,off,force,unforce}.service`, nothing else |
+| `etc/geoclue/conf.d/90-omandroid-gnss.conf` | `[network-nmea] nmea-socket=/run/omandroid-gnss/nmea.sock`; Firefox, Chromium, GNOME Maps/Weather and `where-am-i` allowed as system apps (Omarchy has no GeoClue agent) |
+| `vendor/modprobe.d/omandroid-gnss.conf` | `blacklist bcm4775x_gnss` (loaded only by the start script) |
+
+Elsewhere in the repo:
+
 | Path | What |
 |---|---|
-| `vendor-chroot/omandroid-vendor-chroot` | shared runner, `PROFILE check / start / ns / run`; grown from `fingerprint/omandroid-fp-chroot` (same tmpfs chroot, property store, shim, binderfs, supervision); profiles hold what differs |
-| `vendor-chroot/profiles/gnss.conf` | binds `/dev/ttyBCM`, `/dev/bbd_*` and the `nstandby` attribute; writes lhd.conf/gps.xml from the image with the nstandby path, `/data` logs, `PpsEnable=false` and a `<job id="omandroid">` (continuous `req_pos`); runs `lhd`, then `gpsd -c gps.xml omandroid` |
-| `vendor-chroot/gnss/props.conf` | `ro.hardware`, `net.dns1/2` (bionic resolver without netd, `ANDROID_DNS_MODE=local`) |
-| `vendor-chroot/stubs/` | `libcom.android.tethering.connectivity_native.so` stand-in: `libandroid_net` (gpsd) needs one symbol from the compressed tethering APEX |
-| `vendor-chroot/Makefile` | builds the shim (from `fingerprint/shim`) and the stub for bionic |
-| `vendor-chroot/gnss/omandroid-gnss-start` | hang-safe start (marker file, as `omandroid-wifi-start`), `modprobe bcm4775x-gnss`, then the runner |
-| `vendor-chroot/gnss/omandroid-gnss-nmea` | reads the FIFO, forwards checksummed sentences to `/run/omandroid-gnss/nmea.sock` (GeoClue) and a pty at `/run/omandroid-gnss/nmea-tty` (Linux gpsd) |
-| `vendor-chroot/gnss/*.service` | `omandroid-gnss.service`, `omandroid-gnss-nmea.service`; not enabled |
-| `vendor-chroot/gnss/geoclue-omandroid-gnss.conf` | `[network-nmea] nmea-socket=/run/omandroid-gnss/nmea.sock` |
-| `vendor-chroot/gnss/modprobe-omandroid-gnss.conf` | `blacklist bcm4775x_gnss` |
 | `tools/extract-vendor-chroot` | `-p gnss`: lhd, gpsd, SensorHub.patch, configs, servicemanager, CA store and the library closure, from the user's factory image |
 | `device/cheetah/overlays/gnss-pmic-test.dtso`, `gnss-test.dtso` | G1, G2 |
 
 Offline results: `tools/extract-vendor-chroot -p gnss` on
 `image-cheetah-cp2a.260705.006.zip` gives 264 files, 28 MB (`X/`), closure
-complete with the one stub. `make -C vendor-chroot CLANG=... BIONIC=...
+complete with the one stub. `make -C packages/omandroid-gnss/bionic CLANG=... BIONIC=...
 CHROOT=X/root` builds both `.so` files. The generated lhd.conf/gps.xml were
 diffed against stock: only the four intended changes.
 
 **For apps:** Firefox and GNOME apps use GeoClue. GeoClue only answers apps
 an agent authorizes, or ones listed with `system=true` in its config; on
-Omarchy there is no agent yet. For the first tests use `where-am-i`
-(geoclue demo) as root or `gpspipe -r`; the agent question is section 6.
+Omarchy there is no agent. The package's GeoClue config lists Firefox,
+Chromium, GNOME Maps, GNOME Weather and `where-am-i` as system apps; the
+Location switch (`omandroid-gnss on|off`) is the user's control. A real
+agent (per-app prompts) is section 6, question 4.
 
 ## 4. Runbook (staged, read-only first)
 
@@ -212,7 +223,7 @@ stop: the bus number or the access type is wrong (`sec-acpm.c`,
 ### G2: driver and link (int + `gnss-pmic-test` + `gnss-test`)
 
 ```sh
-tools/phone-ssh 'install -m644 /dev/stdin /etc/modprobe.d/omandroid-gnss.conf' < vendor-chroot/gnss/modprobe-omandroid-gnss.conf
+tools/phone-ssh 'install -m644 /dev/stdin /etc/modprobe.d/omandroid-gnss.conf' < packages/omandroid-gnss/vendor/modprobe.d/omandroid-gnss.conf
 ov gnss-pmic-test gnss-test && bin/omandroid push              # reboots
 tools/phone-ssh 'modprobe sec_acpm; modprobe bcm4775x-gnss; dmesg | grep -iE "bcm4775|spi5|10940000" | tail -5;
   ls -l /dev/ttyBCM /dev/bbd_*; cat /sys/kernel/debug/spi5.0/pins; grep ttyBCM /proc/interrupts'
@@ -250,22 +261,22 @@ What's on the phone: the int kernel with both GNSS overlays, and
 `/etc/modprobe.d/omandroid-g1.conf` (blacklists `sec_acpm`) and
 `omandroid-gnss.conf` (blacklists `bcm4775x_gnss`). So after each boot
 load both by hand, `sec_acpm` once uptime is past 60 s. Nothing else from
-`vendor-chroot/` is installed yet.
+`packages/omandroid-gnss/` (then `vendor-chroot/`) is installed yet.
 
 Laptop, from the omandroid repo:
 
 ```sh
-# 1. shim + stub (already built in vendor-chroot/out; rebuilding is harmless)
-make -C vendor-chroot CLANG=$HOME/android/omandroid/prebuilts/clang/host/linux-x86/clang-r596125/bin/clang \
+# 1. shim + stub (already built in packages/omandroid-gnss/bionic/prebuilt; rebuilding is harmless)
+make -C packages/omandroid-gnss/bionic CLANG=$HOME/android/omandroid/prebuilts/clang/host/linux-x86/clang-r596125/bin/clang \
   BIONIC=$HOME/android/omandroid/bionic/libc CHROOT=$HOME/android/vendor-chroot-work/gnss/root
 # 2. the profile's Android tree (28 MB, the user's own image) and our pieces, root-owned
 tar -C ~/android/vendor-chroot-work/gnss -cf - root MANIFEST SOURCE STUBS |
   tools/phone-ssh 'mkdir -p /usr/lib/omandroid-vendor/gnss && tar --no-same-owner -C /usr/lib/omandroid-vendor/gnss -xf -'
-tar -C vendor-chroot -cf - omandroid-vendor-chroot profiles/gnss.conf |
+tar -C packages/omandroid-gnss -cf - profiles/gnss.conf -C lib omandroid-vendor-chroot |
   tools/phone-ssh 'tar --no-same-owner -C /usr/lib/omandroid-vendor -xf -'
-tar -C vendor-chroot/out -cf - omandroid-fp-shim.so stubs |
+tar -C packages/omandroid-gnss/bionic/prebuilt -cf - omandroid-fp-shim.so stubs |
   tools/phone-ssh 'tar --no-same-owner -C /usr/lib/omandroid-vendor -xf -'
-tools/phone-ssh 'install -m644 /dev/stdin /usr/lib/omandroid-vendor/gnss/props.conf' < vendor-chroot/gnss/props.conf
+tools/phone-ssh 'install -m644 /dev/stdin /usr/lib/omandroid-vendor/gnss/props.conf' < packages/omandroid-gnss/gnss/props.conf
 tools/phone-ssh 'ls -l /usr/lib/omandroid-vendor /usr/lib/omandroid-vendor/stubs; cat /usr/lib/omandroid-vendor/gnss/SOURCE'
 # 3. drivers (once uptime is past 60 s), then the preconditions check (reads only)
 tools/phone-ssh 'cut -d. -f1 /proc/uptime; modprobe sec_acpm; modprobe bcm4775x-gnss;
@@ -315,12 +326,12 @@ Failure clues:
 
 ### G3b: lhd + gpsd together, 90 s, indoors
 
-Reinstall the profile (`vendor-chroot/profiles/gnss.conf`); the tree and
+Reinstall the profile (`packages/omandroid-gnss/profiles/gnss.conf`); the tree and
 the runner are unchanged. Keep a reader on the NMEA FIFO, so gpsd never
 blocks opening it.
 
 ```sh
-tools/phone-ssh 'install -m644 /dev/stdin /usr/lib/omandroid-vendor/profiles/gnss.conf' < vendor-chroot/profiles/gnss.conf
+tools/phone-ssh 'install -m644 /dev/stdin /usr/lib/omandroid-vendor/profiles/gnss.conf' < packages/omandroid-gnss/profiles/gnss.conf
 tools/phone-ssh 'F=/var/lib/omandroid-vendor/gnss/data/vendor/gps/nmea_out; mkdir -p $(dirname $F); [ -p $F ] || mkfifo -m 600 $F;
   /usr/lib/omandroid-vendor/omandroid-vendor-chroot gnss check;
   (timeout 100 cat $F > /tmp/g3b-nmea.txt &);
@@ -407,7 +418,7 @@ build, then `bin/omandroid modules && bin/omandroid modules-push`. No
 reboot is needed, since only the module changed. Reinstall the profile.
 
 ```sh
-tools/phone-ssh 'install -m644 /dev/stdin /usr/lib/omandroid-vendor/profiles/gnss.conf' < vendor-chroot/profiles/gnss.conf
+tools/phone-ssh 'install -m644 /dev/stdin /usr/lib/omandroid-vendor/profiles/gnss.conf' < packages/omandroid-gnss/profiles/gnss.conf
 tools/phone-ssh 'rmmod bcm4775x_gnss 2>/dev/null; modprobe bcm4775x-gnss; cat /sys/module/bcm4775x_gnss/parameters/events'
 #   expect Y
 tools/phone-ssh 'P=/sys/kernel/debug/spi5.0/pins; F=/var/lib/omandroid-vendor/gnss/data/vendor/gps/nmea_out;
@@ -470,20 +481,129 @@ tools/phone-ssh 'systemctl is-active g4-gnss g4-nmea; cat /sys/kernel/debug/spi5
 tools/phone-ssh 'systemctl stop g4-gnss g4-nmea; cat /sys/kernel/debug/spi5.0/pins'
 ```
 
-### G5: Linux side and boot integration
+### G4b: outdoors with assistance (LTO), multi-GNSS check
+
+Like G4, still with the hand-installed runner (G5's package replaces it
+afterwards). New since G4 (commits `2873e27`, `cf392de`):
+- the chroot gets a hosts file, filled on the host at start;
+- the profile downloads `lto2.dat` (4-day orbits) on the host with curl;
+- gpsd's own log goes to logcat, so to the journal.
+
+The phone needs internet at start (Wi-Fi in range) for the LTO download.
+Without it the run still works, as a cold start.
 
 ```sh
-tools/phone-ssh 'pacman -S --needed geoclue gpsd'
-tools/phone-ssh 'install -Dm644 /dev/stdin /etc/geoclue/conf.d/90-omandroid-gnss.conf' < vendor-chroot/gnss/geoclue-omandroid-gnss.conf
-for u in omandroid-gnss.service omandroid-gnss-nmea.service; do
-  tools/phone-ssh "install -m644 /dev/stdin /etc/systemd/system/$u" < vendor-chroot/gnss/$u; done
-tools/phone-ssh 'systemctl daemon-reload; systemctl start omandroid-gnss; sleep 60;
-  systemctl status --no-pager omandroid-gnss-nmea | tail -3; gpspipe -r -n 20 tcp://localhost 2>/dev/null ||
-  (gpsd -n /run/omandroid-gnss/nmea-tty && sleep 5 && gpspipe -w -n 10)'
-#   then GeoClue: /usr/lib/geoclue-2.0/demos/where-am-i -t 60
-#   boot: systemctl enable omandroid-gnss (after two good manual runs); a hang
-#   leaves /var/lib/omandroid/gnss-bringup-started and the next boot skips GNSS
+# laptop, after git pull: runner + profile (the tree, shim and stubs are unchanged)
+tools/phone-ssh 'install -m755 /dev/stdin /usr/lib/omandroid-vendor/omandroid-vendor-chroot' < packages/omandroid-gnss/lib/omandroid-vendor-chroot
+tools/phone-ssh 'install -m644 /dev/stdin /usr/lib/omandroid-vendor/profiles/gnss.conf' < packages/omandroid-gnss/profiles/gnss.conf
+# drivers as in G3 step 3 (sec_acpm past 60 s uptime), then, USB connected:
+tools/phone-ssh 'F=/var/lib/omandroid-vendor/gnss/data/vendor/gps/nmea_out;
+  mkdir -p $(dirname $F); [ -p $F ] || mkfifo -m 600 $F;
+  systemd-run --unit=g4b-nmea --property=RuntimeMaxSec=1000 sh -c "cat $F > /var/tmp/g4b-nmea.txt";
+  systemd-run --unit=g4b-gnss --property=RuntimeMaxSec=900 \
+    /usr/lib/omandroid-vendor/omandroid-vendor-chroot gnss start;
+  sleep 30; journalctl -u g4b-gnss --no-pager | grep -E "LTO:|resolve|hosts" ; cat /sys/kernel/debug/spi5.0/pins'
+#   expect: "LTO: downloaded ~120000 bytes" (or "less than a day old"), no
+#   "cannot resolve", powered 1. Unplug; outdoors, clear sky, 10-15 min; reconnect.
+tools/phone-ssh 'systemctl is-active g4b-gnss g4b-nmea; cat /sys/kernel/debug/spi5.0/pins;
+  N=/var/tmp/g4b-nmea.txt; wc -l $N;
+  echo "== talkers"; cut -c2-6 $N | sort | uniq -c | sort -rn | head -20;
+  echo "== first fix"; grep -m1 -E "^\\\$G.RMC,[^,]*,A," $N; grep -m3 -E "^\\\$G.GGA" $N | tail -1;
+  echo "== last GSA"; grep -E "^\\\$G.GSA" $N | tail -4;
+  echo "== assistance"; journalctl -u g4b-gnss --no-pager | grep -iE "lto|xtra|supl|glpals|assist|almanac|ephem" | head -30;
+  echo "== gpsd tail"; journalctl -u g4b-gnss --no-pager | tail -40'
+# stop early at any time: systemctl stop g4b-gnss g4b-nmea  (rails go off at close)
 ```
+
+Pass: both units inactive, `powered: 0`; RMC with status `A`; gpsd's log
+mentions the LTO file being read or injected.
+
+Reading the talkers:
+- `GN` RMC/GGA/GSA with more than one GSA per epoch (one per system),
+  or `GL`/`GA`/`GB` sentences: several constellations are in use. Nothing
+  to change.
+- Only `GP` everywhere and a fix: the fix may still use other systems.
+  gpsd's NMEA output may describe GPS satellites only. Stock gps.xml has
+  no constellation keys, so the engine runs on its built-in defaults,
+  which are stock's. Optional second run with the same commands plus
+  `--setenv=OMANDROID_GNSS_NMEA411=1` on the `g4b-gnss` line. This sets
+  `EnableNmeaV411` in `<gll>`; 4.11 GSA/GSV carry a system ID field.
+- Only `GP` and no fix after 15 min with a clear sky: send the journal.
+  The assistance lines show whether LTO was used.
+
+### G5: the package (Location on demand)
+
+`packages/omandroid-gnss` replaces the hand-installed files. Nothing
+starts until `omandroid-gnss on`; then GeoClue's NMEA source connecting to
+`/run/omandroid-gnss/nmea.sock` starts the bridge, which pulls in the GNSS
+stack. When the last client has been gone 60 s the bridge exits, the
+stack stops (`StopWhenUnneeded`), `/dev/ttyBCM` closes and the rails go
+off. `omandroid-gnss off` stops everything and removes the socket.
+
+The shim and stubs are built on the laptop into `bionic/prebuilt/` (not
+committed). The Android tree stays the user's own extract, as before.
+
+```sh
+# laptop: the bionic pieces, then the static checks
+make -C packages/omandroid-gnss/bionic CLANG=$HOME/android/omandroid/prebuilts/clang/host/linux-x86/clang-r596125/bin/clang \
+  BIONIC=$HOME/android/omandroid/bionic/libc CHROOT=$HOME/android/vendor-chroot-work/gnss/root
+packages/omandroid-gnss/test/all
+# phone: remove the hand-installed copies (pacman would refuse to overwrite them);
+# the Android tree in /usr/lib/omandroid-vendor/gnss/{root,MANIFEST,SOURCE,STUBS} stays
+tools/phone-ssh 'cd /usr/lib/omandroid-vendor && rm -f omandroid-vendor-chroot profiles/gnss.conf omandroid-fp-shim.so stubs/*.so gnss/props.conf;
+  rm -f /etc/modprobe.d/omandroid-gnss.conf /etc/geoclue/conf.d/90-omandroid-gnss.conf;
+  rm -f /etc/systemd/system/omandroid-gnss.service /etc/systemd/system/omandroid-gnss-nmea.service; systemctl daemon-reload'
+tools/phone-install-package packages/omandroid-gnss      # or tools/repo-build packages/omandroid-gnss + repo-push
+tools/phone-ssh 'pacman -S --needed --noconfirm geoclue; omandroid-gnss status'
+#   expect: location off, receiver running no, chip powered no (sec_acpm/driver
+#   loaded) or unknown (not loaded yet; the start script loads both)
+```
+
+`/etc/modprobe.d/omandroid-g1.conf` (blacklists `sec_acpm`) can stay; the
+start script loads `sec_acpm` itself. Keep the 30 s rule in mind: don't
+switch Location on in the first minute after boot.
+
+```sh
+# 1. on, nothing running yet
+tools/phone-ssh 'omandroid-gnss on; omandroid-gnss status; ls -l /run/omandroid-gnss/'
+#   expect: location on, receiver no, nmea.sock present
+# 2. a GeoClue client starts it (indoors is fine for the plumbing)
+tools/phone-ssh 'systemctl restart geoclue; (timeout 120 /usr/lib/geoclue-2.0/demos/where-am-i -a 8 -t 110 > /tmp/g5-wai.txt 2>&1 &);
+  sleep 30; omandroid-gnss status; journalctl -u omandroid-gnss-nmea -u omandroid-gnss --no-pager -n 20'
+#   expect: receiver yes, chip powered yes, "client connected (1)", "first NMEA sentence received"
+# 3. idle exit: where-am-i ends at 120 s; 60 s later the stack stops
+tools/phone-ssh 'sleep 150; omandroid-gnss status; cat /sys/kernel/debug/spi5.0/pins; cat /tmp/g5-wai.txt | tail -15;
+  for r in /sys/class/regulator/regulator.*; do case $(cat $r/name) in vdd_gnss*) echo $(cat $r/name) $(cat $r/state);; esac; done'
+#   pass: receiver no, powered 0, vdd_gnss_* disabled; where-am-i printed a location
+#   if there was a fix (indoors it may only show Wi-Fi/IP sources or nothing)
+# 4. the switch as the desktop user (polkit), then off
+tools/phone-ssh 'su - omandroid -c "omandroid-gnss off; omandroid-gnss status --json; omandroid-gnss on; omandroid-gnss status --json"'
+tools/phone-ssh 'omandroid-gnss force; sleep 30; omandroid-gnss status; omandroid-gnss unforce; sleep 80; omandroid-gnss status'
+#   expect: force runs it with no client; after unforce it stops within ~65 s
+tools/phone-ssh 'omandroid-gnss off; omandroid-gnss status'
+# rollback: omandroid-gnss off; pacman -R omandroid-gnss
+```
+
+The `su` step: polkit allows only the active local session. Over ssh the
+`omandroid` user is not active, so the call may be refused there. If so,
+try it in a terminal on the phone. Root over ssh skips polkit.
+
+**Quick-settings tile (for the shell):**
+- State: `omandroid-gnss status --json` gives
+  `{"location":"on|off","running":"yes|no","forced":"yes|no","powered":"yes|no|unknown","installed":true|false}`.
+- Toggle: run `omandroid-gnss on` or `omandroid-gnss off` as the user.
+  This goes through `omandroid-gnss-location@.service` and polkit, with no
+  password.
+- Hide the tile when `installed` is false or the command is missing.
+- The QML tile itself is left to the shell's owner.
+
+**Boot:**
+- `omandroid-gnss on` enables the socket (`sockets.target`), so it
+  persists: after a reboot Location is still on, and nothing runs until
+  GeoClue connects.
+- The hang marker still protects the bring-up. A hang leaves
+  `/var/lib/omandroid/gnss-bringup-started`, and later starts are skipped
+  until `/usr/lib/omandroid-vendor/omandroid-gnss-start --retry`.
 
 Suspend: with lhd open the host_req line is a wake source; measure the
 drain with GNSS running and idle (POWER-PLAN.md) before enabling at boot.
@@ -506,8 +626,9 @@ drain with GNSS running and idle (POWER-PLAN.md) before enabling at boot.
    must speak the HAL's control pipe.
 3. Does bionic's resolver work without netd with `ANDROID_DNS_MODE=local` and
    `net.dns1`? If not, LTO/SUPL fail and the first fix is slower (cold start).
-4. GeoClue authorization on Omarchy: a small agent in the shell, or
-   `system=true` entries per app.
+4. GeoClue authorization on Omarchy: the package ships `system=true`
+   entries for a few apps (G5). A small agent in the shell, with per-app
+   prompts, would replace them.
 5. PPS: mainline `pps-gpio` on gpp15-1 for time sync, later.
 6. Move the fingerprint profile onto the shared runner once it has run on
    the phone (it needs its RPMB, panel and Trusty hooks as profile functions).
@@ -551,7 +672,7 @@ drain with GNSS running and idle (POWER-PLAN.md) before enabling at boot.
     the rails run only while GeoClue has a client;
   - an `omandroid-gnss on|off|status` command;
   - a new `packages/omandroid-gnss` package, default-off, with the small
-    bionic `.so` files (shim, stubs) prebuilt from `vendor-chroot/Makefile`.
+    bionic `.so` files (shim, stubs) prebuilt from `packages/omandroid-gnss/bionic/Makefile`.
 - **Multi-GNSS:** find the section for the Enable* keys, e.g. by trying
   each one in `<gll_features>` under qemu and watching gpsd's parser.
 
@@ -567,11 +688,31 @@ drain with GNSS running and idle (POWER-PLAN.md) before enabling at boot.
 are unchanged):
 
 ```sh
-tools/phone-ssh 'install -m755 /dev/stdin /usr/lib/omandroid-vendor/omandroid-vendor-chroot' < vendor-chroot/omandroid-vendor-chroot
-tools/phone-ssh 'install -m644 /dev/stdin /usr/lib/omandroid-vendor/profiles/gnss.conf' < vendor-chroot/profiles/gnss.conf
+tools/phone-ssh 'install -m755 /dev/stdin /usr/lib/omandroid-vendor/omandroid-vendor-chroot' < packages/omandroid-gnss/lib/omandroid-vendor-chroot
+tools/phone-ssh 'install -m644 /dev/stdin /usr/lib/omandroid-vendor/profiles/gnss.conf' < packages/omandroid-gnss/profiles/gnss.conf
 # then the G3d command (section 4); check that the log has no "cannot resolve" lines and
 # look for LTO/SUPL activity in the gpsd lines, then G4 as before (with Wi-Fi in range)
 ```
 
 After any unplug/replug, reboot or use the USB rescue watcher (USB-C-PLAN
 R1).
+
+## Update 2026-10-12, after the checkpoint (offline)
+
+- **Assistance in G3d:** the G3d log has no gpsd lines at all. gpsd's own
+  log was off (stock `LogEnabled="false"`, `Log="JAVA"`), so it can't show
+  whether LTO/SUPL were tried. There were no "cannot resolve" lines.
+  - Since `cf392de`, gpsd logs to logcat (journal), and the profile fetches
+    `lto2.dat` on the host before gpsd starts.
+  - G4b checks both.
+- **Multi-GNSS:** stock's gps.xml sets no constellation keys, so the
+  engine runs on its built-in defaults. Those are what stock ships, and
+  nothing is changed.
+  - GP-only NMEA may be how gpsd's NMEA output reports satellites. On
+    Android the framework's satellite list comes from the HAL callbacks,
+    not from this NMEA.
+  - `OMANDROID_GNSS_NMEA411=1` is an optional G4b run (`EnableNmeaV411`
+    in `<gll>`).
+- **G5 package:** `packages/omandroid-gnss` (section 3), default-off.
+  `vendor-chroot/` moved into it. The runbooks are G4b and G5 in
+  section 4.

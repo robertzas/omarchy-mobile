@@ -1,0 +1,42 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Static checks for omandroid-gnss: syntax, the staged layout, the units, and
+# that the prebuilt bionic libraries are the aarch64 ELF files they claim to be.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { echo "FAIL: $*" >&2; exit 1; }
+for f in bin/omandroid-gnss lib/omandroid-vendor-chroot lib/omandroid-gnss-start install profiles/gnss.conf; do
+  bash -n "$f" || fail "syntax: $f"
+done
+python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/omandroid-gnss-nmea || fail "python: omandroid-gnss-nmea"
+for f in bionic/prebuilt/omandroid-fp-shim.so bionic/prebuilt/stubs/libomandroid-sitril-gps.so \
+         bionic/prebuilt/stubs/libcom.android.tethering.connectivity_native.so; do
+  [[ -f $f ]] || fail "$f missing: build it on the computer first (make -C bionic, see bionic/Makefile)"
+  [[ $(head -c 20 "$f" | od -An -tx1 | tr -d ' \n') == 7f454c46020101* ]] || fail "$f is not a 64-bit ELF"
+  [[ $(od -An -tx1 -j18 -N2 "$f" | tr -d ' \n') == b700 ]] || fail "$f is not aarch64"
+done
+stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
+./install "$stage"
+for f in usr/bin/omandroid-gnss usr/lib/omandroid-vendor/omandroid-vendor-chroot \
+         usr/lib/omandroid-vendor/omandroid-gnss-start usr/lib/omandroid-vendor/omandroid-gnss-nmea \
+         usr/lib/omandroid-vendor/profiles/gnss.conf usr/lib/omandroid-vendor/gnss/props.conf \
+         usr/lib/omandroid-vendor/omandroid-fp-shim.so \
+         usr/lib/omandroid-vendor/stubs/libomandroid-sitril-gps.so \
+         usr/lib/omandroid-vendor/stubs/libcom.android.tethering.connectivity_native.so \
+         usr/lib/systemd/system/omandroid-gnss.service usr/lib/systemd/system/omandroid-gnss-nmea.socket \
+         usr/lib/systemd/system/omandroid-gnss-nmea.service usr/lib/systemd/system/omandroid-gnss-force.service \
+         usr/lib/systemd/system/omandroid-gnss-location@.service usr/lib/modprobe.d/omandroid-gnss.conf \
+         usr/share/polkit-1/rules.d/50-omandroid-gnss.rules etc/geoclue/conf.d/90-omandroid-gnss.conf; do
+  [[ -e $stage/$f ]] || fail "not staged: $f"
+done
+# Default-off: nothing is enabled by a wants link, and the stack itself has no [Install].
+[[ -z $(find "$stage" -path '*.wants/*') ]] || fail "something is enabled by default"
+grep -q '^\[Install\]' vendor/systemd/system/omandroid-gnss.service && fail "omandroid-gnss.service must not be installable"
+grep -q '^StopWhenUnneeded=yes' vendor/systemd/system/omandroid-gnss.service || fail "stack must stop when unneeded"
+grep -q 'blacklist bcm4775x_gnss' vendor/modprobe.d/omandroid-gnss.conf || fail "driver must stay blacklisted from autoload"
+if command -v systemd-analyze >/dev/null; then
+  SYSTEMD_LOG_LEVEL=err systemd-analyze verify --root="$stage" \
+    "$stage"/usr/lib/systemd/system/omandroid-gnss*.service "$stage"/usr/lib/systemd/system/omandroid-gnss*.socket 2>&1 |
+    grep -v -E 'Command .* is not executable|not found|ConditionPathExists' || true
+fi
+echo "omandroid-gnss: all checks passed"

@@ -1,0 +1,24 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omandroid-gnss into DESTDIR. Activates nothing: Location stays off
+# until "omandroid-gnss on". Google's Android files are not part of the
+# package; tools/extract-vendor-chroot -p gnss makes them from the user's
+# own factory image (/usr/lib/omandroid-vendor/gnss/{root,MANIFEST,SOURCE,STUBS}).
+#   ./install DESTDIR
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+d=${1:?Usage: ./install DESTDIR}
+[[ $d == /* && $d != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+v=$d/usr/lib/omandroid-vendor
+install -Dm755 bin/omandroid-gnss "$d/usr/bin/omandroid-gnss"
+for f in lib/*; do install -Dm755 "$f" "$v/${f#lib/}"; done
+install -Dm644 profiles/gnss.conf "$v/profiles/gnss.conf"
+install -Dm644 gnss/props.conf "$v/gnss/props.conf"
+install -Dm644 bionic/prebuilt/omandroid-fp-shim.so "$v/omandroid-fp-shim.so"
+for f in bionic/prebuilt/stubs/*.so; do install -Dm644 "$f" "$v/stubs/${f##*/}"; done
+for f in vendor/systemd/system/*; do install -Dm644 "$f" "$d/usr/lib/systemd/system/${f##*/}"; done
+install -Dm644 vendor/modprobe.d/omandroid-gnss.conf "$d/usr/lib/modprobe.d/omandroid-gnss.conf"
+install -Dm644 polkit/50-omandroid-gnss.rules "$d/usr/share/polkit-1/rules.d/50-omandroid-gnss.rules"
+install -Dm644 etc/geoclue/conf.d/90-omandroid-gnss.conf "$d/etc/geoclue/conf.d/90-omandroid-gnss.conf"
+install -Dm644 LICENSE "$d/usr/share/licenses/omandroid-gnss/LICENSE"
+install -Dm644 version "$d/usr/share/omandroid/gnss/version"

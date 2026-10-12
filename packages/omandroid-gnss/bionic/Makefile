@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT
-# Builds the bionic (aarch64) pieces of the vendor chroot:
-#   out/omandroid-fp-shim.so    the preload shim (source: ../fingerprint/shim)
-#   out/stubs/*.so              stand-ins for libraries a profile's closure
-#                               needs but the image doesn't give us
+# Builds the bionic (aarch64) pieces of the vendor chroot on the computer
+# (the phone has no bionic toolchain) into prebuilt/, which the package
+# installs. prebuilt/ is not committed: run this before tools/repo-build.
+#   prebuilt/omandroid-fp-shim.so  the preload shim (source: fingerprint/shim)
+#   prebuilt/stubs/*.so            stand-ins and preloads for the gnss profile
 #
 #   make NDK=/opt/android-ndk          (Android NDK r27 or later)
 #   make CLANG=... BIONIC=... CHROOT=...
@@ -10,13 +11,13 @@
 #                                       clang and bionic headers, linked
 #                                       against an extracted chroot's libc)
 #
-# Installed on the phone under /usr/lib/omandroid-vendor/.
+# Installed on the phone under /usr/lib/omandroid-vendor/ by omandroid-gnss.
 
 API      ?= 35
-OUT      ?= out
+OUT      ?= prebuilt
 CFLAGS   ?= -O2
 WARN     := -Wall -Wextra -Werror
-SHIM_SRC := ../fingerprint/shim/omandroid-fp-shim.c
+SHIM_SRC := ../../../fingerprint/shim/omandroid-fp-shim.c
 STUB     := $(OUT)/stubs/libcom.android.tethering.connectivity_native.so
 SITRIL   := $(OUT)/stubs/libomandroid-sitril-gps.so
 
@@ -56,6 +57,6 @@ $(SITRIL): stubs/sitril_gps_stub.c
 		-Wl,-soname,$(notdir $@) -o $@ $< $(STUBLIBS)
 
 clean:
-	rm -rf $(OUT)
+	rm -f $(OUT)/*.so $(OUT)/stubs/*.so
 
 .PHONY: all clean

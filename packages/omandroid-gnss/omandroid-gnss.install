@@ -1,0 +1,11 @@
+post_install() {
+  echo "omandroid-gnss: Location is off. Needs the vendor files in /usr/lib/omandroid-vendor/gnss"
+  echo "  (tools/extract-vendor-chroot -p gnss on your computer), the gnss DT overlays,"
+  echo "  then: omandroid-gnss on   (device/cheetah/GNSS-PLAN.md, G5)"
+}
+post_upgrade() {
+  systemctl daemon-reload 2>/dev/null || true
+}
+pre_remove() {
+  /usr/bin/omandroid-gnss off 2>/dev/null || true
+}

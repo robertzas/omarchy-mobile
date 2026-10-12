@@ -1,0 +1,76 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omandroid-gnss: the phone's Location switch and GNSS status.
+#
+#   omandroid-gnss on       Location on: apps can ask GeoClue for positions,
+#                           and the receiver runs only while one does
+#                           (omandroid-gnss-nmea.socket enabled)
+#   omandroid-gnss off      Location off: stop the receiver now and let
+#                           nothing start it
+#   omandroid-gnss force    keep the receiver running with no client (tests,
+#                           gpsd on /run/omandroid-gnss/nmea-tty)
+#   omandroid-gnss unforce  back to on-demand
+#   omandroid-gnss status [--json]
+#
+# on/off/force/unforce need root. As another user they go through
+# omandroid-gnss-location@.service, which polkit lets the active local user
+# start (the shell's quick-settings tile uses exactly that).
+set -euo pipefail
+
+SOCKET=omandroid-gnss-nmea.socket
+BRIDGE=omandroid-gnss-nmea.service
+STACK=omandroid-gnss.service
+FORCE=omandroid-gnss-force.service
+ROOT=/usr/lib/omandroid-vendor/gnss/root
+
+usage() {
+  sed -n '3,15s/^# \{0,1\}//p' "$0" >&2
+  exit 2
+}
+
+as_root() { # $1 action
+  if [[ $EUID -ne 0 ]]; then
+    exec systemctl start "omandroid-gnss-location@$1.service"
+  fi
+}
+
+state() { systemctl "$1" "$2" 2>/dev/null || true; }
+
+status() {
+  local location running forced powered=unknown pins=/sys/kernel/debug/spi5.0/pins
+  location=$([[ $(state is-enabled $SOCKET) == enabled ]] && echo on || echo off)
+  running=$([[ $(state is-active $STACK) == active ]] && echo yes || echo no)
+  forced=$([[ $(state is-active $FORCE) == active ]] && echo yes || echo no)
+  [[ -r $pins ]] && powered=$(awk '$1 == "powered:" { print ($2 ? "yes" : "no") }' "$pins")
+  if [[ ${1:-} == --json ]]; then
+    printf '{"location":"%s","running":"%s","forced":"%s","powered":"%s","installed":%s}\n' \
+      "$location" "$running" "$forced" "$powered" "$([[ -d $ROOT ]] && echo true || echo false)"
+  else
+    echo "location: $location"
+    echo "receiver running: $running${forced/yes/ (forced)}"
+    echo "chip powered: $powered"
+    [[ -d $ROOT ]] || echo "vendor files: missing ($ROOT; tools/extract-vendor-chroot -p gnss)"
+  fi
+}
+
+case ${1:-} in
+  on)
+    as_root on
+    systemctl enable --now "$SOCKET"
+    ;;
+  off)
+    as_root off
+    systemctl stop "$FORCE" "$BRIDGE" "$STACK" 2>/dev/null || true
+    systemctl disable --now "$SOCKET"
+    ;;
+  force)
+    as_root force
+    systemctl start "$FORCE"
+    ;;
+  unforce)
+    as_root unforce
+    systemctl stop "$FORCE"
+    ;;
+  status) status "${2:-}" ;;
+  *) usage ;;
+esac

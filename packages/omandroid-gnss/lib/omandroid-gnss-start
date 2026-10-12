@@ -29,6 +29,8 @@ mkdir -p "$(dirname "$MARK")"
 date -Is > "$MARK"
 sync
 
+# The GNSS rails come from the S2MPG13 (sec_acpm), then the chip driver.
+modprobe sec_acpm
 modprobe bcm4775x-gnss
 for _ in $(seq 1 50); do [[ -c /dev/ttyBCM ]] && break; sleep 0.1; done
 [[ -c /dev/ttyBCM ]] || { say "no /dev/ttyBCM after loading bcm4775x-gnss"; exit 1; }
