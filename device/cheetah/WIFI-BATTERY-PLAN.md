@@ -2134,3 +2134,75 @@ tools/phone-ssh 'grep -E "brcmf|gs201|97:" /proc/interrupts'
 
 Then 9.4 W2.2-W2.4: `iw dev`, `ip link set wlan0 up && iw dev wlan0 scan`,
 and the reload. Rollback as 9.5 (`--disarm` for a leftover watchdog).
+
+### 9.13 Kernel 00087: the firmware traps on the second host ready (2026-10-12)
+
+Run (`logs/wifi-w1-20261012-092910-s5.log`, `logs/w2-00087.out`): the
+interrupt storm is gone and INTx reaches brcmfmac. The chip consumed
+control entries up to TCM r 12 of 16, and D2H w stayed 0 in TCM as well
+as in host memory. This time the firmware console was read after the
+interrupt, and it ends in a trap:
+
+```
+000000.784 THREADX TRAP INFO: Thread: main_thread ...
+TRAP 4(326dc8): pc 27489a, lr 27488d, sp 327020, cpsr 60000193 ... dfsr 80f, dfar 0
+000000.784   srpwr: 0x000f0200 ...
+```
+
+With `fw_bcmdhd.map`, pc and lr are in **`_hnd_die`** (0x27486c), which
+is a deliberate stop. The stack holds `pciedev_handle_hostready_intr+0x75`
+(0x2315f1, also in r6/r7) and `pciedev_dpc+0xff` (0x2317c3). The firmware
+died in its **host-ready handler**, 20 ms after our **second** host-ready
+doorbell. Since 00078 we ring it twice: right after `request_irq`
+(bcmdhd's single, early one) and again in `brcmf_pcie_preinit()`. The
+first was accepted. bcmdhd rings it once at init
+(`W/dhd_msgbuf.c:4430`) and otherwise only on resume, with the value
+0x12345678 (`W/dhd_pcie.c:9215-9240`).
+
+This also explains the earlier picture:
+- **No D2H completion ever.** The firmware stopped before it answered
+  anything; the 16 control entries were buffer posts, which need no
+  answer, and the ioctl came after the second host ready.
+- **D2H w 0 even in TCM.** Nothing was ever produced.
+- **H2D r 0 in host memory.** The read-index writeback had not happened
+  before the trap.
+- Before the INTx fix the trap went unseen: no interrupt meant the
+  console was only read at teardown, if at all.
+
+The "writes never arrive" theory has no evidence left for it. The
+chip's reads worked all along, and there was nothing to write yet.
+
+| Commit (wt-pcie) | Change |
+|---|---|
+| `07c519fd7` wifi: brcmfmac: pcie: ring host ready only once on the BCM4389 | no host ready in preinit for the 4389 (the early one stays); value 0x12345678 |
+
+Builds: `logs/{kernel,modules,images}-w2hrdy.log`, release
+`7.3.0-rc6-omandroid-push1-00088-g07c519fd78ff`; standard test DTB,
+`.default` rebuilt plain.
+
+**Runbook:**
+
+```sh
+export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
+bin/omandroid modules-push && bin/omandroid push
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
+tools/phone-ssh 'grep -E "brcmf|gs201" /proc/interrupts; dmesg | grep -iE "TRAP|hnd_die|halted" | tail'
+```
+
+| Line | Pass | If not |
+|---|---|---|
+| exactly one `host ready on 0x144` | one, right after `request_irq Enter` | two: the old module is loaded |
+| no `THREADX TRAP` / `TRAP 4` in the console lines | — | another trap: symbolise pc/lr/stack with `fw_bcmdhd.map` (`awk` on the map as in 9.13) and keep the log |
+| `isr: … D2H w a b c` | a (control complete) > 0 | still 0 with no trap: now the write path is suspect again; dump `isr:` lines and dongle `D2H tx` |
+| `Firmware: BCM4389/3 … 20.101.90 …`, `CLM version = Google.C10sub6` | both | `Timeout on response for query command`: keep the console lines after it |
+| `/proc/interrupts` | `brcmf_pcie_intr` on `gs201-pcie-intx`, count rising | — |
+
+Then 9.4 W2.2-W2.4:
+
+```sh
+tools/phone-ssh 'iw dev'                                   # wlan0, managed
+tools/phone-ssh 'ip link set wlan0 up && iw dev wlan0 scan | grep -E "^BSS|SSID:|signal:" | head -40'
+tools/phone-ssh 'modprobe -r brcmfmac && sleep 1 && modprobe brcmfmac debug=0x80004 && sleep 8 && iw dev | grep -c wlan0'
+```
+
+Rollback as 9.5 (`--disarm` for a leftover watchdog).
