@@ -225,6 +225,14 @@ kernel does the same with the same constraints); note it here and decide.
 **Stop** if the regmap file is missing (pmic-2 not bound: use the FB2 read
 after F1 with `gnss-pmic-test` instead).
 
+**FB result (2026-10-12, 7.3.0-rc6-omandroid-push1-00306-g60d3ca176c80).**
+FB1 passed: all six partitions match
+`~/android/reference/cheetah-partition-backup-20261012-radio/SHA256SUMS`.
+FB2 hit its stop condition: no `pmic-2` regmap in debugfs on this boot.
+The sub-PMIC binds with the GNSS power stack, which loads only while
+Location is in use, so read FB2 with GNSS running (`omandroid-gnss force`,
+then the read, then `unforce`), or after F1 as the note says.
+
 ### F1: int + fingerprint kernel, overlays as today (one boot; risk low)
 
 The human merges and builds int (the branch is int + 7 commits):
