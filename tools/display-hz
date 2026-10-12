@@ -1,0 +1,62 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# display-hz: measure how often DECON0 sends a frame to the panel, i.e. the
+# real refresh rate of the command-mode panel while DECON's hardware (TE)
+# trigger is unmasked. Read-only by default: it samples DECON's FRAME_COUNT
+# twice on the phone, N seconds apart, and prints frames per second, plus
+# the DSIM registers that are programmed for a given refresh rate.
+#
+# Usage:
+#   tools/display-hz [--secs N] [--clear-underrun]
+#
+#   --secs N            sampling window (default 10)
+#   --clear-underrun    clear the DSIM underrun status bit first (one W1C
+#                       register write), so the reading covers only this window
+#
+# DECON0 and DSIM0 are powered and clocked while the screen shows anything
+# (the bootloader leaves them on and nothing in Linux turns them off), so
+# these reads are safe. Never point this at other blocks.
+#
+# See device/cheetah/DISPLAY-PLAN.md, gate D5a.
+
+set -uo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+SSH="$ROOT/tools/phone-ssh"
+secs=10 clear=0
+
+usage() { sed -n '/^# Usage:/,/^# DECON0/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit "${1:-0}"; }
+
+while (($#)); do
+  case "$1" in
+    --secs) secs="${2:?}"; shift ;;
+    --clear-underrun) clear=1 ;;
+    -h|--help) usage ;;
+    *) usage 1 ;;
+  esac
+  shift
+done
+
+[[ "$secs" =~ ^[0-9]+$ ]] && ((secs > 0)) || { echo "error: --secs needs a positive integer" >&2; exit 1; }
+
+timeout $((secs + 20)) "$SSH" sh -s -- "$secs" "$clear" <<'EOF'
+secs=$1 clear=$2
+r() { devmem "$1"; }
+if [ "$clear" = 1 ]; then devmem 0x1c2c0050 0x00080000; fi
+trig=$(r 0x1c240030)
+t0=$(date +%s%N); f0=$(r 0x1c240004); te0=$(r 0x1c240038)
+sleep "$secs"
+t1=$(date +%s%N); f1=$(r 0x1c240004); te1=$(r 0x1c240038)
+intsrc=$(r 0x1c2c0050); urun=$(r 0x1c2c0034)
+te_ctrl0=$(r 0x1c2c0084); te_ctrl1=$(r 0x1c2c0088)
+ns=$((t1 - t0)); frames=$(( (f1 - f0) & 0xffffffff ))
+printf 'window          %d.%03d s\n' $((ns / 1000000000)) $(( (ns / 1000000) % 1000 ))
+printf 'TRIG_CON        %s (HW_TRIG_EN=%d, MASK_DECON=%d)\n' "$trig" $((trig & 1)) $(((trig >> 4) & 1))
+printf 'FRAME_COUNT     %s -> %s: %d frames\n' "$f0" "$f1" "$frames"
+printf 'refresh         %d.%02d Hz\n' $((frames * 1000000000 / ns)) $(( (frames * 100000000000 / ns) % 100 ))
+printf 'HW_TE_CNT       %s -> %s\n' "$te0" "$te1"
+printf 'DSIM UNDERRUN   %s (cmd underrun count, 0x1f09 expected at 60 Hz, 0x3ec at 120 Hz)\n' "$urun"
+printf 'DSIM TE_CTRL0/1 %s %s (TE protect/timeout 0x33eb/0x3b26 from the bootloader = 60 Hz)\n' "$te_ctrl0" "$te_ctrl1"
+printf 'DSIM INTSRC     %s (UNDER_RUN bit 19 = %d)\n' "$intsrc" $(((intsrc >> 19) & 1))
+EOF

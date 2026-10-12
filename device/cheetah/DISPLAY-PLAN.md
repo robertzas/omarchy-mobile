@@ -1,8 +1,9 @@
 # Display driver plan: DECON0 → DSIM0 → S6E3HC4 (cheetah / gs201)
 
-Status: G0 done (2026-10-11, offline; nothing was run on the phone). Kernel
-branch `omandroid-display` in `~/android/mainline/wt-display`, 8 commits on
-`omandroid` @ `a3061be71`. See "G0 status" at the end.
+Status: D1b and D2 pass on the phone (brightness). D5 (smooth display:
+refresh measurement, 120 Hz requirements, flip-only KMS) is designed and built
+offline in branch `omandroid-display2` (`~/android/mainline/wt-display2`); see
+"D5" at the end for the design and the staged runbook.
 
 Goal, in order of value:
 
@@ -463,11 +464,14 @@ Rules for every gate:
   display-on set. Then wire it into Omarchy's DPMS hook. With the trigger
   still unmasked, DECON keeps sending frames to a dark panel; that's
   harmless.
-- **D3b:** add sleep-in/out (`10`/`11` + 120 ms) and mask/unmask the DECON
-  trigger (option a+). Measure the battery current drop with the MAX77759
-  fuel gauge (`current_now`). Check that sleep-out restores the picture
-  without re-sending the init table. If it doesn't, keep D3a until KMS owns
-  the full init.
+- **D3b:** add sleep-in (`10`) and mask/unmask the DECON trigger (option
+  a+). Measure the battery current drop with the MAX77759 fuel gauge
+  (`current_now`). **Sleep-in loses the panel's registers** (Google's
+  `s6e3hc4_disable` clears its cached `hw_feat` and resets `hw_vrefresh` to
+  60 "after disabling hardware", `HC4:1123-1126`, and its enable re-sends the
+  whole init and feature set after any reset). So wake is always reset +
+  `prepare` (full init, now including the feature/rate set, D5) + `enable`,
+  never a bare sleep-out (`11`). Until KMS (D4) owns the panel, keep D3a.
 - **Risk:** the panel doesn't come back. Recovery is reboot; for the user,
   that costs the session. Test only from SSH first, never from the lock
   screen.
@@ -586,7 +590,8 @@ tools/phone-ssh 'modprobe gs-dsim-cmd; modprobe panel-samsung-s6e3hc4; ls /sys/c
 
 - Whether ABL leaves `PKT_GO_EN` and `CMD_LPDT` clear (D1a).
 - Whether the DPU SysMMU is bypassed and the S2MPU off (D1a).
-- Whether sleep-out alone restores the picture (D3b).
+- ~~Whether sleep-out alone restores the picture (D3b).~~ It doesn't: sleep-in
+  resets the panel's registers; wake re-sends the full init (D3b, D5).
 - The exact DBV ABL sets at boot. The driver assumes 1023 and doesn't read it
   back (DCS reads need BTA/RX support in the host).
 
@@ -615,3 +620,358 @@ Both open questions about ABL's DSIM state are answered in the driver's favour: 
 - **Found in D1b:** with `dsi0` enabled, fw_devlink made simplefb wait for the panel device (the `panel` phandle that gives simplefb the panel size), which only appears with the DSI host driver. simpledrm probed late, so the boot splash and Plymouth had no framebuffer and Hyprland started without a display. Fixed with `post-init-providers = <&panel>` on the framebuffer node.
 - **D2 passes.** With `allow_tx`: brightness 300 then 1023, first with the DECON trigger masked, then with it running. Every write returned 0, no FIFO timeout or -EBUSY, FIFOs empty and PKT_GO_EN clear afterwards, and the user saw the panel dim. HS commands work as ABL left them (no CMD_LPDT needed).
 - Next: make `allow_tx` the default once D3 passes, a quick-settings brightness slider on `/sys/class/backlight`, `systemd-backlight` restore, then D3 (display off/on for DPMS).
+
+## D5: smooth display (2026-10-12, offline; nothing was run on the phone)
+
+Goal: Hyprland with real vsync, tear-free zero-copy flips, then 120 Hz.
+Kernel branch `omandroid-display2` (`~/android/mainline/wt-display2`, out dir
+`out-display2`), on top of the G0/D1b commits. Abbreviations as in the top
+of this file, plus `DSIM` = `G/exynos_drm_dsim.c`, `DEC` =
+`G/exynos_drm_decon.c`, `BTS` = `G/exynos_drm_bts.c`.
+
+### D5.1 Which rate ABL configured, and how to measure the real one
+
+**ABL runs the panel at 60 Hz** (to be confirmed by D5a):
+
+- ABL's DSIM TE timers are the 60 Hz ones. Google programs
+  `CMD_TE_CTRL1 = TE_PROTECT_ON << 16 | TE_TOUT` from
+  `hs_clk * (100 - 5) * 100 / fps / 16` and `hs_clk * (100 + 10) * 100 / fps / 16`
+  (`G/cal_9845/dsim_reg.c:1206-1231`, `TE_MARGIN` 5). With our 1346 Mbps lanes
+  that is 13319/15422 at 60 Hz and 6659/7711 at 120 Hz. ABL left
+  `0x33eb3b26` = 13291/15142 (D1a): the 60 Hz pair, within 2%.
+- Google cold-starts the panel at 60 Hz (`vrefresh = needs_reset ? 60`,
+  `HC4:1043`) and ABL leaves WQHD.
+- The panel itself can run its TE at 120 Hz while refreshing at 60 ("fixed
+  TE" with early exit, `HC4:332-338`), and DECON sends one frame per TE
+  while its trigger is unmasked. So the number that matters is what
+  DECON actually sends; measure it.
+
+**Method 1, read-only, no new kernel: `tools/display-hz`.** DECON has a
+free-running `FRAME_COUNT` register (`0x1c240004`, `G/cal_9845/regs-decon.h:80`).
+The tool reads it (and `HW_TE_CNT` 0x38) twice on the phone, N seconds apart,
+and prints frames per second, together with the DSIM registers that depend
+on the rate: `UNDERRUN_CTRL` (0x34), `CMD_TE_CTRL0/1` (0x84/0x88) and the
+`INTSRC` underrun bit 19 (`G/cal_9845/regs-dsim.h:129,202,310-319`). Nothing
+is written unless `--clear-underrun` is given (one write-one-to-clear of
+`INTSRC` bit 19). DECON0 and DSIM0 are on and clocked whenever the screen
+shows anything, and D1a already read these blocks safely.
+
+**Method 2, interrupt counter: `gs-decon stage=1`.** If `FRAME_COUNT` does
+not move in command mode (Google never reads it), the new driver counts the
+DECON frame start (SPI 241) and frame done (SPI 240) interrupts and reports
+`/sys/bus/platform/devices/1c240000.display-controller/stats`
+(`frame_start_mhz` = rate in mHz). It enables only those two interrupt bits
+(`DECON_INT_EN` 0x60 bits 0, 12, 13; restored on unbind), clears only its own
+pending bits, and disables its interrupts if more than 2000 arrive in a
+second.
+
+Expected readings:
+
+| Reading | Means |
+|---|---|
+| ≈ 60.0 frames/s, `UNDERRUN_CTRL` ≈ 0x1f09 | ABL at 60 Hz, changeable TE (the expected case) |
+| ≈ 120 frames/s at 60 Hz timers | the panel runs a fixed 120 Hz TE: every frame is sent twice; worth knowing for power |
+| 0 frames/s | the trigger is masked (`TRIG_CON` 0x3070): our init didn't run |
+
+`UNDERRUN_CTRL` (the command-mode underrun LP reference) comes from
+`dsim_calc_underrun` (`DSIM:2879-2922`): with 4 lanes at 1346 Mbps, DSC
+(1/3 width), 3120 lines, `te_idle_us` 350 and `te_var` 1 (`HC4:1324-1327`)
+one frame needs 6.71 ms on the link; the count is 7945 (0x1f09) at 60 Hz and
+1004 (0x3ec) at 120 Hz.
+
+### D5.2 What 120 Hz needs
+
+| Part | 60 Hz (today) | 120 Hz | Source |
+|---|---|---|---|
+| Panel | changeable TE, no early exit, `60 01` | fixed TE (`B9 51`), early exit (`BD 21 01 83 03 03`), `60 00` | `HC4:287-497, 523-575` |
+| DSIM `UNDERRUN_CTRL` 0x34 | 0x1f09 | **0x3ec** | `DSIM:2879-2922`, `dsim_reg_set_rr_config` `dsim_reg.c:2177` |
+| DSIM `CMD_TE_CTRL1` 0x88 | 0x33eb3b26 (ABL) | **0x19f51d93** (ABL's values halved) | `dsim_reg.c:1206-1231` |
+| DSIM PLL, PHY, DSC, `CMD_TE_CTRL0` | unchanged | unchanged | Google's seamless check refuses only clock, op-mode and DSC changes (`DSIM:1322-1350`) |
+| DECON | nothing: it sends one frame per TE | nothing | `DEC:1092-1213` |
+| DISP clock (DECON ACLK) | ≥ 148 MHz | **≥ 297 MHz → the 310 MHz DVFS level** | `BTS:59`: `w * h * fps * 1.1 / ppc`, ppc 2; levels 664/533/465/400/310/267/134 MHz (`R/live.dts:5816`) |
+| Memory bus (MIF) | DPP0 reads 1.08 GB/s | **2.16 GB/s; reportedly underruns below MIF 1352 MHz** | `BTS:76-79`; stock MIF levels 421 … 3172 MHz incl. 1352 (`R/dmesg.txt:1175-1190`) |
+
+**Panel sequence.** Google sends the whole feature set on every enable and
+the changed parts on a rate change, ending with `F7 0F` (frequency update,
+taken at the next frame). The panel driver now carries it for PVT panels,
+HS operation, HBM off, IRC on and manual rate (`s6e3hc4_write_rate`):
+
+```
+F0 5A 5A
+B0 00 04 B9; B9 0C 42 00 1B 0C 42 00 1B 0C 42 00 1B      TE width (HS)
+B9 51 (120) | B9 04 (60)                                  fixed / changeable TE
+B0 00 42 F2; F2 0D; B0 00 01 B9; B9 51|04;                TE2, same option,
+B0 00 22 B9; B9 00 10 00 30 00 10 00 30 (120)              rising 0x10, falling 0x30
+  | B0 00 1E B9; B9 00 10 00 30 (60)
+B0 01 9B 92; 92 21; B0 02 F3 68; 68 09 09 09 0A 0A 0A      IRC on
+F2 01; 60 00                                              HS operation
+BD 21 01 83 03 03 (120) | BD 21 81 83 03 03 (60)          early exit on/off
+B0 00 1E BD; BD 00 00 00 02 00 06 00 16
+BD 21; 60 00 (120) | 60 01 (60)                           manual rate
+F7 0F; F0 A5 A5
+```
+
+`prepare` now sends it (at 60 Hz) after the cold init, as Google's enable
+does; before, a cold init left the TE and rate registers at the panel's
+reset values. A bring-up knob, `refresh_rate` in the panel's sysfs directory,
+sends it at run time, only with `panel_samsung_s6e3hc4.allow_rate_switch=1`.
+
+**Order** (Google does both halves inside one atomic commit):
+
+- Up: raise MIF and DISP floors → DSIM `UNDERRUN_CTRL`, `CMD_TE_CTRL1` →
+  panel sequence. The panel takes the rate at its next frame.
+- Down: panel sequence → DSIM timers → drop the floors.
+- The DSIM timers gate command packets around TE, so with 60 Hz timers at a
+  120 Hz TE every other TE may be ignored (we'd measure 60). Write them back
+  to back with the panel switch.
+
+**Memory bandwidth and ACPM.** At WQHD 120 Hz DPP0 alone reads 2.16 GB/s,
+real-time, and an underrun shows as flashing horizontal lines and DSIM
+`INTSRC` bit 19. Google never votes a fixed MIF: the DPU votes bandwidth
+through `bts.ko` (`BTS:896-1000`) and the MIF devfreq turns that into a
+frequency. We have neither, so whatever MIF ABL left is what we get; it is
+reportedly 1352 MHz or more after a normal boot, but lower after other boot
+paths, so it can't be relied on.
+
+**Clean dependency on ACPM (built in `wt-acpm` by another worker).**
+Upstream exposes the ACPM DVFS domains as clocks (`drivers/clk/samsung/clk-acpm.c`,
+gs101: `mif` = 0, `disp` = 12, `dt-bindings/clock/google,gs101-acpm.h`).
+The DECON binding takes them now as optional `clocks = <mif>, <disp>`
+(`clock-names = "mif", "disp"`); `gs-decon` gets them with
+`devm_clk_get_optional` and logs their rates. When gs201 ACPM lands:
+
+1. add `clocks = <&acpm_ipc GS201_CLK_ACPM_DVFS_MIF>, <&acpm_ipc GS201_CLK_ACPM_DVFS_DISP>`
+   to `&decon0` (the IDs are the ACPM worker's; on gs201 DISP is domain
+   `0x0B04000C`, `GDT/gs201/dts/gs201.dtsi:326`);
+2. `gs-decon` holds `clk_set_min_rate(mif, 1352 MHz)` and
+   `clk_set_min_rate(disp, 310 MHz)` while the 120 Hz mode is active, and
+   0 at 60 Hz and at DPMS off. A floor (not `clk_set_rate`) leaves room for
+   the GPU and others to vote higher;
+3. without the clocks, the driver never offers 120 Hz.
+
+The 1352 MHz floor is a starting point: gate D5c sweeps the MIF levels and
+keeps the lowest one with no underrun over a minute of full-screen motion,
+plus one level of margin.
+
+**Where the 120 Hz switch will live.** In `gs-decon` stage 2 the mode switch
+is a KMS mode set (1440x3120@120 in the connector's list). It needs the
+panel sequence and the DSIM timers in one commit, so `gs-dsim-cmd` and the
+panel are then driven from the KMS driver (DSIM as an encoder/bridge, panel
+through `drm_panel` with a rate hook); that is the first piece of option
+(b). Until then the switch is by hand (D5c).
+
+### D5.3 Flip-only KMS design (`gs-decon`, option c)
+
+`drivers/gpu/drm/google/gs-decon.c`, binding `google,gs201-decon.yaml`, node
+`decon0` in `gs201.dtsi` (disabled) and `&decon0` in the cheetah DTS
+(disabled), with a 92 MiB reusable CMA pool below 4 GiB (`display_pool`,
+disabled; five 1440x3120 buffers).
+
+What it touches:
+
+| Register | Access | When |
+|---|---|---|
+| DECON main (`0x1c240000`) | read | probe (dump, checks) |
+| DPP0 RDMA (`0x1c0b0000`), incl. shadow copy at +0x400 | read | probe |
+| `DECON_INT_EN` 0x60, `DECON_INT_PEND` 0x70 | RMW bits 0/12/13; W1C bits 12/13 | stage ≥ 1 |
+| `RDMA_BASEADDR_Y8` 0x40, `SHD_REG_UP_REQ` 0x50 | write | stage 2, each flip |
+| `RDMA_IN_CTRL_0` format field | write once | stage 2 with `force_xrgb=1` only |
+
+It never writes `GLOBAL_CON`, `TRIG_CON`, clocks, power domains, the DSIM
+or the panel, so DECON is never stopped and the DPU never powered down
+under it. **Rule for every later stage:** before anything may power the DPU
+or DISP domain off, disable the windows and stop DECON (mask the trigger,
+clear `DECON_EN_F` with a global shadow update, wait for `RUN_STATUS` to
+clear: `decon_reg_stop_perframe_dsi`, `G/cal_9845/decon_reg.c:1468-1489`).
+The APM firmware's DPU power-off handshake otherwise times out and its
+watchdog resets the SoC.
+
+**Flip** (Google's command-mode commit, `DEC:1092-1213`,
+`decon_reg_start` `decon_reg.c:1872`):
+
+1. Plane check: the framebuffer must have the boot layout (1440x3120,
+   pitch 5760, XRGB8888, no offset), a CMA address below 4 GiB (DPP0
+   takes 32 bits; the DPU SysMMU is bypassed, D1a).
+2. Plane update: write `RDMA_BASEADDR_Y8`, then set `SHD_REG_UP_REQ` =
+   all windows | global | compressor (0x8010003f). DECON latches the new
+   registers at the next frame start and clears the request bits
+   (`decon_reg_wait_update_done_timeout`, `decon_reg.c:2063`).
+3. CRTC flush: the page-flip event is armed, with a vblank reference.
+4. Frame start interrupt: `drm_crtc_handle_vblank`; if the request bits
+   are clear, the new buffer is being scanned, so the event is sent and the
+   old buffer may be reused (Google sends the event at frame start too,
+   `DEC:2103-2125`).
+5. If no frame start takes the update within 100 ms (TE stopped, trigger
+   masked), the event is sent anyway and a warning logged, so a compositor
+   never stalls (Google forces the event on a frame start timeout,
+   `DEC:1810-1880`).
+
+**Vblank** is DECON's frame start. With the trigger permanently unmasked
+(`TRIG_CON` 0x3061, as today) DECON sends a frame on every TE, so frame start
+is a steady panel-rate vblank, and the timestamp is taken in the interrupt.
+Google instead masks the trigger after each flip and uses the TE GPIO for
+vblank (`DEC:1867-1871, 2462-2490`): that saves the DPU memory traffic of
+re-sending unchanged frames. That is a later power step (D4a-3); it needs
+either the TE GPIO (no PERIC0 pin controller yet) or DECON's own TE edge
+interrupts (`DECON_INT_EN_EXTRA` bits 16/20, on the "extra" SPI 239, already
+in the binding).
+
+**Pixel format.** Only XRGB8888. Google maps `DRM_FORMAT_XRGB8888` to DPP
+DMA format 7 (`G/exynos_drm_format.c:76-79`), where the alpha byte is
+ignored. ABL's format is logged at probe (`RDMA_IN_CTRL_0` bits 13:8). If it
+isn't 7, stage 2 refuses to start unless `force_xrgb=1`, which writes 7 with
+the first flip; otherwise a client's undefined X byte could act as alpha.
+
+**Buffers.** `drm_gem_dma` from `display_pool` (`memory-region-names =
+"pool"`), write-combined, so CPU and GPU writes need no cache maintenance
+before scanout. Mesa's kmsro allocates Panthor's scanout buffers as dumb
+buffers on this device, so they land in the pool too.
+
+**Parking.** Whenever no DRM buffer may be scanned (plane or CRTC disable,
+unbind, shutdown), DPP0 is pointed back at ABL's framebuffer (`0xfac00000`,
+reserved `no-map`, `memory-region-names = "boot-framebuffer"`), cleared to
+black, and the driver waits for the shadow update before DRM frees
+anything. DPMS off in this stage is therefore "black frame, DECON still
+running"; the panel goes dark through the D3 `bl_power` hook as today.
+
+**Coexisting with simpledrm, the boot splash and Plymouth.**
+
+- simpledrm stays built in and owns the screen from early boot (fbcon,
+  Plymouth), unchanged.
+- `gs-decon` checks the hardware first (DECON on in command mode, DPP0
+  scanning the reserved boot framebuffer at full size), and only then calls
+  `aperture_remove_conflicting_devices` for `0xfac00000`. That unplugs
+  simpledrm the way any native driver replaces a firmware framebuffer. It
+  then registers its own DRM device and fbdev emulation, so fbcon moves
+  over. Until the first commit DPP0 keeps scanning ABL's buffer, so the
+  picture doesn't change at probe.
+- If any check fails, simpledrm is left alone and the system boots as
+  today.
+- Order for daily use, once D4a passes: load `gs-decon stage=2` from the
+  initramfs, before Plymouth starts, so Plymouth and Hyprland only ever see
+  one card. Loading it later works too, but a running Plymouth loses its
+  device.
+
+**Panel on/off around KMS.** The panel stays with `gs-dsim-cmd` and the
+panel driver (D2/D3). After a sleep-in the panel must get the full init
+(reset, `prepare`, `enable`), never a bare sleep-out (D3b). That needs
+KMS to drive the panel, i.e. D4b.
+
+### D5.4 Staged runbook (each step needs the user; one change per boot)
+
+Before anything: `tools/phone-ssh dmesg -w` in a second terminal. Recovery
+as in section 4 (panic=10, slot A fallback). These reads and writes touch
+only DECON0, DPP0 and DSIM0, which are on and clocked while the screen is
+lit.
+
+**D5a: measure, current kernel, read-only.**
+
+```sh
+tools/display-hz --secs 10        # three runs: idle, while scrolling, while a video plays
+```
+
+Pass: a stable rate (expect 60.0), `UNDERRUN_CTRL` ≈ 0x1f09, underrun bit 0.
+If `FRAME_COUNT` doesn't move, go to D5b for the interrupt counter.
+Also `tools/phone-ssh 'grep -E "disp|dpu" /sys/kernel/debug/clk/clk_summary'`
+for the DISP/DPU clock rates ABL left (D5.2 needs ≥ 297 MHz for 120 Hz).
+
+**D5b: new kernel, `gs-decon` stage 0 then 1.**
+
+1. Build `out-display2` (kernel, modules, images) and install them. With
+   the shipped DTB nothing new probes (decon0 disabled): boots exactly as
+   today.
+2. Test DTB: in `gs201-cheetah.dts` set `&decon0 { status = "okay"; };`
+   and `&display_pool { status = "okay"; };`, rebuild `images`, and
+   blacklist first:
+   `tools/phone-ssh 'echo "blacklist gs_decon" > /etc/modprobe.d/omandroid-decon.conf'`.
+3. Boot, then `tools/phone-ssh modprobe gs-decon` (stage 0): it logs 19
+   registers. Expect `GLOBAL_CON` 0x133, `TRIG_CON` 0x3061,
+   `RDMA_BASEADDR` and `RDMA_BASEADDR*` 0xfac00000, `RDMA_SRC_SIZE`
+   0x0c3005a0, and note `RDMA_IN_CTRL_0` (format).
+4. `rmmod gs-decon; modprobe gs-decon stage=1`, wait 10 s, then
+   `cat /sys/bus/platform/devices/1c240000.display-controller/stats` and
+   `grep gs-decon /proc/interrupts`. Pass: `frame_start_mhz` ≈ 60000 (or
+   what D5a measured), `frame_done` ≈ `frame_start`, picture unchanged.
+   `rmmod` restores `INT_EN`.
+
+- Risk: an interrupt that can't be cleared. The driver turns its
+  interrupts off after 2000 in a second, and rmmod restores `INT_EN`.
+
+**D4a-1: flip-only KMS on the console (stage 2).** Hyprland stopped
+(`systemctl stop` the session / log out to the console).
+
+1. `modprobe gs-decon stage=2` (add `force_xrgb=1` if stage 0 showed a
+   format other than 7). Expect "flip-only KMS on DECON0", simpledrm gone
+   from `/sys/class/drm`, fbcon redrawn on the new card.
+2. `modetest -M gs-decon -s <connector>@<crtc>:1440x3120 -v` (page-flip
+   test, prints the flip rate; expect ≈ 60) and `kmscube -D /dev/dri/cardN`.
+   Watch `stats`: `flips` grows, `flip_timeouts` stays 0.
+3. `rmmod gs-decon`: the screen parks on black; reboot to get simpledrm
+   back.
+
+- Pass: no tearing in kmscube, a steady 60 fps, no timeouts.
+- Risks: wrong pixel order (colours swapped: then the DPP format needs the
+  BGRA/XBGR variant, logged at probe); a stale shadow request (each flip
+  then times out after 100 ms: visible in `flip_timeouts`).
+
+**D4a-2: Hyprland on gs-decon.** Options in
+`/etc/modprobe.d/omandroid-decon.conf` (`options gs_decon stage=2`), loaded
+from the initramfs before Plymouth. Pass: Hyprland's `debug:overlay` shows
+60 fps with vsync, no tearing when scrolling, and `hyprctl monitors` shows
+the real 60 Hz mode with vblank. Measure the drop in CPU use against
+simpledrm's copy.
+
+**D5c: 120 Hz by hand (after D4a-1, and only with the MIF floor
+available, or with D5a showing a high MIF).**
+
+```sh
+P=/sys/bus/mipi-dsi/devices/1c2c0000.dsi.0
+tools/phone-ssh "echo 1 > /sys/module/panel_samsung_s6e3hc4/parameters/allow_rate_switch"
+# up: DSIM timers and the panel back to back (MIF/DISP floors first, once ACPM exists)
+tools/phone-ssh "devmem 0x1c2c0034 0x3ec; devmem 0x1c2c0088 0x19f51d93; echo 120 > $P/refresh_rate"
+tools/display-hz --clear-underrun --secs 10     # expect ~120, underrun bit 0
+# down
+tools/phone-ssh "echo 60 > $P/refresh_rate; devmem 0x1c2c0088 0x33eb3b26; devmem 0x1c2c0034 0x1f09"
+```
+
+- Pass: 120 frames/s, no underrun bit after a minute of full-screen motion,
+  no flashing lines.
+- With ACPM: repeat at each MIF level from 845 MHz up and keep the lowest
+  clean one plus one level.
+- Risks: underrun at low MIF (flashing lines, recoverable by going back
+  down); a TE/timer mismatch (stays at 60, or the DSIM TE timeout fires;
+  restore the 60 Hz values). Brightness writes keep working, but the LP
+  window between frames shrinks to about 1.2 ms.
+
+**D5d: 120 Hz under KMS.** Fold D5c into a `gs-decon` mode set (D5.2, "where
+the 120 Hz switch will live"), with the MIF/DISP floors, and add 10/30 Hz
+idle (the panel's auto mode, `HC4:435-481`) later.
+
+### D5.5 Built (2026-10-12)
+
+Kernel branch `omandroid-display2`, on `omandroid` @ `e7cb10fe5`:
+
+| Commit | What |
+|---|---|
+| `1ca875861` | drm/panel: samsung-s6e3hc4: set the operating features and refresh rate (feature/rate set in `prepare`; `refresh_rate` knob behind `allow_rate_switch`) |
+| `1d567d206` | dt-bindings: display: samsung: add Google gs201 DECON |
+| `96f810ca9` | drm: google: add a flip-only KMS driver for the gs201 DECON (`gs-decon`, `stage` 0/1/2, `force_xrgb`) |
+| `00e49c41b` | arm64: dts: exynos: google: gs201: add DECON0 (disabled) |
+| `52ec674f1` | arm64: dts: exynos: google: gs201-cheetah: add the DECON0 scanout pool (disabled) |
+
+- `kernel`, `modules`, `initramfs` and `images` build into `out-display2`
+  (logs `logs/*-display2.log`), release
+  `7.3.0-rc6-omandroid-push1-00060-g52ec674f1ef2`; W=1 is clean for `gs-decon.o`,
+  `gs-dsim-cmd.o` and `panel-samsung-s6e3hc4.o`.
+- `dt-doc-validate` passes for the new binding; `dt-validate` of the
+  shipped `gs201-cheetah.dtb`, and of a D4 test DTB with `decon0` and
+  `display_pool` okay, reports only the long-standing `soc_id` and the
+  framebuffer's `post-init-providers`.
+- With the shipped DTB nothing new probes. The one behaviour change on
+  today's path: a panel cold init (`prepare`, only reachable from D4b) now
+  ends with the feature/rate set.
+- `kernel/configs/omandroid.config` gains `CONFIG_DRM_GS_DECON=m`.
+  `tools/display-hz` is the D5a tool.
+
+**First step:** D5a, `tools/display-hz --secs 10` on the running phone
+(read-only, no new kernel).
