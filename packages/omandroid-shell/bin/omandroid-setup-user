@@ -83,6 +83,18 @@ if omarchy-done ensure omandroid-chromium-no-first-run; then
     echo --no-first-run >>~/.config/chromium-flags.conf
 fi
 
+# Websites and web apps should get their phone versions. Sites choose by the
+# user agent (desktop Chromium on Linux ignores --use-mobile-user-agent, and
+# an explicit one also drops the desktop client hints) and by the page width
+# in CSS pixels: Hyprland's scale 3 already gives a phone's 480, which
+# Omarchy's desktop shrink factor would widen. Once.
+if omarchy-done ensure omandroid-chromium-mobile; then
+  flags=~/.config/chromium-flags.conf
+  major=$(chromium --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
+  [[ -f $flags ]] && sed -i -e '/^--force-device-scale-factor=/d' -e '/^--user-agent=/d' "$flags"
+  echo "--user-agent=Mozilla/5.0 (Linux; Android 14; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major:-153}.0.0.0 Mobile Safari/537.36" >>"$flags"
+fi
+
 # Lock screen: Omarchy's lock with a number pad (lock-keypad toggle, see
 # patches/omarchy/0003-*), since its session lock hides the on-screen keyboard.
 if omarchy-done ensure omandroid-lock-keypad; then
