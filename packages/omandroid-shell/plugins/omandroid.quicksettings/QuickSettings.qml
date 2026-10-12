@@ -12,7 +12,7 @@ import qs.Commons as Commons
 import qs.Ui
 
 // Pull-down quick settings for the phone. The sheet drops from the top edge
-// over the status bar: a clock header, six toggle tiles, then brightness and
+// over the status bar: a clock header, eight toggle tiles, then brightness and
 // volume. Tap outside it, swipe it up, or press Escape to put it away. The
 // Wi-Fi and Bluetooth tiles' chevrons (or a long-press) open the panels in
 // WifiPanel.qml and BluetoothPanel.qml.
@@ -52,6 +52,8 @@ Item {
     brightness.refresh()
     torch.refresh()
     rotationLock.refresh()
+    location.refresh()
+    nfc.refresh()
     clockFormatRead.running = true
   }
 
@@ -110,7 +112,8 @@ Item {
   function toggleTile(name) {
     var tilesByName = {
       "wifi": wifi, "bluetooth": bluetooth, "mobile-data": mobileData,
-      "rotation-lock": rotationLock, "torch": torch, "dnd": dnd
+      "rotation-lock": rotationLock, "torch": torch, "dnd": dnd, "location": location,
+      "nfc": nfc
     }
     var target = tilesByName[String(name || "")]
     if (!target) return "unknown"
@@ -359,6 +362,92 @@ Item {
   Process {
     id: rotationWrite
     onExited: rotationLock.refresh()
+  }
+
+  // Location over omandroid-gnss (package omandroid-gnss): on lets apps ask
+  // GeoClue for positions and runs the receiver only while one does; off
+  // stops it and lets nothing start it. As the user, on/off go through
+  // polkit. "No GNSS" when the command or the vendor files are missing.
+  QtObject {
+    id: location
+
+    property bool available: false
+    property bool enabled: false
+    property bool running: false
+    readonly property string status: !available ? "No GNSS" : !enabled ? "Off" : running ? "In use" : "On"
+
+    function refresh() {
+      if (!locationRead.running) locationRead.running = true
+    }
+
+    function toggle() {
+      if (!available || locationWrite.running) return
+      locationWrite.command = ["omandroid-gnss", enabled ? "off" : "on"]
+      enabled = !enabled
+      locationWrite.running = true
+    }
+  }
+
+  Process {
+    id: locationRead
+    command: ["omandroid-gnss", "status", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var info = null
+        try { info = JSON.parse(String(text || "").trim()) } catch (error) {}
+        location.available = !!info && info.installed === true
+        location.enabled = !!info && info.location === "on"
+        location.running = !!info && info.running === "yes"
+      }
+    }
+    onExited: function(exitCode) { if (exitCode !== 0) location.available = false }
+  }
+
+  Process {
+    id: locationWrite
+    onExited: location.refresh()
+  }
+
+  // NFC through its rfkill switch, which the kernel's NFC core registers for
+  // each controller (type "nfc"); the session may write /dev/rfkill. "No NFC"
+  // until a controller has probed.
+  QtObject {
+    id: nfc
+
+    property bool available: false
+    property bool enabled: false
+    readonly property string status: !available ? "No NFC" : enabled ? "On" : "Off"
+
+    function refresh() {
+      if (!nfcRead.running) nfcRead.running = true
+    }
+
+    function toggle() {
+      if (!available || nfcWrite.running) return
+      nfcWrite.command = ["rfkill", enabled ? "block" : "unblock", "nfc"]
+      enabled = !enabled
+      nfcWrite.running = true
+    }
+  }
+
+  Process {
+    id: nfcRead
+    command: ["rfkill", "-rn", "-o", "TYPE,SOFT"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var lines = String(text || "").trim().split("\n").filter(function(line) { return /^nfc\s/.test(line) })
+        nfc.available = lines.length > 0
+        nfc.enabled = lines.length > 0 && lines.every(function(line) { return /\sunblocked$/.test(line) })
+      }
+    }
+    onExited: function(exitCode) { if (exitCode !== 0) nfc.available = false }
+  }
+
+  Process {
+    id: nfcWrite
+    onExited: nfc.refresh()
   }
 
   // The rear flash LED in torch mode (leds-lm3644, white:torch). "100%" is
@@ -657,6 +746,26 @@ Item {
             active: rotationLock.enabled
             available: rotationLock.available
             onClicked: rotationLock.toggle()
+          }
+
+          Tile {
+            width: tiles.tileWidth
+            icon: location.enabled ? "󰍎" : "󰍐"
+            label: "Location"
+            status: location.status
+            active: location.enabled
+            available: location.available
+            onClicked: location.toggle()
+          }
+
+          Tile {
+            width: tiles.tileWidth
+            icon: "󰎖"
+            label: "NFC"
+            status: nfc.status
+            active: nfc.enabled
+            available: nfc.available
+            onClicked: nfc.toggle()
           }
 
           Tile {

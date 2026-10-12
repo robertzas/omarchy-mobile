@@ -14,7 +14,7 @@ logical at scale 3).
 | Plugin | Kind | What it is |
 | --- | --- | --- |
 | `omandroid.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings |
-| `omandroid.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: six toggle tiles, brightness and volume; Wi-Fi picker and Bluetooth panel |
+| `omandroid.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: eight toggle tiles, brightness and volume; Wi-Fi picker and Bluetooth panel |
 | `omandroid.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
 
@@ -78,7 +78,7 @@ hardware keys:
 
 A sheet that slides down from the top edge over the status bar, styled as an
 Omarchy popup (popups background and border). It has a clock and date header,
-six toggle tiles in two columns, then brightness and volume sliders. Tap the
+eight toggle tiles in two columns, then brightness and volume sliders. Tap the
 scrim, swipe the sheet up, or press Escape to close it.
 
 | Tile | Backend |
@@ -86,6 +86,8 @@ scrim, swipe the sheet up, or press Escape to close it.
 | Wi-Fi | `Networking.wifiEnabled` (NetworkManager); status shows the SSID. The chevron or a long-press opens the Wi-Fi picker (below) |
 | Bluetooth | `omarchy-bluetooth-power on/off`, the same rfkill path as Omarchy's Bluetooth panel. The chevron or a long-press opens the Bluetooth panel (below) |
 | Mobile data | **Stub**: no modem backend (ModemManager wiring is the TODO) |
+| Location | `omandroid-gnss on` and `off` (omandroid-gnss), through polkit; "In use" while the receiver runs, "No GNSS" without the command or the vendor files |
+| NFC | the controller's rfkill switch (`rfkill block nfc`, `rfkill unblock nfc`); "No NFC" until a controller probes (RADIOS-CAMERA-PLAN section 3) |
 | Rotation lock | `omandroid-autorotate` (omandroid-sensors): locked by `~/.local/state/omandroid/rotation-lock`; unlocking also enables the service. "No sensor" while the sensor proxy has no accelerometer |
 | Torch | **Stub**: the flash LED has no mainline driver; once a `*:flash`/`*:torch` LED appears in `/sys/class/leds`, drive it with `brightnessctl -d` |
 | Do not disturb | The notification service's `notifications` IPC target on this shell instance |
@@ -187,7 +189,7 @@ IPC:
 | `omarchy-shell shell summon omandroid.quicksettings '{"page":"bluetooth"}'` | Open the Bluetooth panel |
 | `omarchy-shell shell call omandroid.quicksettings openBluetooth ''` | The same; returns the panel's state, or `unavailable` |
 | `omarchy-shell shell call omandroid.quicksettings bluetoothPanel ''` | JSON: panel open, adapter name, power, discovering, visible, helper, paired, available (with RSSI and type), unnamed count, action, failure, sheet, pairing phase |
-| `omarchy-shell shell call omandroid.quicksettings toggleTile <name>` | Same as tapping a tile. Names: `wifi`, `bluetooth`, `mobile-data`, `rotation-lock`, `torch`, `dnd`. Returns the new state, `unavailable` or `unknown` |
+| `omarchy-shell shell call omandroid.quicksettings toggleTile <name>` | Same as tapping a tile. Names: `wifi`, `bluetooth`, `mobile-data`, `rotation-lock`, `location`, `nfc`, `torch`, `dnd`. Returns the new state, `unavailable` or `unknown` |
 
 ## omandroid.launcher
 
