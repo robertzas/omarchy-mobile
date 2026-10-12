@@ -8,6 +8,7 @@
 #   power, held 0.6 s  unlocked: Omarchy's system menu, while still held
 #                      locked: screen on
 #   power + volume down together: screenshot (Omarchy's, full screen)
+#   volume down alone   lowers the volume after a 0.15 s wait for power
 # Hyprland can't bind a chord of two plain keys or a long press that fires
 # while held, so each key reports here and the gesture is worked out from
 # when the keys went down. Hyprland cancels power's release bind once another
@@ -23,6 +24,8 @@ now() { date +%s%3N; }
 window=500
 # A press held this long is a long press.
 hold=0.6
+# Volume down waits this long for power before it lowers the volume.
+volume_wait=0.15
 
 recent() {
   [[ -f $state/$1 ]] && (($(now) - $(<"$state/$1") <= window))
@@ -111,9 +114,25 @@ case "${1:-}" in
     fi
     ;;
   volume-down)
-    now >"$state/volume-down"
-    # Power still held, or pressed just before.
-    [[ -f $state/power ]] && chord
+    press=$(now)
+    previous=$(cat "$state/volume-down" 2>/dev/null || echo 0)
+    echo "$press" >"$state/volume-down"
+    # Power still held, or pressed just before: the screenshot chord.
+    if [[ -f $state/power ]]; then
+      chord
+    # Part of a chord that's still held: no volume change.
+    elif [[ -f $state/chord ]]; then
+      :
+    # Key repeat while held (or a quick second press): lower right away.
+    elif ((press - previous < 700)); then
+      omarchy-audio-output-volume lower
+    # A fresh press: give power a moment to join, then lower the volume.
+    else
+      (
+        sleep "$volume_wait"
+        [[ -f $state/power || -f $state/chord ]] || omarchy-audio-output-volume lower
+      ) >/dev/null 2>&1 &
+    fi
     ;;
   power-up)
     if [[ -f $state/chord ]]; then

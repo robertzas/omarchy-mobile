@@ -28,7 +28,11 @@ o.launch_on_start(
 hl.unbind("XF86PowerOff")
 o.bind("XF86PowerOff", "Power key", "omandroid-keys power-down", { locked = true })
 o.bind("XF86PowerOff", "System menu", "omandroid-keys power-up", { locked = true, release = true })
-o.bind("XF86AudioLowerVolume", "Screenshot chord", "omandroid-keys volume-down", { locked = true, non_consuming = true })
+-- Volume down is also half of the screenshot chord, so it can't lower the
+-- volume the moment it goes down: take over Omarchy's binding and let
+-- omandroid-keys decide (a short wait for power, as on Android).
+hl.unbind("XF86AudioLowerVolume")
+o.bind("XF86AudioLowerVolume", "Volume down", "omandroid-keys volume-down", { locked = true, repeating = true })
 
 -- A fresh phone (no name and email, or no PIN): a notification offers the
 -- onboarding that Omarchy's installer does on a computer.
