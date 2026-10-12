@@ -676,7 +676,116 @@ tools/phone-ssh 'rfkill block nfc; nfctool -d nfc0 -1; echo rc=$?; rfkill unbloc
 #   rollback for N2.3-N2.6: nfctool -d nfc0 -0; modprobe -r st_nci_i2c st_nci
 ```
 
-#### Runbook N3: read a tag (needs N2.4 passed)
+#### N2 results (2026-10-12, `7.3.0-rc6-omandroid-push1-00306-g60d3ca176c80`)
+
+int with `omandroid-nfc` `a6ed1ea8b`, overlays including `nfc-test`,
+device-cheetah 0.1.23, neard 0.20.
+
+- **N2.1 pass:** blacklist count 1, no NFC file in `/etc/modprobe.d`,
+  `nfctool` present. (neard built on the phone once its makedepends,
+  autoconf-archive among them, were installed.)
+- **N2.2 pass:** no st_nci module; `pmu-clkout0/1` at 24576000, enable
+  count 0, hardware enable N: **ABL leaves bit 0 clear on both pads.**
+  gph0-5 input low (PUD 0x1), gph1-4 output low, gph1-5 output high.
+- **N2.3 pass:** nfc0 registered, rfkill `nfc unblocked unblocked`,
+  clkout1 count 0. gph1-5's power-down settings changed to the pin group's
+  (CON_PDN 0x2 to 0x3, PUD_PDN 0x1 to 0x0); live state unchanged.
+- **N2.4 fail:** `nfctool -d nfc0 -1` "Connection timed out". Three 5 s
+  `__nci_request` timeouts, then "SE discovery failed". No I2C errors
+  logged, gph1-4/5 unchanged. **N2.5 pass** (powered: no).
+
+Why:
+1. **Wrong link protocol.** Upstream st-nci frames everything in NDLC (a
+   PCB byte, acknowledges). The ST54J speaks plain NCI over I2C: Google's
+   st21nfc.c reads a 3-byte NCI header (byte 2 = payload length), then the
+   payload, and skips 0x7e idle bytes (`st21nfc_dev_read()`). The chip got
+   an unknown leading byte and never answered. The three timeouts were:
+   st-nci's proprietary SET_NFC_MODE in `ops->init` (before CORE_RESET
+   was even sent), the SET_NFC_MODE in `ndlc_close()` during the error
+   path, and NFCEE_DISCOVER.
+2. **"SE discovery failed" is a core bug:** `nfc_dev_up()` ran
+   `discover_se()` even after `dev_up()` failed, and the NCI core sends
+   NFCEE_DISCOVER before calling the driver's hook. So `829e25aed`'s early
+   return never mattered.
+3. **The clock was enabled during the attempt** (count 1 between
+   `nfctool -1` and the error path's close; the regmap write returned 0,
+   or power-up would have failed with that error instead of a timeout).
+   Whether the pad runs with bit 0 set is still unproven.
+4. **Two latent st-nci bugs:** `hard_fault` was never cleared, so after one
+   failure every later power-up failed until the module was reloaded. And
+   the interrupt was enabled while the link was still marked unpowered, so
+   a CORE_RESET_NTF right after reset made the IRQ thread disable the
+   interrupt without reading the frame.
+
+Not needed (question 3): gph0-5 (power-idle) is an output of the chip,
+which stock only watches as an interrupt for power statistics. CLKREQ
+(gpp25-3) is unused on stock (no `st,clk_pinctrl`). Reset timing: stock's
+HAL resets with a double pulse (20 ms low, 10 ms high, 20 ms low, high) to
+leave quick boot mode. The plain NCI mode does the same, then waits 80 ms.
+
+#### Fix: `omandroid-nfc` head `3502821fa` (on `a6ed1ea8b`)
+
+- `d86b6cfae` nfc core: no SE discovery after a failed `dev_up()`.
+- `9e8575465` st-nci: plain NCI link for `st,st54j-i2c` (raw ndlc mode, I2C
+  reader with idle-byte handling, double reset pulse, no SET_NFC_MODE);
+  `hard_fault` cleared on open; powered before reset release; dev_dbg and
+  hex dumps of every frame and I2C error.
+- `ed80f106a` st-nci: with no SE described, the NCI device has no SE ops
+  at all, so neither NFCEE_DISCOVER nor the HCI network set-up runs
+  (replaces `829e25aed`'s early return).
+- `3502821fa` clkout (bring-up only): writable parameter
+  `clk_exynos_clkout.gs101_pad_en_active_low` (default 0: bit 0 set runs
+  the pad), read at every enable/disable, and a pr_debug of `PAD_CTRL`
+  after each change. Both polarities can be tried in one boot.
+
+checkpatch clean (no Signed-off-by, by rule); W=1 clean for st-nci,
+clkout and `net/nfc/core.c`.
+
+#### Runbook N2.4b: plain NCI power-up, both clock polarities
+
+```sh
+# laptop: the human merges omandroid-nfc (3502821fa) into omandroid-int
+export KERNEL_DIR=~/android/mainline/wt-int KERNEL_OUT=~/android/mainline/out-int
+bin/omandroid kernel && bin/omandroid modules
+O=$KERNEL_OUT D=$O/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb; rm -f "$D.default"
+ov <the overlays the phone boots now, nfc-test included> && bin/omandroid push    # reboots
+#   pass: as N2.2 (boot, USB/SSH, UFS, touch, Wi-Fi, sound; st_nci not loaded).
+
+# N2.4b-0  bind with dynamic debug on (risk: low, as N2.3)
+#   second terminal first:  tools/phone-ssh dmesg -w
+tools/phone-ssh 'modprobe nci dyndbg=+p; modprobe st_nci dyndbg=+p; modprobe st_nci_i2c dyndbg=+p;
+  echo "file clk-exynos-clkout.c +p" > /sys/kernel/debug/dynamic_debug/control;
+  cat /sys/module/clk_exynos_clkout/parameters/gs101_pad_en_active_low; ls /sys/class/nfc;
+  grep st_nci /proc/interrupts'
+#   pass: N (default polarity), nfc0, the st_nci IRQ line with its count.
+
+# N2.4b-1  power-up, default polarity (bit 0 set = run) (risk: low-medium, as N2.4;
+#          no SE ops now, so only CORE_RESET/CORE_INIT go out)
+tools/phone-ssh 'nfctool -d nfc0 -1; echo rc=$?; nfctool -l; grep st_nci /proc/interrupts;
+  dmesg | grep -E "st_nci|pmu-clkout|nci" | tail -40'
+#   expect in dmesg: "pmu-clkout1: enable, PAD_CTRL 0x3e84 = 0x00000001", "reset released
+#   (double pulse)", then tx 20 00 01 01 (CORE_RESET_CMD), rx 40 00 01 00 (RSP) and a
+#   60 00 ... CORE_RESET_NTF, tx 20 01 02 00 00 (CORE_INIT), rx 40 01 ...
+#   pass: rc=0, nfc0 powered, IRQ count went up. Skip to N2.5 (nfctool -0), then N2.6.
+#   read the failure from the log:
+#     no rx, IRQ count unchanged: the chip is silent (clock or reset): N2.4b-2;
+#     rx of only "read: idle": the link works, the chip is not ready: record, stop;
+#     "write of N bytes failed": I2C NACK: record the error, stop;
+#     rx frames but a timeout: the dump says which command; record, stop.
+
+# N2.4b-2  only if N2.4b-1 failed with no rx: the other polarity (risk: low-medium)
+tools/phone-ssh 'nfctool -d nfc0 -0; cat /sys/kernel/debug/clk/pmu-clkout1/clk_enable_count;
+  echo 1 > /sys/module/clk_exynos_clkout/parameters/gs101_pad_en_active_low;
+  nfctool -d nfc0 -1; echo rc=$?; nfctool -l; grep st_nci /proc/interrupts;
+  dmesg | grep -E "st_nci|pmu-clkout|nci" | tail -40'
+#   flip the parameter only with enable count 0. Expect "PAD_CTRL 0x3e84 = 0x00000000" on
+#   enable. pass as N2.4b-1. Record which polarity passed; that fixes the driver's default.
+#   stop: both fail with no rx. Leave NFC off, keep the logs (no identifiers in them).
+# rollback: nfctool -d nfc0 -0; echo 0 > /sys/module/clk_exynos_clkout/parameters/gs101_pad_en_active_low;
+#   modprobe -r st_nci_i2c st_nci; images without nfc-test.
+```
+
+#### Runbook N3: read a tag (needs N2.4 or N2.4b passed)
 
 Any NFC tag or transit card, held to the middle of the back. Don't copy a
 tag's UID into this plan; record its length and type.
