@@ -295,9 +295,65 @@ Failure clues:
 - `servicemanager` or linker errors: `run`-test a binary inside, e.g.
   `omandroid-vendor-chroot gnss ns ls /dev`, and send the log.
 
+**G3 result (2026-10-12, runner `9163788`):**
+- servicemanager starts. lhd starts, reads our lhd.conf and logs only the
+  expected errors.
+- **lhd never opened `/dev/ttyBCM`:** the chip stayed in standby with its
+  rails off, and the stop was clean.
+- **Why:** lhd does not touch the chip on its own. It talks to gpsd over
+  named pipes in `/data/vendor/gps` (`.pipe.gpsd_to_lhd`,
+  `.pipe.chd_to_lhd`, strings in `lhd`). It powers the chip and loads the
+  patch when gpsd needs it, and resets the chip when gpsd exits ("Gpsd has
+  terminated! force reset mcu"). So lhd alone idling is correct.
+- **`/sys/bbd/lk_enable`:** lhd's "killer" switch. Google's GPL bbd driver
+  (the one stock runs) has no such attribute either, so stock lhd logs the
+  same error. No stub is needed.
+- **gpsd starts a position session only when asked.** The profile now asks
+  through gpsd's control pipe (`CtrlPipe`, `/data/vendor/gps/glgpsctrl`)
+  with `$pglirm,req_pos,omandroid,period,1000`. The command format and its
+  `$pglirm,stop,...` counterpart are strings in gpsd. The NMEA of that
+  request goes to the `NmeaOutName` FIFO.
+- gpsd runs as a plain daemon by default now (`OMANDROID_GNSS_JOB` empty).
+
+### G3b: lhd + gpsd together, 90 s, indoors
+
+Reinstall the profile (`vendor-chroot/profiles/gnss.conf`); the tree and
+the runner are unchanged. Keep a reader on the NMEA FIFO, so gpsd never
+blocks opening it.
+
+```sh
+tools/phone-ssh 'install -m644 /dev/stdin /usr/lib/omandroid-vendor/profiles/gnss.conf' < vendor-chroot/profiles/gnss.conf
+tools/phone-ssh 'F=/var/lib/omandroid-vendor/gnss/data/vendor/gps/nmea_out; mkdir -p $(dirname $F); [ -p $F ] || mkfifo -m 600 $F;
+  /usr/lib/omandroid-vendor/omandroid-vendor-chroot gnss check;
+  (timeout 100 cat $F > /tmp/g3b-nmea.txt &);
+  (OMANDROID_VENDOR_LOGLEVEL=2 timeout 90 /usr/lib/omandroid-vendor/omandroid-vendor-chroot gnss start > /tmp/g3b.log 2>&1 &);
+  sleep 30; echo "== during"; cat /sys/kernel/debug/spi5.0/pins;
+  sleep 70; echo "== after"; cat /sys/kernel/debug/spi5.0/pins;
+  for r in /sys/class/regulator/regulator.*; do case $(cat $r/name) in vdd_gnss*) echo $(cat $r/name) $(cat $r/state);; esac; done;
+  pgrep -a "lhd|gpsd" || echo "none left"; ls -l /var/lib/omandroid-vendor/gnss/data/vendor/gps/;
+  echo "== nmea"; wc -l /tmp/g3b-nmea.txt; grep -E "GSV|RMC|GGA" /tmp/g3b-nmea.txt | tail -8;
+  echo "== log"; grep -E "omandroid-vendor|\[gpsd\].* [EFW] |ESW|Broadcom" /tmp/g3b.log | head -40; tail -n 40 /tmp/g3b.log'
+```
+
+Pass:
+- **During:** `powered 1`, `nstandby 1`, packets rising, `tx_fail 0`.
+- **Log:** "control pipe: req_pos"; gpsd identifies the chip as a Broadcom
+  BCM477x (expect "BCM4776"); no gpsd exit.
+- **NMEA:** GSV sentences. Indoors there may be few or no satellites; RMC
+  with status V is fine here.
+- **After:** one "stopping", no lhd or gpsd left, `powered 0`, all three
+  rails disabled.
+
+If it fails:
+- "a service exited" early: send `/tmp/g3b.log` (gpsd failing on binder,
+  the RIL client library or the sensor service).
+- "no control pipe ... after 60 s": gpsd never created `glgpsctrl`. Send
+  the `ls -l` of the gps directory.
+- No NMEA but lhd powered the chip: send both files.
+
 ### G4: a fix outdoors, unattended, rails off afterwards
 
-Same set-up as G3, plus Wi-Fi in range if possible (orbit predictions and
+Same set-up as G3b (after it passes), plus Wi-Fi in range if possible (orbit predictions and
 SUPL; without them a cold start can take several minutes). Everything runs
 under systemd with a hard time limit. When it ends, the namespace dies,
 `/dev/ttyBCM` closes and the chip loses power, whether the run worked or
@@ -308,7 +364,7 @@ not. The phone can be unplugged and carried outside.
 tools/phone-ssh 'F=/var/lib/omandroid-vendor/gnss/data/vendor/gps/nmea_out;
   mkdir -p $(dirname $F); [ -p $F ] || mkfifo -m 600 $F;
   systemd-run --unit=g4-nmea --property=RuntimeMaxSec=1000 sh -c "cat $F > /var/tmp/g4-nmea.txt";
-  systemd-run --unit=g4-gnss --property=RuntimeMaxSec=900 --setenv=OMANDROID_GNSS_JOB=omandroid \
+  systemd-run --unit=g4-gnss --property=RuntimeMaxSec=900 \
     /usr/lib/omandroid-vendor/omandroid-vendor-chroot gnss start;
   sleep 20; systemctl --no-pager status g4-gnss | tail -5; cat /sys/kernel/debug/spi5.0/pins'
 #   expect: g4-gnss active, powered 1. Unplug, put the phone outdoors with a clear
@@ -318,8 +374,8 @@ tools/phone-ssh 'systemctl is-active g4-gnss g4-nmea; cat /sys/kernel/debug/spi5
   grep -E "GSV" /var/tmp/g4-nmea.txt | tail -5; grep -E "RMC" /var/tmp/g4-nmea.txt | grep ",A," | head -3'
 #   pass: both units inactive (time limit), powered 0; GSV lines with satellites and
 #   SNRs; RMC lines with status A (a fix).
-#   empty file: gpsd wrote nothing to the FIFO in job mode; repeat with
-#   --setenv=OMANDROID_GNSS_JOB= (plain daemon) and send both journals.
+#   empty file: no NMEA from the control-pipe request; repeat with
+#   --setenv=OMANDROID_GNSS_JOB=omandroid (job mode) and send both journals.
 # stop early at any time (rails go off the same way):
 tools/phone-ssh 'systemctl stop g4-gnss g4-nmea; cat /sys/kernel/debug/spi5.0/pins'
 ```
