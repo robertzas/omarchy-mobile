@@ -1128,8 +1128,8 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
        the bottom one about 3 s later, while the stream still ran.
      - Step 3: through both -10 dBFS bursts every DSP value stayed frozen
        (heartbeat, temperature, excursion), state still 0, and both bursts
-       were clearly audible. The top amplifier then acknowledged the pause
-       at stream stop; the bottom did not.
+       were clearly audible. At the stream stops only the bottom amplifier
+       logged a failed pause.
      - **Cause: step 1's `grep` over the whole regmap `registers` file.**
        The file lists every readable register, which for this driver goes
        on past the amplifier's registers into the DSP's XM, YM and program
