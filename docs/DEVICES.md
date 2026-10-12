@@ -7,17 +7,19 @@ The status of each phone, as verified on real hardware. To add a device or updat
 
 - **works**: verified on the phone, on by default;
 - **testing**: works by hand, not yet on by default;
+- **partial**: works on by default, with a known gap that the notes name;
 - **WIP**: bring-up in progress, some gates passed;
+- **built**: driver and DT written and built, not yet run on the phone;
 - **boots**: the block's firmware runs, but nothing user-facing uses it yet;
 - **no**: not started, or blocked;
 - **-**: the hardware doesn't exist on this device.
 
 ## Matrix
 
-| Device | Codename | SoC | Boot | Storage | Display | GPU | Touch | Buttons | USB net | Wi-Fi | Bluetooth | Battery | Charging | Haptics | Torch | GNSS | AoC | Speakers/mics | Sensors | Modem | Cameras | Suspend | Fingerprint |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Pixel 7 Pro | cheetah | gs201 (Tensor G2) | works | works | works (120 Hz) | works (DVFS) | works | works | works | works | works (audio) | works | testing | works | works | WIP | boots | no | WIP | no | no | no | WIP |
-| *Template* | *codename* | *SoC* | | | | | | | | | | | | | | | | | | | | | |
+| Device | Codename | SoC | Boot | Storage | Display | GPU | Touch | Buttons | USB net | Wi-Fi | Bluetooth | Battery | Charging | Haptics | Torch | GNSS | AoC | Speakers/mics | Sensors | Modem | NFC | Cameras | Suspend | Fingerprint |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Pixel 7 Pro | cheetah | gs201 (Tensor G2) | works | works | works (120 Hz) | works (DVFS) | works | works | works | works | works (audio) | works | testing | works | works | WIP | works | WIP (mics) | partial | WIP | built | no | WIP | WIP |
+| *Template* | *codename* | *SoC* | | | | | | | | | | | | | | | | | | | | | | |
 
 ## cheetah (Pixel 7 Pro) in detail
 
@@ -25,7 +27,7 @@ The status of each phone, as verified on real hardware. To add a device or updat
 | --- | --- | --- | --- |
 | Boot | works | Mainline on slot B, stock Android kept on slot A; the boot-success marker sets the slot's flags in `devinfo` | [BRINGUP-M1](../device/cheetah/BRINGUP-M1.md) |
 | Storage | works | UFS, behind the read-only partition guard; the Arch root on `userdata` | [NOTES](../device/cheetah/NOTES.md) |
-| Display | works | Our flip-only KMS driver (gs-decon) on DECON0 → DSIM0 → S6E3HC4, 120 Hz by default, brightness, DPMS | [DISPLAY-PLAN](../device/cheetah/DISPLAY-PLAN.md) |
+| Display | works | Our flip-only KMS driver (gs-decon) on DECON0 → DSIM0 → S6E3HC4, 120 Hz by default, brightness, DPMS; the panel sleeps when the screen is off | [DISPLAY-PLAN](../device/cheetah/DISPLAY-PLAN.md) |
 | GPU | works | Mali-G710 on Panthor, with Mesa patched for G710; frequency scaling through ACPM | [GPU-PLAN](../device/cheetah/GPU-PLAN.md), [ACPM-PLAN](../device/cheetah/ACPM-PLAN.md) |
 | Touch | works | Synaptics S3908 over SPI, our TouchComm driver | [NOTES](../device/cheetah/NOTES.md) |
 | Buttons | works | Power and volume through `gpio-keys` | [NOTES](../device/cheetah/NOTES.md) |
@@ -36,13 +38,14 @@ The status of each phone, as verified on real hardware. To add a device or updat
 | Charging | testing | MAX77759 charger works by hand; waits for the temperature guard before it's on by default | [USB-C-PLAN](../device/cheetah/USB-C-PLAN.md) |
 | Haptics | works | CS40L26A, through feedbackd | [HAPTICS-TORCH-PLAN](../device/cheetah/HAPTICS-TORCH-PLAN.md) |
 | Torch | works | LM3644TT, quick-settings tile | [HAPTICS-TORCH-PLAN](../device/cheetah/HAPTICS-TORCH-PLAN.md) |
-| GNSS | WIP | Google's GNSS stack in a vendor chroot; the chip streams NMEA, no outdoor fix verified yet | [GNSS-PLAN](../device/cheetah/GNSS-PLAN.md) |
-| AoC | boots | The audio and sensor DSP starts through the GSA and Trusty (82 services); no kernel clients yet | [AOC-PLAN](../device/cheetah/AOC-PLAN.md) |
-| Speakers/mics | no | CS35L41 amplifiers and the AoC audio path not brought up | [AUDIO-PLAN](../device/cheetah/AUDIO-PLAN.md) |
-| Sensors | WIP | Accelerometer, light, proximity and compass through the AoC's USF; `omandroid-sensors` written | [USF-PROTOCOL](../device/cheetah/USF-PROTOCOL.md) |
-| Modem | no | S5300 on PCIe; link bring-up built, not run | [MODEM-PLAN](../device/cheetah/MODEM-PLAN.md) |
+| GNSS | WIP | `omandroid-gnss`: Google's GNSS stack in a vendor chroot, started on demand through GeoClue, with a Location quick-settings tile. The chip streams NMEA; a fix still needs an outdoor test | [GNSS-PLAN](../device/cheetah/GNSS-PLAN.md) |
+| AoC | works | The audio and sensor DSP starts at boot (`omandroid-aoc.service`) through the GSA and Trusty, with 82 services; sensors and the sound card use it | [AOC-PLAN](../device/cheetah/AOC-PLAN.md) |
+| Speakers/mics | WIP | The AoC sound card and both CS35L41 amplifiers probe; the microphones record. Speaker playback is in progress: the AoC rejected the entry point because the card's PCM numbers didn't match stock, and a kernel fix that sorts them is being tested | [AOC-PLAN](../device/cheetah/AOC-PLAN.md) C7, [AUDIO-PLAN](../device/cheetah/AUDIO-PLAN.md) |
+| Sensors | partial | `omandroid-sensors`: an iio-sensor-proxy D-Bus service from the AoC's USF, started at boot. Light, proximity and compass work; the accelerometer (I3C) goes missing after a warm reboot, and a fix that power-cycles the sensor rails is in progress. Auto-rotate works when it is there, switched from the rotation lock tile | [AOC-PLAN](../device/cheetah/AOC-PLAN.md) C6, [USF-PROTOCOL](../device/cheetah/USF-PROTOCOL.md) |
+| Modem | WIP | S5300 on PCIe: the link comes up (Gen1, endpoint `144d:a5a5`). No modem driver yet; UFS error-handler runs around modem power changes are open | [MODEM-PLAN](../device/cheetah/MODEM-PLAN.md) |
+| NFC | built | ST54J over I2C, driver and DT built, not yet run on the phone; quick settings has an NFC tile (rfkill) | [RADIOS-CAMERA-PLAN](../device/cheetah/RADIOS-CAMERA-PLAN.md) |
 | Cameras | no | Surveyed only | [RADIOS-CAMERA-PLAN](../device/cheetah/RADIOS-CAMERA-PLAN.md) |
-| Suspend | no | s2idle research and read-only checks done | [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md) |
+| Suspend | WIP | `pm_test` dry runs (freezer, devices, platform) pass; UFS needs a host reset after the platform level, and its `spm_lvl` is the open question | [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md) |
 | Fingerprint | WIP | Trusty runs from Linux; Google's HAL in a chroot, sensor and RPMB stages pending | [FINGERPRINT-RESEARCH](../device/cheetah/FINGERPRINT-RESEARCH.md) |
 
 ## Wanted

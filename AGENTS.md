@@ -11,7 +11,7 @@ Omandroid runs native Omarchy (Arch Linux ARM, Hyprland, Omarchy's packages) on 
 - **The phone is shared with a human. Announce anything that affects the screen or the feel of the phone before you run it**: DPMS, display modes and refresh rate, brightness, `bl_power`, haptics, the torch, the shell restarting, rotation. Otherwise they think the phone is broken, or it buzzes in their hand.
 - **Only slot B and `userdata` are ours.** Write only `boot_b`, `init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b` and `dtbo_b`, and only through `bin/omandroid flash|push`. Never touch bootloader, radio, `devinfo`, `persist`, `efs*`, `modem*` or `vbmeta`, and never run an unsuffixed `fastboot flash`. Slot A's stock Android is the way back.
 - **Never weaken the storage guard.** Don't `blockdev --setrw` a partition or recreate `/dev/sda`. Don't mount Android partitions read-write, and don't add names to the `UFS_RW` allowlist without the human's say-so. The guard is what keeps a bad command from erasing the IMEI.
-- **Check backups before radio, PMIC, AoC or Trusty work.** Run the checksum check of `efs`, `efs_backup`, `modem_userdata`, `persist` and `modem_a/b` against the off-repo backup first ([MODEM-PLAN.md](device/cheetah/MODEM-PLAN.md) M0.1). If there's no backup, stop.
+- **Check backups before radio, PMIC, AoC or Trusty work.** Run the checksum check of `efs`, `efs_backup`, `modem_userdata`, `persist` and `modem_a/b` against the off-repo backup first ([MODEM-PLAN.md](device/cheetah/MODEM-PLAN.md) M0.1). If there's no backup, stop. Find each partition by `PARTNAME` in `/sys/class/block/*/uevent`: the Arch root has no `/dev/disk/by-partlabel`. **Take a fresh read-only backup after any stock Android boot** (a slot A fallback counts): stock's modem stack writes `efs`, `persist` and `modem_userdata`, so the old checksums stop matching and the next check can't tell a change of ours from stock's.
 - **Never read or write PMU registers from userspace** (no `devmem`, no `debugfs/regmap/*pmu*/registers`). PMU writes from userspace are silently ignored, and one read of a PMU G3D register crashed the phone. Use the kernel's SMC-backed `exynos-pmu` regmap.
 - **`devmem` is `devmem ADDR [VALUE]`.** A second argument is written, so `devmem ADDR 32` writes 0x20. This once clobbered live DSIM timing registers.
 - **Read only blocks that are known powered and clocked, one register per call on a first probe.** A read of an unpowered block aborts the SoC and kills the session.
@@ -22,7 +22,7 @@ Omandroid runs native Omarchy (Arch Linux ARM, Hyprland, Omarchy's packages) on 
   - for anything at boot, a hang marker.
 
   USB is the only link, so a step that can kill it must be able to undo itself.
-- **When a reboot gets stuck:** systemd's `RebootWatchdogSec=1min` resets the phone a minute into a hung shutdown, so wait. If it's still stuck, ask the human to force a restart: Power held about 30 s, then Power. For fastboot by hand: Volume Down + Power held about 20 s. Don't send more commands to a phone that has stopped answering, and don't guess at its state. Ask.
+- **When a reboot gets stuck:** systemd's `RebootWatchdogSec=1min` resets the phone a minute into a hung shutdown, so wait. It doesn't cover a hang in the kernel's `device_shutdown` (a held device lock, as after the AoC `rmmod` oops below). If it's still stuck, ask the human to force a restart: Power held about 30 s, then Power. For fastboot by hand: Volume Down + Power held about 20 s. Don't send more commands to a phone that has stopped answering, and don't guess at its state. Ask.
 - **Never commit or paste identifying data or vendor blobs.** That means MAC and Bluetooth addresses, serial numbers, IMEIs, SSIDs, account names, `getprop` dumps, `persist` or `efs` contents, partition images, Google firmware and binaries. Grep your diff before committing (`[0-9a-f]{2}(:[0-9a-f]{2}){5}`, the SSID, the serial). Use placeholders such as `<SSID>`.
 - **Cite only properly licensed, citable sources** in commits, docs and code: upstream Linux, Google's GPL kernel, postmarketOS, Mesa, Omarchy and our own captures.
 
@@ -52,7 +52,7 @@ Omandroid runs native Omarchy (Arch Linux ARM, Hyprland, Omarchy's packages) on 
   ```
 
   This leaves other people's staged and unstaged changes alone.
-- **Moving a feature from bring-up into a package:** bump the package `version`, enable nothing that isn't hang-safe, and delete the bring-up blacklist from `/etc/modprobe.d` on the phone. Stale ones override the package's options.
+- **Moving a feature from bring-up into a package:** bump the package `version`, enable nothing that isn't hang-safe, and delete the bring-up files from `/etc/modprobe.d` on the phone (`omandroid-*-bringup.conf`, and any hand-copied package file). A file in `/etc/modprobe.d` replaces the package's `/usr/lib/modprobe.d` file of the same name, so a stale `omandroid-aoc.conf` there hid the package's new blacklist.
 - **Kernel releases change with every push** (`7.3.0-rc6-omandroid-push1-NNNNN-g<sha>`). `bin/omandroid push` runs `modules-push` when the tarball's checksum differs. Without its modules a new kernel boots without its drivers, the GPU among them.
 
 ## 3. How the tools fit together
@@ -82,6 +82,7 @@ tools/phone-ssh CMD    -> run anything; stream files with  ssh 'cat > f' < f
 | `tools/display-hz` | Read-only refresh-rate measurement from DECON's frame counter |
 | `tools/power-ab` | On-phone A/B battery-drain test (runs detached; the cable is out) |
 | `tools/bt-uart-test`, `cs35l41-id`, `ff-rumble`, `usf.py` | On-phone probes, streamed with `tools/phone-ssh python3 - < tool` |
+| `tools/aoc-audio-diag` | On-phone AoC playback diagnosis (`tools/phone-ssh 'EP=6 MODES=copy bash -s' < tools/aoc-audio-diag`): plays a short tone under `timeout`, snapshots mailbox IRQs, ring counters, CS35L41 registers and DAPM. `EP=` entry point, `MODES=` copy/mmap, `AOCLOG=1` records the AoC firmware log, `SETUP2=0/1` sets `ep_setup2` |
 | `tools/extract-vendor-firmware`, `extract-vendor-chroot`, `extract-fingerprint-vendor` | Google's files from the user's own factory image, on the laptop |
 | `tools/phone-install-package packages/X` | Build a package on the phone and install it |
 | `tools/repo-build`, `tools/repo-push` | Maintainer only: the signed `[omandroid]` repository (needs `keys/`, never committed) |
@@ -101,6 +102,7 @@ Each entry gives the gotcha, then the reason or the fix. Details are in the link
 - **`reboot -f` and busybox `reboot` hang:** use `reboot-to <reason>` (`LINUX_REBOOT_CMD_RESTART2`). ABL often ignores the `bootloader` reason anyway.
 - **Reserved memory on gs201 is `#address-cells = <2>`, `#size-cells = <1>`,** so each `reg`/`alloc-ranges` entry is 12 bytes. A 16-byte value is silently ignored, and the pool lands anywhere. The display pool's `alignment` must be two cells too, or `of_reserved_mem` rejects it. `/proc/device-tree` shows the raw property, so it *looks* right. [WIFI-BATTERY-PLAN](device/cheetah/WIFI-BATTERY-PLAN.md) 9.x, [NOTES](device/cheetah/NOTES.md)
 - **Check every stock `reserved-memory` region against `/proc/iomem`:** five were plain System RAM in our kernel, and firmware writes into them at runtime.
+- **Don't make a driver depend on device-tree node order.** The AoC sound card numbered its PCMs in DAI link order, and the PCM number is the AoC entry point ID. Rewriting the overlay's node order changed nothing on the phone (`fdtoverlay` in our tree kept the source order), so the fix (being tested) sorts the links by link id in the driver. [AOC-PLAN](device/cheetah/AOC-PLAN.md) C7d-5
 - **gs201 EINT numbering skips EINT19:** from EINT20 the GIC SPI is the EINT number minus one. gs201 SPIs differ from gs101's, so never copy IRQ numbers.
 - **USI IPCLK gates need `CLK_SET_RATE_PARENT`:** without it, SPI ran from the undivided 400 MHz source and never shifted a byte.
 
@@ -116,6 +118,7 @@ Each entry gives the gotcha, then the reason or the fix. Details are in the link
 - **The panel is DSI command mode:** a frame goes out only on a TE-triggered DECON trigger. The initramfs unmasks `TRIG_CON` for simplefb. That write is cheetah-specific: never run it on another device.
 - **A CRTC check must not demand a primary plane on a CRTC being turned off,** or DPMS off and `remove_fb` fail with -EINVAL.
 - **Hyprland refused DPMS commits while a flip was in flight,** and gave up after one retry. Our `packages/hyprland` patch keeps retrying. [packages/hyprland/README.md](packages/hyprland/README.md)
+- **With the panel really off (gs-decon `screen_off=2`), Omarchy's key handling broke:** `key_press_enables_dpms` lit the screen on the power key's press, so its release turned it off again, and Omarchy's lock waits for a lit screen, so locking after power-off lit the PIN pad. `omandroid-shell` 0.1.20 wakes only through `omandroid-keys` (and touch), and locks behind a zero backlight before powering the panel off.
 - **Hyprland 0.56 on Omarchy uses the Lua config,** so dispatchers take Lua syntax: `hyprctl dispatch 'hl.dsp.dpms({ action = "disable" })'` (or `"enable"`), not `dpms off`.
 
 ### Buses and drivers
@@ -129,6 +132,20 @@ Each entry gives the gotcha, then the reason or the fix. Details are in the link
 - **The AoC starts only through Trusty** (`com.android.trusty.gsa.hwmgr.aoc`). The GSA mailbox `START` leaves the A32 held. So Trusty is a dependency of audio and sensors, not just of fingerprint.
 - **Set the Bluetooth address only after powering the controller on:** set on a never-powered controller, the kernel withdrew the index for good.
 - **brcmfmac on BCM4389 needs control-ring D3 messages:** this firmware ignores the TCM mailbox. Unload Wi-Fi for suspend tests until that lands. [SUSPEND-PLAN](device/cheetah/SUSPEND-PLAN.md)
+
+### AoC (audio and sensor DSP)
+
+- **The AoC starts at boot from `omandroid-aoc.service`** (device-cheetah 0.1.19+), and the sensor proxy with it. Start it through the unit (`systemctl start omandroid-aoc`), never by running `omandroid-aoc-start` by hand: units that `Require=` it then saw it inactive and ran the script again, which wrote `aoc.bin` to a running AoC, took it offline and left it down until a reboot. The script now exits when the AoC is online, and a marker in `/run/omandroid/` records the firmware load for the boot.
+- **The AoC modules are blacklisted and the start script loads them in order,** with `aoc_channel_dev` and `aoc_alsa_dev` before `aoc_char_dev`. `aoc_char_dev` takes every free service, so a sound card loaded after it waited forever for `audio_output_control`. `aoc_alsa_dev` is blacklisted too, because autoloading from the card's DT node pulled `aoc_core`, `gsa` and Trusty in early and left `aoc_core` unbound.
+- **Never `rmmod` the AoC modules on the current kernel.** Unloading them while `aoc_core` waited for deferred probe left `aoc_alsa_dev_util`'s platform drivers on the bus in freed memory: the deferred-probe worker oopsed, and its device lock hung every later shutdown in `device_shutdown`, past the reboot watchdog, until a held power key. A fix is on the `omandroid-aoc` branch; until the phone runs a kernel with it, reboot instead.
+- **To learn why the AoC rejects a command, read its own log** (`/dev/acd-logging`, or `AOCLOG=1` in `tools/aoc-audio-diag`). The AoC answers a rejected command with rc -1, which the driver doesn't treat as an error, so from the kernel side everything looks accepted and nothing plays.
+- **The ALSA PCM device number is the AoC entry point ID** (`entry_point_idx = pcm->device` in Google's driver). The card's PCMs must be numbered as on stock (EP1-EP8 playback 0-7, EP1-EP6 capture 8-13), or the AoC configures the wrong entry point and refuses it. A kernel fix that sorts the card's links into the stock order is being tested; until it passes, find a PCM by its `id:` in `/proc/asound/card*/pcm*/info`, not by number. [AOC-PLAN](device/cheetah/AOC-PLAN.md) C7d
+- **The I3C accelerometer can go missing while the I2C sensors (light, proximity, compass) come up.** The sensor rails stay powered across a warm reboot, and the LSM6DSV then keeps the previous AoC session's state, so the new AoC never finds it; the I2C sensors don't care. The AoC probes its sensors once, when the registry loads, so restarting the proxy doesn't help, and neither did waiting longer. Google's driver power-cycles these rails around an AoC restart; our fix (`gs201_aoc_rails cycle=1` from the start script) is in progress. [AOC-PLAN](device/cheetah/AOC-PLAN.md) C6
+
+### Suspend and modem
+
+- **UFS fails its first hibern8 exit after the `platform` suspend level** and needs a host reset (it recovered, no I/O errors). Which `spm_lvl` UFS should use is the open question. [SUSPEND-PLAN](device/cheetah/SUSPEND-PLAN.md) S1
+- **UFS ran its error handler around modem power changes** (a PA-layer error, recovered at once). The cause isn't known yet, so keep the modem powered only for short, attended tests and check `dmesg | grep ufshcd_err_handler` after each. Also, `link_down` doesn't restore the PCIe PHY isolation yet. [MODEM-PLAN](device/cheetah/MODEM-PLAN.md) M2
 
 ### USB
 
@@ -147,6 +164,8 @@ Each entry gives the gotcha, then the reason or the fix. Details are in the link
   - pointer handlers declared directly on a window get no events, so put them on an Item inside it;
   - Qt 6.12's `QtQuick/Color` shadows Omarchy's `Commons.Color`, so import `qs.Commons as Commons`.
 - **pacman.conf order on aarch64:** `[omandroid]`, then `[omarchy]`, then Arch Linux ARM's repositories, so our Mesa and Omarchy's builds win. Use `omarchy update`, not `pacman -Syu`.
+- **`environment.d` can't unset a variable:** `VAR=` with an empty value is a syntax error, and the generator skips the line silently, so the old value stays. Set an explicit value instead (`omandroid-shell` uses `none`).
+- **GeoClue answers no client until an authorization agent is registered for the caller's user,** and queues the call with no timeout, so every client just times out. `omandroid-gnss` runs GeoClue's demo agent as a user unit; app allow-list entries skip only the agent's question, not the agent.
 - **Firewall changes** (ufw is on): arm `systemd-run --on-active=90 /usr/bin/ufw disable` first, then check with a fresh SSH connection.
 
 ## 5. Where things are

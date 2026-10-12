@@ -78,7 +78,8 @@ Before you touch radios, the PMIC, the AoC or Trusty, take a **read-only** copy 
 
 - Read them with `dd` over SSH from the guarded initramfs, or from a rooted reference Android.
 - Store them **outside the repository** (we use `~/android/reference/`) with a `SHA256SUMS` file.
-- Re-check the checksums before radio work. [MODEM-PLAN.md](device/cheetah/MODEM-PLAN.md) M0.1 shows how.
+- Re-check the checksums before radio work. [MODEM-PLAN.md](device/cheetah/MODEM-PLAN.md) M0.1 shows how; it finds each partition by `PARTNAME` in `/sys/class/block/*/uevent`, because the Arch root has no `/dev/disk/by-partlabel` links.
+- **Take a fresh backup after any stock Android boot**, including a fallback to slot A. Stock's modem stack writes `efs`, `persist` and `modem_userdata`, so the old checksums no longer match, and a later mismatch would no longer tell you whether something of ours wrote there.
 - These files contain your IMEI and serial numbers. They must never be committed, posted or attached to an issue.
 
 ### 3.4 Hangs: dead-man switches, watchdogs and recovery
@@ -88,8 +89,8 @@ Bring-up steps hang phones. Plan for it before you start:
 - **Capture the log first.** The stage tools (`tools/wifi-w1-capture`, `acpm-stage`, `aoc-stage`, `fingerprint-capture`) open one SSH connection that streams `/dev/kmsg` into `logs/` **before** a second connection touches the hardware. The last line before a hang is then already on the laptop.
 - **Arm the hardware watchdog for risky loads.** Pass `--watchdog`: an s3c2410 watchdog (about 15 s) with a feeder loop. A full hang then ends in a warm reset by itself, and pstore keeps the console (`--pstore` saves it afterwards).
 - **Use dead-man switches for anything that can cut the USB link** (USB-C, firewall, network changes). The step runs detached on the phone and undoes itself unless the laptop confirms over a **new** SSH login. If even the undo doesn't bring USB back, the watchdog resets the phone into the known-good setup. See [`tools/usbc-deadman`](tools/usbc-deadman). The quick version for a config change is `systemd-run --unit=x-deadman --on-active=90 <undo command>`: test with a fresh connection, then stop the timer.
-- **Use hang markers for anything that runs at boot.** Write and `sync` a marker before touching the hardware, and remove it once the step has finished. If the next boot finds the marker, it skips the step. See [`omandroid-wifi-start`](packages/omandroid-device-cheetah/bin/omandroid-wifi-start).
-- **Shutdown hangs** end in a watchdog reset after a minute (`RebootWatchdogSec=1min`, [`10-omandroid-reboot-watchdog.conf`](packages/omandroid-device-cheetah/vendor/systemd/system.conf.d/10-omandroid-reboot-watchdog.conf)).
+- **Use hang markers for anything that runs at boot.** Write and `sync` a marker before touching the hardware, and remove it once the step has finished. If the next boot finds the marker, it skips the step. See [`omandroid-wifi-start`](packages/omandroid-device-cheetah/bin/omandroid-wifi-start) and [`omandroid-aoc-start`](packages/omandroid-device-cheetah/bin/omandroid-aoc-start).
+- **Shutdown hangs** end in a watchdog reset after a minute (`RebootWatchdogSec=1min`, [`10-omandroid-reboot-watchdog.conf`](packages/omandroid-device-cheetah/vendor/systemd/system.conf.d/10-omandroid-reboot-watchdog.conf)). A hang inside the kernel's `device_shutdown` isn't covered: an oops that leaves a device lock held (as unloading the AoC modules once did) needs a forced restart.
 - **When the phone hangs:**
   1. Wait about 2 minutes. A dead-man undo, a watchdog reset or `panic=10` may bring it back on its own.
   2. Unplug and replug the cable once.
@@ -110,7 +111,8 @@ Bring-up steps hang phones. Plan for it before you start:
 - **One change per boot.** If two new things break together, you learn nothing.
 - **New DT nodes are `status = "disabled"` in the board DTS** and switched on by a bring-up overlay ([`device/cheetah/overlays/`](device/cheetah/overlays)). When a feature has passed every gate, it becomes default-on in a separate commit.
 - **Blacklist the module before installing a DTB that enables its node**, so it can't autoload. Load it by hand with `dmesg -w` running.
-- **Remove bring-up blacklists** (`/etc/modprobe.d/omandroid-*-bringup.conf`) when the feature moves into the device package. A stale one once left the GPU unbound.
+- **Remove bring-up blacklists** (`/etc/modprobe.d/omandroid-*-bringup.conf`) when the feature moves into the device package. A stale one once left the GPU unbound. The same goes for a package's own modprobe file copied to `/etc/modprobe.d` by hand: a file there replaces the package's `/usr/lib/modprobe.d` file of the same name, so the package's later changes never apply.
+- **Don't unload a bring-up module to retry** unless its exit path is known good. On cheetah, `rmmod` of the AoC modules left freed drivers on the platform bus, oopsed the deferred-probe worker and hung every shutdown after it. Reboot instead.
 
 ## 4. The development loop
 
@@ -145,6 +147,8 @@ tools/phone-ssh <command>      # root@172.16.42.1 over USB
   }
   # rollback: cp "$D.default" "$D"; bin/omandroid images && bin/omandroid push
   ```
+
+  Don't rely on the applied node order: where a driver numbers things by node order (an ASoC card numbers its PCMs by DAI link order), make the driver order them explicitly.
 
 - **Packages** build natively on the phone: `tools/phone-install-package packages/<name>` builds one with makepkg and installs it with pacman. The maintainer publishes the signed `[omandroid]` repository with `tools/repo-build` and `tools/repo-push`.
 - **Shell UI** can be developed on the desktop in a nested Hyprland: `phone/dev/run-desktop` ([phone/README.md](phone/README.md)).
