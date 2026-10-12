@@ -465,8 +465,11 @@ def ceilings():
     """This stage's ceilings, the same numbers the service checks before it
     unmutes: digital, then analog per amplifier (c8: the top drives the
     earpiece, AUDIO-PLAN.md section 4; c9: stock's 817 and 17 on both)."""
-    if os.environ.get('OMANDROID_SPK_STAGE', 'c8') == 'c9':
+    stage = os.environ.get('OMANDROID_SPK_STAGE') or 'media'
+    if stage == 'c9':
         return 817, {'Top': 17, 'Bottom': 17}
+    if stage == 'media':
+        return 737, {'Top': 10, 'Bottom': 10}
     return 657, {'Top': 6, 'Bottom': 10}
 
 
@@ -666,7 +669,11 @@ def cmd_watch(args):
     since = None
     beat = {}
     warned = False
-    media_delta = os.environ.get('OMANDROID_SPK_MEDIA_DELTA', '0') == '1'
+    # Stock's media delta: on when asked (1), off when asked (0), and by
+    # default on when both files are installed.
+    mode = os.environ.get('OMANDROID_SPK_MEDIA_DELTA', '')
+    media_delta = mode == '1' or (mode == '' and all(load_delta(a) is not None for a in AMPS))
+    log(f'watchdog: stock media delta {"on" if media_delta else "off"}')
     applied = False
     problems_delta = []
     failures = 0

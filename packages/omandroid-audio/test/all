@@ -104,7 +104,7 @@ sp() {  # run the script against $r
       OMANDROID_FW_DIRS="$r/fw" OMANDROID_STATE="$r/state" OMANDROID_RUN="$r/run" \
       OMANDROID_SPIDEVS="$r/spi" OMANDROID_SPIDRV="$r/spidrv" OMANDROID_SYSMODULE="$r/module" \
       OMANDROID_KMSG="$r/kmsg" OMANDROID_AUDIO_LIB="$here/lib" OMANDROID_CTL_BACKEND="json:$r/amixer.json" \
-      OMANDROID_CARD_WAIT=1 OMANDROID_CTL_WAIT=1 "${prep[@]}" bin/omandroid-speaker-protection "$@"
+      OMANDROID_CARD_WAIT=1 OMANDROID_CTL_WAIT=1 OMANDROID_SPK_STAGE=c8 "${prep[@]}" bin/omandroid-speaker-protection "$@"
 }
 run() {
   mktree "$1"
@@ -155,6 +155,17 @@ prep=(OMANDROID_SPK_TOP_DIGITAL=500 OMANDROID_SPK_BOTTOM_ANALOG=9); run per-amp
   $(val "Bottom Analog PCM Volume") == 9 && $(val "Top Analog PCM Volume") == 6 ]] || fail "per-amplifier levels"
 pass "configured levels within the ceilings, per amplifier too"
 
+# stage media, the default: 737 / 10 on both, no stamp or kernel option needed
+prep=(OMANDROID_SPK_STAGE=); run media
+((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 737 && $(val "Top Analog PCM Volume") == 10 &&
+  $(val "Bottom Digital PCM Volume") == 737 && $(val "Bottom Analog PCM Volume") == 10 ]] || { cat "$r/out" >&2; fail "stage media: 737 / 10 by default"; }
+[[ $(cat "$r/run/speaker-protection") == "ok: stage media"* ]] || fail "stage media: status"
+pass "stage media (the default): 737 / 10 on both, without a stamp or speaker_protection=1"
+prep=(OMANDROID_SPK_DRE=1); run dre
+((rc == 0)) && [[ $(val "Top DRE Switch") == on && $(val "Bottom DRE Switch") == on ]] || fail "DRE on when asked"
+r0=$r; r=$tmp/run.ok; [[ $(val "Top DRE Switch") == off ]] || fail "DRE left off by default"; r=$r0
+pass "DRE (stock's) on only when asked"
+
 check_refused() {  # name, then the scenario ran
   ((rc == 1)) || { cat "$r/out" >&2; fail "$1: start fails"; }
   muted || fail "$1: both amplifiers muted"
@@ -170,6 +181,8 @@ prep=(OMANDROID_SPK_BOTTOM_ANALOG=12); run bottom-analog-ceiling; check_refused_
 prep=(FAKE_DIGITAL_MAX=913); run no-kernel-limit; check_refused_early "kernel digital limit missing"
 prep=(FAKE_ANALOG_MAX=17); run analog-limit; check_refused_early "kernel analog limit above 10 without speaker_protection"
 prep=(OMANDROID_SPK_STAGE=c7); run bad-stage; check_refused_early "unknown stage"
+prep=(OMANDROID_SPK_STAGE=media OMANDROID_SPK_DIGITAL=738); run media-digital; check_refused_early "stage media: digital above 737"
+prep=(OMANDROID_SPK_STAGE=media OMANDROID_SPK_TOP_ANALOG=11); run media-analog; check_refused_early "stage media: analog above 10"
 pass "refuses levels above the ceilings and kernels without the limits, muted"
 
 # a firmware directory with the bottom tuning missing
@@ -278,6 +291,13 @@ wprep=(OMANDROID_SPK_MEDIA_DELTA=1 FAKE_DELTA_LOG=$r/delta.log); watchrun
 [[ $(wc -l < "$r/delta.log") == 2 ]] || fail "watchdog: the media delta goes to both amplifiers once per stream"
 n=$(amx controls | sed -n "s/^numid=1,iface=MIXER,name='\(Bottom DSP1 .*PARAMS_CONFIG\)'\$/\1/p")
 [[ $(val "$n") == 0x00,0x00,0x00,0x04,0x00,0x00,0x00,0x64,0x00,0x00,0x00,0xc8,0x00,0x00,0x01,0x2d,0x00,* ]] || { val "$n" >&2; fail "watchdog: the delta words, big-endian, rest kept"; }
+startok w-delta-auto; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+echo '4,100,200,300' > "$r/fw/cirrus/cs35l41-cheetah-top-media-delta.txt"
+echo '4,100,200,301' > "$r/fw/cirrus/cs35l41-cheetah-bottom-media-delta.txt"
+wprep=(FAKE_DELTA_LOG=$r/delta.log); watchrun
+((rc == 0)) && [[ $(wc -l < "$r/delta.log") == 2 ]] || { cat "$r/watch.out" >&2; fail "watchdog: the media delta is on by default when installed"; }
+startok w-delta-none; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; watchrun
+((rc == 0)) && ! muted || fail "watchdog: no delta files and no setting: off, no mute"
 startok w-delta-missing; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
 wprep=(OMANDROID_SPK_MEDIA_DELTA=1); watchrun
 ((rc == 1)) && muted || fail "watchdog: media delta enabled but missing mutes"
