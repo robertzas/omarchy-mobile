@@ -89,6 +89,7 @@ class AlsaCtl:
                 ('snd_ctl_elem_list_get_used', ctypes.c_uint, [vp]),
                 ('snd_ctl_elem_list_get_name', ctypes.c_char_p, [vp, ctypes.c_uint]),
                 ('snd_ctl_elem_id_malloc', ctypes.c_int, [ctypes.POINTER(vp)]),
+                ('snd_ctl_elem_id_clear', None, [vp]),
                 ('snd_ctl_elem_id_set_interface', None, [vp, ctypes.c_int]),
                 ('snd_ctl_elem_id_set_name', None, [vp, ctypes.c_char_p]),
                 ('snd_ctl_elem_info_malloc', ctypes.c_int, [ctypes.POINTER(vp)]),
@@ -132,6 +133,9 @@ class AlsaCtl:
 
     def _info(self, name):
         a = self.a
+        # Clear the numid the last lookup copied back: ALSA finds a control by
+        # numid first, so a stale one returned the previous control.
+        a.snd_ctl_elem_id_clear(self.id)
         a.snd_ctl_elem_id_set_interface(self.id, self.IFACE_MIXER)
         a.snd_ctl_elem_id_set_name(self.id, name.encode())
         a.snd_ctl_elem_info_set_id(self.info, self.id)
