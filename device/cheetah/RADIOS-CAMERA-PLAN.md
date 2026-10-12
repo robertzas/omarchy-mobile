@@ -541,6 +541,18 @@ tools/phone-ssh 'grep -hE "\((gph0-5|gph1-[45])\)" /sys/kernel/debug/pinctrl/*11
 #   or both held: whatever ABL left is the state N2 must start from.
 ```
 
+
+**N2.4b-N2.6 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00345-g606b84c7a9fd,
+omandroid-nfc 3502821fa merged): passed.** `gs101_pad_en_active_low` N (the
+default polarity). Bind: nfc0, IRQ 127 count 1. `nfctool -d nfc0 -1` rc 0,
+"Powered: Yes", protocols Felica MIFARE Jewel ISO-DEP NFC-DEP ISO-15693; the
+IRQ count rose 1 → 9; two "nci_ntf_packet: unsupported ntf opcode 0xf02"
+lines (ST proprietary notifications, ignored). A 10 s poll with no tag found
+nothing, as expected. Power down rc 0, power up again rc 0 (the hard_fault fix
+holds), power down. CONFIG_DYNAMIC_DEBUG is off in our config, so the
+per-frame debug lines weren't available; enable it if a later stage needs
+them. N3 (a tag's type) waits for the human with a card.
+
 ### 3.7 Built (2026-10-12): stages N1-N3
 
 Kernel branch `omandroid-gnss` (GNSS-PLAN.md section 2), merged into int:
