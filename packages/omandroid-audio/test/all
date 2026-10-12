@@ -262,13 +262,13 @@ pass "watchdog: mutes on DSP errors, bypass, levels, runtime PM, a stuck heartbe
 
 # stock's media delta at stream start (made-up words in the stock format)
 startok w-delta; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
-echo '4,768,1236,222608' > "$r/fw/cirrus/cs35l41-cheetah-top-media-delta.txt"
-echo '4, 768,1236,222609' > "$r/fw/cirrus/cs35l41-cheetah-bottom-media-delta.txt"
+echo '4,100,200,300' > "$r/fw/cirrus/cs35l41-cheetah-top-media-delta.txt"
+echo '4, 100,200,301' > "$r/fw/cirrus/cs35l41-cheetah-bottom-media-delta.txt"
 wprep=(OMANDROID_SPK_MEDIA_DELTA=1 FAKE_DELTA_LOG=$r/delta.log); watchrun
 ((rc == 0)) && ! muted || { cat "$r/watch.out" >&2; fail "watchdog: media delta, then healthy"; }
 [[ $(wc -l < "$r/delta.log") == 2 ]] || fail "watchdog: the media delta goes to both amplifiers once per stream"
 n=$(amx controls | sed -n "s/^numid=1,iface=MIXER,name='\(Bottom DSP1 .*PARAMS_CONFIG\)'\$/\1/p")
-[[ $(val "$n") == 0x00,0x00,0x00,0x04,0x00,0x00,0x03,0x00,0x00,0x00,0x04,0xd4,0x00,0x03,0x65,0x91,0x00,* ]] || { val "$n" >&2; fail "watchdog: the delta words, big-endian, rest kept"; }
+[[ $(val "$n") == 0x00,0x00,0x00,0x04,0x00,0x00,0x00,0x64,0x00,0x00,0x00,0xc8,0x00,0x00,0x01,0x2d,0x00,* ]] || { val "$n" >&2; fail "watchdog: the delta words, big-endian, rest kept"; }
 startok w-delta-missing; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
 wprep=(OMANDROID_SPK_MEDIA_DELTA=1); watchrun
 ((rc == 1)) && muted || fail "watchdog: media delta enabled but missing mutes"
