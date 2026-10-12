@@ -248,6 +248,30 @@ tools/phone-ssh 'echo link_down > /sys/kernel/debug/gs201-pcie-cp/ctl; echo cp_o
 #   pass: PMU bit 0 back to 0, outputs 0, PERST# asserted
 ```
 
+**M2.1-M2.4 result (2026-10-12, same boot): the link works; two open
+problems.**
+- **M2.1 passed.** All five ap2cp outputs went to 1. The modem raised
+  `cp2ap-wakeup` 1 within 2 s (its ROM asking for the link);
+  `cp2ap-cp-wrst`, `ps-hold` and `phone-active` stayed 0.
+- **M2.2 passed.** PHY "PLL lock 1, CDR lock 1, OC done 1", "DBI ID
+  0xa5a5144d", "link up: Gen1 x1 (target Gen1), try 1", LTSSM 0x11 (L0).
+  Only one lane trained, at the Gen1 target.
+- **M2.3 passed.** "secure ATU SMC: 0x0"; "endpoint 144d:a5a5 class
+  000000".
+- **M2.4 partial.** The outputs went back to 0 and PERST# was asserted,
+  but **PMU 0x3ec0 stayed 0x1**: the PHY was not isolated again. Fix
+  `link_down`/`cp_off` to restore isolation.
+- **UFS errors around modem power changes.** UFS ran its error handler
+  (`saved_err = 0x4; saved_uic_err = 0x40`, a PA-layer error), recovered
+  at once (Gear 4, 2 lanes, HBA operational), and logged no I/O or
+  filesystem errors. It happened twice, at 252.24 s (about 1 s before the
+  M2.2 power cycle, with the modem powered since M2.1 at 231 s) and at
+  277.14 s (0.23 s after the M2.4 power-off). The two previous boots had
+  none. Until the cause is known (a shared supply, ground bounce or a
+  reference clock between HSI1 and UFS are candidates), keep the modem
+  powered only for short attended tests, and check
+  `dmesg | grep ufshcd_err_handler` after each.
+
 After M2 passes, **M3**: the host side CPIF needs (bus, MSI, the
 `exynos_pcie_*` API), the CPIF port (`CP/`, CPIF-20220408R1), and the
 `modem` vendor-chroot profile for `cbd`/`rfsd` with private NV copies.
