@@ -7,18 +7,18 @@ fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
-for f in src/*.py; do python3 -m py_compile "$f" || fail "$f compiles"; done
+for f in lib/*.py; do python3 -m py_compile "$f" || fail "$f compiles"; done
 pass "python compiles"
 
-python3 -I src/usf.py --self-test >/dev/null || fail "usf.py self-test"
+python3 -I lib/usf.py --self-test >/dev/null || fail "usf.py self-test"
 pass "USF protocol self-test"
 
 # orientation from gravity, iio-sensor-proxy's frame
-PYTHONPATH=src python3 - <<'PY' || fail "orientation thresholds"
+PYTHONPATH=lib python3 - <<'PY' || fail "orientation thresholds"
 import sys
 sys.argv = ['x']
 import importlib.util
-spec = importlib.util.spec_from_file_location('sp', 'src/sensor_proxy.py')
+spec = importlib.util.spec_from_file_location('sp', 'lib/sensor_proxy.py')
 sp = importlib.util.module_from_spec(spec); spec.loader.exec_module(sp)
 # Android accel (reaction to gravity) upright: (0, 9.8, 0) -> gravity (0, -9.8, 0)
 assert sp.orientation('undefined', 0, -9.8, 0) == 'normal'
@@ -32,9 +32,9 @@ pass "orientation and tilt"
 # D-Bus round trip on a private session bus: test backend -> autorotate (dry run)
 if command -v dbus-run-session >/dev/null; then
   GIO_USE_VFS=local dbus-run-session -- bash -c '
-    PYTHONPATH=src python3 src/sensor_proxy.py --backend test --session & p=$!
+    PYTHONPATH=lib python3 lib/sensor_proxy.py --backend test --session & p=$!
     sleep 1
-    timeout 8 python3 src/autorotate.py --session --dry-run 2> '"$tmp"'/rot.log || true
+    timeout 8 python3 lib/autorotate.py --session --dry-run 2> '"$tmp"'/rot.log || true
     kill $p' || true
   grep -q "transform 0" "$tmp/rot.log" || grep -q "transform = 0" "$tmp/rot.log" || fail "autorotate applies normal"
   grep -q "transform = 1" "$tmp/rot.log" || fail "autorotate applies left-up"
