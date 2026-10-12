@@ -422,6 +422,8 @@ is the template. We use the same nodes on hsi2c_13 with gs201's pins.
   Upstream max17042 assumes 5 µVh/Rsense = 1 mAh/LSB at 5 mΩ. Expect
   `charge_full` to read about half the real value until this is understood.
   Compare with `R0/dumpsys-battery.txt` (charge counter 3982000 µAh at 87 %).
+  **Resolved in B1b:** the model's TaskPeriod 0x2d00 doubles the LSB to 2 mAh,
+  and upstream already scales by TaskPeriod.
 
 ---
 
@@ -626,6 +628,169 @@ runbook.
 - **Fuel gauge STATUS = 0x0082: the POR bit is set**, and DesignCap reads 3000 (the chip default; Google's model has 0x09c5). The gauge has lost Google's model and runs its own default EZ model. Read-only register dump: RepSOC 98 %, VCell 4.327 V, current about 0, Temp exactly 22.0 °C (probably a default; no thermistor configuration).
 - Because our DT has no `monitored-battery`, `max17042_init_worker` writes nothing on POR (`max17042_battery.c:1187`: `enable_por_init` is only set by `max17042_apply_battery_properties`). So the driver was loaded: `max170xx_battery` reports capacity 97 %, 4.32 V, -7.8 mA, charge_full 2898 mAh of design 3000. Its interrupt (gpa9-3) stayed at 0, no storm. The fuel gauge now autoloads (removed from the blacklist); UPower and the status bar show the battery.
 - Follow-ups: load Google's M5 model (`gs201-cheetah-battery-data.dtsi`) so capacity (4926 mAh) and temperature are right; check what Android's driver does when it next sees the gauge (it may reload its model on its own POR check); charger (B3) waits for Type-C (B4).
+
+
+## B1b battery model (2026-10-11, offline; nothing was run on the phone)
+
+Goal: right capacity and temperature from the MAX77759 gauge, by loading the
+same ModelGauge m5 model that stock loads. Kernel branch `omandroid-battery`
+in `/home/raven/android/mainline/wt-battery`, on `omandroid` @ `43918aeb7`;
+build in `/home/raven/android/mainline/out-battery`.
+
+### Why the B1 readings are wrong
+
+- **Capacity.** After the POR the gauge runs its built-in EZ model:
+  DesignCap 3000 and TaskPeriod 0x1680. Stock's model writes
+  **TaskPeriod 0x2d00** (`G/devices/google/pantah/dts/gs201-cheetah-battery-data.dtsi:102`,
+  the last fg-params word of the 1 kΩ model). This doubles the time base, so one capacity LSB is
+  2 × 5 µVh / 5 mΩ = **2 mAh** (Google: `max_m5_period2caplsb()`, `cap_lsb=2` in
+  `R/dmesg.txt:3295`). DesignCap 0x09c5 = 2501 LSB = **5002 mAh**. Google's
+  model is rounded up a bit; their 4926 mAh is `google,chg-battery-capacity`.
+  Upstream `max17042_battery.c` already scales every capacity by
+  `TaskPeriod / 5760`, but it reads TaskPeriod only once, at probe. That
+  settles the "2 mAh/LSB" question in 4.3.
+- **Temperature.** At POR, Config has TEx set: the Temp register (0x08)
+  holds a host-written value, 22.0 °C by default. Stock's Config 0x4217 clears
+  TEx and sets TEn + ETHRM (external thermistor); TGain 0xed51, TOff 0x1eba
+  and Curve 0x0014 convert AIN to °C (`max_m5_reg.h:396-411` for the Config
+  bits). B1's exact 22.0 °C (0x1600) fits a TEx-mode register nobody writes.
+- **`monitored-battery` alone would not help.** Upstream's POR init only
+  applies `simple-battery` data for the MAX17055
+  (`max17042_apply_battery_properties()` returns early for every other chip),
+  and its legacy full-init path is the MAX17042 sequence, not the m5 one.
+
+### The fix (kernel)
+
+| Commit | What |
+|---|---|
+| `b83a53075` dt-bindings: power: supply: max17042: add MAX77759 battery model | `maxim,fg-model` (48 × u16, registers 0x80-0xaf) and `maxim,fg-params` (27 or 28 × u16, fixed order, Google's format); only for `maxim,max77759-fg`; each requires the other |
+| `b26147fe2` power: supply: max17042_battery: load the MAX77759 battery model on POR | Only when the gauge reports POR and the DT has a model. Google's `max_m5_load_gauge_model()` order: wait FStat.DNR, refuse if Config2.LdMdl is set, unlock, write and verify the table, lock and verify (a locked table reads 0xffff), 500 ms, write the parameters (RepCap 0, RelaxCfg, extra-config unlock, VFSOC0, LearnCfg ... MiscCfg, AtRate, CV_MixCap = 75 % FullCapNom, CV_HalfTime 0x600, ConvgCfg, relock), Curve, FilterCfg, CGain, set Config2.LdMdl, poll until it clears and RepCap ≠ 0, check FullCapRep against FullCapNom (3 tries), re-read TaskPeriod, clear POR. On failure POR stays set (the next probe retries) and the driver keeps reporting from the default model |
+| `50c4b244a` arm64: dts: exynos: google: gs201-cheetah: add the battery and its gauge model | `simple-battery` node (4926 mAh, 4.45 V max, 3.3 V min) as `monitored-battery`; the gauge model |
+
+Model choice: stock reads a **1 kΩ battery ID** on this phone
+(`R/dmesg.txt:3279`), so `maxim,cos-a1-1k` (model version 1), word for word as
+in `R/live.dts:8337-8338`. Two words differ, on purpose: RelaxCfg 0x143b
+(stock overwrites 0x0839 at every boot from `maxim,r_regval_1720x`) and
+FilterCfg 0xc613 (stock switches to this above 10 °C, `filtercfg-default`).
+We do **not** write the model version byte (TAlrtTh[15:8]); see the dual-boot
+note. A different pack (ID 3, `lsn-a1-3k`) needs that model instead; Linux can't read the ID yet (stock gets it
+through `gbms_storage` tag BRID, `max1720x_read_batt_id()`; the pack EEPROM
+is `google,bee-name = "8-00500"` in `gs201-cheetah-battery.dtsi`).
+
+Build: `logs/kernel-battery.log`, `modules-battery.log`, `images-battery.log`,
+all exit 0. Release `7.3.0-rc6-omandroid-push1-00057-g50c4b244a706`, 1682 modules, images in `~/android/mainline/out-battery/images` (initramfs rebuilt there: `logs/initramfs-battery.log`). W=1 build of `max17042_battery.o` has no
+warnings; `dt-validate` of `gs201-cheetah.dtb` (dtschema 2026.9) reports only the existing
+`soc_id` and framebuffer `post-init-providers`; `dt-doc-validate` of the binding is clean.
+
+### Expected registers after the load
+
+Read with `i2cget -f -y 0 0x36 <reg> w` (the driver owns the address, so
+`-f`; reads are harmless) or `cat /sys/kernel/debug/regmap/0-0036/registers`.
+
+| Reg | Name | Before (B1) | Right after the load | Notes |
+|---|---|---|---|---|
+| 0x00 | Status | 0x0082 | bit 1 (POR) clear | other bits are alerts |
+| 0x18 | DesignCap | 0x0bb8 (3000) | **0x09c5** | fixed |
+| 0x3c | TaskPeriod | 0x1680 | **0x2d00** | fixed; doubles the LSB |
+| 0x23 | FullCapNom | ? | 0x09c5 | learns afterwards |
+| 0x35 | FullCapRep | ? | 0x09c5 ± 25 | learns; stock had 0x08f1 (4578 mAh) |
+| 0x10 | FullCap | ~0x0b52 (2898) | about 0x09c5 | what `charge_full` reads |
+| 0x1d | Config | ? | **0x4217** | TEx (bit 8) clear |
+| 0xbb | Config2 | ? | 0x0090 | LdMdl (bit 5) clear |
+| 0x2c / 0x2d | TGain / TOff | ? | **0xed51 / 0x1eba** | fixed |
+| 0xb9 | Curve | ? | 0x0014 | fixed |
+| 0x28 | LearnCfg | ? | 0x260e | the gauge changes the learn stage; stock read 0x247e |
+| 0x2a / 0x29 | RelaxCfg / FilterCfg | ? | 0x143b / 0xc613 | fixed |
+| 0x38 / 0x39 | RComp0 / TempCo | ? | 0x0770 / 0x2202 | learn; stock read 0x0965 / 0x2602 |
+| 0x02 | TAlrtTh | ? | unchanged (0x7f80 after POR) | we don't write a version |
+| 0x08 | Temp | 0x1600 (22.0 °C) | room/body temperature, moving | LSB 1/256 °C |
+
+There is no ModelCfg (0xdb) on the m5 gauge; Config2.LdMdl is its
+counterpart.
+
+### Runbook (phone in Arch over USB; each step has its rollback)
+
+```sh
+export KERNEL_OUT=$HOME/android/mainline/out-battery
+# B1b.0  read-only dump, current kernel. Keep the output.
+tools/phone-ssh 'for r in 00 18 3c 23 35 10 1d bb 2c 2d b9 28 2a 29 38 39 02 08 27 17 3d; do
+  printf "%s=%s\n" $r $(i2cget -f -y 0 0x36 0x$r w); done'
+tools/phone-ssh 'grep . /sys/class/power_supply/max170xx_battery/{capacity,charge_full,charge_full_design,temp,voltage_now,current_now}'
+#   gate: 0x00 has bit 1 set (POR). If it does NOT (Android ran since B1 and
+#   loaded its own model), check 0x18=0x09c5 and 0x3c=0x2d00: then the gauge
+#   already has the right model and the new kernel will leave it alone. Skip to B1b.3.
+# B1b.1  new kernel + DTB (slot B), modules first
+bin/omandroid modules-push
+bin/omandroid push          # reboots into slot B
+# B1b.2  the load happens at probe (max17042_battery autoloads). Watch for:
+tools/phone-ssh 'dmesg | grep -i -E "max17042|max170xx|battery model"'
+#   pass: "battery model loaded (DesignCap 0x9c5, TaskPeriod 0x2d00)", no
+#         "model load failed", no "FullCapRep differs"
+# B1b.3  the register dump again (same command as B1b.0): compare with the table above
+# B1b.4  sysfs
+tools/phone-ssh 'grep . /sys/class/power_supply/max170xx_battery/{capacity,charge_full,charge_full_design,temp,voltage_now,current_now,cycle_count}'
+#   pass: charge_full_design 5002000; charge_full about 5000000 (it learns down
+#         over full cycles; stock had learned 4578 mAh); temp 200-400 (deci-°C)
+#         and it moves (hold the phone, run a CPU load: it rises within minutes);
+#         capacity close to before (it may jump a few %, re-estimated from voltage);
+#         current_now sign still flips with the cable.
+# B1b.5  persistence: reboot into Linux again and repeat B1b.0
+#   expect POR clear and the same model registers (no reload). If POR is set
+#   on every boot, something resets the gauge between boots: write it down,
+#   the loader then simply runs each boot (~1 s).
+```
+
+Forcing a reload (only if needed, e.g. to test the loader again): the gauge
+reloads only after a POR. `i2cset -f -y 0 0x36 0x60 0x000f w` is the m5
+hardware reset (Google's `max1720x_full_reset()`, `MAX_M5_COMMAND_HARDWARE_RESET`),
+then `modprobe -r max17042_battery; modprobe max17042_battery`. It throws away
+everything the gauge has learned (Cycles, FullCapNom, RComp0).
+
+**Rollback.** The gauge has no NVM, so nothing we write survives a power
+loss, and every change can be undone in software:
+
+1. Bad readings after the load: `i2cset -f -y 0 0x36 0x60 0x000f w`
+   (hardware reset: back to the default EZ model, POR set), then boot the
+   previous kernel/DTB (`bin/omandroid push` from `out-wifi`, or let ABL fall
+   back to slot A). With the old DTB, the driver writes nothing again.
+2. Or boot stock Android in slot A: it reloads its own model (below).
+3. A loader failure is already safe: POR stays set and the driver reports
+   from the default model, as in B1.
+
+### Dual boot: what stock Android does with our gauge
+
+Google's driver checks the gauge at every probe (`max1720x_init_max_m5()`,
+`G/google-modules/bms/max1720x_battery.c:5462-5530`): if the model version in
+TAlrtTh[15:8] differs from the DT's (`max_m5_fg_model_check_version()`), it
+issues a hardware reset and reloads its model (`"FG Version Changed, Reset,
+Will Reload"`). It also reloads whenever it sees POR (`max1720x_check_por()`,
+`:2525`). Our loader leaves TAlrtTh at its POR value (version 0x7f, not 1), so
+**Android always replaces our load with its own**, then handles its saved
+learned state (GMSR) as it does after any reset. The other way round, Android's load clears POR and sets
+TaskPeriod 0x2d00, so the next Linux boot reads it correctly and does not
+reload. Not writing the version is deliberate: on this gauge TAlrtTh[15:8] is
+also the over-temperature alert threshold (1 °C for version 1), and upstream
+enables the alert pin.
+
+### Not in this step
+
+- Battery ID and the ID-3 model: needs the battery ID in Linux.
+- Charging (B3/B4). Stock's top CV limit is 4.45 V (`google,fv-max-uv`,
+  `R/live.dts:18205`); upstream's charger programs 4.3 V unless its own power
+  supply has battery info. Read the float voltage ABL leaves before B3.
+- **USB data switch (separate gate, B4-adjacent).** Google's TCPC driver
+  closes the MAX77759's USB2 data switch on attach and opens it on detach
+  (`enable_data_path_locked()`, `GS/drivers/usb/typec/tcpm/google/tcpci_max77759.c:1117-1215`).
+  Nothing in our Linux closes it again, a likely cause of our "USB doesn't
+  reconnect after unplugging" note. The switch is
+  TCPC (0x25) vendor register **0x93 `USBSW_CTRL`**, 0x09 = connected
+  (Google `tcpci_max77759_vendor_reg.h:94-95`). Upstream `tcpci_maxim_core.c:24-26,302`
+  already writes it from TCPM, so B4 should fix it for good. Gated test, only
+  with a non-USB console (Wi-Fi SSH or the on-screen terminal), since USB is
+  the link that breaks: read `i2cget -y 0 0x25 0x93` while connected (write it
+  down), unplug and replug, read again (0x00 would confirm the report), then
+  `i2cset -y 0 0x25 0x93 0x09` and check the host enumerates the gadget.
+  Rollback: replug or reboot.
 
 ---
 
