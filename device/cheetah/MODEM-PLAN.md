@@ -201,7 +201,18 @@ This root has no `/dev/disk/by-partlabel`, so find each partition by its
 - **M0.3:** gpa0-2/3 and gpa8-2/4 inputs, low, `PUD` 0x1; gpa8-3
   (`cp2ap_wake_up`) input, low, `PUD` 0x3 (keep it).
 - **M0.4** runs on the M2 boot: `modem-link-test` enables the HSI1 pin
-  controller too.
+  controller too. **Result:** gph0-0..5 and gph1-0..3, gph1-6 are inputs,
+  low, `PUD` 0x1; gph1-4 (eSE reset) is an output driven low, gph1-5 (NFC
+  reset) an output driven high, both as ABL left them; gph1-0 (AoC SPI
+  select) untouched.
+- **M0.5: passed.** The udev rule is in place, and all five partitions read
+  `blockdev --getro` 1.
+
+**M2.0 result (same boot): passed.** `pcie_gs201_cp` is blacklisted
+(device-cheetah 0.1.21) and was loaded by hand with `allow_hw=1`: "modem
+PCIe ch0 bring-up: 2 lanes, steps enabled". Every ap2cp output and cp2ap
+input is 0, PERST# is asserted, PMU 0x3ec0 is 0x0 (PHY isolated), and the
+state is "cp 0, phy 0/0, link 0, atu 0". No controller access.
 
 ### M2: link only (int + `omandroid-modem`, overlay `modem-link-test`)
 
