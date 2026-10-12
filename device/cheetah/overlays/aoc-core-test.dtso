@@ -1,0 +1,40 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up (AOC-PLAN.md, stage C5): everything the AoC core needs, i.e. the
+ * GSA mailbox, Trusty, the AoC System MMU, the three AoC mailboxes and the
+ * AoC node with cheetah's board id and revision. The modules stay
+ * blacklisted from autoload; omandroid-aoc-start loads them in order.
+ * Paths, not labels, so the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/trusty} {
+	status = "okay";
+};
+
+&{/soc@0/gsa@17c90000} {
+	status = "okay";
+};
+
+&{/soc@0/sysmmu@1a090000} {
+	status = "okay";
+};
+
+&{/soc@0/mailbox@18300000} {
+	status = "okay";
+};
+
+&{/soc@0/mailbox@18320000} {
+	status = "okay";
+};
+
+&{/soc@0/mailbox@18340000} {
+	status = "okay";
+};
+
+&{/soc@0/aoc@181d0000} {
+	google,board-id = <0x30301>;
+	google,board-rev = <0x10000>;
+	status = "okay";
+};

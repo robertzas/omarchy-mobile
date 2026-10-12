@@ -30,6 +30,72 @@ Path abbreviations (as in the other plans):
 
 ---
 
+## Checkpoint 2026-10-12
+
+**Done on the phone:** C1 (GSA mailbox), C2 (read-only probes), C3 (rails
+read: all five off at hand-off), C4a (load), C4t (**AoC firmware online**:
+started through Trusty `hwmgr.aoc`, 82 services, 0 faults). The mailbox
+`START` (cmd 91) is not enough (section 0.3).
+
+**Done offline, built, not run** (kernel `omandroid-aoc` @ `f716b607e`,
+merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
+
+- `drivers/soc/google/aoc/`: Google's AoC core (aoc.c, aoc_v1.c,
+  aoc_service_core.c, aoc_firmware.c, aoc_ipc_core.c), mailbox driver
+  (mailbox-wc.c, `google,gs201-aoc-mbox`), `/dev/acd-*` front ends
+  (aoc_char_dev.c, aoc_channel_dev.c), imported (`f141bb96a`) and ported
+  (`f716b607e`): GSA load + Trusty start, S2MPU open, System MMU windows
+  from the header, vendor stubs in aoc-compat.h, restart disabled.
+  Config: `CONFIG_GS201_AOC_MBOX`, `CONFIG_GS201_AOC`, `CONFIG_GS201_AOC_CHAR`
+  (=m, in `kernel/configs/omandroid.config`).
+- DT: three mailbox nodes and the AoC node's 48 `mboxes` (disabled).
+- Repo: `overlays/aoc-core-test.dtso` (Trusty, GSA, System MMU, mailboxes,
+  AoC); `omandroid-device-cheetah`: `bin/omandroid-aoc-start` (Trusty → gsa
+  → rails → sysmmu → mailboxes → core → channel/char devs → load `aoc.bin`
+  → wait for services and `/dev/acd-com.google.usf`, hang marker),
+  `omandroid-aoc.service` (not enabled), `modprobe.d/omandroid-aoc.conf`
+  (blacklists); package version not bumped. `tools/usf.py` (USF client:
+  sensor list, registry load, sampling; `--self-test` passes offline) and
+  `USF-PROTOCOL.md`.
+
+**Half-done / not started:**
+
+- W=1 and checkpatch not run over the imported Google files (vendor style).
+- `dt_binding_check` not run (no dtschema here) for `google,gs201-aoc-mbox`
+  and the AoC binding changes.
+- No iio-sensor-proxy-style D-Bus service yet (only `tools/usf.py`).
+- Audio: `aoc_alsa` not ported; CS35L41 A2/A3 not run.
+
+**Next steps, in order:**
+
+1. **C5 (ready to run):** merge `omandroid-aoc` @ `f716b607e` into int,
+   build, push with `aoc-core-test` (instead of `aoc-boot-test` and
+   `fingerprint-trusty`) plus the usual overlays. Install the device
+   package files by hand for now (or bump and publish it), and the
+   firmware: `tools/aoc-stage --fw … c4a` copies `aoc.bin`, or
+   `tools/phone-ssh 'mkdir -p /usr/lib/firmware/updates && cat > /usr/lib/firmware/updates/aoc.bin' < V/firmware/aoc.bin`.
+   Then:
+   ```sh
+   tools/phone-ssh 'rm -f /var/lib/omandroid/aoc-bringup-started'
+   tools/phone-ssh 'cat > /usr/bin/omandroid-aoc-start && chmod +x /usr/bin/omandroid-aoc-start' < packages/omandroid-device-cheetah/bin/omandroid-aoc-start
+   tools/phone-ssh 'cat > /etc/modprobe.d/omandroid-aoc.conf' < packages/omandroid-device-cheetah/vendor/modprobe.d/omandroid-aoc.conf
+   tools/phone-ssh 'omandroid-aoc-start; dmesg | grep -iE "aoc|gsa|wc-mbox|sysmmu" | tail -40; ls /dev/acd-* | head; head -3 /sys/bus/platform/devices/181d0000.aoc/services'
+   ```
+   Expect "omandroid-aoc: up: Services : 82", `/dev/acd-com.google.usf`
+   and `.non_wake_up`, "firmware version … did become online with 82
+   services" from the core. Stop: any abort, "blocked" line, "aoc init no
+   respond", or the AoC watchdog. Rollback: reboot (the marker then keeps
+   the AoC off; `omandroid-aoc-start --retry`).
+2. **C6 first sensor:** copy `V/etc/sensors/registry` to the phone
+   (`/usr/share/omandroid/sensors/registry`, Google's files, never commit),
+   check `/sys/firmware/devicetree/base/chosen/plat` exists (the CDT), then
+   `tools/phone-ssh 'python3 - --load-registry /usr/share/omandroid/sensors/registry /usr/share/omandroid/sensors/registry/append --duration 3' < tools/usf.py`
+   (accelerometer at 50 Hz; persist calibration can be added as a third
+   directory, read with debugfs, read-only). Then a D-Bus service with
+   iio-sensor-proxy's API for rotation.
+3. **Audio:** port `aoc_alsa` (Google's `alsa/`), machine card with the
+   CS35L41 on TDM 0, AUDIO-PLAN section 4 limits, then mics (EP1, PCM 8).
+
 ## 0. Top findings
 
 1. **Stock starts the AoC through Trusty; this phone's GSA also takes the

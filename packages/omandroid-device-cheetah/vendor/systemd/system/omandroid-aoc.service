@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# The AoC (audio and sensor DSP) at boot. Not enabled: during bring-up start
+# it by hand (systemctl start omandroid-aoc) or enable it once the AoC stages
+# in device/cheetah/AOC-PLAN.md pass. The AoC modules are blacklisted for
+# autoload (modprobe.d/omandroid-aoc.conf), so this hang-safe script is the
+# only thing that starts the AoC.
+[Unit]
+Description=Boot the AoC audio and sensor DSP (hang-safe)
+After=local-fs.target systemd-modules-load.service
+ConditionPathExists=/sys/bus/platform/devices/181d0000.aoc
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omandroid-aoc-start
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
