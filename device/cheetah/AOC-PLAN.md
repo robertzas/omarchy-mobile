@@ -781,7 +781,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    - **C8d PipeWire, keys, slider, microphones** (risk medium; announce
      it: short sounds at low volume):
      ```sh
-     U='U=$(id -nu 1000); as_user() { runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/1000 "$@"; }'
+     U='U=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}"); I=$(id -u $U); as_user() { runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/$I "$@"; }'
      tools/phone-ssh "$U"'; as_user wpctl status | sed -n "/Sinks/,/Streams/p"; as_user pactl get-default-sink; as_user pactl get-default-source'
      tools/phone-ssh "$U"'; as_user wpctl inspect @DEFAULT_AUDIO_SINK@ | grep -E "node.description|disable-mmap|period-size|period-num|api.alsa.path"'
      tools/phone-ssh "$U"'; as_user wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.4; (sleep 1; cat /proc/asound/card*/pcm5p/sub0/hw_params) & as_user timeout 5 pw-play /tmp/tone-left.wav; wait'
@@ -834,6 +834,163 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    (left = top = slot 0, right = bottom = slot 1). The earlier silent bottom
    run used the driver's default TDM_0 format (S16_LE stereo). The UCM
    profile (C8) sets the stock format.
+
+   **C8 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00303-g9086704161a9,
+   omandroid-audio 0.1.1): C8a-C8e passed.**
+   - C8b first failed on a parser bug (the limits check read the dB line's
+     "max=12.00dB" as a second maximum and kept the amplifiers muted),
+     fixed in 0.1.1. Then: top "…C10_EVT1p1_top_tune.bin", bottom
+     "…C10_DVT_bot_tune.bin"; calibration "match" on both; 657/6, PCM
+     Source DSP, Preload on. "DSP1: Legacy support not available" once per
+     amplifier at first playback.
+   - C8c: left from the top only, right from the bottom only (by ear).
+     During each tone, both amplifiers: CAL_SET_STATUS 2, CSPL_STATE 0,
+     CSPL_ERRORNO 0, HALO_STATE 2. **CSPL baseline** (CSPL_TEMPERATURE,
+     unsigned Q14 °C): top 409852 then 409664 (25.02 °C, 25.00 °C), bottom
+     409662 both times (25.00 °C). Both near room temperature and within
+     0.02 °C of each other: with the two records swapped, the 6 % apart
+     resistances would put them about 15 °C apart. So record 0 = top is
+     confirmed.
+   - C8d: "Built-in Audio Speaker" and "Built-in Audio Microphone" the
+     defaults; disable-mmap true, period 960 × 4, `hw:googleaocsndcar,5`;
+     `pw-play` worked; `pw-record` 3.9 s, peak 483 in a quiet room; the
+     amplifier controls stayed at 657/6; the volume keys and the
+     quick-settings slider work (confirmed by the human). The runbook's
+     `id -nu 1000` was wrong for this phone (the user is uid 1001): find
+     the session user instead (below).
+   - C8e: `systemd-analyze blame`: omandroid-speaker-protection 1.168 s,
+     omandroid-aoc 1.072 s; "speaker protection on" at 7.05 s, before
+     login; after login both nodes the defaults; status "ok: protection
+     firmware with factory calibration, PCM Source DSP, digital 657,
+     analog 6".
+   - By ear (the human): at these levels media is soft and the top
+     earpiece dominates; it sounds like the call speaker. C9 takes this.
+
+   **C8 failure in real use (same boot as C8e).** YouTube through PipeWire
+   played, then:
+   ```
+   [205.53] alsa-aoc cmd [output] id 0x00c9 (stream stop)
+   [205.54] cs35l41 spi6.0: Failed to set mailbox cmd 1 (status 0)
+   [205.54] ASoC: PRE_PMD: Top DSP1 event failed: -42      (the same for Bottom)
+   [221.48] cs35l41 spi6.0: Wake failed, re-enter hibernate: -42
+            … "CSPL Error Detected" (361 in total), "Wake failed … -22"
+   [223.17] cs35l41 spi6.0: Timed out waking device; ASoC error (-110) at
+            snd_soc_pcm_component_pm_runtime_get()
+   ```
+   PipeWire's open timed out, the speaker node went to error and was
+   destroyed (Dummy Output); the microphones went later. `systemctl stop`
+   muted, `rmmod` was refused (the card holds the module), and a
+   `systemctl start` then reported "ok" and **unmuted the broken
+   amplifiers without reloading their firmware**. Forcing a resume
+   (`power/control` on) failed the same way.
+
+   Analysis (mainline `sound/soc/codecs/cs35l41.c`, `cs35l41-lib.c`;
+   Google's `google-modules/amplifiers/cs35l41/cs35l41.c` for stock):
+   - At stream stop the DSP1 widget's PRE_PMD sends CSPL_MBOX_CMD_PAUSE (1)
+     and polls DSP_MBOX_2 five times, 1 ms apart, for PAUSED. This
+     firmware kept answering 0 (RUNNING). The AoC had already stopped the
+     TDM bit clock (cmd 0x00c9), which is the amplifiers' PLL reference, so
+     the DSP most likely had no clock to act on the mailbox. Google's
+     driver sends the same pause later (main amplifier POST_PMD) and
+     ignores its result.
+   - runtime suspend (autosuspend 3000 ms) hibernates the DSP only once
+     it has run (`dsp.cs_dsp.running`); that is why the 7 s start and the
+     idle minutes before the first playback were fine. It writes the
+     hibernate command without waiting for an answer; resume then sends
+     "out of hibernate" and waits for PAUSED, which never comes, retries,
+     re-enters hibernate, and ends in CSPL errors and -ETIMEDOUT at the next
+     stream's `pm_runtime_get`. Stock's driver hibernates only with its
+     own `cirrus,hibernate-enable` sequence; ours is not that one.
+   - Without hibernation the unacknowledged pause is harmless: the next
+     stream's POST_PMU finds RUNNING (or PAUSED) and sends RESUME, which
+     this firmware answers.
+
+   Fixes:
+   - Kernel, branch `omandroid-audio-amp` @ `60d3ca176` (worktree
+     `~/android/mainline/wt-audio-amp`, out `out-audio-amp`, on int
+     `908670416`): `8c4a74fc3` dt-binding `cirrus,dsp-no-hibernate`,
+     `165c2da7b` cs35l41 skips hibernate in runtime suspend and the wake in
+     runtime resume when it is set, `60d3ca176` sets it on both cheetah
+     amplifiers. Built (Image.gz, dtbs, modules); `cs35l41.o` W=1 clean;
+     checkpatch: only the trailer warnings; the cheetah DTB carries the
+     property on both amplifiers. `dt_binding_check` not run (no dtschema
+     here).
+   - omandroid-audio 0.2.0 (`7be2246`): holds both amplifiers awake
+     (`power/control` on, from a udev rule at bind and checked by the
+     service), so it works on kernels without the property too; `start`
+     rebinds the amplifiers when the driver is already bound (a chip reset
+     and a fresh firmware load: `systemctl restart` is the recovery);
+     a health check before unmute; `omandroid-speaker-watch.service` mutes
+     on any amplifier failure in the kernel log, an amplifier no longer held
+     awake, a level above the ceilings, or a DSP not running the protection
+     with its calibration during playback. Its tests cover each case.
+
+   **Checkpoint 2026-10-12 (amp hibernate fix / C9).** Done: the kernel
+   fix (branch above, built), omandroid-audio 0.2.0, extract-vendor-firmware
+   with the media deltas (`231936e`). Ready: C8f below. Next: C9 (stock
+   gains and balance under verified protection), after C8f passes.
+
+   - **C8f the amplifiers across idle** (kernel: int with
+     `omandroid-audio-amp` merged; omandroid-audio 0.2.0; the media deltas
+     are installed by the same firmware step but stay off). The session
+     user, for all PipeWire steps from here on:
+     ```sh
+     U='U=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}"); I=$(id -u $U); as_user() { runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/$I "$@"; }'
+     ```
+     1. Install (risk low): merge and push the kernel (ask first), then
+        ```sh
+        tools/extract-vendor-firmware ~/android/factory/cheetah-<build>/image-cheetah-<build>.zip
+        tar -C out/vendor-firmware -cf - usr/lib/firmware/updates/cirrus | tools/phone-ssh 'tar -C / -xf -'
+        tools/phone-install-package packages/omandroid-audio
+        tools/phone-ssh 'udevadm control --reload; systemctl daemon-reload'
+        ```
+        Expect `omandroid-audio 0.2.0-1` with every test `ok`. Reboot
+        (ask first).
+     2. Read-only after the boot (risk none):
+        ```sh
+        tools/phone-ssh 'uname -r; for d in /sys/bus/spi/drivers/cs35l41/spi*; do echo ${d##*/} $(cat $d/power/control $d/power/runtime_status) $([ -e $(readlink -f $d/of_node)/cirrus,dsp-no-hibernate ] && echo no-hibernate); done;
+          systemctl is-active omandroid-speaker-protection omandroid-speaker-watch; omandroid-speaker-protection status; omandroid-speaker-protection health'
+        ```
+        Expect both amplifiers "on active no-hibernate", both units active, status "ok: stage c8 … held
+        awake", "healthy". Stop: a unit failed or "not healthy" (send the
+        journal of both units).
+     3. Five cycles of play, stop, idle well past the 3 s autosuspend,
+        play again (risk low: C8 levels; announce it, ten short tones):
+        ```sh
+        tools/phone-ssh 'omandroid-speaker-protection signal tone /tmp/c8f.wav --level -23 --seconds 2'
+        for i in 1 2 3 4 5; do
+          tools/phone-ssh "$U"'; as_user timeout 6 pw-play /tmp/c8f.wav; echo "pw-play $?"; sleep 15;
+            omandroid-speaker-protection health; dmesg | grep -E "cs35l41|DSP1" | tail -3; systemctl is-active omandroid-speaker-watch'
+        done
+        tools/phone-ssh 'journalctl -u omandroid-speaker-watch -b --no-pager | tail -20; omandroid-speaker-protection status | tail -4'
+        ```
+        Expect each cycle: the tone, `pw-play 0`, "healthy" (notes about
+        "Failed to set mailbox cmd 1" are allowed: the pause at stop), the
+        watchdog active, no "Wake failed", "CSPL Error", "Timed out" or
+        "pm_runtime_get" line. **Stop:** a cycle without sound, any of those
+        lines, the watchdog inactive or a "muted: watchdog: …" status (send
+        the journal). Rollback: `omandroid-speaker-protection mute`.
+     4. The same with PipeWire left idle for 60 s between two plays (its
+        own suspend closes the PCM after 5 s), then a few minutes of real
+        media in Chromium with pauses. Expect the same.
+     5. Recovery (risk low): `tools/phone-ssh 'systemctl restart
+        omandroid-speaker-protection; sleep 3; omandroid-speaker-protection
+        status | head -3; systemctl is-active omandroid-speaker-watch'`.
+        Expect "rebinding both amplifiers", "ok", the watchdog active
+        again, and the speaker back in PipeWire within a few seconds (the
+        card goes away and comes back). Stop: no card after the rebind
+        (reboot, ask first).
+     6. Watchdog negative test (risk low, C8 levels; the --level is RMS, so
+        -23 is a -20 dBFS peak tone):
+        ```sh
+        tools/phone-ssh "$U"'; C=$(awk "/\]: aoc-snd-card - /{print \$1; exit}" /proc/asound/cards);
+          as_user timeout 6 pw-play /tmp/c8f.wav & sleep 1; amixer -q -c $C cset name="Top PCM Source" ASP; wait; sleep 2;
+          omandroid-speaker-protection status | head -1'
+        ```
+        Expect the watchdog
+        to mute both within about 2 s ("muted: watchdog: Top: PCM Source
+        is ASP, not DSP"), then `systemctl restart
+        omandroid-speaker-protection` to restore.
 
 ## 0. Top findings
 
@@ -1265,6 +1422,7 @@ Repo:
 | C6 | first sensor reading: `gs201_aoc_rails enable=1` (LDO7S then LDO5S), registry load, accelerometer samples; then rotation | PMIC LDO bits | medium | C5, USF client |
 | C7 | microphones: mic rails, capture EP1 (PCM 8) | PMIC, AoC | low | C5, `aoc_alsa` |
 | C8 | speaker protection (firmware and factory calibration on both amplifier DSPs), UCM2, PipeWire, still at the C7 limits (digital ≤ 657, analog ≤ 10). First sound itself came in C7d-6 | amps, AoC TDM | medium | C7d-6, `AUDIO-PLAN.md` A7 |
+| C8f | the amplifiers across idle: no runtime hibernate (kernel `cirrus,dsp-no-hibernate`, service holds them awake), health check before unmute, restart = rebind, watchdog | amps | low | C8 |
 | C9 | stock gains under protection (`speaker_protection=1`: analog 17, digital 817), VMON/IMON slots, earpiece (Voice Call verb) | amps | **speaker damage** if protection is not really running | C8 |
 | C10 | crash recovery: ACPM ch 13 doorbell, AoC watchdog | AoC PCU watchdog | medium | C5 |
 
