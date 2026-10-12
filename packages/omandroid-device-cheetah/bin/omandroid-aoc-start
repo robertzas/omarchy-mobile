@@ -13,6 +13,7 @@
 #      (aoc_channel_dev before aoc_char_dev, so named services bind first).
 #   5. The firmware load (aoc.bin, from the firmware search path), then wait
 #      for the services and the sensor channel.
+#   6. The sound card (aoc_alsa_dev), when the DTB has one.
 # A marker is written and synced before any of it, and removed at the end. If
 # a boot hangs here, the next one finds the marker and leaves the AoC off;
 # "omandroid-aoc-start --retry" tries again.
@@ -21,6 +22,8 @@ set -uo pipefail
 
 state=/var/lib/omandroid
 marker=$state/aoc-bringup-started
+# Set right before the firmware load, gone after a reboot (tmpfs)
+loaded=/run/omandroid/aoc-firmware-loaded
 node=/sys/bus/platform/devices/181d0000.aoc
 rails=1
 
@@ -49,7 +52,9 @@ if grep -q '^Services : [1-9]' "$node/services" 2>/dev/null; then
   log "already online: $(head -1 "$node/services")"
   exit 0
 fi
-if [[ -d /sys/module/aoc_core ]]; then
+# (aoc_core alone can be loaded without that: the sound card's driver pulls it
+# in as a dependency at boot, and it waits there unbound.)
+if [[ -e $loaded ]]; then
   log "the AoC was already started this boot but is not online; reboot to start it again"
   exit 1
 fi
@@ -96,12 +101,15 @@ done
 [[ -w $node/firmware ]] || fail "the AoC core did not bind ($node/firmware missing)"
 
 # 5. Firmware; the core loads, authenticates and starts it in the background
+mkdir -p "${loaded%/*}" && date -Is > "$loaded"
 echo aoc.bin > "$node/firmware" || fail "firmware load request failed"
 for _ in $(seq 75); do
   if grep -q '^Services : [1-9]' "$node/services" 2>/dev/null; then
     log "up: $(head -1 "$node/services"), firmware $(cat "$node/revision" 2>/dev/null | head -1)"
     for _ in $(seq 25); do [[ -c /dev/acd-com.google.usf ]] && break; sleep 0.2; done
     [[ -c /dev/acd-com.google.usf ]] || log "no /dev/acd-com.google.usf (sensors unavailable)"
+    # 6. The sound card, once the AoC's audio services are there
+    modprobe aoc_alsa_dev || log "aoc_alsa_dev failed (no sound card)"
     finish; exit 0
   fi
   sleep 0.2
