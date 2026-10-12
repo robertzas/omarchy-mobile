@@ -36,6 +36,7 @@ for f in usr/bin/omandroid-bootctl usr/bin/reboot-to usr/bin/omandroid-boot-succ
          usr/lib/systemd/system/omandroid-boot-success.service usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/udev/rules.d/10-omandroid-storage.rules usr/lib/NetworkManager/conf.d/10-omandroid-usb.conf usr/lib/systemd/logind.conf.d/10-omandroid-power-key.conf usr/lib/udev/rules.d/20-omandroid-gpu-always-on.rules \
          usr/bin/omandroid-wlan-mac usr/lib/udev/rules.d/80-omandroid-wlan-mac.rules \
+         usr/bin/omandroid-charge-guard usr/lib/modprobe.d/omandroid-charger.conf \
          usr/lib/systemd/system.conf.d/10-omandroid-reboot-watchdog.conf \
          usr/lib/udev/rules.d/72-omandroid-feedbackd.rules \
          usr/bin/omandroid-bt-addr usr/lib/systemd/system/omandroid-bt-addr@.service usr/lib/udev/rules.d/80-omandroid-bt-addr.rules \
@@ -49,4 +50,6 @@ done
   || fail "the Wi-Fi unit is enabled by a vendor wants link"
 grep -q 'mode=' bin/omandroid-wifi-start && fail "omandroid-wifi-start never loads the SysMMU firewall"
 grep -qx 'blacklist pcie_gs201' vendor/modprobe.d/omandroid-wifi.conf || fail "pcie_gs201 only loads through the guarded service"
+grep -qE '^options max77759_charger' vendor/modprobe.d/omandroid-charger.conf && fail "the charge guard stays off until USB-C-PLAN gate B3g passes"
+grep -qx 'blacklist max77759_charger' vendor/modprobe.d/omandroid-max77759.conf || fail "the charger stays blacklisted"
 pass "install stages the package"

@@ -236,6 +236,95 @@ Before `options max77759_charger default_ilim_ua=500000` goes into the
 device package, add a temperature guard (a small userspace or kernel policy
 that sets mode OFF outside 10-45 °C from the gauge's `temp`).
 
+### B3g: battery temperature guard (before charging is on by default)
+
+Nothing in mainline limits charging by temperature; stock does it in
+software from the `google,battery` step-charging table (`R/live.dts:17774-17776`):
+
+| Battery | Float voltage | Charge current (% of capacity) up to 4.20 / 4.30 / 4.45 V |
+|---|---|---|
+| below 0 °C | no charging | |
+| 0-10 °C | 4.30 V | 30 / 10 / - |
+| 10-20 °C | 4.45 V | 50 / 30 / 30 |
+| 20-42 °C | 4.45 V | 100 / 70 / 50 |
+| 42-46 °C | 4.45 V | 80 / 50 / 50 |
+| 46-48 °C | 4.30 V | 50 / 50 / - |
+| 48-55 °C | 4.20 V | 30 / - / - |
+| 55 °C and up | no charging | |
+
+**Design: in the charger driver, not a userspace service.** A service can be
+stopped, crash or be frozen in suspend, and the guard must hold whenever the
+charger driver is bound. So the policy lives in `max77759_charger` (branch
+`omandroid-chgguard` in `~/android/mainline/wt-chgguard`, commit
+`37a83337c` on top of `omandroid-usbc` `c86bd2db7`; built W=1 clean into
+`~/android/mainline/out-suspend/chgguard`):
+
+- Module parameter `temp_guard` (bool, runtime-writable, **default off**).
+  Every 30 s the driver reads `temp` and `voltage_now` from the power supply
+  named by `guard_psy` (default `max170xx_battery`), picks the band and the
+  tier, and programs the float voltage (`CHG_CNFG_04`) and fast charge
+  current (`CHG_CNFG_02`), never above the battery node's limits (4.45 V,
+  1.47 A; with 4926 mAh, 100 % is capped at 1.47 A anyway).
+- Out of range or **no reading** means charging off: mode 4 (buck only), so the
+  phone keeps running from USB and the battery rests. Mode 0 would cut the
+  buck too.
+- It enters a more restrictive band at once, and a less restrictive one only
+  2 °C inside it (both directions), so a reading at a boundary doesn't flap.
+  Tiers only rise within a band.
+- Turning the parameter off restores the battery node's limits and allows
+  charging again. When the module unloads while charging is inhibited, it
+  stays inhibited (the safe side) until the next load.
+- Backstops: the charger's own JEITA (thermistor on its THM input, status
+  `CHG_DETAILS_01` CHG_DTLS 0xc). External reports say the bootloader leaves
+  it on (`CHG_CNFG_08` 0xc1, bit 2). G0 reads it.
+
+**Package:** `omandroid-device-cheetah` 0.1.14 adds `omandroid-charge-guard`
+(`status`, `on`, `off`) and `/usr/lib/modprobe.d/omandroid-charger.conf`,
+whose `options max77759_charger temp_guard=1` line stays commented out. The
+package test fails if it is uncommented, or if the charger stops being
+blacklisted, until this gate passes.
+
+Runbook (needs the B3 kernel plus `omandroid-chgguard`; merge order:
+`omandroid-usbc`, then `omandroid-chgguard`):
+
+- **G0, read-only:** `tools/usbc-deadman dump`, plus
+  `tools/phone-ssh 'i2cget -f -y 0 0x69 0xc1; i2cget -f -y 0 0x69 0xb8; i2cget -f -y 0 0x69 0xb6'`
+  (CNFG_08, DETAILS_03, DETAILS_01; use the bus number B3.0 found). Record
+  whether JEITA bit 2 is set. Then
+  `cat /sys/class/power_supply/max170xx_battery/temp` (tenths of °C) twice,
+  a minute apart, and compare with the room: it must be a plausible battery
+  temperature that moves (not stuck at 22.0 °C, which would mean the
+  thermistor isn't in use; B1b fixed that).
+- **G1, guard on, normal temperature:** load the charger as in B3.3, then
+  `omandroid-charge-guard on`, wait 35 s, `omandroid-charge-guard status`.
+  Expect `temperature guard on (max170xx_battery)`, then `battery 2x.x C,
+  .... mV: band 20-42 C, float 4450 mV, charge 1466730 uA` (or the 10-20 °C
+  band in a cold room: 4450 mV, 50 % = 1466730 capped). Charging continues.
+- **G2, simulated read failure:** with the guard on, `modprobe -r
+  max17042_battery`. Within 30 s: `no reading from max170xx_battery:
+  charging inhibited`, `CHG_CNFG_00` mode 4 in the dump, charger `status`
+  "Not charging". `modprobe max17042_battery`: within 30 s charging resumes
+  (at room temperature; within 2 °C of a band edge it waits until the
+  reading is 2 °C inside the band).
+- **G3, hot band (attended, cable in):** warm the phone gently (a long GPU
+  load: `glmark2-es2-wayland --run-forever` with the screen at full
+  brightness, or a warm room). Stop the load at once if the battery passes
+  50 °C. Watch `omandroid-charge-guard status` every minute. Expect at 42 °C
+  the 42-46 band (1.47 A capped -> current stays, float 4450), at 46 °C float
+  4300 mV, at 48 °C 4200 mV. Cool down: the bands come back only 2 °C inside
+  each one.
+- **G4, cold band (optional, attended):** the phone in a fridge (not a freezer)
+  for 20 min, then on the cable: below 10 °C float 4300 mV and 30 % current;
+  below 0 °C inhibited.
+- **G5, soak:** a full charge from below 50 % with the guard on: the same
+  result as B3.4, and no guard message other than band changes.
+
+**Pass:** G0-G2 and G5 (G3/G4 as far as can be done safely). Then uncomment the
+modprobe option together with removing the charger from the blacklist, in
+the same package release, so charging is never on by default without the
+guard. **Rollback:** `omandroid-charge-guard off` (restores the battery
+node's limits), or unload the charger (`tools/usbc-deadman undo b3-charger`).
+
 ### B4a: TCPM drives VBUS valid and the data switch (device only)
 
 ```sh
