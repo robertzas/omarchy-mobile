@@ -1,10 +1,10 @@
 <!-- SPDX-License-Identifier: MIT -->
 # AoC plan (cheetah / gs201): audio and sensor DSP bring-up
 
-Status (2026-10-12): **C1 passed on the phone** (section 0.1): the GSA
-answers its mailbox, including the AoC state command 91, so the AoC can be
-loaded and started without Trusty. C2-C4 (read-only probes, rails, load,
-start) are written and built offline, not run yet. Kernel branch
+Status (2026-10-12): **C1, C2, C3 and C4a passed on the phone; C4b (start)
+did not finish** (section 0.2): the GSA accepted `START` but reported state
+4, and the firmware never wrote its control block. C4b-2 (diagnostics,
+setup re-apply, release reset) is built and is next. Kernel branch
 `omandroid-aoc` in `~/android/mainline/wt-aoc` (out dir
 `~/android/mainline/out-aoc`), on `omandroid` @ `7b0f8b5d1` plus the Trusty
 commits of `omandroid-fingerprint`. Everything new is disabled by default.
@@ -134,6 +134,62 @@ Stock's order:
 So the GSA-direct path is: load (90), then 91 `START`; restart = 91
 `SHUTDOWN`, 92, load, 91 `START`. `gsa.c` sends 91/92 when loaded with
 `aoc_cmd_mbox=1`, and the Trusty messages otherwise.
+
+### 0.2 C2-C4 results (omandroid-int 00200, DTB default + display-decon-test + aoc-boot-test)
+
+| Stage | Result |
+|---|---|
+| C2 | pass. `aoc_req` 1, ack 1: **BLK_AOC is on at hand-off**. GSA state 0. Chip 0x9855000, type 0x1, revision 0x10; board 0x30301/0x10000. Carve-out not System RAM. **AoC S2MPU CTRL0 0x5** (enabled, blocking). AoC System MMU v8.1, CTRL 0x24, CAPA0 0x41085800, CAPA1 0xe051 (8 VIDs), every VID off (ctrl 0, cfg 0x20000, no table) |
+| C3 | pass. S2MPG12 and S2MPG13 CHIPID 0x05. **All five rails off**: LDO20M/19S/20S/7S ctrl 0x2c (1800 mV), LDO5S 0x3c (3300 mV), enable bits clear |
+| C4a | pass. GSA S2MPU CTRL0 0x1 → 0 for the load; "cmd 90: answer 0x8000005a err 0"; state 1 (loaded); no faults |
+| C4b | **no**. "cmd 91 … argc 1", reply **4**; no control block in 5 s; GSA state stays 4; no System MMU fault line. `SHUTDOWN` then gives state 1 (loaded), and the phone is fine |
+
+**The "magic 0xa0cda7a" is our own parameter block.** The boot driver wrote
+`AOC_PARAMETER_MAGIC` 0x0a0cda7a at carve-out + 0x1600000 before the start,
+and the firmware overwrites that area with its control block (magic
+0xa0c00a0c) when it comes up (`GA/aoc.c` writes both at the same address).
+The "control block" printed is that parameter block read as one: status
+0x1001 is the first key (`kAOCBoardID`), "4098 services" is 0x1002
+(`kAOCBoardRevision`), "size 4" its length, "+0x10000" the board revision
+value. Nothing is half-written or mis-parsed: **the firmware never got as
+far as writing its control block.**
+
+**State 4 is not in Google's enum** (`gsa_aoc.h`: inactive 0, loaded 1,
+running 2; the TPU adds suspended 3, the DSP's own enum has 5 values). It is
+the reply to `START`, read the same way as the replies that were right
+(0 before load, 1 after load and after `SHUTDOWN`), so it is a real state.
+Google's `aoc_take_offline()` carries a note that the shutdown command's
+number changed in the GSA firmware (`GA/aoc.c:1619-1621`), so the GSA's AoC
+interface has moved over time and its states are not all in the public
+header. Readings to tell apart in C4b-2:
+
+1. **A block reset during load or start cleared our setup.** The AoC S2MPU
+   was 0x5 (blocking) at hand-off and the System MMU was off. If cmd 90 or
+   `START` resets BLK_AOC, the S2MPU blocks every AoC access again (its
+   faults are not reported to us) or the System MMU passes the AoC's
+   addresses through untranslated. Either way the A32 cannot fetch its code.
+   Stock restores both after a reset (pKVM for the S2MPU, the IOMMU driver
+   on runtime resume). C4b-2 reads both after the load and before and after
+   the start, and puts them back before `START`.
+2. **The A32 is still in reset.** `START` may prepare the AoC and leave the
+   A32 to a separate release (`GSA_AOC_RELEASE_RESET` 5, "take AoC A32 out of
+   reset" in `gsa_aoc.h`), which Trusty's service might send itself. C4b-2
+   reads the PCU reset control and, only if the A32 is held, sends 5.
+3. **The firmware runs but waits or crashes early.** The ramdump header at
+   carve-out + 32 MiB (`GA/aoc_ramdump_regions.h`, outside the locked body)
+   has boot breadcrumbs, and the AoC watchdog (SPI 116) fires on a crash.
+   C4b-2 dumps both.
+4. **The rails.** Stock powers the microphone and sensor LDOs before the
+   load (`configure_sensor_regulator()` and `configure_dmic_regulator()` at
+   probe); on this phone all five are off at hand-off. The firmware publishes
+   its control block before it probes sensors, so this is the least likely,
+   but C4b-3 tests it.
+
+Stock needs nothing else from the AP between `START` and "online": the
+firmware writes its control block and rings an AoC mailbox; the AP only
+checks the magic (`aoc_mbox_rx_callback()` → `aoc_fw_ready()`) and then
+drops `aoc_req` (`aoc_did_become_online()`, `GA/aoc.c:1358-1440`). No ACPM
+message, no AP doorbell first.
 
 What is mandatory, in boot order:
 
@@ -311,6 +367,7 @@ merges cleanly into `omandroid-int` @ `741b6ed1d` (`git merge-tree`).
 | `5caf0d303`, `0610de752` AoC binding and boot driver | `gs201-aoc-boot.c` (`CONFIG_GS201_AOC_BOOT`): debugfs `info`, `power`, `blk`, `load`, `start`, `control`, `shutdown` (section 7) | module |
 | `3a71f0471` soc: google: add the gs201 AoC supplies over ACPM | `gs201-aoc-rails.c` (`CONFIG_GS201_AOC_RAILS`): reads S2MPG12/13 CHIPID and the five LDOs; sets their enable bits only with `enable=1`, never a voltage | module, no DT |
 | `973b54b71` arm64: dts: ... gs201: add the AoC and its System MMU | `sysmmu@1a090000` (SPI 118), `aoc@181d0000` | `disabled` |
+| `0e5c2082d`, `edfb4e5df`, `aa453aaee`, `c868f906b` C4b diagnostics | System MMU "lost" check and reprogram, VID 0 fault registers in the dump; the AoC node gains the PCU (`0x19a00000`) and the watchdog interrupt (SPI 116); the boot driver logs S2MPU, PCU reset control, System MMU, IPC words and ramdump breadcrumbs around `START`, re-applies a cleared S2MPU/System MMU setup first (`reapply=1`), and gains `cmd` (any GSA AoC command) and `ramdump` (hex dump) | - |
 | `2f785843b`, `615b5188a` unload | `gsa_unload_aoc_fw_image()` (cmd 92 or Trusty `UNLOAD_IMG`); debugfs `unload` (shutdown, unload, System MMU off, as `aoc_take_offline()`) | - |
 
 Build in `out-aoc`: release `7.3.0-rc6-omandroid-push1-00079-g615b5188a148`
@@ -511,6 +568,66 @@ tools/aoc-stage --watchdog c4b
   may log nothing or wait for the AP. Leave it running at most a few minutes,
   then `tools/aoc-stage stop` (`GSA_AOC_SHUTDOWN`, expect "state 1
   (loaded)"), or reboot.
+
+### C4b-2: diagnose the start (one boot)
+
+Rebuild int with `omandroid-aoc` @ `c868f906b` (merge again) and push as
+before. The overlay is unchanged; the AoC node now also has the PCU range
+and the watchdog interrupt, from `gs201.dtsi`.
+
+```sh
+tools/phone-ssh 'rm -f /var/lib/omandroid/aoc-bringup-started'
+tools/aoc-stage --watchdog c2
+tools/aoc-stage --watchdog c4a
+tools/aoc-stage diag          # after the load, before the start
+tools/aoc-stage --watchdog c4b
+tools/aoc-stage diag
+```
+
+Read, in the kernel log (each line is prefixed with blk/before/after/5 s):
+
+- `aoc s2mpu CTRL0`: 0 after our load, or 0x5 again (a block reset).
+- `pcu reset 0x…`: bit 0 is the A32 run bit that Google's non-GSA path sets
+  (`aoc_release_from_reset()`); record it before and after `START`.
+- the System MMU lines: global ctrl bit 0 and VID 0 ctrl bit 0 set, table at
+  our address; "VID 0 fault va … info …"; `int` status.
+- "AoC S2MPU CTRL0 is 0x… again, setting 0" or "System MMU setup was
+  cleared, programming it again": printed by the re-apply before `START`.
+- `ipc …`: 0a0cda7a … (our parameters) or a0c00a0c … (the firmware's).
+- `ramdump magic … crumbs …`: "AOCDUMP" and non-zero breadcrumbs mean the
+  firmware ran.
+- "AoC watchdog interrupt": the firmware ran and stopped.
+
+Then, only if `START` gave state 4, `pcu reset` bit 0 is clear and nothing
+came up:
+
+```sh
+tools/aoc-stage --watchdog release    # GSA_AOC_RELEASE_RESET (5)
+tools/aoc-stage diag
+tools/aoc-stage stop
+```
+
+- **Expect (if this is it):** state 2 (running), "firmware up: 82 services".
+- **Stop:** any "blocked … VID n", the watchdog interrupt, or an unexpected
+  state (record it). `stop` returns the AoC to "loaded"; a reboot clears
+  everything.
+
+Send the four logs (`logs/aoc-*-diag.log`, `-c4b.log`, `-release.log`).
+
+### C4b-3: rails first (separate boot, if C4b-2 shows the A32 running but no control block)
+
+```sh
+tools/phone-ssh 'rm -f /var/lib/omandroid/aoc-bringup-started'
+tools/aoc-stage --watchdog c2
+tools/aoc-stage rails         # LDO7S, LDO5S and the mic LDOs on, stock voltages
+tools/aoc-stage --watchdog c4a
+tools/aoc-stage --watchdog c4b
+tools/aoc-stage diag
+```
+
+- **Expect:** "LDO… : enabled, ctrl now 0xac" (LDO7S; LDO5S 0xbc, the mic rails 0xec), then
+  the read-back "on". Rails stay on until a cold boot (stock keeps them on
+  all the time).
 
 ### C4c: clean restart (optional, after C4b)
 

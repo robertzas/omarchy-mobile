@@ -31,6 +31,13 @@
 #   c4b  start: GSA_AOC_START over the mailbox, wait for the firmware's
 #        control block, list the services; clears the hang marker on success
 #   stop GSA_AOC_SHUTDOWN (back to "loaded")
+#   diag read-only: the AoC S2MPU, A32 reset control, System MMU, boot
+#        breadcrumbs (kernel log) and a hex dump of the ramdump header and IPC
+#        area
+#   release  GSA_AOC_RELEASE_RESET (5): only after a start that left GSA
+#        state 4 without a control block (AOC-PLAN.md C4b-2)
+#   rails    turn the five AoC LDOs on (gs201_aoc_rails enable=1; stock
+#        voltages, never changed). Before c4a, for C4b-3.
 #
 # Options:
 #   --watchdog   arm the hardware watchdog (about 15 s) with a feeder loop on the
@@ -64,7 +71,7 @@ while (($#)); do
     --fw) FW="${2:?}"; shift ;;
     --pstore) pstore=1 ;;
     -h|--help) usage ;;
-    c2|c2p|c3|c4a|c4b|stop) stage="$1" ;;
+    c2|c2p|c3|c4a|c4b|stop|diag|release|rails) stage="$1" ;;
     *) usage 1 ;;
   esac
   shift
@@ -172,6 +179,23 @@ case "$stage" in
     phone "dmesg | grep -c 'blocked' ; cat $DBG/info" | tee -a "$log" || result=fail
     [[ $result == ok ]] && phone "rm -f $MARKER; sync"
     ;;
+  diag)
+    phone "test -d $DBG" || die "run c2 first"
+    mark "diagnostics (reads only)"
+    phone "cat $DBG/info; cat $DBG/blk; cat $DBG/ramdump" | tee -a "$log" || result=fail
+    ;;
+  release)
+    phone "test -d $DBG" || die "run c2 first"
+    mark "about to send GSA_AOC_RELEASE_RESET (5)"
+    phone "echo 5 > $DBG/cmd; echo release-exit=\$?; cat $DBG/info; cat $DBG/control" | tee -a "$log" || result=fail
+    phone "dmesg | grep -c 'blocked'" | tee -a "$log" || result=fail
+    ;;
+  rails)
+    mark "about to turn the AoC LDOs on (enable bits only)"
+    phone 'lsmod | grep -q "^gs201_aoc_rails " && rmmod gs201_aoc_rails;
+      modprobe gs201_aoc_rails enable=1; echo modprobe-exit=$?; rmmod gs201_aoc_rails;
+      modprobe gs201_aoc_rails; rmmod gs201_aoc_rails' | tee -a "$log" || result=fail
+    ;;
   stop)
     mark "about to shut the AoC down (GSA_AOC_SHUTDOWN)"
     phone "echo 1 > $DBG/shutdown; echo stop-exit=\$?; cat $DBG/info" | tee -a "$log" || result=fail
@@ -204,5 +228,5 @@ trap - EXIT
 echo
 say "summary ($log): $result"
 sed -n "/aoc-stage: start $stage/,\$p" "$log" |
-  grep -E 'aoc|gsa|sysmmu|s2mpu|S2MPU|rails|LDO|CHIPID|blocked|-exit' |
-  sed -E 's/^([0-9:.]+) [0-9]+,[0-9]+,[0-9]+,[^;]*;/\1 /' | tail -40
+  grep -E 'aoc|gsa|sysmmu|s2mpu|S2MPU|rails|LDO|CHIPID|blocked|-exit|watchdog|crumbs|ipc|pcu' |
+  sed -E 's/^([0-9:.]+) [0-9]+,[0-9]+,[0-9]+,[^;]*;/\1 /' | tail -80
