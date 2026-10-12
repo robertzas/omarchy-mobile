@@ -1680,3 +1680,82 @@ New lines to expect after `max rx buf post 1535, rx dataoffset 0`:
 | then the 9.4 table from `Firmware: BCM4389/3 ...` on | | a firmware trap in the console lines: keep the log |
 
 Then 9.4 W2.2-W2.4 (`iw dev`, `iw dev wlan0 scan`, reload). Rollback as 9.5.
+
+### 9.7 Third W2.1 run: the firmware never reads the rings (2026-10-12)
+
+Log: `logs/wifi-w1-20261012-013214-s5.log`, kernel `…-00073-g449fdf52b5d2`.
+The DMA fix worked: `shared flags 0x70050107`, `Using host memory indices`,
+`Nr of flowrings is 40`, and the firmware boots to "ThreadX v5.6
+initialized". Then the rxpost ring is never read (`r_ptr 0 (1023), ring
+1` over and over), `brcmf_msgbuf_rxbuf_ctrl_post: No PKTID available !!`
+twice, and the first ioctl (`cur_etheraddr`) times out after 2 s.
+
+The shared flags decode as: version 7, ASSERT_BUILT (0x100), DMA_INDEX
+(0x10000, 4-byte indices since 0x100000 is clear), D2H sync XORCSUM
+(0x40000), HOSTRDY_SUPPORT (0x10000000), NO_OOB_DW (0x20000000),
+INBAND_DS (0x40000000), and **no DAR (bit 31 clear)**
+(`W/include/bcmpcie.h:54-120`). The shared address moving (0x3b26e8 then
+0x461198) is expected: the firmware randomises its heap from the host's
+seed (`heap_aslr_*` in `fw_bcmdhd.map`).
+
+Three causes, each with a fix:
+
+1. **Wrong doorbell registers (the main one).** For PCIe core rev >= 64
+   brcmfmac rings the DAR copies, H2D DB0/DB1 at 0xa20/0xa24
+   (`L/.../pcie.c` `brcmf_reginfo_64`). bcmdhd rings those only when the
+   firmware offers DAR and the host enables it; otherwise it uses the core's
+   own `PCIH2D_MailBox` 0x140 and `PCIH2D_DB1` 0x144, on any core revision
+   (`W/dhd_pcie.c:659-680`, `W/dhd_pcie.h:82`, `W/include/pcie_core.h:1030-1031`).
+   This firmware has no DAR (also stock: "FW supports DAR ? N",
+   `R/dmesg.txt:7104`). So neither the ring doorbells nor the host-ready
+   ring (DB1) reached it, which fits a firmware that boots and then sits
+   idle. D2H interrupts were never the problem: no D2H message was ever
+   written.
+2. **No host capability word.** For shared revision >= 6 bcmdhd writes
+   `host_cap` (offset 84 of `pciedev_shared_t`) before it uses the rings:
+   the IPC version, HOSTRDY, the device-wake mode, and UR_FW_NO_TRAP
+   (`W/dhd_msgbuf.c:3878-4037,4347`, `W/include/bcmpcie.h:356-433,440-466`).
+   brcmfmac writes nothing there. It does write a legacy "ring update"
+   buffer at offsets 64/68, which in the v7 layout is `host_scb_addr`, and
+   its high half spills into `host_scb_size` (72). With the pool at
+   0xaff000000 that is 0xa, not 0.
+3. **Rx packet IDs run out.** The firmware allows 1535 rx data buffers
+   (`max rx buf post 1535`), brcmfmac has 1024 rx IDs for data, ioctl
+   response and event buffers together, and fills them with data buffers
+   first. The ioctl response buffers got no IDs ("No PKTID available"), so
+   even a working ring could not have returned the `cur_etheraddr` answer.
+   Stock posts 2040 (`R/dmesg.txt:7131`, "RxBuf Post : 2040").
+
+"EL: 30 12fc" and "EL: e6 8a58" are binary event-log records (set, tag)
+printed to the console. They are not decodable without Broadcom's
+event-log string tables, which are not in the GPL tree, and they also
+appear during a normal boot. Not a lead.
+
+| Commit (wt-pcie) | Change |
+|---|---|
+| `8358ff260` wifi: brcmfmac: pcie: ring the core doorbells when the firmware has no DAR | BCM4389 without the DAR flag: doorbells at 0x140/0x144; logs `no DAR: doorbells at 0x140/0x144` |
+| `bacfef43f` wifi: brcmfmac: pcie: write the host capabilities for the BCM4389 | `host_cap` = 7 \| ENABLE_HOSTRDY \| DS_NO_OOB_DW \| UR_FW_NO_TRAP = `0x00801407`; no legacy ring-update fields; logs `host capabilities 0x...` |
+| `e89538839` wifi: brcmfmac: msgbuf: keep rx packet IDs for the control buffers | rx ID pool 2048; data buffers capped at 2047 - 16 |
+
+Builds: `logs/{kernel,modules,images}-w2ipc.log`; out-pcie with both
+overlays re-applied (plain DTB in `.default`), release
+`7.3.0-rc6-omandroid-push1-00076-ge89538839a44`.
+
+**Next run (same command):**
+
+```sh
+export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
+bin/omandroid modules-push && bin/omandroid push
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
+```
+
+| Line | Pass | If not |
+|---|---|---|
+| `shared flags 0x70050107`, then `no DAR: doorbells at 0x140/0x144` | both | no second line: the flags changed (DAR now set?), note them |
+| `host capabilities 0x00801407` | that value | — |
+| `Using host memory indices`, `Nr of flowrings is 40` | as run 3 | — |
+| `ring_mb_update_rptr R r_ptr N (...), ring 1` with N growing past 0 | the firmware reads rxpost | still 0: the doorbell is still not seen; keep the log (next suspect: hostready ordering) |
+| no `No PKTID available` | absent | present: note how many |
+| `Firmware: BCM4389/3 wl0: ... version 20.101.90 ...`, then `CLM version = Google.C10sub6` | both | `Timeout on response for query command` again: keep the log and the console lines after it |
+
+Then 9.4 W2.2-W2.4. Rollback as 9.5.
