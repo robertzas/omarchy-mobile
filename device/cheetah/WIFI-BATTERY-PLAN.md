@@ -1957,3 +1957,96 @@ tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
 | `Firmware: BCM4389/3 …`, `CLM version = Google.C10sub6` | both | then 9.4 W2.2-W2.4 (`iw dev`, `iw dev wlan0 scan`) |
 
 Rollback as 9.5.
+
+### 9.11 Run D: the pool below 4 GiB changes nothing; probing the HSI2 path (2026-10-12)
+
+Run D (`logs/wifi-w1-20261012-021916-s5.log`): the pool is at 0xff000000,
+with the same pattern as every earlier run. The chip fetches one round of
+H2D indices and ring entries (TCM H2D w 16, r 5, rxpost 1023/1023), and
+then nothing: host H2D r and D2H w stay 0 and `mailboxint` stays 0. So the
+writes fail whatever the address.
+
+**One detail that narrows it.** PCIe does not let a read pass an earlier
+posted write. The chip did one burst of reads, then stopped fetching: its
+TCM copy of the control write index stays at 16 while the host goes to 17,
+and it never rings a D2H doorbell (a register inside the chip, which needs
+no host write). That fits a **write that never completes**, with the
+chip's DMA engine blocked behind it. It fits less well with a write that
+is accepted and then dropped, since then the reads and the doorbell would
+carry on. This build reads the chip's own DMA engine state to settle it.
+
+**What Google's code says about the two HSI2 blocks:**
+
+- **S2MPU (0x145e0000).** With `CTRL0.ENABLE` = 0 "all traffic would be
+  allowed through" (`G/drivers/soc/google/pkvm-s2mpu/common/hyp/s2mpu.c:183-195`).
+  Its reset state blocks **all** DMA until the hypervisor configures it
+  (same comment), which would block reads too. Permissions are per
+  gigabyte and per VID, R and W separately (`common/kvm_s2mpu.h:340-346,420-424`),
+  so a read-only setup is possible in principle. We read `CTRL0` = 0 at
+  W1.1. Stock runs it from pKVM (`always-on`, `R/live.dts:9638-9645`), and
+  we boot without pKVM.
+- **PCIe SysMMU (0x145c0000).** Stock enables it (`use-sysmmu = "true"`,
+  `R/live.dts:12107-12149`; "PCIe SysMMU is ENABLED", `R/dmesg.txt:2075`)
+  and programs a page table for VID 1 (`pcie-vid-num = <1>`). Global
+  `CTRL` 0 is bypass ("PCIe SysMMU use full disable(by pass) as default",
+  `G/drivers/iommu/exynos-pcie-iommu-whi.c:203-221`). There are also BLOCK
+  values (0x7, 0x3), and a per-VID enable with "stall mode is default"
+  (`:190-193`, `exynos-pcie-iommu-whi.h:96-105`). A VID left enabled by
+  the bootloader, with a page table that maps only some pages or stalls on
+  a write fault, would explain a write that never completes. It records
+  separate read and write fault addresses (`FAULT_AR_*` 0x70/0x78,
+  `FAULT_AW_*` 0x80/0x88).
+- Google's controller driver programs nothing else for the inbound path:
+  no inbound iATU, no AXI AW/AR user bits, no MPS. The ELBI setup
+  (`L1_REQ_NAK`, `QCH_SEL`, `MSTR_PEND_SEL_NAK`, `DBI_L1_EXIT_DISABLE`)
+  and the DBI setup match ours (`G/pcie-exynos-rc.c:3560-3624` and
+  `exynos_pcie_setup_rc()`). `use-msi = "false"` in stock, so the INTx
+  path we use is the stock one.
+
+**New in this build** (wt-pcie):
+
+| Commit | What |
+|---|---|
+| `c7b2c66ec` PCI: dwc: gs201: add a staged read-only probe of the HSI2 DMA path | `echo N > /sys/module/pcie_gs201/parameters/hsi2_probe` reads one group; each register is logged (`hsi2 probe: about to read …`) before the read: **1** SysMMU VERSION, CTRL, CFG, STATUS, INT_STATUS, FAULT_AR/AW addr+info; **2** SysMMU CTRL/CFG/PT_BASE for VID 0 and 1; **3** S2MPU CTRL0, VERSION, CTRL1, CFG, INFO, STATUS; **4** S2MPU FAULT_STATUS + per-VID fault PA/INFO; **5** S2MPU L1 entries, VIDs 0-7, 2-4 GiB |
+| `53a679e7a` wifi: brcmfmac: pcie: dump the dongle's DMA engine state when debugging | with every index dump: `dongle DMA H2D/D2H tx/rx ctrl … st0 … st1 …` (st0 bits 31:28 = state: 1 active, 2 idle, 3 stopped; st1 bits 31:28 = error: 3 data transfer, 4 descriptor read, 5 core), `dongle DAR errlog … erraddr … intstatus …`. These are chip registers read over BAR0, no SoC risk |
+
+`tools/wifi-w1-capture --hsi2-probe N` runs groups 1..N after the link and
+brcmfmac, under the same watchdog. Builds: `logs/{kernel,modules,images}-w2hsi2.log`,
+release `7.3.0-rc6-omandroid-push1-00083-g53a679e7ae2a`, standard test DTB
+(pool with `alloc-ranges`), `.default` rebuilt plain.
+
+**Runbook (one group further per run; stop at the first hang).** The
+SysMMU groups are what Google's EL1 driver reads in stock, so they are the
+lower risk. The S2MPU beyond `CTRL0` is normally run from EL2 and **may
+not be reachable from EL1**: a hang or reset there is possible, which is
+what the watchdog is for.
+
+```sh
+export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
+bin/omandroid modules-push && bin/omandroid push
+
+# E1: brcmfmac with the dongle DMA dump + SysMMU groups 1-2
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac --hsi2-probe 2 5
+tools/phone-ssh 'lspci -vvv -s 00:00.0; lspci -vvv -s 01:00.0' > logs/w2-lspci-$(date +%H%M).txt
+#   (config space through the kernel, safe while the link is up: look at the
+#    root port's "Secondary status" <MAbort/<TAbort, DevSta, and the AER UESta lines)
+# E2 (only if E1 did not hang): add the S2MPU control group
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac --hsi2-probe 3 5
+# E3: S2MPU faults; E4: S2MPU permissions
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac --hsi2-probe 4 5
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac --hsi2-probe 5 5
+#   if the phone resets: tools/wifi-w1-capture --pstore; the last "about to read" names the register
+#   rollback: modprobe -r brcmfmac pcie_gs201; tools/wifi-w1-capture --disarm
+```
+
+How to read it:
+
+| Reading | Meaning | Next |
+|---|---|---|
+| `dongle DMA D2H tx … st0 0x1…` (active) that never goes idle, st1 error 0 | the write is stuck in flight: the host is not accepting it | SysMMU/S2MPU lines below |
+| `D2H tx … st1 0x3…/0x5…` | the host answered the write with an error | AER/lspci lines; SysMMU fault AW |
+| `D2H tx` idle, `ptr` unchanged | the chip never started a write | back to the chip side (firmware console after the ioctl) |
+| SysMMU `CTRL` 0, `CTRL_VID1` 0 | bypassed: not the SysMMU | S2MPU groups |
+| SysMMU `CTRL` 0x5 or `CTRL_VIDn` bit 0 set, `FAULT_AW_ADDR` ≈ our pool address | the bootloader left the SysMMU translating, and our writes fault and stall in it | fix: disable it the way Google's driver does (`CTRL_VID` = 0, then `CTRL` = 0), or program a page table for VID 1 as stock does: a later, separate gate |
+| S2MPU `CTRL0` 1, `FAULT_INFO` with the RW bit (bit 20) = write and a pool PA | S2MPU write protection | program the S2MPU (W4 work) |
+| everything bypassed and no faults | the block is not on the write path we probed | next: the HSI2 sysreg/SSMT and the IA (the I/A sequencer also has ELBI/AXI hooks; `use_ia=0` is a cheap test: `--ia 0`) |

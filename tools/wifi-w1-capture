@@ -28,6 +28,11 @@
 #                    for "Firmware: BCM4389" or a failure line
 #   --brcm-debug HEX brcmfmac debug mask for --brcmfmac (default 0x80004 =
 #                    PCIE + INFO; needs CONFIG_BRCMDBG, else it is ignored)
+#   --hsi2-probe N   stage 5 only: after the link (and --brcmfmac), read the
+#                    HSI2 SysMMU/S2MPU register groups 1..N through
+#                    pcie_gs201's hsi2_probe parameter, under the same watchdog.
+#                    Read-only, but a register that is not reachable hangs the
+#                    SoC: raise N one step per run (WIFI-BATTERY-PLAN 9.11)
 #   --no-trace       load without trace=1
 #   --ia 0|1         pcie_gs201 use_ia (default 1)
 #   --cmu-acg-off    pcie_gs201 cmu_acg_off=1 (clear CMU_HSI2 automatic clock gating)
@@ -44,7 +49,7 @@ SSH="$ROOT/tools/phone-ssh"
 LOGDIR="$ROOT/logs"
 
 watchdog=0 trace=1 ia=1 acg=0 tcxo=0 delay=20 wait_s=30 stage= pstore=0 disarm_only=0
-brcm=0 brcm_debug=0x80004
+brcm=0 brcm_debug=0x80004 hsi2=0
 
 usage() { sed -n '/^# Usage:/,/^# See /p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
@@ -64,6 +69,7 @@ while (($#)); do
     --disarm) disarm_only=1 ;;
     --brcmfmac) brcm=1 ;;
     --brcm-debug) brcm_debug="${2:?}"; shift ;;
+    --hsi2-probe) hsi2="${2:?}"; shift ;;
     -h|--help) usage ;;
     [0-5]) stage="$1" ;;
     *) usage 1 ;;
@@ -141,6 +147,8 @@ fi
 
 [[ -n "$stage" ]] || usage 1
 ((brcm == 0)) || [[ "$stage" == 5 ]] || die "--brcmfmac needs stage 5"
+((hsi2 == 0)) || [[ "$stage" == 5 ]] || die "--hsi2-probe needs stage 5"
+[[ "$hsi2" =~ ^[0-5]$ ]] || die "--hsi2-probe takes 0-5"
 
 log="$LOGDIR/wifi-w1-$stamp-s$stage.log"
 
@@ -239,6 +247,16 @@ if ((brcm)) && since_start | grep -q 'link up on try'; then
   sleep 3
 fi
 
+# 4c. HSI2 DMA path registers, one group at a time (each logged before it is read).
+if ((hsi2)) && since_start | grep -q 'link up on try'; then
+  for g in $(seq 1 "$hsi2"); do
+    say "hsi2 probe group $g"
+    phone "echo 'wifi-w1-capture: hsi2 group $g' > /dev/kmsg; echo $g > /sys/module/pcie_gs201/parameters/hsi2_probe" ||
+      { warn "hsi2 probe group $g: no answer"; break; }
+    sleep 1
+  done
+fi
+
 alive=0
 phone 'true' && alive=1
 
@@ -276,5 +294,5 @@ trap - EXIT INT TERM
 
 echo
 say "summary ($log)"
-since_start | grep -E 'gs201|pcie|brcmf|ieee80211|wifi-w1-capture|WARNING|Call trace' | sed -E 's/^([0-9:.]+) [0-9]+,[0-9]+,[0-9]+,[^;]*;/\1 /' | tail -n $((brcm ? 60 : 25))
+since_start | grep -E 'gs201|pcie|brcmf|ieee80211|wifi-w1-capture|hsi2 probe|WARNING|Call trace' | sed -E 's/^([0-9:.]+) [0-9]+,[0-9]+,[0-9]+,[^;]*;/\1 /' | tail -n $((brcm || hsi2 ? 90 : 25))
 [[ -n "$result" ]] || warn "no end marker seen within ${wait_s}s"
