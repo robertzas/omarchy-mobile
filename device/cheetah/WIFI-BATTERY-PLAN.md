@@ -1759,3 +1759,86 @@ tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
 | `Firmware: BCM4389/3 wl0: ... version 20.101.90 ...`, then `CLM version = Google.C10sub6` | both | `Timeout on response for query command` again: keep the log and the console lines after it |
 
 Then 9.4 W2.2-W2.4. Rollback as 9.5.
+
+### 9.8 Fourth W2.1 run: doorbells right, firmware still idle (2026-10-12)
+
+Log: `logs/wifi-w1-20261012-014147-s5.log`, kernel `…-00076-ge89538839a44`.
+`no DAR: doorbells at 0x140/0x144` and `host capabilities 0x00801407` were
+both present. Ring 1 `r_ptr` stayed 0, ring 0 went to `w_ptr` 17 with a
+doorbell each time, the ioctl timed out, and the firmware console ended at
+"ThreadX v5.6 initialized" with no trap.
+
+**What was checked against bcmdhd, and is right:** the doorbell registers
+(0x140/0x144, `W/dhd_pcie.c:659-680`; any value works, bcmdhd writes
+0x12345678); the BAR0 window at the PCIe core when ringing (brcmfmac
+selects PCIE2 before `request_irq` and nothing moves it after); the v7
+`ring_info_t` layout (`W/include/bcmpcie.h` `ring_info`, the same four 64-bit
+host index addresses after the five 32-bit TCM pointers as brcmfmac's
+`brcmf_pcie_dhi_ringinfo`); the host index layout (four arrays, 4-byte
+indices, H2D indexed 0 = control, 1 = rxpost); and `host_cap`, which is
+written after the rings but before any doorbell. The dongle cannot tell
+the order of host writes it has not been rung about, so that is not too late.
+
+**The order of host ready was different:** bcmdhd rings it right after the
+common rings are set up, before any buffer is posted (`W/dhd_msgbuf.c:4430`
+in `dhd_prot_init()`, `hostrdy_after_init` from `W/dhd_pcie.c:987`).
+brcmfmac rang it only in preinit, after 1023 rx and 16 control buffers
+were posted. Now it also rings it right after `request_irq` (4389 only).
+
+**Remaining suspect: DMA between chip and host memory.** Nothing so far
+proves that any DMA in either direction has ever worked. Firmware download
+and the shared area go through BAR2 (MMIO). The chip is `dma-coherent`
+through the bridge; if the coherency (AxCACHE in DBI 0x8e8, shareability in
+SYSREG_HSI2 0x730) is not in effect, the chip reads stale zeros for our
+indices and rings, and we never see its writes. That matches "firmware
+idle, no trap" exactly. Google programs it after the root port setup and
+again after enumeration (`G/pcie-exynos-rc.c:3624` in
+`exynos_pcie_rc_establish_link()`, `:5748` at the end of probe). We did it
+once, before link up. Now we do all three, and print the registers.
+
+| Commit (wt-pcie) | Change |
+|---|---|
+| `6f384898b` PCI: dwc: gs201: program the coherency again after link up | `IOCC after link up: …` and `IOCC after enumeration: AxCACHE 0x…, shareability 0x…` |
+| `2c738ed2d` wifi: brcmfmac: pcie: ring host ready early on the BCM4389, debug the indices | `host ready on 0x144` after `request_irq` (and again in preinit); `ring info: ringmem …, TCM idx …`; at each control doorbell and every 64th poll: `host H2D w … r …, D2H w … r …` and `TCM H2D w … r …, D2H w … r …, mailboxint 0x…` |
+
+Builds: `logs/{kernel,modules,images}-w2db.log`, release
+`7.3.0-rc6-omandroid-push1-00078-g2c738ed2d334`; out-pcie with both
+overlays re-applied, and `.default` rebuilt from kbuild's preprocessed
+source (pcie_1 disabled; checked).
+
+**Run A (same command):**
+
+```sh
+export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
+bin/omandroid modules-push && bin/omandroid push
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
+```
+
+| Line | Expect | Meaning |
+|---|---|---|
+| `IOCC after link up: AxCACHE 0x10101010, shareability 0x…3` (and `after enumeration`) | 0x10101010, low two bits 3 | other values: the coherency does not hold; go to run B |
+| `host ready on 0x144` | right after `request_irq Enter` | — |
+| `ring bell: host H2D w 8 1023 …` then `ring bell: TCM H2D w X Y …` | **X follows the host (8, 16, 17) and Y = 1023**: the chip fetches our indices (DMA reads work) | **X and Y stay 0**: the chip never read host memory, or never took the doorbell: go to run B |
+| later `update rptr: host … r …` | host H2D r rising (r of ring 1 > 0) | TCM moves but the host's r stays 0: the chip's writes to host memory are not visible: run B |
+| `mailboxint 0x…` | non-zero once the chip answers | — |
+| success | `Firmware: BCM4389/3 …`, `CLM version = Google.C10sub6` | then 9.4 W2.2-W2.4 |
+
+**Run B (only if A fails as above): the device made non-coherent.** Same
+kernel; only the DTB loses `dma-coherent` on `pcie@14520000`. The DMA core
+then maps the pool uncached and the bridge leaves IOCC off. If B works and
+A does not, the IOCC setup is the bug.
+
+```sh
+D=$KERNEL_OUT/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb
+cp "$D" "$D.coherent"
+$KERNEL_OUT/scripts/dtc/dtc -q -I dtb -O dts "$D" |
+  awk '/pcie@14520000 \{/{f=1} f&&/^[ \t]*dma-coherent;/{f=0;next} {print}' |
+  $KERNEL_OUT/scripts/dtc/dtc -q -I dts -O dtb -o "$D" -
+$KERNEL_OUT/scripts/dtc/dtc -q -I dtb -O dts "$D" | grep -c dma-coherent   # 1 (UFS only; was 2)
+bin/omandroid images && bin/omandroid push
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
+#   expect: no "IOCC after ..." lines (coherent is off), then the same table as run A
+#   rollback: cp "$D.coherent" "$D"; bin/omandroid images && bin/omandroid push
+```
+
+Rollback otherwise as 9.5.
