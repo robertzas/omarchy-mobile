@@ -168,9 +168,10 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    No step here uses `devmem`. The phone's `/usr/local/bin/devmem` is our
    `tools/devmem.c` (`devmem ADDRESS [VALUE]`): a second argument WRITES, so
    never pass a width (`devmem ADDR 32` writes 0x20), and never read PMU
-   registers from userspace. PCM numbers follow the link order in the
-   overlay (EP1-EP8 playback are 0-7, EP1 capture is 8); check them with
-   `aplay -l; arecord -l` in C7b before using them.
+   registers from userspace. PCM numbers do not follow the stock order
+   (C7b: EP1 capture is 44, EP6 playback 47), so the steps find a device by
+   its id in `/proc/asound`:
+   `pcm() { grep -l "^id: $1" /proc/asound/card$C/pcm*/info | sed -n 's#.*/pcm\([0-9]*\)[pc]/info#\1#p' | head -1; }`.
 
    - **C7a amplifiers, read-only:** `AUDIO-PLAN.md` A2 (IDs over spidev)
      and A3 (driver probe, no card), unchanged. Stop as there.
@@ -189,11 +190,13 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
        amixer -c $C cset name="EP1 TX Mixer INTERNAL_MIC_TX" 1;
        amixer -c $C cset name="BUILDIN MIC ID CAPTURE LIST" 0,3,2,-1;
        amixer -c $C cset name="MIC DC Blocker" 1; amixer -c $C cset name="MIC Record Soft Gain (dB)" 22;
-       arecord -D hw:$C,8 -f S16_LE -r 48000 -c 2 -d 3 /tmp/mic.wav; ls -l /tmp/mic.wav'
+       pcm() { grep -l "^id: $1" /proc/asound/card$C/pcm*/info | sed -n "s#.*/pcm\([0-9]*\)[pc]/info#\1#p" | head -1; };
+       arecord -D hw:$C,$(pcm "EP1 capture") -f S16_LE -r 48000 -c 2 -d 3 /tmp/mic.wav; ls -l /tmp/mic.wav'
      ```
      (control names from the stock `mixer_paths.xml`, `handset-mic` and
-     `audio-recordC`; PCM 8 is the first capture front end, EP1.) Expect a
-     3 s file that is not all zeros (tap the phone while it records).
+     `audio-recordC`.) Expect a 3 s file that is not all zeros (tap the phone
+     while it records). **Passed** on 2026-10-12: floor RMS about 35, peaks
+     to 946 / 2635 with noise.
    - **C7d first sound, top amplifier alone, DSP bypassed, -20 dB:**
      ```sh
      tools/phone-ssh 'python3 - <<"PY"
@@ -208,7 +211,8 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
        amixer -c $C cset name="Top PCM Source" ASP; amixer -c $C cset name="Top Analog PCM Volume" 6;
        amixer -c $C cget name="Top Digital PCM Volume";
        amixer -c $C cset name="TDM_0_RX Mixer EP6" 1;
-       aplay -D hw:$C,5 /tmp/tone.wav; dmesg | grep -iE "cs35l41|aoc" | tail -10'
+       pcm() { grep -l "^id: $1" /proc/asound/card$C/pcm*/info | sed -n "s#.*/pcm\([0-9]*\)[pc]/info#\1#p" | head -1; };
+       aplay -M -D hw:$C,$(pcm "EP6 playback") /tmp/tone.wav; dmesg | grep -iE "cs35l41|aoc" | tail -10'
      ```
      Expect a quiet 1.5 s 1 kHz tone from the **top** speaker (the
      earpiece grille): that also confirms top = chip select 0. Then the same
@@ -219,6 +223,19 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      Rollback: `amixer … cset name="TDM_0_RX Mixer EP6" 0`, then
      `rmmod aoc_alsa_dev aoc_alsa_dev_util snd_soc_cs35l41_spi` (the amps go
      back into reset).
+
+     **C7d result (first run):** card, amplifiers and limits fine, but
+     `aplay` (copy mode, no `-M`) failed at once with "Bad address":
+     `ERR: inconsistent write/read pointers, avail = 0, towrite = 15360`.
+     Not the iov_iter port (capture uses the same copy path and works).
+     Prepare resets the down ring's write pointer to the ring start; on a
+     ring that was never used (wp 0) that marks the whole ring as written,
+     and the first copy finds no room. Google's HAL plays through mmap,
+     where prepare treats the ring as full anyway and the AoC drains it.
+     Hence `aplay -M` above (C7d-2). Kernel `d696fde42` (modules only:
+     `aoc_alsa_dev_util.ko`) logs the ring's written/read counters if a
+     copy write still fails. Stop as before, and also if `aplay -M` reports
+     an mmap error or the AoC logs a SysMMU fault (report the dmesg).
 
 ## 0. Top findings
 
