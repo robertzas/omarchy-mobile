@@ -585,6 +585,210 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      5. Microphones again (C7c with PCM 8, which is now the AoC record use
         case): expect a 3 s file that is not all zeros.
 
+4. **C8 speaker protection, UCM and PipeWire** (package `omandroid-audio`
+   0.1.0; after C7d-6 passed: stock PCM numbers, the AoC drains EP6). Goal:
+   the speaker is "Built-in Audio Speaker" in PipeWire and the microphones
+   "Built-in Audio Microphone"; the volume keys and the quick-settings
+   slider move it; both amplifiers run Cirrus's protection firmware with the
+   factory calibration, as stock. **The C7 limits stay:** digital ≤ 657
+   (-20 dB), analog ≤ 10, enforced by the kernel (`aoc_speaker_limits()`)
+   and again by the service, which refuses to unmute above them or on a
+   kernel without them. Stock's gains (analog 17, digital 817) are C9.
+
+   **What the package does** (`packages/omandroid-audio`, `README.md` there):
+   - `omandroid-speaker-protection.service` (not enabled by the package):
+     loads `snd_soc_cs35l41_spi` (now blacklisted, so this is the only way
+     the card comes up), waits for the card, **mutes both amplifiers**
+     (Digital PCM Volume 0), checks the limits, the firmware and the
+     calibration, sets `DSP1 Preload Switch` (the firmware and each
+     speaker's tuning load), writes `CAL_AMBIENT`, `CAL_R`, `CAL_STATUS`,
+     `CAL_CHECKSUM` (mainline cs-amp-lib's order) and reads them back,
+     sets `DSP RX1/RX2 Source` ASPRX1 and `PCM Source` DSP (stock's default
+     path in `V/etc/mixer_paths.xml`), analog 6, and unmutes to 657 last.
+     Any failure leaves both muted; a hang leaves a marker, and the next
+     boot keeps the driver unloaded (no card at all). It logs no
+     calibration values. `omandroid-speaker-protection status` reports
+     the DSP state, `mute` mutes.
+   - The calibration: `persist:/audio/speaker.cal`, read with debugfs
+     (read-only; persist is never mounted), copied to `/run/omandroid`
+     (mode 0600). Six LE u32 per amplifier; the service checks status 1,
+     checksum = R + status, R < 2^24, ambient ≤ 60 °C. **Record 0 goes
+     to Top, record 1 to Bottom.** Evidence: the stock HAL library
+     (`V/lib64/audio_spk_35l41.so`) indexes its amplifiers 0-3 as
+     "Left/Top", "Right/Bottom", "Left Bottom", "Right Bottom" (the dump in
+     `cs35l41_set_healthe_data_to_property`), reads the file per
+     `amp_index`, and amp 0 is the unprefixed (left) mixer controls, which
+     are chip select 0, the top speaker (`AUDIO-PLAN.md` 1.1). The fifth
+     word is what its dump calls `amp_pcm_gain`; the fifth and sixth equal
+     stock's AMP PCM Gain and Digital PCM Volume; neither is used. C8c
+     checks the mapping on the phone.
+   - The firmware: `tools/extract-vendor-firmware` now also copies
+     `cs35l41-dsp1-spk-prot.wmfw` (both amplifiers) and the two tunings,
+     named as mainline wm_adsp asks for them with our DT's
+     `cirrus,subsystem-id = "cheetah"` and the Top/Bottom prefixes:
+     `cirrus/cs35l41-dsp1-spk-prot-cheetah.wmfw`, `-cheetah-top.bin`
+     (stock's unprefixed `.bin`) and `-cheetah-bottom.bin` (stock's `R-`).
+     The service refuses to start unless all three are there: otherwise
+     wm_adsp falls back to linux-firmware's generic
+     `cirrus/cs35l41-dsp1-spk-prot.{wmfw,bin}` (a laptop's tuning) or to an
+     unsuffixed tuning. The stock prot and cali `.wmfw` are the same file;
+     only the tunings differ.
+   - UCM2 for the card driver `aoc-snd-card`
+     (`ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf`,
+     `ucm2/Google/cheetah/HiFi.conf`), verb HiFi: Speaker = `EP6 playback`,
+     Mic = `EP1 capture`, both **found by their PCM id**
+     (`${find-device:…regex='^EP6 playback'}`), so they resolve to PCM 5
+     and PCM 8 with the C7d-6 kernel and keep working if the numbering
+     moves. The verb sets the routes (an ASoC DPCM front end with no back
+     end fails at prepare, and PipeWire opens the PCMs while probing):
+     `TDM_0_RX Mixer EP6`, stock's record path (C7c), and stock's TDM 0
+     init values `TDM_0_RX/TX Chan Four, Format S32_LE, Sample Rate
+     SR_48K`. The format matters: cs35l41's `hw_params` takes the slot
+     width from the sample width, so the default S16_LE gives the
+     amplifiers 16-bit slots against the AoC's four 32-bit ones, and the
+     bottom amplifier (slot 1) would read the low half of slot 0. The
+     profile touches no amplifier control, so PipeWire uses software
+     volume and cannot raise the amplifiers.
+   - WirePlumber (`51-omandroid-aoc.conf`, matched on the card name
+     `google,aoc-snd-card`): no mmap and 4 periods of 960 frames (stock
+     `audio_platform_configuration.xml`: deep buffer and record are
+     `mmap="false"`, 4 × 20 ms), and the names "Built-in Audio Speaker" /
+     "Built-in Audio Microphone" (the card is a platform device with no
+     udev form factor).
+
+   Checked offline: `packages/omandroid-audio/test/all` (alsa-lib parses
+   the profile; the service against stand-ins for amixer, modprobe and
+   debugfs: the happy path, record → amplifier mapping, mute first and
+   unmute last, refusal and mute for each failed check, the hang marker,
+   no values in the output); the PCM lookup by id against a real card on
+   the laptop; `tools/extract-vendor-firmware` against the factory image.
+
+   No step uses `devmem`. Volume ceilings: never edit the service's
+   `DIGITAL_CEIL`/`ANALOG_CEIL` or pass `speaker_protection=1` in C8.
+
+   - **C8.0 install** (laptop, then the phone; risk low: files only):
+     ```sh
+     tools/extract-vendor-firmware ~/android/factory/cheetah-<build>/image-cheetah-<build>.zip   # -> out/vendor-firmware
+     tar -C out/vendor-firmware -cf - usr/lib/firmware/updates/cirrus | tools/phone-ssh 'tar -C / -xf -'
+     tools/phone-install-package packages/omandroid-audio
+     tools/phone-ssh 'rm -f /etc/modprobe.d/omandroid-audio-bringup.conf; ls /etc/modprobe.d/'
+     ```
+     (the last line drops A3's bring-up blacklist, now in the package.)
+     Expect `omandroid-audio 0.1.0-1` and all `ok` lines from `test/all`
+     in makepkg's check. Then **reboot (ask first)**, so the boot starts
+     with the amplifier driver blacklisted and fresh AoC rings.
+     Rollback: `pacman -R omandroid-audio`.
+   - **C8a read-only** (risk none):
+     ```sh
+     tools/phone-ssh 'uname -r; ls /usr/lib/firmware/updates/cirrus/; lsmod | grep -c cs35l41; cat /proc/asound/cards;
+       systemctl is-enabled omandroid-speaker-protection;
+       d=$(grep -l "^PARTNAME=persist$" /sys/class/block/*/uevent); debugfs -R "stat /audio/speaker.cal" /dev/$(basename ${d%/uevent}) 2>/dev/null | grep -o "Size: [0-9]*"'
+     ```
+     Expect the three `cs35l41-dsp1-spk-prot-cheetah*` files, `0` (driver
+     not loaded), no `aoc-snd-card` line, `disabled`, `Size: 48`. Stop:
+     the card is already there (something else loads the driver: find it
+     before going on), or no `speaker.cal`.
+   - **C8b the service by hand** (risk low: the amplifiers power up and
+     their DSPs load, nothing plays; announce it, a click is possible):
+     ```sh
+     tools/phone-ssh 'systemctl start omandroid-speaker-protection; journalctl -u omandroid-speaker-protection -b --no-pager | tail -8;
+       omandroid-speaker-protection status; dmesg | grep -iE "cs35l41|DSP1|aoc_speaker_limits" | tail -25'
+     ```
+     Expect "factory calibration read from persist (read-only): both
+     records valid", "calibration written to both DSPs and read back",
+     "speaker protection on: both amplifiers through the DSP, digital 657,
+     analog 6"; `status`: for Top and Bottom "PCM Source DSP, Digital 657
+     (max 817), Analog 6 (max 10), DSP1 Firmware Protection, Preload on"
+     and "calibration in the DSP vs persist: match"; dmesg: per amplifier
+     `cirrus/cs35l41-dsp1-spk-prot-cheetah.wmfw: format 3 …`, its own
+     `-top.bin` / `-bottom.bin` line, "Firmware: 400a4 …", no errors, and
+     the four `aoc_speaker_limits` lines ending in `: 0`.
+     **Stop:** any "did not start" line (the amplifiers are muted; send
+     the journal and dmesg lines), the wrong tuning on an amplifier, a
+     CS35L41 error or IRQ line, `max` other than 817 / 10. **If the log
+     says MUTING FAILED:** `rmmod snd_soc_cs35l41_spi` at once (the amps go
+     into reset). Rollback: `omandroid-speaker-protection mute`.
+   - **C8c protected tone, each speaker alone** (risk medium: the first
+     sound through the protection firmware; -20 dBFS 1 kHz for 2 s at the
+     C7 levels; announce it):
+     ```sh
+     tools/phone-ssh 'python3 - <<"PY"
+     import math, struct, wave
+     a = int(32767 * 0.1)  # -20 dBFS
+     for name, l, r in (("left", 1, 0), ("right", 0, 1)):
+         w = wave.open(f"/tmp/tone-{name}.wav", "wb"); w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000)
+         s = [int(a * math.sin(2 * math.pi * 1000 * n / 48000)) for n in range(96000)]
+         w.writeframes(b"".join(struct.pack("<hh", v * l, v * r) for v in s)); w.close()
+     PY'
+     tools/phone-ssh 'C=$(awk "/\]: aoc-snd-card - /{print \$1; exit}" /proc/asound/cards);
+       for n in "Chan Four" "Format S32_LE" "Sample Rate SR_48K"; do amixer -q -c $C cset name="TDM_0_RX ${n% *}" "${n##* }"; done;
+       amixer -q -c $C cset name="TDM_0_RX Mixer EP6" 1;
+       for side in left right; do echo "== $side";
+         (sleep 1; omandroid-speaker-protection status | grep -vE "^(ok|no state)") & timeout 5 aplay -q -D hw:$C,5 /tmp/tone-$side.wav; wait; sleep 1; done;
+       amixer -q -c $C cset name="TDM_0_RX Mixer EP6" 0; dmesg | grep -iE "cs35l41|DSP1" | tail -10'
+     ```
+     (with PipeWire running and the card new to it, it may already hold
+     the PCM: if `aplay` says busy, do C8d first and come back to the
+     mapping check with `pw-play --target` on the speaker sink.)
+     Expect "left" from the **top** speaker only, then "right" from the
+     **bottom** speaker only, both quiet and clean. During each tone, for
+     both amplifiers: `CAL_SET_STATUS 2` (stock HAL: 2 = calibration
+     applied, 1 = firmware defaults), `CSPL_ERRORNO 0`, and
+     `CSPL_TEMPERATURE` values that agree between the two amplifiers.
+     Record all of them. A swapped calibration (records 0/1 the other way
+     round) shows as the two temperatures apart by roughly 15 °C worth (the
+     two resistances differ by about 6 %), one above and one below room
+     temperature. **Stop:** sound from the wrong speaker or both, silence
+     (send status and dmesg; do not raise any gain), `CAL_SET_STATUS` 1 or
+     other, `CSPL_ERRORNO` non-zero, distortion, an amplifier error, a warm
+     phone. Rollback: `omandroid-speaker-protection mute`.
+   - **C8d PipeWire, keys, slider, microphones** (risk medium; announce
+     it: short sounds at low volume):
+     ```sh
+     U='U=$(id -nu 1000); as_user() { runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/1000 "$@"; }'
+     tools/phone-ssh "$U"'; as_user wpctl status | sed -n "/Sinks/,/Streams/p"; as_user pactl get-default-sink; as_user pactl get-default-source'
+     tools/phone-ssh "$U"'; as_user wpctl inspect @DEFAULT_AUDIO_SINK@ | grep -E "node.description|disable-mmap|period-size|period-num|api.alsa.path"'
+     tools/phone-ssh "$U"'; as_user wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.4; (sleep 1; cat /proc/asound/card*/pcm5p/sub0/hw_params) & as_user timeout 5 pw-play /tmp/tone-left.wav; wait'
+     tools/phone-ssh "$U"'; as_user timeout 4 pw-record --rate 48000 --channels 2 /tmp/mic.wav; python3 -c "import wave,array,sys; w=wave.open(\"/tmp/mic.wav\"); a=array.array(\"h\", w.readframes(w.getnframes())); print(len(a), max(map(abs,a)))"'
+     ```
+     Expect the sink "Built-in Audio Speaker" and the source "Built-in
+     Audio Microphone", both defaults (not "Dummy Output");
+     `api.alsa.disable-mmap = true`, period size 960, 4 periods,
+     `api.alsa.path` on PCM 5; `hw_params` with `access: RW_INTERLEAVED`
+     and `period_size: 960`; the tone from the top speaker; a recording
+     that is not all zeros (tap the phone). Then by hand: the volume keys
+     move Omarchy's OSD and `pactl get-sink-volume @DEFAULT_SINK@`; the
+     quick-settings slider follows them and changes the level; mute works.
+     The amplifier controls do not move (`omandroid-speaker-protection
+     status` still shows 657 / 6). **Stop:** "Dummy Output" (send
+     `journalctl --user -u wireplumber -b | grep -iE "ucm|aoc|alsa"` and
+     dmesg's "no backend DAIs" lines), underruns or crackle (try
+     `api.alsa.disable-tsched = true` in the WirePlumber rule and report),
+     anything louder than C8c at 40 %. Rollback: `wpctl set-mute
+     @DEFAULT_AUDIO_SINK@ 1`; `omandroid-speaker-protection mute`.
+   - **C8e at boot** (risk low-medium: boot ordering; ask before the
+     reboot):
+     ```sh
+     tools/phone-ssh 'systemctl enable omandroid-speaker-protection'
+     # reboot, then after the login:
+     tools/phone-ssh 'systemd-analyze blame | grep -E "speaker|aoc"; journalctl -u omandroid-speaker-protection -b --no-pager | tail -4; omandroid-speaker-protection status | head -3'
+     ```
+     The unit runs after `omandroid-aoc.service` and before
+     `systemd-user-sessions.service`, so PipeWire meets the card once,
+     already protected. Expect "speaker protection on" before the session
+     starts, a few seconds in the blame list, and the C8d sink right after
+     login. **Stop:** the login waits on it for long (its timeout is 60 s;
+     `systemctl disable omandroid-speaker-protection` and report), or a
+     "did not start" line. If a boot hangs in the service, the next one
+     says "the last start … never finished" and leaves the amplifiers off;
+     after reading that boot's log, `omandroid-speaker-protection start
+     --retry`. Rollback: `systemctl disable omandroid-speaker-protection`
+     (no card from the next boot on).
+
+   Results go here with the date and `uname -r`. Then bump
+   `omandroid-audio` if anything changed, and record the CSPL readings as
+   the baseline C9 compares against.
+
 ## 0. Top findings
 
 1. **Stock starts the AoC through Trusty; this phone's GSA also takes the
@@ -1014,8 +1218,8 @@ Repo:
 | C5 | AoC core port (mailboxes, services, char devices) | - | - | C4b |
 | C6 | first sensor reading: `gs201_aoc_rails enable=1` (LDO7S then LDO5S), registry load, accelerometer samples; then rotation | PMIC LDO bits | medium | C5, USF client |
 | C7 | microphones: mic rails, capture EP1 (PCM 8) | PMIC, AoC | low | C5, `aoc_alsa` |
-| C8 | first sound: top amp alone, DSP bypassed, section 4 limits | amps, AoC TDM | **speaker damage** | `AUDIO-PLAN.md` A2/A3, C7 |
-| C9 | protection firmware + calibration, UCM, PipeWire | amps | medium | `AUDIO-PLAN.md` A7 |
+| C8 | speaker protection (firmware and factory calibration on both amplifier DSPs), UCM2, PipeWire, still at the C7 limits (digital ≤ 657, analog ≤ 10). First sound itself came in C7d-6 | amps, AoC TDM | medium | C7d-6, `AUDIO-PLAN.md` A7 |
+| C9 | stock gains under protection (`speaker_protection=1`: analog 17, digital 817), VMON/IMON slots, earpiece (Voice Call verb) | amps | **speaker damage** if protection is not really running | C8 |
 | C10 | crash recovery: ACPM ch 13 doorbell, AoC watchdog | AoC PCU watchdog | medium | C5 |
 
 The order inside C4 follows stock (section 0.1). C4n comes after a working
