@@ -69,6 +69,7 @@ PROPS_EXTRA=$LIB/$PROFILE/props.conf
 BINDER=no
 NO_SERVICES=""
 BINS=()		# the Android binaries the profile runs (paths in the chroot)
+PRELOADS=()	# extra libraries from $STUBS preloaded after the shim
 RUN=/run/omandroid-vendor/$PROFILE
 profile_check() { :; }
 profile_setup() { :; }
@@ -125,6 +126,12 @@ check() {
     while read -r s; do
       [[ -z $s || -f $STUBS/$s ]] || { say "no stub $STUBS/$s (vendor-chroot/Makefile)"; ok=0; }
     done < "$IMAGE/../STUBS"
+  fi
+  if ((${#PRELOADS[@]})); then
+    local p
+    for p in "${PRELOADS[@]}"; do
+      [[ -f $STUBS/$p ]] || { say "no preload $STUBS/$p (vendor-chroot/Makefile)"; ok=0; }
+    done
   fi
   local bins=("${BINS[@]}")
   [[ $BINDER == yes ]] && bins+=(/system/bin/servicemanager)
@@ -196,6 +203,9 @@ setup() {
       [[ -n $s ]] && bind "$STUBS/$s" "$ROOT/omandroid/lib64/$s" ro
     done < "$IMAGE/../STUBS"
   fi
+  for s in "${PRELOADS[@]}"; do
+    bind "$STUBS/$s" "$ROOT/omandroid/lib64/$s" ro
+  done
   mkdir -p "$STATE/data"
   chmod 0700 "$STATE"
   bind "$STATE/data" "$ROOT/data"
@@ -204,15 +214,23 @@ setup() {
   mount -o remount,ro "$ROOT/sys"
 }
 
+# The shim, then the profile's preloads (colon-separated, as bionic takes it).
+android_preload() {
+  local p out=/omandroid/omandroid-fp-shim.so
+  for p in "${PRELOADS[@]}"; do out+=":/omandroid/lib64/$p"; done
+  printf '%s' "$out"
+}
+
 # Environment for every Android process in the chroot.
 android_env() { # $1 vendor|system
   local libs=$LIBS_VENDOR
   [[ $1 == system ]] && libs=$LIBS_SYSTEM
   ENV=(env -i PATH=/system/bin:/vendor/bin
-    LD_LIBRARY_PATH="$libs" LD_PRELOAD=/omandroid/omandroid-fp-shim.so
+    LD_LIBRARY_PATH="$libs" LD_PRELOAD="$(android_preload)"
     OMANDROID_FP_PROPS=/dev/__omandroid_props__
     OMANDROID_FP_LOGLEVEL="${OMANDROID_VENDOR_LOGLEVEL:-3}"
     OMANDROID_FP_NO_SERVICES="$NO_SERVICES"
+    OMANDROID_FP_ABSENT_PARK="${ABSENT_PARK:-0}"
     ANDROID_ROOT=/system ANDROID_DATA=/data ANDROID_DNS_MODE=local)
 }
 

@@ -555,6 +555,24 @@ static bool service_absent(const char *name)
 	return false;
 }
 
+/*
+ * OMANDROID_FP_ABSENT_PARK=1: a lookup of an absent service from any thread
+ * but the main one never returns, as on Android when a service never
+ * registers. Broadcom's gpsd retries its sensor service from a new thread
+ * each time a lookup fails, tens of thousands of times a minute; parked,
+ * that retry thread just waits. The main thread still gets "no service" at
+ * once (blocking it would stop gpsd before its event loop). Off unless set.
+ */
+static void absent_park(void)
+{
+	const char *s = getenv("OMANDROID_FP_ABSENT_PARK");
+
+	if (!s || strcmp(s, "1") || gettid() == getpid())
+		return;
+	for (;;)
+		pause();
+}
+
 typedef struct AIBinder *(*sm_get_fn)(const char *);
 typedef bool (*sm_declared_fn)(const char *);
 
@@ -565,6 +583,7 @@ EXPORT type fn(const char *name)					\
 									\
 	if (service_absent(name)) {					\
 		log_line(4, "omandroid-fp-shim", name);			\
+		absent_park();						\
 		return absent;						\
 	}								\
 	if (!real)							\

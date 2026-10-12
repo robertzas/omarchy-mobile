@@ -18,6 +18,7 @@ CFLAGS   ?= -O2
 WARN     := -Wall -Wextra -Werror
 SHIM_SRC := ../fingerprint/shim/omandroid-fp-shim.c
 STUB     := $(OUT)/stubs/libcom.android.tethering.connectivity_native.so
+SITRIL   := $(OUT)/stubs/libomandroid-sitril-gps.so
 
 ifdef NDK
 CC       := $(NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android$(API)-clang
@@ -36,7 +37,7 @@ else
 $(error set NDK=<android-ndk> or CLANG=, BIONIC= and CHROOT=)
 endif
 
-all: $(OUT)/omandroid-fp-shim.so $(STUB)
+all: $(OUT)/omandroid-fp-shim.so $(STUB) $(SITRIL)
 
 $(OUT)/omandroid-fp-shim.so: $(SHIM_SRC)
 	@mkdir -p $(OUT)
@@ -47,6 +48,11 @@ $(STUB): stubs/connectivity_native_stub.c stubs/connectivity_native_stub.map
 	@mkdir -p $(OUT)/stubs
 	$(CC) $(CFLAGS) $(WARN) -fPIC -fvisibility=hidden -shared \
 		-Wl,--version-script=stubs/connectivity_native_stub.map \
+		-Wl,-soname,$(notdir $@) -o $@ $< $(STUBLIBS)
+
+$(SITRIL): stubs/sitril_gps_stub.c
+	@mkdir -p $(OUT)/stubs
+	$(CC) $(CFLAGS) $(WARN) -fPIC -fvisibility=hidden -shared \
 		-Wl,-soname,$(notdir $@) -o $@ $< $(STUBLIBS)
 
 clean:
