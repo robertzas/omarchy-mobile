@@ -12,6 +12,10 @@
 #   gnss   Broadcom's lhd and gpsd (the GNSS engine), SensorHub.patch, their
 #          configuration, servicemanager (gpsd links libbinder_ndk) and the
 #          system CA store (SUPL over TLS). device/cheetah/GNSS-PLAN.md.
+#   modem  Samsung's cbd (modem boot) and rfsd (NV file service) with their
+#          init and fstab files, for reference. No binder, no system
+#          binaries. The modem firmware and NV are not in it: they are read
+#          on the phone, into RAM, at start. device/cheetah/MODEM-PLAN.md M3.
 #
 # These binaries are Google's and not ours to redistribute, so Omandroid
 # never ships them: this tool takes exactly what the profile needs from an
@@ -50,7 +54,15 @@ profile_lists() {
       # compressed APEX we don't unpack: the shim build provides a stub.
       STUB_LIBS=(libcom.android.tethering.connectivity_native.so)
       ;;
-    *) die "unknown profile '$1' (known: gnss)" ;;
+    modem)
+      VENDOR_BINS=(bin/cbd bin/rfsd)
+      VENDOR_FILES=(etc/init/cbd.rc etc/init/rfsd.rc etc/fstab.modem build.prop)
+      VENDOR_DIRS=()
+      SYSTEM_BINS=()
+      SYSTEM_FILES=(system/build.prop)
+      SYSTEM_DIRS=()
+      ;;
+    *) die "unknown profile '$1' (known: gnss, modem)" ;;
   esac
 }
 
@@ -65,6 +77,14 @@ profile_check() {
       grep -q 'NmeaOutName=' "$1/vendor/etc/gnss/gps.xml" ||
         die "gps.xml has no NmeaOutName (the NMEA output the bridge reads)"
       ;;
+    modem)
+      grep -aq 'CP Boot Daemon' "$1/vendor/bin/cbd" ||
+        die "cbd does not look like Samsung's CP boot daemon"
+      grep -aq '/dev/umts_rfs0' "$1/vendor/bin/rfsd" ||
+        die "rfsd does not use /dev/umts_rfs0"
+      grep -q 'modem_img' "$1/vendor/etc/fstab.modem" ||
+        die "fstab.modem has no modem image mount"
+      ;;
   esac
 }
 
@@ -74,7 +94,7 @@ Usage: extract-vendor-chroot -p PROFILE [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
 
   SOURCE   Google factory zip (cheetah-*-factory-*.zip) or the
            image-cheetah-*.zip inside it
-  -p NAME  profile: gnss
+  -p NAME  profile: gnss, modem
   -o DIR   output directory (default: ./out/vendor-chroot-PROFILE)
   -w DIR   scratch directory for vendor.img and system.img, about 2.5 GB
            (default: a temp dir in \$TMPDIR)
