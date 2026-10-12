@@ -957,3 +957,9 @@ against SYS_SLEEP.
   `.pre-s3` for rollback.
 - `omandroid-device-cheetah`: `test/all` passes with the new hook, link and
   drop-in (no version bump; they ship in S8).
+
+**S3a result (2026-10-12, 7.3.0-rc6-omandroid-push1-00317-gdea700f6eec2):
+passed.** With `a7e5e1d95` merged, `spm_lvl` reads 5 at boot (`rpm_lvl` 3).
+Wi-Fi unloaded; one s2idle freeze slept 26 s (wall clock) and woke on Volume
+Up (`pm_wakeup_irq` 106, pressed by the human); no UFS error-handler lines;
+Wi-Fi came back with `systemctl start omandroid-wifi`.

@@ -259,6 +259,19 @@ first). Rollback: `cp "$D.default" "$D"`, rebuild int without the merge
 (`git -C ~/android/mainline/wt-int reset --hard <previous int>` is the
 human's call), push; or let ABL fall back to slot A.
 
+
+**F1 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00317-gdea700f6eec2):
+passed.** int with `omandroid-fingerprint` merged (`dea700f6e`), overlays as
+before. `goodix_fp` and `sg` not loaded (blacklisted); `local_hbm_mode`
+reads 0, and writing 1 is refused ("Operation not permitted",
+`allow_lhbm=N`). No `vdd_udfps` regulator: pmic-2 binds only with the GNSS
+power stack, as FB2 found, so that check moves to the first GNSS-on boot.
+Display: brightness 512 → 256 → 512 fine; the power key turns the panel
+fully off and wakes to the PIN pad (the human). A DPMS-off sent by hand
+through `hyprctl dispatch` over two shell layers left the last frame on
+screen; that was the test command, not the panel, so use the power key for
+this check.
+
 ### F2: Trusty for fingerprint (read-only; risk low)
 
 ```sh
