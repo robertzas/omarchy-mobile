@@ -1,9 +1,10 @@
 # Display driver plan: DECON0 → DSIM0 → S6E3HC4 (cheetah / gs201)
 
-Status: D1b and D2 pass on the phone (brightness). D5 (smooth display:
-refresh measurement, 120 Hz requirements, flip-only KMS) is designed and built
-offline in branch `omandroid-display2` (`~/android/mainline/wt-display2`); see
-"D5" at the end for the design and the staged runbook.
+Status: D1b, D2, D5a-c and D4a-1/2 pass on the phone (brightness, flip-only
+KMS under Hyprland, 120 Hz by hand). D5d/D6 (gs-decon by default, 120 Hz as a
+KMS mode) is built offline in branch `omandroid-display2`
+(`~/android/mainline/wt-display2`); see "D5d/D6" at the end for the design and
+the staged runbook.
 
 Goal, in order of value:
 
@@ -975,3 +976,238 @@ Kernel branch `omandroid-display2`, on `omandroid` @ `e7cb10fe5`:
 
 **First step:** D5a, `tools/display-hz --secs 10` on the running phone
 (read-only, no new kernel).
+
+## D5d/D6: gs-decon by default, 120 Hz as a KMS mode (2026-10-12, offline; nothing was run on the phone)
+
+Starting point (on the phone, kernel `omandroid-int` `…-00175-g7bee66237c8d`
+with `overlays/display-decon-test.dtso`): D5b and D4a-1/2 pass (60.1 Hz flips,
+no flip timeouts, Hyprland on `card2` with correct colours after `a2a2ee90d`
+and `fa6d7aec8`), and D5c ran 120.02 Hz under Hyprland with the DSIM timers
+written by hand. This step makes that the default.
+
+### D6.1 What changed
+
+Branch `omandroid-display2`, on top of `fa6d7aec8`:
+
+| Commit | What |
+|---|---|
+| `bea2c2842` | merge `omandroid-acpm` (identical to the ACPM code in `omandroid-int`): DECON0 needs the ACPM clock provider |
+| `04cbbeca6` | drm/panel: add an optional refresh rate switch (`drm_panel_set_refresh_rate()`, `funcs->set_refresh_rate`) |
+| `32b4bf0c3` | drm/panel: samsung-s6e3hc4: switch the refresh rate through drm_panel (lists 60 and 120 Hz; the `refresh_rate` sysfs knob and `allow_rate_switch` are gone) |
+| `445d2b4f7` | dt-bindings: DECON and DSIM get an OF graph `port` |
+| `3e242dc3f` | drm: google: gs-dsim-cmd: switch the link and the panel between 60 and 120 Hz |
+| `cb0400f56` | drm: google: gs-decon: add a 120 Hz mode and drive KMS by default |
+| `5081097ac` | arm64: dts: gs201: DECON0 → DSIM0 port, ACPM `mif`/`disp` clocks on DECON0 |
+| `d4b2e68a3` | arm64: dts: gs201-cheetah: enable DECON0 and its pool |
+
+Merging into `omandroid-int` is conflict-free (`git merge-tree` checked).
+Build in `out-display2`: release `7.3.0-rc6-omandroid-push1-00078-gd4b2e68a372c`,
+logs `logs/{kernel,modules,initramfs,images}-display2-d5d.log`. W=1 is clean
+for `gs-decon.o`, `gs-dsim-cmd.o`, `panel-samsung-s6e3hc4.o` and
+`drm_panel.o`; checkpatch is clean; `dt_binding_check` passes for both
+bindings; `dt-validate` of `gs201-cheetah.dtb` reports only the old `soc_id`
+and `post-init-providers` items. That build is `omandroid-display2` alone
+(no Wi-Fi, Bluetooth, …): for the phone, merge into `omandroid-int` and
+build that.
+
+**120 Hz switch (`gs-decon` + `gs-dsim-cmd` + panel).**
+
+- The connector lists 1440x3120@60 and @120; 120 is preferred. A mode
+  change between them needs no modeset: the CRTC check clears
+  `mode_changed`, and the switch runs in the CRTC's `atomic_begin`, before the
+  plane update of the same commit. So Hyprland's `preferred` rule gets 120 Hz,
+  and `hyprctl monitors` lists both modes.
+- Order, as D5.2 (and as gate D5c did by hand):
+  - Up: `clk_set_min_rate(mif, 1352 MHz)` and `(disp, 310 MHz)`; wait for a
+    DECON frame done (≤ 50 ms); DSIM `UNDERRUN_CTRL` = 0x3ec,
+    `CMD_TE_CTRL1` = 0x19f51d93; panel rate set (ends with `F7 0F`, taken at
+    the panel's next frame).
+  - Down: frame done; panel; DSIM 0x1f09 / 0x33eb3b26; floors released.
+  - A failed panel write is rolled back (old panel rate, old timers); the
+    driver logs "staying at N Hz".
+- The floors only raise a clock that runs below them. MIF runs at
+  3172 MHz today, so they cost nothing now and protect a boot that leaves MIF
+  low. Releasing a floor leaves the rate where it is. The 1352 MHz figure is
+  stock's 120 Hz pairing.
+- `gs-dsim-cmd` recognises the link from the boot values of those two
+  registers (the 60 Hz pair, or the 120 Hz pair after a kexec) and refuses
+  to switch a link it has no values for. `CMD_TE_CTRL0` (stable VFP) doesn't
+  depend on the rate and stays as ABL left it, as in D5c.
+- 120 Hz is offered only with: the DSIM on DECON0's port, a panel that
+  implements `set_refresh_rate`, `gs_dsim_cmd.allow_tx=1` (set by
+  `omandroid-device-cheetah`) and the `mif` clock. Otherwise only 60 Hz.
+  `gs_decon.max_refresh=60` turns 120 Hz off.
+- `/sys/bus/platform/devices/1c240000.display-controller/stats` gains
+  `refresh_hz`.
+
+**Default KMS and the boot handover.**
+
+- `stage` defaults to 2 (KMS); 0 and 1 stay for debugging. `force_xrgb` is
+  gone: DPP0 switches from ABL's ARGB8888 (code 0) to XRGB8888 (code 4) in
+  the shadow update of the first DRM buffer, so the boot picture stays until
+  then.
+- `gs-decon` is a module, autoloaded by udev from the DT in Arch (about 4 s
+  after boot, with `gs_dsim_cmd`, the panel and `clk_acpm`). It defers until
+  the DSIM is bound and the panel has attached, and until `clk_acpm` provides
+  the clocks. If any of them never comes, `gs-decon` never probes and
+  **simpledrm keeps the screen as before**.
+- **No fbdev console by default** (`gs_decon.fbdev=1` gives one). The chain
+  is:
+  1. ABL logo.
+  2. The initramfs draws Omarchy's logo into simpledrm's `/dev/fb0`, which
+     is the boot framebuffer.
+  3. `gs-decon` probes and unplugs simpledrm. DPP0 keeps scanning the boot
+     framebuffer, so the logo stays (fbcon loses its framebuffer and goes
+     to the dummy console).
+  4. Plymouth 26 ignores simpledrm until its `DeviceTimeout` (8 s) and takes
+     a real KMS device as soon as one appears, so it opens `gs-decon`
+     directly. It also drops a simpledrm renderer if it had already fallen
+     back to one. Its first commit draws the same screen, at 120 Hz.
+  5. `plymouth quit --retain-splash` (our drop-in) leaves its frame up,
+     because no in-kernel client restores a console on last close, and
+     Hyprland's first frame replaces it.
+
+  With fbdev on, step 3 would turn black (fbcon takes over at once,
+  `CONFIG_FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER` is off), and every
+  last-close (Plymouth quit, session restart) would restore the black console.
+  That was the brief black seen in D4a-2. The initramfs is unchanged: it
+  carries no modules and still unmasks the DECON trigger (`TRIG_CON 0x3061`),
+  which `gs-decon` needs.
+- **Brightness** is the panel driver's backlight device
+  (`/sys/class/backlight/1c2c0000.dsi.0`), registered on the DSI device. It
+  is not tied to simpledrm, nor to `gs-decon` (which never calls
+  `drm_panel_enable/disable`). `brightnessctl --class=backlight`, the
+  quick-settings slider (logind) and the `bl_power` udev rule are unchanged.
+  The rate switch and brightness writes are serialised by the panel's
+  mutex.
+- **DPMS** (`omarchy-brightness-display off`: Hyprland DPMS disable, then
+  `bl_power` 4):
+  - CRTC disable: DPP0 parks on the black boot framebuffer, the panel drops
+    to 60 Hz (half the DPU memory traffic for the black frames), and the
+    commit's event is sent at once.
+  - Then `bl_power` 4 runs the panel's display-off set (D3a).
+  - On: `bl_power` 0 runs display on, and the CRTC enable switches back to
+    120 Hz before the first flip.
+  - A custom commit tail updates planes only on an active CRTC and waits for
+    `flip_done`, which the frame start interrupt or the 100 ms flip timeout
+    always signals. So no commit waits for a vblank that a dark panel might
+    not send.
+  - **Missing:** DECON keeps running (no trigger masking) and the panel is
+    never put to sleep (D3b/D4b: needs the full panel init and DSIM/DECON
+    restart). "Off" is black frames to a display-off panel. Saving more
+    needs D4a-3 (mask the trigger when idle) and D4b.
+- **Session restart:** Hyprland's framebuffers are removed on exit, which
+  turns the CRTC off (black, 60 Hz). The next session's first commit turns it
+  back on at 120 Hz.
+- **Shutdown, reboot, kexec:** `drm_atomic_helper_shutdown` turns the CRTC
+  off, so the link and panel are back at 60 Hz on the black boot
+  framebuffer.
+
+**Not done: the panel's 10/30 Hz idle (auto mode, `BD 23`).** The panel
+drops to its idle rate only when frames stop arriving. With the trigger
+permanently unmasked, DECON sends a frame on every TE, so auto mode would
+never idle. That needs D4a-3 (send frames only after a flip: mask the trigger
+after each frame, TE interrupt for vblank) first. Then add auto mode with
+the idle frame insertion as stock's `s6e3hc4_set_panel_feat()` does
+(`B0 00 0C BD; BD 00 00; B0 00 12 BD; BD 00 00 16 00 06 01; BD 23` for
+10 Hz).
+
+### D6.2 Runbook (each step needs the user; one change per boot)
+
+Before anything: `tools/phone-ssh dmesg -w` in a second terminal. Rollback
+as in section 4 (panic=10, slot A fallback, known-good images). Every check
+below is a read: no `devmem` writes are needed at any step (`devmem` on the
+phone writes when given a second argument, so never pass one). Exception:
+`display-hz --clear-underrun` (one write-one-to-clear of DSIM `INTSRC` bit 19).
+
+**D6a: merge, build, install.**
+
+1. In `~/android/mainline/wt-int`: `git merge omandroid-display2`; build
+   `out-int` (`kernel`, `modules`, `initramfs`, `images`, with `KERNEL_DIR`
+   and `KERNEL_OUT` set). Keep the current images in `known-good` first.
+2. On the phone, remove the D4 test settings: the `gs_decon` line(s) in
+   `/etc/modprobe.d/omandroid-decon.conf` (blacklist, `stage=2`,
+   `force_xrgb=1`; the last one would now only log "unknown parameter").
+   Remove `overlays/display-decon-test.dtso` from the boot DTB if it was
+   applied; the base DTB enables DECON0 and the pool now.
+3. `bin/omandroid modules-push && bin/omandroid push` (reboots into slot B).
+
+**D6b: boot.** Watch the screen:
+ABL logo → Omarchy logo → Plymouth animation → Hyprland, with no black frame
+between the logo and Plymouth.
+
+```sh
+tools/phone-ssh 'dmesg | grep -E "gs-decon|gs-dsim|s6e3hc4|simpledrm|aperture"'
+tools/phone-ssh 'ls /sys/class/drm; cat /sys/bus/platform/devices/1c240000.display-controller/stats'
+tools/phone-ssh 'grep -wE "mif|disp" /sys/kernel/debug/clk/clk_summary'
+```
+
+- Expect:
+  - "link timers for 60 Hz" (gs-dsim-cmd);
+  - "flip-only KMS on DECON0, 1440x3120, up to 120 Hz (at 60 Hz)", then
+    "120 Hz" once Plymouth commits;
+  - no simpledrm card; `refresh_hz 120`; `flip_timeouts 0`;
+  - MIF ≥ 1352 MHz, DISP ≥ 310 MHz.
+- **Stop if:**
+  - the screen goes black and stays black (check over SSH whether
+    `gs-decon` is bound);
+  - "staying at 60 Hz", a DSIM FIFO timeout, or "120 Hz needs …" in dmesg;
+  - Plymouth doesn't show.
+
+**D6c: 120 Hz under Hyprland.**
+
+```sh
+tools/phone-ssh 'sudo -u $(id -nu 1000) hyprctl -i 0 monitors'   # or on the phone
+tools/display-hz --clear-underrun --secs 10                       # idle, scrolling, video
+```
+
+- Pass:
+  - `1440x3120@120.00` with both modes in `availableModes`;
+  - 119.5–120.5 frames/s, `UNDERRUN_CTRL` 0x3ec, underrun bit 0 after a
+    minute of full-screen motion;
+  - no flashing lines;
+  - `flips` grows with `flip_timeouts` 0.
+- **Stop if:** underrun bit set or flashing lines (go to rollback 1), or
+  any flip timeouts.
+
+**D6d: switch by mode.** In `~/.config/hypr/monitors.lua` set the mode to
+`1440x3120@60`, save (Hyprland reloads), then back to `preferred`. Each
+time: `display-hz` (≈60 then ≈120), `refresh_hz` in `stats`, no black
+frame during the switch, and dmesg prints "60 Hz" / "120 Hz".
+
+**D6e: brightness at 120 Hz.** The quick-settings slider and
+`brightnessctl --class=backlight set 30%` / `100%`. Pass: the panel
+follows, no FIFO timeout in dmesg (the LP window between frames is about
+1.2 ms at 120 Hz).
+
+**D6f: DPMS, 10 cycles.** Power key (or `omarchy-brightness-display off`,
+wait 5 s, `on`).
+
+- Pass:
+  - the screen goes dark and comes back each time, with no hang;
+  - `refresh_hz` reads 60 while off and 120 after;
+  - `flip_timeouts` stays 0, apart from at most one per cycle if the dark
+    panel sends no TE.
+- **Stop if:** the screen doesn't come back. Recovery over SSH: `echo 0 >
+  /sys/class/backlight/1c2c0000.dsi.0/bl_power` and `hyprctl dispatch dpms
+  on`, else reboot.
+
+**D6g: session restart, 3 times.** `systemctl restart sddm`. Pass: the
+lock screen and Hyprland come back at 120 Hz, with at most a short black
+frame while the old session exits.
+
+**D6h: reboot twice and one kexec** (`bin/omandroid kexec`). Pass: same as
+D6b. After the kexec, "link timers for 60 Hz" (shutdown went back to 60).
+
+**Rollback, mildest first:**
+
+1. 60 Hz only: `echo "options gs_decon max_refresh=60" >
+   /etc/modprobe.d/omandroid-decon.conf`, reboot.
+2. No KMS (simpledrm as before, brightness unaffected): `echo "blacklist
+   gs_decon" > /etc/modprobe.d/omandroid-decon.conf`, reboot.
+3. Console on the panel for debugging: `options gs_decon fbdev=1`.
+4. Previous kernel: `push` the `known-good` images. The old kernel's
+   `gs-decon` defaults to stage 0 (logs only), even with this DTB.
+
+**Next:** D4a-3 (trigger masking, TE vblank), then the 10 Hz idle; D3b/D4b
+(panel sleep, full DECON/DSIM restart) for real screen-off power savings.
