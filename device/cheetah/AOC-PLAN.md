@@ -199,7 +199,13 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    (`__device_attach_driver` on a freed driver: one of them leaves a
    driver on the bus). The device lock it held then hung every reboot in
    `device_shutdown`, which the shutdown watchdog doesn't cover: it needed
-   a held power key. Open: find which exit path doesn't unregister.
+   a held power key. **Found and fixed** (kernel `dfeafb2ba`, modules
+   only): `aoc_alsa_dev_util` registers its seven platform drivers (PCM,
+   voice, compress, path, no-host, in-call, VoIP) at module init, but its
+   exit unregistered them only once every AoC audio service had probed.
+   With the AoC not online, unloading it left them on the platform bus in
+   freed memory. It now always unregisters them and unwinds a failed init.
+   Until that kernel is on the phone, still don't `rmmod` these modules.
 3. **C7 audio** (kernel `omandroid-aoc` @ `33b28cee6` or later: the AoC
    sound card, `aoc_alsa_dev`/`aoc_alsa_dev_util`, ported from Google's
    driver, with the speaker limits in code; the amplifier description from
@@ -327,6 +333,57 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      C7d (`/tmp/tone.wav` is gone after a reboot).
      Stop on anything louder than a tone burst, an amplifier error, or a
      watchdog. Send `logs/c7d3.txt`.
+
+     **C7d-3 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00269-ga874b95ca381):
+     nothing heard; the AoC never read the ring.**
+     - `audio_playback5` Down ring (1 × 4 MiB): Tx 0 before, 4194304
+       during and after the mmap run, Rx 0 throughout. The copy run then
+       failed with "avail = 0 … written 8388608, read 0".
+     - Interrupts: A32 mailbox (IRQ 107) flat at 4732; F1 mailbox
+       (IRQ 108, the PCM's) 12 → 15 → 16; P6 (109) 0.
+     - Amplifiers: GLOBAL_EN and AMP_EN on during playback, RX slot 1
+       enabled (0x4800 0x10000). IRQ1_STATUS3 0x2000003f afterwards has
+       PLL_LOCK (bit 1) and PLL_CLK_CTRL moved 0x10 → 0x510: **both
+       amplifiers locked to the AoC's TDM 0 bit clock**, so the AoC's
+       sink ran (playing silence) while EP6 never pulled from its ring.
+     - The AoC answered every command (bind 0x010f, EP setup 0x00ce and
+       0x012a, start 0x00c9) with no error reply.
+
+     What that rules out: the amplifiers, TDM 0 clocking, the PCM
+     interrupt line, and the AP sending TDM configuration (it never does:
+     the `TDM_0_RX` Chan/Format/Rate controls only feed the codec's
+     `hw_params`; the AoC configures its port itself). The ring itself is
+     the suspect: prepare "resets" the write pointer by advancing it to the
+     ring start, and on a fresh ring (wp 0) that advanced it by a whole
+     ring, so the ring read as full of stale data before the AoC saw the
+     setup, and the AoC never flushed it. Google's HAL plays in copy mode
+     (not mmap), so the copy path must work on a fresh ring.
+
+   - **C7d-4** (kernel `omandroid-aoc` @ `24483c36e`, modules only:
+     `aoc_core.ko`, `aoc_alsa_dev_util.ko`; a fresh boot, because the
+     rings this boot used stay full until the AoC restarts):
+     - `2211dd734` leaves a ring alone when its write pointer is already
+       at the start, so a fresh ring stays empty after prepare;
+     - `24483c36e` adds `aoc_alsa_dev_util ring_debug=1`, which logs the
+       ring's written/read counters at prepare, start, stop and each AoC
+       PCM interrupt (`aoc-audio-diag` sets it).
+
+     Run C7b's check, the C7d tone step, then copy mode first:
+     ```sh
+     tools/phone-ssh 'EP=6 MODES="copy" bash -s' < tools/aoc-audio-diag > logs/c7d4a.txt 2>&1
+     ```
+     Expect "aoc pcm audio_playback5 prepared: written 0 read 0", then
+     `irq` lines with `read` going up, Rx going up in the snapshots, and a
+     quiet 1.5 s tone from the top speaker (-20 dB digital, analog 6).
+     - If the tone plays: run the same with `MODES="copy copy"` (second
+       stream on the same ring, wp no longer 0) and send both logs.
+     - If `read` stays 0 again: try the low-latency endpoint EP2 (service
+       `audio_playback1`) the same way, to tell an EP6 problem from a
+       general one:
+       `tools/phone-ssh 'EP=2 MODES="copy" bash -s' < tools/aoc-audio-diag > logs/c7d4b.txt 2>&1`.
+     Stop: anything louder than the tone, distortion, an amplifier error,
+     an AoC watchdog or a SysMMU line. Rollback: the script sets the route
+     and Top Analog back to 0 itself.
 
 ## 0. Top findings
 

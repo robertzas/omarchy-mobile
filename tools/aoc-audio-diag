@@ -1,21 +1,25 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 #
-# aoc-audio-diag: AOC-PLAN.md stage C7d-3, run ON THE PHONE as root:
-#   tools/phone-ssh 'bash -s' < tools/aoc-audio-diag > logs/c7d3.txt 2>&1
-# Plays /tmp/tone.wav (C7d) for at most 5 s on the top amplifier through AoC
-# EP6, once with mmap and once in copy mode, and snapshots before, during and
-# after: the AoC mailbox interrupt counts, the audio_playback5 ring counters,
-# CS35L41 registers (read through regmap debugfs; nothing is written) and the
-# DAPM state. The mixer is left as the speaker test found it: EP6 off, top
-# amplifier analog 0. No devmem.
+# aoc-audio-diag: AOC-PLAN.md stages C7d-3 and C7d-4, run ON THE PHONE as root:
+#   tools/phone-ssh 'EP=6 MODES="copy" bash -s' < tools/aoc-audio-diag > logs/c7d4.txt 2>&1
+# Plays /tmp/tone.wav (C7d) for at most 5 s per mode on the top amplifier
+# through AoC endpoint EP (default 6), in each of MODES ("copy", "mmap";
+# default "mmap copy", the C7d-3 order), and snapshots before, during and
+# after: the AoC mailbox interrupt counts, the endpoint's ring counters
+# (service audio_playback<EP-1>), CS35L41 registers (read through regmap
+# debugfs; nothing is written) and the DAPM state. The mixer is left as the
+# speaker test found it: the EP route off, top amplifier analog 0. No devmem.
 set -u
+EP=${EP:-6}
+MODES=${MODES:-mmap copy}
+svc=audio_playback$((EP - 1))
 C=$(awk '/aoc-snd-card/{print $1; exit}' /proc/asound/cards)
 [[ -n $C ]] || { echo "no aoc-snd-card"; exit 1; }
-P=$(grep -l '^id: EP6 playback' /proc/asound/card$C/pcm*/info | sed -n 's#.*/pcm\([0-9]*\)p/info#\1#p' | head -1)
-[[ -n $P ]] || { echo "no EP6 playback PCM"; exit 1; }
+P=$(grep -l "^id: EP$EP playback" /proc/asound/card$C/pcm*/info | sed -n 's#.*/pcm\([0-9]*\)p/info#\1#p' | head -1)
+[[ -n $P ]] || { echo "no EP$EP playback PCM"; exit 1; }
 [[ -e /tmp/tone.wav ]] || { echo "no /tmp/tone.wav (make it as in C7d)"; exit 1; }
-echo "card $C, EP6 playback = pcm $P"
+echo "card $C, EP$EP playback = pcm $P ($svc), modes: $MODES"
 
 amps=$(ls -d /sys/kernel/debug/regmap/spi*.* 2>/dev/null)
 
@@ -23,10 +27,10 @@ snap() {
   echo "== $1 $(date +%T.%N)"
   grep -iE 'mbox|mailbox' /proc/interrupts
   if [[ -r /sys/kernel/debug/aoc/services ]]; then
-    grep -A2 '"audio_playback5"' /sys/kernel/debug/aoc/services
+    grep -A2 "\"$svc\"" /sys/kernel/debug/aoc/services
   else
-    grep -A2 '"audio_playback5"' /sys/bus/platform/devices/181d0000.aoc/services ||
-      echo "(audio_playback5 not in the sysfs listing: it stops at a page)"
+    grep -A2 "\"$svc\"" /sys/bus/platform/devices/181d0000.aoc/services ||
+      echo "($svc not in the sysfs listing: it stops at a page)"
   fi
   for a in $amps; do
     echo "-- $a"
@@ -47,16 +51,24 @@ mix 'Bottom Analog PCM Volume' 0
 mix 'Top PCM Source' ASP
 mix 'Top Analog PCM Volume' 6
 amixer -c "$C" cget name='Top Digital PCM Volume' | tail -1
-mix 'TDM_0_RX Mixer EP6' 1
+mix "TDM_0_RX Mixer EP$EP" 1
+[[ -w /sys/module/aoc_alsa_dev_util/parameters/ring_debug ]] &&
+  echo 1 > /sys/module/aoc_alsa_dev_util/parameters/ring_debug
 
 snap before
-timeout 5 aplay -M -D "hw:$C,$P" /tmp/tone.wav &
-sleep 2
-snap during
-wait; echo "mmap aplay exit $?"
-snap after
-timeout 5 aplay -D "hw:$C,$P" /tmp/tone.wav; echo "copy-mode aplay exit $?"
+for mode in $MODES; do
+  case $mode in
+    mmap) flag=-M ;;
+    copy) flag= ;;
+    *) echo "unknown mode $mode"; continue ;;
+  esac
+  timeout 5 aplay $flag -D "hw:$C,$P" /tmp/tone.wav &
+  sleep 2
+  snap "during $mode"
+  wait; echo "$mode aplay exit $?"
+  snap "after $mode"
+done
 
-mix 'TDM_0_RX Mixer EP6' 0
+mix "TDM_0_RX Mixer EP$EP" 0
 mix 'Top Analog PCM Volume' 0
-dmesg | grep -iE 'alsa|aoc|cs35l41|mbox|sysmmu' | tail -40
+dmesg | grep -iE 'alsa|aoc|cs35l41|mbox|sysmmu' | grep -v MBOX_TX_QUEUE_LEN | tail -60
