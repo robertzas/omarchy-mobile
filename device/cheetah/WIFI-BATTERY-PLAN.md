@@ -2815,3 +2815,77 @@ tools/phone-ssh -t 'nmcli con up nevermore'; tools/phone-ssh 'curl -o /dev/null 
 
 If n ≠ 1: put `google,vid = <n>` in the cheetah DT (one-line DT commit), and
 `omandroid-wifi-start` needs nothing else. Nothing ships until F4b passes.
+
+### 9.20 F4a/F4b/F3: the SysMMU is shared with UFS on VID 0 (2026-10-12)
+
+Results on int 00151 (contains `841baece6`):
+- **F4a** (`mode=3 vids=0xff`): Wi-Fi failed. One line: `blocked READ at
+  0xff000000 (VID 0, AxID 0x0)`. **PCIe traffic is on VID 0.**
+- **F4b** (`mode=2 vids=0x1`): blocked VID 0, AxID 0x2, at 0x8859b9000 and
+  0x8859b90c0. Those addresses are the **UFS host's transfer request list**:
+  `UTRLBA` = 0x8_859b9000 in the `host_regs` dump printed right after, and
+  `UTMRLBA` = 0x8_859ba000.
+- **F3** (`mode=1 vids=0x1`) only allowed the Wi-Fi window on VID 0. That
+  starved storage and wedged the phone (`ufshcd_abort`, SCSI EH), and the
+  display and SSH died after it.
+
+**Conclusion: the HSI2 SysMMU at 0x145c0000 carries both the PCIe
+controller (AxID 0x0) and UFS (AxID 0x2) on VID 0.** Any table on VID 0
+that isn't a full 1:1 map confines storage too. The 0xff000000 read in
+F4a is the chip's first access into the pool. Every brcmfmac buffer is
+allocated against 01:00.0, which has the restricted pool, so nothing from
+Wi-Fi was seen outside the window.
+
+**Stock never shows this.** Stock DT gives `sysmmu_hsi2` `pcie-vid-num = <1>`
+and enables VID 1, and UFS has no IOMMU. But stock maps every Wi-Fi buffer
+1:1, so if PCIe also arrives on VID 0 there, stock's SysMMU is a no-op as
+well, and nothing breaks.
+
+Nothing in Google's kernel tree assigns a VID or AxUSER:
+- PCIe RC driver (dwc and dwc-whi) and the gs201 CAL;
+- the UFS driver (its only HSI2 sysreg write is IOCC);
+- the SysMMU drivers.
+
+If a VID mux exists, it is set before Linux (bootloader/EL3) or not at all.
+The S2MPU is also selected per VID (`NR_VIDS` 8, `PROT_EN_PER_VID`), so it
+can't separate the two masters either. There is no AxID-based protection
+in either block: the SysMMU's `TLB_MATCH_ID` only steers TLB allocation.
+
+**Change:** `pcie_gs201_sysmmu` now **refuses any mode that translates VID
+0** unless `allow_vid0=1` (debug only). It still never enables VID 0 by
+default, and the DT stays `google,vid = <1>`. On this hardware, mode 1 on
+VID 1 is a harmless no-op. Commit `7ff22794d` (wt-pcie `omandroid-w4`),
+release `7.3.0-rc6-omandroid-push1-00101-g7ff22794d119`, logs
+`logs/{kernel,modules,images}-w4d.log`. Nothing that enforces is proposed.
+
+**Options:**
+1. **Restricted pool only (recommended for now).**
+   - Every kernel-provided DMA buffer is in the 16 MiB window, as measured.
+   - That protects against driver/DMA bugs and stray pointers, but not
+     against hostile Wi-Fi firmware, which can still DMA anywhere.
+   - The firmware is Broadcom's signed blob, the same as stock, and stock's
+     own SysMMU appears to give no more protection.
+   - Ship Wi-Fi this way with the firewall module not loaded.
+2. **Deny-list on VID 0** (`mode=3`-style: everything 1:1 except selected
+   regions):
+   - Candidates are the kernel image (text/rodata) and reserved firmware
+     carve-outs, which UFS never targets.
+   - It blocks firmware patching kernel text, but not page tables or heap,
+     so it's a partial mitigation.
+   - The risk is storage: one wrong region and UFS stalls as in F3.
+   - It needs its own staged runbook (read-only first, canary region,
+     watchdog) and your agreement before anything is built.
+3. **Find a VID mux:**
+   - The only lead is an undocumented SYSREG_HSI2 field set before Linux.
+     A read-only sweep of SYSREG_HSI2 isn't risk-free (the SysMMU 0x70 read
+     aborted), so I don't recommend it without a register map.
+   - A stock-Android root dump of SYSREG_HSI2 to compare against would
+     settle it, but needs a stock device.
+4. **IOMMU-free hardening:** keep the pool, keep the blacklist and the
+   guarded start script, and load the newest firmware.
+
+No runbook in this section: nothing new should run on the phone until we
+pick an option. If you want a data point, F4a (`mode=3 vids=0xfe`, so not
+VID 0) is now the only firewall test that still makes sense. It should show
+**no** blocked lines and working Wi-Fi, which confirms PCIe never uses
+VIDs 1-7.
