@@ -158,6 +158,36 @@ tools/phone-ssh 'P=/sys/kernel/debug/pinctrl; grep -hE "\((gph2-[0-5])\)" $P/*14
 Record: gph2-3 (nstandby) and gpp4-3 (mcu_req) as ABL left them; expect
 output-low or input.
 
+**G0 result (2026-10-12, kernel `...-00214-g6def5bac7547`): passed.**
+
+| Pin | Role | CON | DAT | PUD | Note |
+|---|---|---|---|---|---|
+| gph2-0 | Wi-Fi PERST# | 0x1 | 1 | 0 | ours (Wi-Fi up) |
+| gph2-1 | Wi-Fi CLKREQ# | 0x2 | 0 | 3 | ours |
+| gph2-2 | GNSS mcu_resp | 0 | 0 | 1 | input, pull-down (= stock pin group) |
+| gph2-3 | GNSS nstandby | 0 | 0 | 1 | input, pull-down: chip held in standby |
+| gph2-4 | WL_REG_ON | 0x1 | 1 | 0 | ours |
+| gph2-5 | Wi-Fi dev-wake | 0 | 0 | 1 | ours |
+| gpp4-3 | GNSS mcu_req | 0 | 0 | 1 | input, pull-down |
+| gpp10-0..3 | SPI5 SCLK/MOSI/MISO/CS | 0 | 0 | 1 | inputs: ABL never sets up USI5/SPI5 |
+| gpp15-1 | GNSS PPS | 0 | 0 | 1 | input |
+| gpa6-4 | GNSS host_req | 0 | 0 | 1 | input, pull-down (not yet EINT) |
+
+PERIC0 power-down states: CON_PDN 2, PUD_PDN 1 on the PERIC0 pins.
+
+What this means for G1/G2:
+- The GNSS chip is idle and in standby, and nothing else uses its pins.
+- ABL leaves SPI5 entirely unconfigured, so the USI5 mode, clock and pins
+  all come from our DT. If the G2 probe reads all 0xff with
+  `mcu_resp: answered`, check the USI5 mode and the PERIC0 USI5 clock
+  first.
+- gph2-3 and gpp4-3 are inputs with pull-down. The driver drives them low
+  as outputs at probe, which keeps the same level.
+- Our host_req group takes away the pull-down (stock: none) once it
+  becomes the EINT.
+- int merged `omandroid-gnss` at `7af02fa41`; G1 and G2 run on the next
+  push.
+
 ### G1: the sub-PMIC, read-only (int + `gnss-pmic-test`)
 
 ```sh
