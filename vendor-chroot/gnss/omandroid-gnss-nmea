@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""omandroid-gnss-nmea: hand the GNSS engine's NMEA to Linux location services.
+
+Broadcom's gpsd in the gnss vendor chroot writes NMEA sentences to a FIFO
+(gps.xml NmeaOutName, /var/lib/omandroid-vendor/gnss/data/vendor/gps/nmea_out
+on the host). This daemon reads it and serves every complete, checksummed
+sentence to:
+
+  - a Unix stream socket, /run/omandroid-gnss/nmea.sock, which GeoClue reads
+    ([network-nmea] nmea-socket=, geoclue-omandroid-gnss.conf);
+  - a pseudo-terminal linked at /run/omandroid-gnss/nmea-tty, for gpsd
+    (gpsd -n /run/omandroid-gnss/nmea-tty) and anything else that wants a
+    serial NMEA device.
+
+Nothing is written back to the engine. Standard library only.
+"""
+
+import argparse
+import os
+import selectors
+import socket
+import stat
+import sys
+import tty
+
+FIFO = "/var/lib/omandroid-vendor/gnss/data/vendor/gps/nmea_out"
+RUN = "/run/omandroid-gnss"
+MAX_LINE = 1024
+
+
+def log(msg):
+    print(f"omandroid-gnss-nmea: {msg}", file=sys.stderr, flush=True)
+
+
+def nmea_ok(line):
+    """A complete sentence with a valid checksum: $....*hh"""
+    if not line.startswith(b"$") or len(line) < 9 or line[-3:-2] != b"*":
+        return False
+    body = line[1:-3]
+    try:
+        want = int(line[-2:], 16)
+    except ValueError:
+        return False
+    got = 0
+    for b in body:
+        got ^= b
+    return got == want
+
+
+class Bridge:
+    def __init__(self, fifo, run):
+        self.fifo = fifo
+        self.run = run
+        self.sel = selectors.DefaultSelector()
+        self.clients = []
+        self.buf = b""
+        self.sentences = 0
+
+    def open_fifo(self):
+        st = os.stat(self.fifo)
+        if not stat.S_ISFIFO(st.st_mode):
+            raise SystemExit(f"{self.fifo} is not a FIFO")
+        # O_RDWR keeps the FIFO open across gpsd restarts (no EOF storm).
+        fd = os.open(self.fifo, os.O_RDWR | os.O_NONBLOCK)
+        self.sel.register(fd, selectors.EVENT_READ, self.on_fifo)
+
+    def open_socket(self):
+        path = os.path.join(self.run, "nmea.sock")
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(path)
+        os.chmod(path, 0o666)
+        srv.listen(8)
+        srv.setblocking(False)
+        self.sel.register(srv, selectors.EVENT_READ, self.on_accept)
+
+    def open_pty(self):
+        master, slave = os.openpty()
+        tty.setraw(slave)
+        os.set_blocking(master, False)
+        link = os.path.join(self.run, "nmea-tty")
+        try:
+            os.unlink(link)
+        except FileNotFoundError:
+            pass
+        os.symlink(os.ttyname(slave), link)
+        # Keep the slave open so writes never fail with EIO when no reader.
+        self.pty_master, self.pty_slave = master, slave
+
+    def on_accept(self, srv):
+        conn, _ = srv.accept()
+        conn.setblocking(False)
+        self.clients.append(conn)
+        log(f"client connected ({len(self.clients)})")
+
+    def send(self, line):
+        for c in list(self.clients):
+            try:
+                c.send(line)
+            except (BlockingIOError, InterruptedError):
+                pass  # a slow client loses this sentence
+            except OSError:
+                self.clients.remove(c)
+                c.close()
+                log(f"client gone ({len(self.clients)})")
+        try:
+            os.write(self.pty_master, line)
+        except (BlockingIOError, OSError):
+            pass
+
+    def on_fifo(self, fd):
+        try:
+            data = os.read(fd, 4096)
+        except BlockingIOError:
+            return
+        self.buf += data
+        while b"\n" in self.buf:
+            line, self.buf = self.buf.split(b"\n", 1)
+            line = line.rstrip(b"\r")
+            if nmea_ok(line):
+                self.sentences += 1
+                if self.sentences == 1:
+                    log("first NMEA sentence received")
+                self.send(line + b"\r\n")
+        if len(self.buf) > MAX_LINE:
+            self.buf = b""
+
+    def loop(self):
+        while True:
+            for key, _ in self.sel.select():
+                key.data(key.fileobj)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--fifo", default=FIFO)
+    ap.add_argument("--run", default=RUN)
+    args = ap.parse_args()
+
+    os.makedirs(args.run, mode=0o755, exist_ok=True)
+    b = Bridge(args.fifo, args.run)
+    b.open_fifo()
+    b.open_socket()
+    b.open_pty()
+    log(f"reading {args.fifo}; serving {args.run}/nmea.sock and {args.run}/nmea-tty")
+    b.loop()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (GNSS-PLAN.md, stage G1): turn on the S2MPG13 sub-PMIC node,
+ * for its LDOs. Only LDO9S-LDO11S (the GNSS rails) are described, with the
+ * stock voltage ranges, so registering them changes nothing; the regmap only
+ * allows writes to the LDO control registers. Nothing consumes the rails in
+ * this stage. Applied to the built gs201-cheetah.dtb with fdtoverlay. Paths,
+ * not labels, so the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/firmware/power-management/pmic-2} {
+	status = "okay";
+};

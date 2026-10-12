@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# GNSS: the bcm4775x-gnss driver and Broadcom's lhd/gpsd in the gnss vendor
+# chroot (device/cheetah/GNSS-PLAN.md). Not enabled by default.
+[Unit]
+Description=Omandroid GNSS (BCM4775x, stock lhd and gpsd)
+After=network-online.target
+Wants=omandroid-gnss-nmea.service
+ConditionPathExists=/usr/lib/omandroid-vendor/gnss/root
+
+[Service]
+ExecStart=/usr/lib/omandroid-vendor/omandroid-gnss-start
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

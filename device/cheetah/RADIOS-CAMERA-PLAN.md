@@ -1,7 +1,8 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Radios and cameras plan: modem, GNSS, NFC, cameras (cheetah / gs201)
 
-Status: **offline survey, 2026-10-12. Nothing has run on the phone.** One
+Status: **offline survey, 2026-10-12. Nothing has run on the phone.**
+Update: GNSS and NFC (N1) are built: see GNSS-PLAN.md and section 3.7. One
 kernel piece is built: the HSI1 pin controller that the modem and NFC both
 need (section 6). Kernel branch `omandroid-hsi1` in
 `~/android/mainline/wt-hsi1`, on `omandroid` @ `7b0f8b5d1`, build in
@@ -359,10 +360,10 @@ thing G1 must find out.
     - Regulators, not raw PMIC writes.
     - The standard SPI core with our `spi-s3c64xx` gs201 support (already
       used for touch on USI0).
-    - Fix the 1 Hz statistics timer. `bbd_resume()` turns it on after every
-      resume whether or not it ran before (`bbd.c:633-646`, timer
-      `:145-151`), so an idle phone would wake every second. Restart it
-      only if it was running.
+    - Keep the 1 Hz statistics timer out. `bbd_resume()` turns it on after
+      every resume (`bbd.c:633-646`), which would wake an idle phone every
+      second, but only when `DEBUG_1HZ_STAT` is defined, and Google's
+      build leaves it out (`bbd.h:62`). The port drops that code.
   - **Upstream path, later:** a `drivers/gnss/` driver that exposes the raw
     SSI stream as `/dev/gnssN`, with `nstandby` and `mcu_req` handled in
     the kernel. It only works if `lhd` can live without `bbd_control`
@@ -543,6 +544,43 @@ tools/phone-ssh 'grep -hE "\((gph0-5|gph1-[45])\)" /sys/kernel/debug/pinctrl/*11
 #   record: gph1-5 (NFC reset) and gph1-4 (eSE reset) levels. Expect both released (high)
 #   or both held: whatever ABL left is the state N2 must start from.
 ```
+
+### 3.7 Built (2026-10-12): stages N1-N3
+
+Kernel branch `omandroid-gnss` (GNSS-PLAN.md section 2):
+- `cad9624c0`: `st,st54j-i2c` in the st-nci binding;
+- `ec375b274`: `nfc@8` on `hsi2c_8`, `interrupts-extended = <&gpa9 1
+  IRQ_TYPE_LEVEL_HIGH>`, `reset-gpios = <&gph1 5 GPIO_ACTIVE_HIGH>` (st-nci
+  pulses 0 then 1, like Google's driver), no `ese-present`/`uicc-present`;
+  disabled. The reset pin group only sets power-down states, as stock.
+
+Also built:
+- `CONFIG_NFC_ST_NCI_I2C=m`, giving `st-nci.ko` and `st-nci_i2c.ko` in
+  `out-gnss`;
+- overlay `overlays/nfc-test.dtso`, which enables the HSI1 pin controller
+  and the node.
+
+The PMU reference clock (`PAD_CTRL_CLKOUT1` bit 0) is **not** handled yet.
+N2 finds out whether the controller initialises without it.
+
+Userspace: neard (`nfctool`) is not in Arch's repositories (AUR only).
+`/sys/class/nfc` and the kernel log are enough for N2.
+
+```sh
+# N1: build only (done). N2 (int with omandroid-gnss + nfc-test):
+ov nfc-test && bin/omandroid push                               # reboots
+tools/phone-ssh 'dmesg | grep -iE "st-nci|st21nfc|nfc" | tail; ls /sys/class/nfc/ 2>&1;
+  grep -hE "\((gph1-[45]|gph0-5)\)" /sys/kernel/debug/pinctrl/*11840000*/pins'
+#   pass: st_nci_i2c bound to 8-0008, nfc0 registered, no "timeout" or NCI errors;
+#   gph1-4 (eSE reset) unchanged from N0.
+#   NCI init timeout: the reference clock is missing. Next step (not built): a small
+#   clock provider for PMU PAD_CTRL_CLKOUT1 through the PMU regmap, as st21nfc.c:191-200.
+# N3 (needs nfctool from neard, AUR): nfctool -d nfc0 -1; nfctool -d nfc0 -p
+#   with a tag on the back: its UID and protocol
+# rollback: images without the overlay
+```
+
+Never run i2cdetect on this bus, and never write `st54j_fw.bin` from Linux.
 
 ---
 

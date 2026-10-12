@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (RADIOS-CAMERA-PLAN.md section 3, stage N2): turn on the HSI1
+ * pin controller (the NFC reset line is gph1-5) and the ST54J's NFC
+ * controller node at 0x08 on I2C 8, so st-nci binds (udev loads st_nci_i2c
+ * once the node exists). The eSE side of the chip is not described and is
+ * never touched. Applied with fdtoverlay; paths, not labels.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/pinctrl@11840000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109700c0/i2c@10970000/nfc@8} {
+	status = "okay";
+};

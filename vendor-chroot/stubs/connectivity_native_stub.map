@@ -1,0 +1,6 @@
+LIBCONNECTIVITY_NATIVE {
+  global:
+    AConnectivityNative_getNetworkBlockedReason;
+  local:
+    *;
+};
