@@ -1,11 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Power plan before suspend: CPU idle C2 and UFS Hibern8 (cheetah / gs201)
 
-Status: offline work done (2026-10-12). Kernel branch `omandroid-power` in
-`wt-power`, built into `~/android/mainline/out-power`. Nothing is enabled by
-default: the C2 states and the MCT are `status = "disabled"` in the DT and are
-turned on by test overlays, and the UFS change only removes a mode that Google
-never uses on this SoC. **First on-phone step: P0 (read-only), section 5.1.**
+Status (2026-10-12): P0, C1 and C2 pass on the phone (section 7); the C2
+soak and the battery measurements (B0, `power-ab c2`) are pending. Kernel
+branch `omandroid-power` in `wt-power`, built into
+`~/android/mainline/out-power`: the C2 states and the MCT are
+`status = "disabled"` in the DT and turned on by test overlays; the UFS change
+only removes a mode that Google never uses on this SoC. Branch
+`omandroid-power-on` (`241736cc0`, one commit on top) enables the MCT and C2 by
+default; not merged, waiting for the soak.
 
 Goal: cheap power savings while the phone is awake, before real suspend
 exists: (1) core power-down (C2) when a CPU is idle, (2) the UFS link in
@@ -155,8 +158,15 @@ the one state of a CPU skipped, `psci_idle_init_cpu()` registers nothing
 Test overlays, applied with `fdtoverlay` exactly like the Wi-Fi ones:
 
 - `device/cheetah/overlays/power-mct-test.dtso`: MCT on (gate C1)
-- `device/cheetah/overlays/power-c2-little-test.dtso`: C2 on cpu0-3 only (C2a)
-- `device/cheetah/overlays/power-c2-all-test.dtso`: C2 on all 8 CPUs (C2b)
+- `device/cheetah/overlays/power-c2-all-test.dtso`: C2 on all 8 CPUs (C2)
+
+**C2 can only be enabled on all CPUs at once.** `psci_cpuidle_probe()` walks
+every present CPU; `psci_idle_init_cpu()` returns -ENODEV for a CPU without
+idle states (`L/drivers/cpuidle/cpuidle-psci.c:401`), and the probe then
+unwinds every CPU (`:437-440`), so no driver registers at all. A
+little-cores-only overlay therefore gives WFI everywhere (seen on the phone).
+To narrow C2 down, boot with all states and disable `state1` at runtime on
+the CPUs to exclude.
 
 Once the overlays are on, C2 can be switched off **at runtime** per CPU
 (`/sys/devices/system/cpu/cpuN/cpuidle/state1/disable`), which is also what
@@ -371,34 +381,35 @@ grep -E "mct" /proc/interrupts'
 (`uptime`, `date` against the laptop: no drift). **Fail:** no boot -> slot A
 fallback, flash the previous images; MCT error lines -> stop and report.
 
-### 5.4 C2a: C2 on the little cores (cpu0-3)
+### 5.4 C2: all cores (one gate)
 
 ```sh
-$O/scripts/dtc/dtc -q -I dts -O dtb -o out/power-c2-little-test.dtbo device/cheetah/overlays/power-c2-little-test.dtso
-$O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" out/power-mct-test.dtbo out/power-c2-little-test.dtbo
-KERNEL_DIR=~/android/mainline/wt-power KERNEL_OUT=$O bin/omandroid images > logs/images-power-c2a.log 2>&1
+$O/scripts/dtc/dtc -q -I dts -O dtb -o out/power-c2-all-test.dtbo device/cheetah/overlays/power-c2-all-test.dtso
+$O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" out/power-mct-test.dtbo out/power-c2-all-test.dtbo
+KERNEL_DIR=~/android/mainline/wt-power KERNEL_OUT=$O bin/omandroid images > logs/images-power-c2.log 2>&1
 # flash slot B, boot. Then arm the watchdog feeder (tools/wifi-w1-capture --watchdog
 # pattern) so a later hang resets the phone instead of needing a 30 s Power hold:
 tools/phone-ssh 'nohup sh -c "exec 3>/dev/watchdog0; trap \"printf V >&3; exit 0\" TERM
   while :; do printf k >&3; sleep 2; done" >/dev/null 2>&1 & echo $! > /run/power-wd.pid'
-tools/phone-ssh 'for c in 0 1 2 3 4; do d=/sys/devices/system/cpu/cpu$c/cpuidle
+tools/phone-ssh 'for c in 0 1 2 3 4 5 6 7; do d=/sys/devices/system/cpu/cpu$c/cpuidle
   echo "cpu$c $(cat $d/state1/name 2>/dev/null) usage=$(cat $d/state1/usage 2>/dev/null) rejected=$(cat $d/state1/rejected 2>/dev/null) time=$(cat $d/state1/time 2>/dev/null)"; done
 cat /sys/devices/system/cpu/cpuidle/current_driver
 dmesg | grep -iE "psci|cpuidle|SMC failed"'
 ```
 
-**Expect:** cpu0-3 have `state1` "c2" with `usage` growing and `rejected`
-near 0; cpu4-7 have no cpuidle directory; no "SMC failed". Check twice, a
-minute apart. Then a 30-minute soak with normal use (Hyprland, terminal,
-`stress-ng --cpu 4 --timeout 60` once if installed, otherwise a `yes >
-/dev/null` loop for a minute), looking for RCU stalls, soft lockups or a
-frozen screen.
+**Expect:** driver `psci_idle`, `state1` "c2" on cpu0-7 with `usage`
+growing and `rejected` a small fraction of it; no "SMC failed". Check twice,
+a minute apart. For a more cautious start, disable `state1` on cpu4-7 right
+after boot (`echo 1 > /sys/devices/system/cpu/cpu[4-7]/cpuidle/state1/disable`)
+and re-enable after a few minutes. Then a 30-minute soak with normal use and
+one all-core load (`stress-ng --cpu 8 --timeout 60`, or 8 `yes > /dev/null`
+for a minute), looking for RCU stalls, soft lockups or a frozen screen.
 
 **Fail modes and actions:**
 
 | Symptom | Meaning | Action |
 |---|---|---|
-| `rejected` grows like `usage` | firmware refuses C2 (hint not seen) | `echo 1 > .../state1/disable` on cpu0-3, collect `dmesg`, stop |
+| `rejected` grows like `usage` | firmware refuses C2 (hint not seen) | `echo 1 > .../state1/disable` on all CPUs, collect `dmesg`, stop |
 | "SMC failed" flood | secure PMU writes refused | same |
 | RCU stall / lockup messages | a CPU doesn't wake | disable at runtime if the shell answers; else watchdog reset; reflash previous images |
 | no boot | hang before userspace | slot A fallback, reflash previous images |
@@ -406,18 +417,16 @@ frozen screen.
 To stop the feeder cleanly: `tools/phone-ssh 'kill $(cat /run/power-wd.pid)'`
 (the trap writes the magic close, so the watchdog stops).
 
-### 5.5 C2b: all cores, then measure
-
-Same as C2a with `power-c2-all-test.dtso` instead of the little one. Expect
-`state1` on cpu0-7. Soak 30 minutes as above, then:
+### 5.5 C2 measurement and default-on
 
 ```sh
 tools/phone-ssh 'power-ab --detach c2'     # A = C2 off on all CPUs, B = on
 ```
 
-**Pass:** B - A clearly above the baseline noise. Then propose the DT change
-that drops `status = "disabled"` from the MCT and the states (one commit),
-after a day of use with the overlay.
+Needs the phone on battery (cable out). **Pass:** B - A clearly above the
+baseline noise. Then merge `omandroid-power-on` (`241736cc0`, drops
+`status = "disabled"` from the MCT and the three states), so default images
+get C2 without overlays.
 
 ### 5.6 U1: auto-hibernate (only if P0 printed a number)
 
@@ -457,7 +466,7 @@ Rollback: `pacman -U` the previous package, or delete the rule and reboot.
 | Change | Risk | Default | Rollback |
 |---|---|---|---|
 | MCT node | timer misconfiguration -> no boot or stalls | disabled; overlay C1 | images without the overlay |
-| C2 states | CPU not woken, firmware rejects, lockups | disabled; overlays C2a/C2b | runtime `state1/disable`; images without the overlay |
+| C2 states | CPU not woken, firmware rejects, lockups | disabled; overlay C2 (all cores); default-on commit ready | runtime `state1/disable`; images without the overlay |
 | UFS AH8 quirk | changes link handling on the root disk | in the kernel; runtime-proven by U1 first, no-op if AH8 unsupported | previous kernel; nothing on disk changes |
 | Hibern8 delay | more H8 transitions, latency; link errors would hit the root FS | runtime sysfs only until U3 | write 150; remove the rule |
 | power-ab | none (sysfs writes it restores) | manual | n/a |
@@ -481,3 +490,24 @@ PMU register outside the CPU_INFORM path upstream already uses.
   `power-mct-test` + `power-c2-all-test` applied reports only the existing
   `soc_id` and `/chosen/framebuffer` items. All three overlays compile, and
   `fdtoverlay` sets exactly the four `status` properties to `okay`.
+
+---
+
+## 7. On-phone results (2026-10-12, integration kernel 00097-g6caaf25a0a21)
+
+- **P0:** as expected. No cpuidle directory, broadcast `bc_hrtimer`, no
+  "SMC failed", `auto_hibern8` "Operation not supported" (so the controller
+  has no auto-hibernate; commit `20bd72c37` is a no-op and U1 is skipped),
+  `clkgate_enable` 1, `clkgate_delay_ms` 150. Measured on USB power, so no
+  battery numbers yet.
+- **C1 (MCT): pass.** Broadcast device `mct-comp`, clocksource still
+  `arch_sys_counter`, `mct_comp_irq` and `mct_tick0..7` registered.
+- **Little-cores-only C2: cannot work** (see 1.5): no driver registered.
+  The overlay was removed and the runbook now has one all-cores gate.
+- **C2 (all cores): pass so far.** Driver `psci_idle`, `state1` on all 8
+  CPUs. Over 60 s idle each CPU spent 51-53 s in C2; rejected/usage about 7%
+  on cpu0 and 1-4% on the others. An all-core 30 s load, then idle: no RCU
+  stall, lockup or SMC failure. 30-minute soak under the watchdog feeder in
+  progress.
+- **Pending (needs the cable out):** B0 baseline and `ufs-gate`,
+  `power-ab c2`, U2.

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 /*
- * Bring-up only (POWER-PLAN.md, gate C2b): C2 core power-down on all eight
- * cores. Apply on top of power-mct-test.dtso (power-c2-little-test.dtso is
- * then redundant).
+ * Bring-up only (POWER-PLAN.md, gate C2): C2 core power-down on all eight
+ * cores. Apply on top of power-mct-test.dtso. All three states go together:
+ * cpuidle-psci registers nothing if any CPU lacks an idle state.
  */
 /dts-v1/;
 /plugin/;
