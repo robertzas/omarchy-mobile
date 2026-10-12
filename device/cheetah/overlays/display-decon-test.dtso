@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (DISPLAY-PLAN.md D5b/D4a): enable DECON0 and its scanout
+ * pool so the gs-decon driver can probe. Blacklist gs_decon first; the
+ * driver is loaded by hand, stage 0 (register dump) then stage 1
+ * (interrupt counters) then stage 2 (flip-only KMS).
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/display-controller@1c240000} {
+	status = "okay";
+};
+
+&{/reserved-memory/display-pool} {
+	status = "okay";
+};
