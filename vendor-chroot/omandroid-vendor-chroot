@@ -35,6 +35,24 @@ STUBS=${OMANDROID_VENDOR_STUBS:-$LIB/stubs}
 say() { printf 'omandroid-vendor[%s]: %s\n' "${PROFILE:-?}" "$*" >&2; }
 die() { say "error: $*"; exit 1; }
 
+# Host tools, resolved now: the Android processes get an Android PATH, and
+# env(1) would look chroot up in that.
+CHROOT_BIN=$(PATH=/usr/bin:/bin:/usr/sbin:/sbin command -v chroot || true)
+
+# Stop everything once: ignore further TERM/INT first, so the group-wide
+# kill below cannot re-enter this handler, then signal the process group
+# and exit. As the namespace's PID 1, exiting also ends every process left.
+STOPPING=
+stop() {
+  local code=${1:-0}
+  [[ -n $STOPPING ]] && exit "$code"
+  STOPPING=1
+  trap '' TERM INT
+  say "stopping"
+  kill -TERM 0 2>/dev/null || true
+  exit "$code"
+}
+
 PROFILE=${1:-}
 [[ $PROFILE =~ ^[a-z0-9-]+$ ]] || {
   echo "usage: omandroid-vendor-chroot PROFILE check | start | ns CMD... | run CMD..." >&2
@@ -65,6 +83,7 @@ LIBS_SYSTEM=/system/lib64:/vendor/lib64:/omandroid/lib64
 check() {
   local ok=1
   [[ $EUID -eq 0 ]] || die "run as root"
+  [[ -x $CHROOT_BIN ]] || { say "no chroot(1) on the host (coreutils)"; ok=0; }
   [[ -d $IMAGE/vendor && -d $IMAGE/apex/com.android.runtime ]] ||
     { say "no image in $IMAGE (tools/extract-vendor-chroot -p $PROFILE)"; ok=0; }
   [[ -f $SHIM ]] || { say "no shim at $SHIM (vendor-chroot/Makefile)"; ok=0; }
@@ -172,7 +191,7 @@ spawn() {
   local name=$1 kind=$2; shift 2
   android_env "$kind"
   say "starting $name"
-  "${ENV[@]}" chroot "$ROOT" "$@" 2>&1 | sed -u "s/^/[$name] /" &
+  "${ENV[@]}" "$CHROOT_BIN" "$ROOT" "$@" 2>&1 | sed -u "s/^/[$name] /" &
   PIDS[$name]=$!
 }
 
@@ -185,7 +204,7 @@ start() {
       env OMANDROID_VENDOR_IN_NS=1 "$0" "$PROFILE" start
   fi
   awk '/^NSpid:/ {print $2}' /proc/self/status > "$NSPID"
-  trap 'say "stopping"; kill 0 2>/dev/null; exit 0' TERM INT
+  trap 'stop 0' TERM INT
   setup
   if [[ $BINDER == yes ]]; then
     spawn servicemanager system /system/bin/servicemanager
@@ -196,9 +215,9 @@ start() {
   # Supervise: any child exiting stops the whole profile (systemd decides
   # whether to restart it).
   wait -n || true
-  say "a service exited; stopping"
-  kill 0 2>/dev/null || true
-  exit 1
+  # wait also returns when TERM/INT arrives; then the trap is already stopping
+  [[ -n $STOPPING ]] || say "a service exited"
+  stop 1
 }
 
 ns_pid() {
@@ -214,7 +233,7 @@ ns() {
 run() {
   (($#)) || die "usage: omandroid-vendor-chroot $PROFILE run /vendor/bin/... ARGS"
   android_env vendor
-  exec nsenter --target "$(ns_pid)" --mount --pid "${ENV[@]}" chroot "$ROOT" "$@"
+  exec nsenter --target "$(ns_pid)" --mount --pid "${ENV[@]}" "$CHROOT_BIN" "$ROOT" "$@"
 }
 
 case ${1:-} in

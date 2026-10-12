@@ -39,6 +39,24 @@ RPMB_LUN=49476
 say() { printf 'omandroid-fp: %s\n' "$*" >&2; }
 die() { say "error: $*"; exit 1; }
 
+# Host tools, resolved now: the Android processes get an Android PATH, and
+# env(1) would look chroot up in that.
+CHROOT_BIN=$(PATH=/usr/bin:/bin:/usr/sbin:/sbin command -v chroot || true)
+
+# Stop everything once: ignore further TERM/INT first, so the group-wide
+# kill below cannot re-enter this handler, then signal the process group
+# and exit. As the namespace's PID 1, exiting also ends every process left.
+STOPPING=
+stop() {
+  local code=${1:-0}
+  [[ -n $STOPPING ]] && exit "$code"
+  STOPPING=1
+  trap '' TERM INT
+  say "stopping"
+  kill -TERM 0 2>/dev/null || true
+  exit "$code"
+}
+
 rpmb_sg() {
   local d
   for d in /sys/class/scsi_generic/sg*; do
@@ -50,6 +68,7 @@ rpmb_sg() {
 check() {
   local ok=1 sg
   [[ $EUID -eq 0 ]] || die "run as root"
+  [[ -x $CHROOT_BIN ]] || { say "no chroot(1) on the host (coreutils)"; ok=0; }
   [[ -f $IMAGE/vendor/bin/hw/android.hardware.biometrics.fingerprint-service.goodix ]] ||
     { say "no vendor image in $IMAGE (tools/extract-fingerprint-vendor)"; ok=0; }
   [[ -f $SHIM ]] || { say "no shim at $SHIM (fingerprint/Makefile)"; ok=0; }
@@ -185,7 +204,7 @@ spawn() {
     OMANDROID_FP_PROPS=/dev/__omandroid_props__ \
     OMANDROID_FP_LOGLEVEL="${OMANDROID_FP_LOGLEVEL:-3}" \
     ANDROID_ROOT=/system ANDROID_DATA=/data \
-    chroot "$ROOT" "$@" 2>&1 | sed -u "s/^/[$name] /" &
+    "$CHROOT_BIN" "$ROOT" "$@" 2>&1 | sed -u "s/^/[$name] /" &
   PIDS[$name]=$!
 }
 
@@ -216,7 +235,7 @@ start() {
   # unshare's child: PID 1 inside, its parent is unshare outside. /run is
   # shared with the host until our mounts, so record the host PID for ns/run.
   awk '/^NSpid:/ {print $2}' /proc/self/status > "$NSPID"
-  trap 'say "stopping"; kill 0 2>/dev/null; exit 0' TERM INT
+  trap 'stop 0' TERM INT
   setup "$sg"
 
   spawn servicemanager system /system/bin/servicemanager
@@ -234,7 +253,7 @@ start() {
     say "loading g7.app"
     env -i LD_LIBRARY_PATH=$LIBS_VENDOR LD_PRELOAD=/omandroid/omandroid-fp-shim.so \
       OMANDROID_FP_PROPS=/dev/__omandroid_props__ \
-      timeout 60 chroot "$ROOT" /vendor/bin/trusty_apploader /vendor/firmware/g7.app ||
+      timeout 60 "$CHROOT_BIN" "$ROOT" /vendor/bin/trusty_apploader /vendor/firmware/g7.app ||
       die "trusty_apploader failed ($?)"
     say "g7.app loaded"
   fi
@@ -254,9 +273,9 @@ start() {
   say "stage $stage running"
   # Supervise: any child exiting stops the whole stack (systemd restarts it).
   wait -n || true
-  say "a service exited; stopping the stack"
-  kill 0 2>/dev/null || true
-  exit 1
+  # wait also returns when TERM/INT arrives; then the trap is already stopping
+  [[ -n $STOPPING ]] || say "a service exited"
+  stop 1
 }
 
 # $NSPID holds the namespace's PID 1 as seen from the host.
@@ -275,7 +294,7 @@ run() {
   exec nsenter --target "$(ns_pid)" --mount --pid \
     env -i LD_LIBRARY_PATH=$LIBS_VENDOR LD_PRELOAD=/omandroid/omandroid-fp-shim.so \
     OMANDROID_FP_PROPS=/dev/__omandroid_props__ OMANDROID_FP_LOGLEVEL=2 \
-    chroot "$ROOT" "$@"
+    "$CHROOT_BIN" "$ROOT" "$@"
 }
 
 case ${1:-} in
