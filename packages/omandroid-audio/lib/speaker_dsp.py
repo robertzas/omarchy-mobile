@@ -27,7 +27,14 @@ Formats, from the stock HAL library (vendor/lib64/audio_spk_35l41.so):
   CSPL_TEMPERATURE, BDLOG_MAX_TEMP  unsigned Q14, degrees C ("Max temp: 0x%x
                                     ==> %f C" converts with ucvtf #14)
   BDLOG_MAX_EXC                     unsigned Q19, mm ("Max exc" with ucvtf #19)
-  SPK_OUTPUT_POWER                  raw / 2^23 * 667.1889 (its ConvertRawToPower)
+  SPK_OUTPUT_POWER                  the HAL scales it by 667.1889 / 2^23 (its
+                                    ConvertRawToPower); printed raw here
+The firmware's coefficient table (the .wmfw's descriptors) marks which controls
+the DSP updates: HALO_STATE, HALO_HEARTBEAT, CSPL_STATE, CSPL_ERRORNO,
+CSPL_TEMPERATURE, CAL_R_SELECTED, CAL_SET_STATUS, SPK_OUTPUT_POWER and the
+BDLOG_* values are volatile (read live from the running DSP). ATTENUATION,
+REDUCE_POWER, CH_BAL and CAL_AMBIENT are host-written settings (reading them
+returns what was written), so ATTENUATION is not a measurement.
 States: HALO_STATE 2 = running (mainline cs35l41_hda.h HALO_STATE_CODE_RUN);
 CSPL_STATE 0 running, 1 error, 2 muted, 3 reiniting, 6 diagnosing (Google's
 cs35l41.h enum cs35l41_cspl_st); CAL_SET_STATUS 2 = calibration applied,
@@ -50,7 +57,8 @@ import wave
 AMPS = ('Top', 'Bottom')
 NAME_MAX = 43          # SNDRV_CTL_ELEM_ID_NAME_MAXLEN - 1
 DSP_KEYS = ('HALO_STATE', 'HALO_HEARTBEAT', 'CSPL_STATE', 'CSPL_ERRORNO', 'CAL_SET_STATUS',
-            'CSPL_TEMPERATURE', 'CSPL_ATTENUATION', 'SPK_OUTPUT_POWER', 'BDLOG_MAX_TEMP',
+            'CSPL_TEMPERATURE', 'SPK_OUTPUT_POWER', 'BDLOG_MAX_TEMP', 'BDLOG_VMON_LOW_FLAG',
+            'CAL_R', 'CAL_R_SELECTED',
             'BDLOG_MAX_EXC', 'BDLOG_OVER_TEMP_COUNT', 'BDLOG_OVER_EXC_COUNT', 'BDLOG_ABNORMAL_MUTE')
 AMP_KEYS = ('PCM Source', 'Digital PCM Volume', 'Analog PCM Volume')
 DELTA_KEYS = ('CSPL_UPDATE_PARAMS_CONFIG', 'CSPL_COMMAND')
@@ -505,8 +513,12 @@ def fmt(v, amp):
     p = g('SPK_OUTPUT_POWER')
     s = g('CSPL_STATE')
     f = lambda x, n: '-' if x is None else f'{x:.{n}f}'
-    return (f'{amp:6} temp {f(t, 2)} C, attenuation {g("CSPL_ATTENUATION")}, power '
-            f'{f(None if p is None else p / float(1 << 23) * 667.1889, 4)} (raw {p}), '
+    # whether the resistance the model uses is the calibration we wrote
+    # (never print either value: they are this phone's calibration)
+    r, rs = g('CAL_R'), g('CAL_R_SELECTED')
+    rsel = '-' if r is None or rs is None else ('yes' if r == rs else 'NO')
+    return (f'{amp:6} temp {f(t, 2)} C, R_selected=CAL_R {rsel}, vmon low {g("BDLOG_VMON_LOW_FLAG")}, '
+            f'power raw {p}, '
             f'state {s} ({CSPL_STATES.get(s, "?")}), errorno {g("CSPL_ERRORNO")}, '
             f'halo {g("HALO_STATE")}, heartbeat {g("HALO_HEARTBEAT")}, cal {g("CAL_SET_STATUS")}; '
             f'max temp {f(mt, 2)} C, max exc {f(mx, 4)} mm, over temp {g("BDLOG_OVER_TEMP_COUNT")}, '

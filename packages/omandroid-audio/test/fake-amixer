@@ -44,13 +44,13 @@ def wm_adsp_name(prefix, alg, key):
 
 DSP_VALUES = {   # what a healthy DSP reads during playback (C8c)
     'HALO_STATE': 2, 'HALO_HEARTBEAT': 100, 'CSPL_STATE': 0, 'CSPL_ERRORNO': 0, 'CAL_SET_STATUS': 2,
-    'CSPL_TEMPERATURE': 409700, 'CSPL_ATTENUATION': 0, 'SPK_OUTPUT_POWER': 0, 'BDLOG_MAX_TEMP': 409700,
+    'CSPL_TEMPERATURE': 409700, 'SPK_OUTPUT_POWER': 0, 'BDLOG_MAX_TEMP': 409700, 'BDLOG_VMON_LOW_FLAG': 0,
     'BDLOG_MAX_EXC': 0, 'BDLOG_OVER_TEMP_COUNT': 0, 'BDLOG_OVER_EXC_COUNT': 0, 'BDLOG_ABNORMAL_MUTE': 0,
 }
 
 
 def dsp_controls(c, p):
-    for n in ('CAL_R', 'CAL_R_SELECTED', 'CAL_STATUS', 'CAL_CHECKSUM', 'CAL_AMBIENT'):
+    for n in ('CAL_R', 'CAL_R_SELECTED', 'CAL_STATUS', 'CAL_CHECKSUM', 'CAL_AMBIENT', 'ATTENUATION'):
         c.setdefault(wm_adsp_name(p, 'cd', n), {'type': 'BYTES', 'v': [0, 0, 0, 0]})
     for n, v in DSP_VALUES.items():
         alg = '400a4' if n.startswith('HALO_') else 'cd'

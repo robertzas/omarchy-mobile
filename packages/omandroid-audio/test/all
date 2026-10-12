@@ -324,6 +324,7 @@ out=$(sp status)
 [[ $out == *"Top (spi6.0, power/control on, active): PCM Source DSP, Digital 657 (max 817), Analog 6 (max 10)"* ]] || { echo "$out" >&2; fail "status"; }
 [[ $out == *"calibration in the DSP vs persist: match"* ]] || fail "status compares the calibration"
 [[ $out == *"temp 25.01 C"* ]] || { echo "$out" >&2; fail "status decodes the coil temperature (Q14)"; }
+[[ $out == *"R_selected=CAL_R NO"* && $out == *"vmon low 0"* ]] || { echo "$out" >&2; fail "status compares CAL_R_SELECTED and shows the VMON-low flag"; }
 if grep -E '0x20|8192|8448' <<<"$out"; then fail "status prints no calibration values"; fi
 sp health >/dev/null || fail "health"
 sp mute >/dev/null || fail "mute"
