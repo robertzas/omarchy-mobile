@@ -75,6 +75,12 @@ Mainline v7.3-rc6 boots from slot B, with all 8 CPUs, 11.5 GB of RAM, USB networ
 - **NetworkManager profile `omandroid-phone`** gives `172.16.42.2/24` on any `enp0s20f0u*` gadget link. Without it, NM tears the link down after DHCP fails.
 - **`tools/phone-ssh`** runs commands on the phone. dropbear has no scp/sftp server, so stream files with `ssh 'cat > file' < file`.
 
+## 2026-10-12: firewall (Omarchy's ufw)
+- **Kernel:** Arch's iptables is iptables-nft, so ufw needs nf_tables plus the xtables matches its rules use through `nft_compat`: conntrack, state, owner, limit, recent, addrtype, hl, multiport, comment, LOG, REJECT (v4 and v6), and IPv6 `rt`. These are in `kernel/configs/omandroid.config`. The legacy filter tables (`iptable_filter`) are not needed.
+- **Phone:** Omarchy's `install/config/firewall.sh`, plus `ufw allow in on usb0 to any port 22 proto tcp` so SSH over the USB link keeps working. ufw is on at boot (`ENABLED=yes`, `ufw.service`): incoming is denied, outgoing allowed.
+- **Testing a change safely:** arm `systemd-run --unit=fw-deadman --on-active=90 /usr/bin/ufw disable` first, check that a *fresh* SSH connection opens, then stop the timer.
+- **To do:** the image build should run the same steps. Should SSH-over-USB stay open on user builds? It is a developer feature.
+
 ## Host changes to undo later
 
 Made on the development laptop to give the phone internet over USB. Revert when no longer needed:
