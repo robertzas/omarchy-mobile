@@ -556,7 +556,7 @@ drain with GNSS running and idle (POWER-PLAN.md) before enabling at boot.
   each one in `<gll_features>` under qemu and watching gpsd's parser.
 
 **Next steps:**
-1. On the phone: reinstall the runner and profile (`9cb…` below) and
+1. On the phone: reinstall the runner and profile (commit `2873e27`, commands below) and
    repeat G4 with Wi-Fi in range. Expect assistance downloads in gpsd's
    log (LTO/SUPL) and a faster fix.
 2. Compare talker IDs with a clear sky view before changing constellation
