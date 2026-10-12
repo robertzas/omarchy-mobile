@@ -86,7 +86,7 @@ scrim, swipe the sheet up, or press Escape to close it.
 | Wi-Fi | `Networking.wifiEnabled` (NetworkManager); status shows the SSID. The chevron or a long-press opens the Wi-Fi picker (below) |
 | Bluetooth | `omarchy-bluetooth-power on/off`, the same rfkill path as Omarchy's Bluetooth panel. The chevron or a long-press opens the Bluetooth panel (below) |
 | Mobile data | **Stub**: no modem backend (ModemManager wiring is the TODO) |
-| Rotation lock | **Stub**: no accelerometer / iio-sensor-proxy and no rotation daemon yet |
+| Rotation lock | `omandroid-autorotate` (omandroid-sensors): locked by `~/.local/state/omandroid/rotation-lock`; unlocking also enables the service. "No sensor" while the sensor proxy has no accelerometer |
 | Torch | **Stub**: the flash LED has no mainline driver; once a `*:flash`/`*:torch` LED appears in `/sys/class/leds`, drive it with `brightnessctl -d` |
 | Do not disturb | The notification service's `notifications` IPC target on this shell instance |
 | Brightness slider | `brightnessctl --class=backlight` (the panel backlight; dimmed when there is none) |

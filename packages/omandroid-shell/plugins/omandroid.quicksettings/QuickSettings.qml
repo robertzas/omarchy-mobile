@@ -51,6 +51,8 @@ Item {
     refreshDnd()
     brightness.refresh()
     torch.refresh()
+    rotationLock.refresh()
+    clockFormatRead.running = true
   }
 
   // Host-initiated close (`shell hide`).
@@ -118,6 +120,23 @@ Item {
   }
 
   // ---------------------------------------------------------------- clock
+
+  // The header follows the bar clock's 12/24-hour choice (Omarchy's clock
+  // 12-hour formats all carry "AP"), read from shell.json on open.
+  property bool twelveHour: false
+
+  Process {
+    id: clockFormatRead
+    command: ["sh", "-c", "grep -o '\"clockFormat\": *\"[^\"]*\"' \"${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json\" | head -1"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var format = String(text || "").replace(/^"clockFormat": *"/, "").replace(/"\s*$/, "")
+        root.twelveHour = /AP/i.test(format)
+      }
+    }
+  }
+
 
   SystemClock {
     id: clock
@@ -296,15 +315,50 @@ Item {
     function toggle() {}
   }
 
-  // STUB: rotation lock. Needs an accelerometer (iio-sensor-proxy) and a
-  // daemon that rotates the Hyprland output; neither exists yet, so there is
-  // no rotation to lock.
+  // Rotation lock over omandroid-autorotate (omandroid-sensors): it rotates
+  // the screen while the sensor proxy has an accelerometer, unless
+  // ~/.local/state/omandroid/rotation-lock exists. Turning the lock off also
+  // enables the service, so auto-rotate stays on after a reboot.
   QtObject {
     id: rotationLock
-    readonly property bool available: false
-    readonly property bool enabled: false
-    readonly property string status: "No sensor"
-    function toggle() {}
+
+    property bool available: false
+    property bool enabled: false
+    readonly property string status: !available ? "No sensor" : enabled ? "Locked" : "Auto-rotate"
+
+    function refresh() {
+      if (!rotationRead.running) rotationRead.running = true
+    }
+
+    function toggle() {
+      if (!available || rotationWrite.running) return
+      rotationWrite.command = enabled
+        ? ["sh", "-c", "rm -f \"$HOME/.local/state/omandroid/rotation-lock\"; systemctl --user enable --now omandroid-autorotate.service"]
+        : ["sh", "-c", "mkdir -p \"$HOME/.local/state/omandroid\" && touch \"$HOME/.local/state/omandroid/rotation-lock\""]
+      rotationWrite.running = true
+    }
+  }
+
+  Process {
+    id: rotationRead
+    // none: no accelerometer; locked: the lock file, or the service is off
+    command: ["sh", "-c",
+      "busctl get-property net.hadess.SensorProxy /net/hadess/SensorProxy net.hadess.SensorProxy HasAccelerometer 2>/dev/null | grep -q true || { echo none; exit 0; }; "
+      + "[ -e \"$HOME/.local/state/omandroid/rotation-lock\" ] && { echo locked; exit 0; }; "
+      + "systemctl --user is-active --quiet omandroid-autorotate.service && echo auto || echo locked"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var value = String(text || "").trim()
+        rotationLock.available = value === "auto" || value === "locked"
+        rotationLock.enabled = value === "locked"
+      }
+    }
+  }
+
+  Process {
+    id: rotationWrite
+    onExited: rotationLock.refresh()
   }
 
   // The rear flash LED in torch mode (leds-lm3644, white:torch). "100%" is
@@ -517,7 +571,7 @@ Item {
 
             Text {
               textFormat: Text.PlainText
-              text: Qt.formatDateTime(clock.date, "HH:mm")
+              text: Qt.formatDateTime(clock.date, root.twelveHour ? "h:mm AP" : "HH:mm")
               color: root.foreground
               font.family: Style.font.family
               font.pixelSize: Style.font.displayLarge
