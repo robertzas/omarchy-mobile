@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Suspend plan: s2idle first, then SYS_SLEEP (cheetah / gs201)
 
-Status (2026-10-12): research done and kernel side written and built offline;
-**nothing run on the phone yet**. Kernel branch `omandroid-suspend` in
+Status (2026-10-12): research done and kernel side written and built offline.
+**S0 (read-only) ran on the phone** (section 8.0, results). S1 is next. Kernel branch `omandroid-suspend` in
 `~/android/mainline/wt-suspend` (off `omandroid`, with `omandroid-acpm`
 merged in, because the RTC sits on ACPM), built into
 `~/android/mainline/out-suspend`. The runbook is section 8. The first stage
@@ -69,7 +69,7 @@ Path abbreviations (as in the other plans):
 
 ## 2. s2idle on gs201: what happens
 
-Today's default DTB has no cpuidle states, so in s2idle the CPUs sit in WFI
+Without cpuidle states (int before `741b6ed1d`), in s2idle the CPUs sit in WFI
 (`L/kernel/sched/idle.c:196-199`, `default_idle_call()`), and the last CPU
 freezes the tick and timekeeping. The arch counter is
 `CLOCK_SOURCE_SUSPEND_NONSTOP`, so time stays right.
@@ -126,7 +126,7 @@ comparison.
 | **UFS** (`ufs-exynos.c`, gs201 data) | Core default `spm_lvl` = 3: device SLEEP, link Hibern8. The gs101/gs201 vendor `suspend` (`gs101_ufs_suspend`, `L/drivers/ufs/host/ufs-exynos.c:1806-1810`) writes `HCI_GPIO_OUT = 0`, which **asserts the device reset**. Then `phy_power_off` if the link isn't active. Resume does `phy_power_on`, SMU and FMP; nothing deasserts reset, so the Hibern8 exit fails and the core's link recovery resets the host and device (`exynos_ufs_dev_hw_reset`). Stock uses `spm_lvl` 5 (device powered down, link off) for system suspend (`GS/drivers/ufs/ufs-exynos.c:702-705`), so its resume is always a full re-init, which matches the reset. | **Medium, root FS.** Stage S1 reads `spm_lvl`/`rpm_lvl` and whether the device WLUN already runtime-suspends (if it does, this reset path already runs every day). Before the first real freeze, `echo 5 > spm_lvl` (runtime, a reboot undoes it), as stock. Promote to a gs201 default only after S3 passes. `sync` before every test |
 | **Display** (simpledrm on ABL's framebuffer; `gs_dsim_cmd` + `panel-samsung-s6e3hc4` for commands and `bl_power`) | simpledrm's suspend only disables its software CRTC. DECON0 → DSIM0 → panel keep running on ABL's setup plus our `TRIG_CON` write from init (`P/device/cheetah/initramfs/init:90`), all powered (`pd_ignore_unused`). The panel driver has no PM ops. | Low for s2idle: the picture stays (a frozen picture is the visible sign of a freeze). Userspace blanks with `bl_power = 4` before sleeping and unblanks on a user wake. For SYS_SLEEP the DPU domain powers off: TRIG_CON is lost, the panel needs its full init (DISPLAY-PLAN D3b/D4c), and with stock's PWREN rails off a powered display domain stopped the wake in external tests |
 | **GPU** (Panthor, `clk_acpm`) | System sleep uses `pm_runtime_force_suspend` even though our udev rule pins runtime PM on (`P/packages/omandroid-device-cheetah/vendor/udev/rules.d/20-omandroid-gpu-always-on.rules`). `panthor_device_suspend` stops the scheduler, firmware and MMU, then devfreq, then `clk_disable`. `clk_acpm` has no gate ops, and there is no G3D PD driver, so the GPU stays powered. Resume reboots the MCU firmware. | Medium: the first run of this path. S2 watches for "FW slow reset" or job timeouts after resume |
-| **Wi-Fi** (`pcie_gs201` + brcmfmac) | brcmfmac `.suspend` sends D3_INFORM and waits 2 s for D3_ACK; on timeout it returns **-EIO and aborts the suspend** (`pcie.c:3310-3335`). `pcie-gs201` has **no PM ops**: no PME_Turn_Off, no L2, no PERST, no PHY isolation; the link stays up and the PCI core puts the endpoint in D3hot. Host wake gpa6-1 has no consumer. | **Unload Wi-Fi for stages S1-S4** (`systemctl stop omandroid-wifi`, then `modprobe -r brcmfmac pcie_gs201`). Wi-Fi across s2idle is stage S5 (section 6.3). External reports with mainline brcmfmac on this chip: the D3 ack arrives as a control-ring message and was missed until D3 completion was published only after the IRQ thread finished RX; even then about 2 in 20 s2idle resumes hung the firmware ("Failed to reserve space in commonring", then -EIO on every later suspend) |
+| **Wi-Fi** (`pcie_gs201` + brcmfmac) | brcmfmac `.suspend` sends D3_INFORM and waits 2 s for D3_ACK; on timeout it returns **-EIO and aborts the suspend** (`pcie.c:3310-3335`). **It can't work today:** our BCM4389 firmware reports shared flags `0x70050107` (version 7, no `PCIE_SHARED_USE_MAILBOX` `0x2000000`, `bcmpcie.h:103` in Google's driver), so, as in Broadcom's driver, mailbox data (D3 inform/ack, deep sleep) travels as control-ring messages (types `0x23`/`0x24`); brcmfmac writes the TCM mailbox, which this firmware ignores, and logs the replies as "Unsupported msgtype 36". Fixed on branch `omandroid-wifi-d3` (section 7). `pcie-gs201` has **no PM ops**: no PME_Turn_Off, no L2, no PERST, no PHY isolation; the link stays up and the PCI core puts the endpoint in D3hot. Host wake gpa6-1 has no consumer. | **Unload Wi-Fi for stages S1-S4** (`systemctl stop omandroid-wifi`, then `modprobe -r brcmfmac pcie_gs201`). Wi-Fi across s2idle is stage S5 (section 6.3). External reports with mainline brcmfmac on this chip: the D3 ack arrives as a control-ring message and was missed until D3 completion was published only after the IRQ thread finished RX; even then about 2 in 20 s2idle resumes hung the firmware ("Failed to reserve space in commonring", then -EIO on every later suspend) |
 | **Bluetooth** (`hci_bcm`, `samsung_tty`) | `bcm_suspend` drops BT_DEV_WAKE (gpp16-3) and arms host wake. The UART has suspend, resume and resume_noirq. | Low. For SYS_SLEEP BT_REG_ON (gpp16-2) needs stock's "previous" PDN state, or the chip loses power (BLUETOOTH-PLAN 367) |
 | **Haptics** (`cs40l26-vibra`, ours) | No PM ops. The DSP is kept out of hibernate; `play_work` on the system workqueue could hit the suspended I2C adapter (-ESHUTDOWN) if a buzz is in flight. | Low/medium. Add a suspend that stops playback and lets the DSP hibernate (Google's `cs40l26.c` PM ops) |
 | **Touch** (`synaptics_tcm`, ours) | No PM ops, no sleep command. The controller keeps scanning; its IRQ is masked as suspended and the pending ATTN replays on resume. | Power drain; add suspend = TouchComm sleep (or hold reset as stock does at screen off), resume = wake + re-read |
@@ -299,6 +299,19 @@ Notes on the PMIC work:
   and the VGPIO pending bit must be cleared. regmap-irq reads INT1-5 in one
   bulk read, and the pre-handler clears the latch.
 
+**Wi-Fi D3 (branch `omandroid-wifi-d3`, `~/android/mainline/wt-wifi-d3`, off
+`omandroid-w4` `242602382`):** `73a5c5ccf` wifi: brcmfmac: pcie: exchange
+mailbox data as control messages. For shared version >= 6 without
+`USE_MAILBOX`, H2D mailbox data goes out as `MSGBUF_TYPE_H2D_MAILBOX_DATA` on
+the control submit ring and D2H `MSGBUF_TYPE_D2H_MAILBOX_DATA` is handled; no
+D0 inform on resume (the host-ready doorbell resumes the device). The D3 ack
+is published only after RX processing (ISR thread and poll worker), so the
+suspend path can't set STATE_DOWN before the control ring's read pointer is
+written back (`brcmf_pcie_ring_mb_write_rptr()` refuses writes once DOWN).
+External tests with that ordering: 8 of 8 RTC sleep/resume cycles with
+Wi-Fi working after each. **Not compile-tested** (the tool environment
+refused the build): build it before merging.
+
 Not done here, for later branches: per-bank EINT offsets for gs201 (deep
 only); `pcie-gs201` PM ops; Synaptics and CS40L26 suspend; S2MPG12/13
 regulators; the SYS_SLEEP driver.
@@ -335,6 +348,21 @@ Stop conditions: any UFS error; any RCU stall, soft lockup or "SMC failed";
 a wake that needs the 30 s reset; an IRQ storm on the PMIC interrupt (S3);
 `state1/rejected` close to `state1/usage` across a freeze (S4).
 
+### S0 results (2026-10-12, `omandroid-int` 00186-ga0b0c0ebb3f6)
+
+- `state` "freeze mem disk"; `mem_sleep` "s2idle [deep]": the firmware's
+  SYSTEM_SUSPEND is advertised, as predicted (section 1). No `pm_test`, no
+  RTC.
+- No cpuidle at all, broadcast `bc_hrtimer`: C2 and the MCT were only on
+  `omandroid-power-on`, since merged into int (`741b6ed1d`). From now on
+  every s2idle test runs with C2, so the exynos-pmu fix (`8d820bc0a`) must
+  be in before S2.
+- UFS `spm_lvl` 3, `rpm_lvl` 3, `runtime_status` active.
+- Wake-enabled: BT serdev, `max170xx_battery`, the Wi-Fi function
+  `0000:01:00.0`, gpio-keys. `wakeup_count` 1.
+- Loaded: brcmfmac (+wcc), pcie_gs201, hci_uart, btbcm, panthor,
+  cs40l26_vibra, max17042_battery.
+
 ### S0: read-only state (current kernel, no flash)
 
 ```sh
@@ -369,8 +397,17 @@ Record in NOTES. What decides the next stages:
 
 ### S1: new kernel, dry runs with pm_test (flash)
 
-Merge `omandroid-suspend` into `omandroid-int`, add the three PM debug options
-to `kernel/configs/omandroid.config`, build and flash slot B as usual. This
+Merge order into `omandroid-int` (each merges cleanly on `741b6ed1d`, checked
+with `git merge-tree`):
+
+1. `omandroid-suspend` (`025624c64`): s2idle default, exynos-pmu hint fix,
+   S2MPG12 + RTC (node disabled).
+2. `omandroid-chgguard` (`37a83337c`, on `omandroid-usbc`, already in int):
+   the charger temperature guard, off by default (USB-C-PLAN B3g).
+3. Not yet: `omandroid-wifi-d3` (`73a5c5ccf`). Build it first; merge for S5.
+
+`kernel/configs/omandroid.config` has the PM debug options since `38358ac`.
+Build and flash slot B as usual. This
 kernel changes nothing at runtime except `mem_sleep` (now `[s2idle] deep`)
 and the new `/sys/power/pm_test`. The PMIC node is still disabled.
 
@@ -449,9 +486,10 @@ tools/phone-ssh 'systemd-run --unit=s3-test sh -c "L=/var/lib/omandroid/suspend/
 its own after 30 s with `pm_wakeup_irq` = the PMIC interrupt. If USB comes
 back by itself, S3 is also the unattended test from here on.
 
-### S4: C2 in s2idle (with the C2 overlays or `omandroid-power-on`)
+### S4: C2 in s2idle
 
-Apply `power-mct-test` + `power-c2-all-test` with the PMIC overlay. Before and
+C2 and the MCT are in the default DTB since `omandroid-power-on` was merged
+into int, so only the PMIC overlay is needed. Before and
 after one `rtcwake -m freeze -s 60`, record per CPU `state1/usage`,
 `state1/rejected`, `state1/s2idle/usage` and `state1/s2idle/time`.
 **Pass:** `s2idle/usage` grows on every CPU; `rejected` grows by a small
