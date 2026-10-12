@@ -68,6 +68,7 @@ STATE=/var/lib/omandroid-vendor/$PROFILE
 PROPS_EXTRA=$LIB/$PROFILE/props.conf
 BINDER=no
 NO_SERVICES=""
+BINS=()		# the Android binaries the profile runs (paths in the chroot)
 RUN=/run/omandroid-vendor/$PROFILE
 profile_check() { :; }
 profile_setup() { :; }
@@ -79,6 +80,35 @@ NSPID=$RUN/ns.pid
 
 LIBS_VENDOR=/vendor/lib64:/vendor/lib64/hw:/system/lib64:/omandroid/lib64
 LIBS_SYSTEM=/system/lib64:/vendor/lib64:/omandroid/lib64
+
+# Resolve a chroot path inside $IMAGE, following symlinks as the chroot would.
+in_image() {
+  local p=$IMAGE$1 t n=0
+  while [[ -L $p ]] && ((n++ < 16)); do
+    t=$(readlink "$p")
+    [[ $t == /* ]] && p=$IMAGE$t || p=$(dirname "$p")/$t
+  done
+  [[ -e $p ]] && printf '%s\n' "$p"
+}
+
+# The ELF interpreter a binary names (PT_INTERP): Android's are
+# /system/bin/linker64 or /system/bin/bootstrap/linker64, near the start.
+elf_interp() {
+  head -c 4096 "$1" | tr -c '[:print:]' '\n' |
+    grep -m1 -E '^/system/bin/(bootstrap/)?linker(64)?$' || true
+}
+
+check_bins() {
+  local b f i ok=0
+  for b in "$@"; do
+    f=$(in_image "$b")
+    if [[ -z $f ]]; then say "missing $b in $IMAGE"; ok=1; continue; fi
+    i=$(elf_interp "$f")
+    if [[ -z $i ]]; then say "$b: no Android interpreter found"; ok=1; continue; fi
+    [[ -n $(in_image "$i") ]] || { say "$b needs $i, missing from $IMAGE (re-run tools/extract-vendor-chroot)"; ok=1; }
+  done
+  return $ok
+}
 
 check() {
   local ok=1
@@ -96,6 +126,9 @@ check() {
       [[ -z $s || -f $STUBS/$s ]] || { say "no stub $STUBS/$s (vendor-chroot/Makefile)"; ok=0; }
     done < "$IMAGE/../STUBS"
   fi
+  local bins=("${BINS[@]}")
+  [[ $BINDER == yes ]] && bins+=(/system/bin/servicemanager)
+  ((${#bins[@]})) && { check_bins "${bins[@]}" || ok=0; }
   profile_check || ok=0
   ((ok)) || exit 1
   say "preconditions met"

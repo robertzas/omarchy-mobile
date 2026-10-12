@@ -280,6 +280,12 @@ for d in "${SYSTEM_DIRS[@]}"; do mkdir -p "$root/$d"; cp -a "$WORK/s/$d/." "$roo
 for f in "${RUNTIME_FILES[@]}"; do put "$WORK/r/$f" "apex/com.android.runtime/$f"; done
 mkdir -p "$root/system/bin"
 ln -sfn /apex/com.android.runtime/bin/linker64 "$root/system/bin/linker64"
+# Bootstrap binaries (servicemanager: those Android starts before the
+# runtime APEX is mounted) name /system/bin/bootstrap/linker64 as their
+# interpreter. In the chroot the runtime APEX is always there, so they get
+# the same linker as everything else, and with it the same bionic.
+mkdir -p "$root/system/bin/bootstrap"
+ln -sfn /apex/com.android.runtime/bin/linker64 "$root/system/bin/bootstrap/linker64"
 for key in "${!PICKED[@]}"; do
   dst=${PICKED[$key]}
   [[ $dst == apex/* || -e "$root/$dst" || -L "$root/$dst" ]] && continue
@@ -293,6 +299,14 @@ for n in libc.so libm.so libdl.so libdl_android.so; do
   ln -sfn "/apex/com.android.runtime/lib64/bionic/$n" "$root/system/lib64/$n"
 done
 chmod -R u+w,go-w "$root"
+
+# Every executable's interpreter (PT_INTERP) must exist inside the chroot.
+interp() { "$READELF" -lW "$1" 2>/dev/null | sed -n 's/.*\[Requesting program interpreter: \(.*\)\]/\1/p'; }
+while read -r f; do
+  i=$(interp "$f")
+  [[ -z $i ]] && continue
+  [[ -e "$root$i" || -L "$root$i" ]] || die "${f#"$root"/} needs the interpreter $i, missing from the chroot"
+done < <(find "$root/system/bin" "$root/vendor/bin" -type f 2>/dev/null)
 
 # Every symlink must resolve inside the chroot.
 while read -r l; do
