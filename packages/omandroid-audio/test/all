@@ -71,24 +71,45 @@ open(sys.argv[1], 'wb').write(b''.join(struct.pack('<6I', *r) for r in recs))
 PY
 }
 
-# One scenario in a fresh directory tree; extra VAR=value arguments are set
-# in its environment. Leaves $r (the tree) and $rc (the exit status).
-run() {
-  r=$tmp/run.$1; shift
-  rm -rf "$r"; mkdir -p "$r/asound" "$r/block/sda9" "$r/fw/cirrus" "$r/state" "$r/run"
+# One scenario in a fresh directory tree: the card (with the EP6 PCM), the
+# two amplifiers' SPI devices (runtime PM files, DT nodes), persist, the
+# firmware, a kernel log. Extra VAR=value words in prep=() go into the
+# environment. Leaves $r (the tree) and $rc (the exit status).
+mktree() {
+  r=$tmp/run.$1
+  rm -rf "$r"; mkdir -p "$r/asound/card0/pcm5p/sub0" "$r/block/sda9" "$r/fw/cirrus" "$r/state" "$r/run" \
+    "$r/spidrv" "$r/module/aoc_alsa_dev/parameters" "$r/dt/spi@10960000/amplifier@0" "$r/dt/spi@10960000/amplifier@1"
   printf ' 0 [googleaocsndcar]: aoc-snd-card - google,aoc-snd-card\n                      google,aoc-snd-card\n' > "$r/asound/cards"
+  printf 'card: 0\ndevice: 5\nsubdevice: 0\nstream: PLAYBACK\nid: EP6 playback (*)\n' > "$r/asound/card0/pcm5p/info"
+  echo closed > "$r/asound/card0/pcm5p/sub0/status"
   printf 'MAJOR=8\nMINOR=9\nDEVNAME=sda9\nPARTNAME=persist\n' > "$r/block/sda9/uevent"
   for f in cs35l41-dsp1-spk-prot-cheetah.wmfw cs35l41-dsp1-spk-prot-cheetah-top.bin cs35l41-dsp1-spk-prot-cheetah-bottom.bin; do
-    : > "$r/fw/cirrus/$f"
+    echo "$f" > "$r/fw/cirrus/$f"
   done
+  local i
+  for i in 0 1; do
+    mkdir -p "$r/spi/spi6.$i/power"
+    ln -s "$r/dt/spi@10960000/amplifier@$i" "$r/spi/spi6.$i/of_node"
+    echo auto > "$r/spi/spi6.$i/power/control"
+    echo active > "$r/spi/spi6.$i/power/runtime_status"
+  done
+  echo N > "$r/module/aoc_alsa_dev/parameters/speaker_protection"
+  : > "$r/kmsg"
   mkcal "$r/speaker.cal"
-  rc=0
+}
+sp() {  # run the script against $r
   env PATH="$fake:$PATH" FAKE_AMIXER_STATE="$r/amixer.json" FAKE_AMIXER_LOG="$r/cset.log" \
       FAKE_MODPROBE_LOG="$r/modprobe.log" FAKE_CAL="$r/speaker.cal" \
       OMANDROID_ASOUND="$r/asound" OMANDROID_SYSBLOCK="$r/block" OMANDROID_DEVDIR="$r/dev" \
       OMANDROID_FW_DIRS="$r/fw" OMANDROID_STATE="$r/state" OMANDROID_RUN="$r/run" \
-      OMANDROID_CARD_WAIT=1 OMANDROID_CTL_WAIT=1 "${prep[@]}" \
-      bin/omandroid-speaker-protection start > "$r/out" 2>&1 || rc=$?
+      OMANDROID_SPIDEVS="$r/spi" OMANDROID_SPIDRV="$r/spidrv" OMANDROID_SYSMODULE="$r/module" \
+      OMANDROID_KMSG="$r/kmsg" OMANDROID_AUDIO_LIB="$here/lib" OMANDROID_CTL_BACKEND="json:$r/amixer.json" \
+      OMANDROID_CARD_WAIT=1 OMANDROID_CTL_WAIT=1 "${prep[@]}" bin/omandroid-speaker-protection "$@"
+}
+run() {
+  mktree "$1"
+  rc=0
+  sp start > "$r/out" 2>&1 || rc=$?
   prep=()
 }
 prep=()
@@ -96,6 +117,15 @@ prep=()
 amx() { FAKE_AMIXER_STATE="$r/amixer.json" FAKE_AMIXER_LOG="$r/cset.log" test/fake-amixer -c 0 "$@"; }
 val() { amx cget "name=$1" | sed -n 's/^ *: values=//p'; }
 muted() { [[ $(val "Top Digital PCM Volume") == 0 && $(val "Bottom Digital PCM Volume") == 0 ]]; }
+# set a DSP word (by key, through the wm_adsp naming)
+dspset() {  # AMP KEY VALUE
+  local n
+  n=$(amx controls | sed -n "s/^numid=1,iface=MIXER,name='\($1 DSP1 .*\)'\$/\1/p" | grep -E "[ _]${2#BDLOG_}\$|$2\$" | head -n1)
+  amx cset "name=$n" "$(printf '0x%02x,0x%02x,0x%02x,0x%02x' $(($3 >> 24 & 255)) $(($3 >> 16 & 255)) $(($3 >> 8 & 255)) $(($3 & 255)))" >/dev/null
+}
+# a kernel log record at kernel time T seconds
+kmsg() { printf '3,%d,%d,-;%s\n' "$RANDOM" "$(python3 -c "print(int(($1) * 1e6))")" "$2" >> "$r/kmsg"; }
+uptime_now() { python3 -c 'import time; print(time.monotonic())'; }
 
 run ok
 ((rc == 0)) || { cat "$r/out" >&2; fail "start succeeds"; }
@@ -111,73 +141,224 @@ run ok
 [[ $(head -n2 "$r/cset.log") == $'Top Digital PCM Volume=0\nBottom Digital PCM Volume=0' ]] || fail "the first thing it does is mute"
 [[ $(tail -n2 "$r/cset.log") == $'Top Digital PCM Volume=657\nBottom Digital PCM Volume=657' ]] || fail "the last thing it does is unmute"
 grep -c '^snd_soc_cs35l41_spi$' "$r/modprobe.log" >/dev/null || fail "loads the amplifier driver"
+[[ $(cat "$r/spi/spi6.0/power/control") == on && $(cat "$r/spi/spi6.1/power/control") == on ]] || fail "holds both amplifiers awake"
+grep -c '^healthy' "$r/out" >/dev/null || fail "health check before unmute"
 [[ ! -e $r/state/speaker-protection-started ]] || fail "removes the hang marker"
-[[ $(cat "$r/run/speaker-protection") == ok:* ]] || fail "status ok"
+[[ $(cat "$r/run/speaker-protection") == "ok: stage c8"* ]] || fail "status ok"
 if grep -E '0x20|8192|8448|2000|2100' "$r/out"; then fail "logs no calibration values"; fi
-pass "start: calibration per amplifier, DSP routing, unmute last, nothing logged"
+pass "start: amplifiers held awake, calibration per amplifier, DSP routing, health, unmute last, nothing logged"
 
-prep=(OMANDROID_SPK_DIGITAL=600 OMANDROID_SPK_ANALOG=10); run levels
-((rc == 0)) && [[ $(val "Bottom Digital PCM Volume") == 600 && $(val "Top Analog PCM Volume") == 10 ]] || fail "configured levels"
-pass "configured levels within the ceilings"
+prep=(OMANDROID_SPK_DIGITAL=600 OMANDROID_SPK_BOTTOM_ANALOG=10); run levels
+((rc == 0)) && [[ $(val "Bottom Digital PCM Volume") == 600 && $(val "Bottom Analog PCM Volume") == 10 && $(val "Top Analog PCM Volume") == 6 ]] || fail "configured levels"
+prep=(OMANDROID_SPK_TOP_DIGITAL=500 OMANDROID_SPK_BOTTOM_ANALOG=9); run per-amp
+((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 500 && $(val "Bottom Digital PCM Volume") == 657 &&
+  $(val "Bottom Analog PCM Volume") == 9 && $(val "Top Analog PCM Volume") == 6 ]] || fail "per-amplifier levels"
+pass "configured levels within the ceilings, per amplifier too"
 
 check_refused() {  # name, then the scenario ran
   ((rc == 1)) || { cat "$r/out" >&2; fail "$1: start fails"; }
   muted || fail "$1: both amplifiers muted"
-  [[ $(val "Top PCM Source") == 0 ]] || fail "$1: PCM Source left alone"
   [[ $(cat "$r/run/speaker-protection") == muted:* ]] || fail "$1: status muted"
   [[ ! -e $r/state/speaker-protection-started ]] || fail "$1: marker removed after a clean failure"
 }
-prep=(OMANDROID_SPK_DIGITAL=700); run digital-ceiling; check_refused "digital above 657"
-prep=(OMANDROID_SPK_DIGITAL=0); run digital-zero; check_refused "digital 0"
-prep=(OMANDROID_SPK_ANALOG=11); run analog-ceiling; check_refused "analog above 10"
-prep=(FAKE_DIGITAL_MAX=913); run no-kernel-limit; check_refused "kernel digital limit missing"
-prep=(FAKE_ANALOG_MAX=17); run analog-limit; check_refused "kernel analog limit above 10"
+check_refused_early() { check_refused "$1"; [[ $(val "Top PCM Source") == 0 ]] || fail "$1: PCM Source left alone"; }
+prep=(OMANDROID_SPK_DIGITAL=700); run digital-ceiling; check_refused_early "digital above 657"
+prep=(OMANDROID_SPK_DIGITAL=0); run digital-zero; check_refused_early "digital 0"
+prep=(OMANDROID_SPK_ANALOG=11); run analog-ceiling; check_refused_early "analog above 10"
+prep=(OMANDROID_SPK_TOP_ANALOG=7); run top-analog-ceiling; check_refused_early "top analog above 6 (earpiece)"
+prep=(OMANDROID_SPK_BOTTOM_ANALOG=12); run bottom-analog-ceiling; check_refused_early "bottom analog above 10"
+prep=(FAKE_DIGITAL_MAX=913); run no-kernel-limit; check_refused_early "kernel digital limit missing"
+prep=(FAKE_ANALOG_MAX=17); run analog-limit; check_refused_early "kernel analog limit above 10 without speaker_protection"
+prep=(OMANDROID_SPK_STAGE=c7); run bad-stage; check_refused_early "unknown stage"
 pass "refuses levels above the ceilings and kernels without the limits, muted"
 
 # a firmware directory with the bottom tuning missing
 prep=(OMANDROID_FW_DIRS=$tmp/emptyfw); mkdir -p "$tmp/emptyfw/cirrus"
 : > "$tmp/emptyfw/cirrus/cs35l41-dsp1-spk-prot-cheetah.wmfw"
 : > "$tmp/emptyfw/cirrus/cs35l41-dsp1-spk-prot-cheetah-top.bin"
-run no-bin; check_refused "bottom tuning missing"
+run no-bin; check_refused_early "bottom tuning missing"
 grep -c 'cheetah-bottom.bin' "$r/out" >/dev/null || fail "names the missing tuning"
-prep=(FAKE_NO_DSP=1); run no-dsp; check_refused "firmware did not load"
+prep=(FAKE_NO_DSP=1); run no-dsp; check_refused_early "firmware did not load"
 pass "refuses without the firmware or its tunings, muted"
 
-mkcal "$tmp/bad.cal" badsum; prep=(FAKE_CAL=$tmp/bad.cal); run badsum; check_refused "bad checksum"
-mkcal "$tmp/uncal.cal" uncal; prep=(FAKE_CAL=$tmp/uncal.cal); run uncal; check_refused "status not 1"
-: > "$tmp/short.cal"; prep=(FAKE_CAL=$tmp/short.cal); run short; check_refused "short file"
+mkcal "$tmp/bad.cal" badsum; prep=(FAKE_CAL=$tmp/bad.cal); run badsum; check_refused_early "bad checksum"
+mkcal "$tmp/uncal.cal" uncal; prep=(FAKE_CAL=$tmp/uncal.cal); run uncal; check_refused_early "status not 1"
+: > "$tmp/short.cal"; prep=(FAKE_CAL=$tmp/short.cal); run short; check_refused_early "short file"
 pass "refuses a missing, short or invalid calibration, muted"
 
+# Runtime PM: an amplifier that cannot be held awake, then kernel log errors
+mktree pm-stuck; echo suspended > "$r/spi/spi6.1/power/runtime_status"; chmod a-w "$r/spi/spi6.1/power/control"
+rc=0; sp start > "$r/out" 2>&1 || rc=$?
+check_refused_early "an amplifier not held awake"
+grep -c 'not held awake' "$r/out" >/dev/null || fail "names the amplifier not held awake"
+mktree kmsg-old; kmsg 1.0 'cs35l41 spi6.0: Wake failed, re-enter hibernate: -42'
+rc=0; sp start > "$r/out" 2>&1 || rc=$?
+((rc == 0)) || { cat "$r/out" >&2; fail "an amplifier error from before this start is not held against it"; }
+# an error logged while the service starts (stand-in: a kernel log time in the future)
+mktree kmsg-new; kmsg "$(uptime_now) + 100" 'cs35l41 spi6.1: CSPL Error Detected'
+rc=0; sp start > "$r/out" 2>&1 || rc=$?
+check_refused "an amplifier error since the start"
+grep -c 'CSPL Error Detected' "$r/out" >/dev/null || fail "names the kernel log line"
+mktree kmsg-warn; kmsg "$(uptime_now) + 100" 'cs35l41 spi6.0: Failed to set mailbox cmd 1 (status 0)'
+rc=0; sp start > "$r/out" 2>&1 || rc=$?
+((rc == 0)) || fail "an unacknowledged pause is a note, not a failure"
+pass "holds the amplifiers awake or refuses; refuses on amplifier errors in the kernel log since the start"
+
+# Restart with the driver already bound: rebind both (a chip reset), then set up again
+mktree rebind; touch "$r/spidrv/spi6.0" "$r/spidrv/spi6.1"
+rc=0; sp start > "$r/out" 2>&1 || rc=$?
+((rc == 0)) || { cat "$r/out" >&2; fail "restart succeeds"; }
+[[ $(cat "$r/spidrv/unbind" 2>/dev/null | tr '\n' ' ') == "spi6.0 spi6.1 " || -s $r/spidrv/unbind ]] || fail "unbinds both"
+[[ -s $r/spidrv/bind ]] || fail "binds again"
+[[ ! -e $r/modprobe.log ]] || fail "no modprobe when bound"
+pass "restart rebinds both amplifiers, then sets them up again"
+
 # A hang marker from an earlier boot: no driver load, no card touched
-r=$tmp/run.marker
-run marker  # prepares the tree
-mkdir -p "$r/state"; echo 2026-01-01T00:00:00 > "$r/state/speaker-protection-started"
-rm -f "$r/modprobe.log" "$r/amixer.json" "$r/cset.log"
-rc=0
-env PATH="$fake:$PATH" FAKE_AMIXER_STATE="$r/amixer.json" FAKE_AMIXER_LOG="$r/cset.log" FAKE_MODPROBE_LOG="$r/modprobe.log" \
-    FAKE_CAL="$r/speaker.cal" OMANDROID_ASOUND="$r/none" OMANDROID_STATE="$r/state" OMANDROID_RUN="$r/run" \
-    bin/omandroid-speaker-protection start > "$r/out" 2>&1 || rc=$?
+mktree marker; echo 2026-01-01T00:00:00 > "$r/state/speaker-protection-started"
+rc=0; prep=(OMANDROID_ASOUND=$r/none); sp start > "$r/out" 2>&1 || rc=$?; prep=()
 ((rc == 1)) || fail "marker: start fails"
 [[ ! -e $r/modprobe.log ]] || fail "marker: the amplifier driver is not loaded"
 [[ -e $r/state/speaker-protection-started ]] || fail "marker: kept for the human"
 pass "a hang marker from the last boot keeps the amplifiers off"
 
-# status and mute
+# --- the watchdog ----------------------------------------------------------------
+watchrun() {  # name: run the watchdog briefly on a healthy started tree; $1 hook runs before
+  prep=(OMANDROID_WATCH_INTERVAL=0.05 OMANDROID_WATCH_GRACE=0.1 OMANDROID_WATCH_HB_TIMEOUT=0.3
+        OMANDROID_WATCH_ITERATIONS=${WATCH_N:-20} "${wprep[@]}")
+  rc=0; sp watch > "$r/watch.out" 2>&1 || rc=$?
+  prep=(); wprep=()
+}
+wprep=()
+startok() { run "$1"; ((rc == 0)) || { cat "$r/out" >&2; fail "$1: start"; }; }
+startok w-idle; watchrun
+((rc == 0)) && ! muted || { cat "$r/watch.out" >&2; fail "watchdog: idle and healthy, nothing happens"; }
+startok w-run; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; watchrun
+((rc == 0)) && ! muted || { cat "$r/watch.out" >&2; fail "watchdog: playing and healthy, nothing happens"; }
+startok w-cspl; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; dspset Bottom CSPL_STATE 1; watchrun
+((rc == 1)) && muted || { cat "$r/watch.out" >&2; fail "watchdog: CSPL error state mutes"; }
+[[ $(cat "$r/run/speaker-protection") == "muted: watchdog: Bottom: CSPL_STATE 1 (error)"* ]] || fail "watchdog: says why"
+startok w-cal; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; dspset Top CAL_SET_STATUS 1; watchrun
+((rc == 1)) && muted || fail "watchdog: calibration not applied mutes"
+startok w-src; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; amx cset "name=Top PCM Source" ASP >/dev/null; watchrun
+((rc == 1)) && muted || fail "watchdog: DSP bypass mutes"
+startok w-level; amx cset "name=Bottom Digital PCM Volume" 700 >/dev/null; watchrun
+((rc == 1)) && muted || fail "watchdog: a level above the ceiling mutes, even idle"
+startok w-pm; echo auto > "$r/spi/spi6.0/power/control"; watchrun
+((rc == 1)) && muted || fail "watchdog: an amplifier no longer held awake mutes"
+startok w-hb8; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; wprep=(FAKE_HB_STUCK=1); watchrun
+((rc == 0)) && ! muted && grep -c 'stuck' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: a stuck heartbeat is logged in stage c8"; }
+startok w-hb9; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; wprep=(FAKE_HB_STUCK=1 OMANDROID_SPK_STAGE=c9); watchrun
+((rc == 1)) && muted || fail "watchdog: a stuck heartbeat mutes in stage c9"
+# a kernel log error after the watchdog started
+startok w-kmsg
+( sleep 0.4; kmsg 1.0 'cs35l41 spi6.1: Wake failed, re-enter hibernate: -42' ) &
+WATCH_N=40 watchrun; wait
+((rc == 1)) && muted || { cat "$r/watch.out" >&2; fail "watchdog: a failed wake in the kernel log mutes"; }
+startok w-kmsg-warn
+( sleep 0.4; kmsg 1.0 'cs35l41 spi6.0: Failed to set mailbox cmd 1 (status 0)' ) &
+WATCH_N=20 watchrun; wait
+((rc == 0)) && ! muted || fail "watchdog: an unacknowledged pause is logged only"
+pass "watchdog: mutes on DSP errors, bypass, levels, runtime PM, a stuck heartbeat (c9) and kernel log failures"
+
+# stock's media delta at stream start (made-up words in the stock format)
+startok w-delta; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+echo '4,768,1236,222608' > "$r/fw/cirrus/cs35l41-cheetah-top-media-delta.txt"
+echo '4, 768,1236,222609' > "$r/fw/cirrus/cs35l41-cheetah-bottom-media-delta.txt"
+wprep=(OMANDROID_SPK_MEDIA_DELTA=1 FAKE_DELTA_LOG=$r/delta.log); watchrun
+((rc == 0)) && ! muted || { cat "$r/watch.out" >&2; fail "watchdog: media delta, then healthy"; }
+[[ $(wc -l < "$r/delta.log") == 2 ]] || fail "watchdog: the media delta goes to both amplifiers once per stream"
+n=$(amx controls | sed -n "s/^numid=1,iface=MIXER,name='\(Bottom DSP1 .*PARAMS_CONFIG\)'\$/\1/p")
+[[ $(val "$n") == 0x00,0x00,0x00,0x04,0x00,0x00,0x03,0x00,0x00,0x00,0x04,0xd4,0x00,0x03,0x65,0x91,0x00,* ]] || { val "$n" >&2; fail "watchdog: the delta words, big-endian, rest kept"; }
+startok w-delta-missing; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+wprep=(OMANDROID_SPK_MEDIA_DELTA=1); watchrun
+((rc == 1)) && muted || fail "watchdog: media delta enabled but missing mutes"
+pass "watchdog: stock media delta at stream start, both amplifiers, or mute"
+
+# --- verify and stage c9 -----------------------------------------------------------
+startok verify; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+rc=0; prep=(OMANDROID_VERIFY_SECONDS=0.5 OMANDROID_VERIFY_INTERVAL=0.1); sp verify > "$r/v.out" 2>&1 || rc=$?; prep=()
+((rc == 0)) && [[ -s $r/state/speaker-protection-verified ]] || { cat "$r/v.out" >&2; fail "verify passes and writes the stamp"; }
+cp "$r/state/speaker-protection-verified" "$tmp/stamp"
+startok verify-idle
+rc=0; prep=(OMANDROID_VERIFY_SECONDS=0.3); sp verify > "$r/v.out" 2>&1 || rc=$?; prep=()
+((rc == 1)) && [[ ! -e $r/state/speaker-protection-verified ]] || fail "verify needs playback"
+startok verify-swap; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; dspset Bottom CSPL_TEMPERATURE $((40 * 16384))
+rc=0; prep=(OMANDROID_VERIFY_SECONDS=0.3 OMANDROID_VERIFY_INTERVAL=0.1); sp verify > "$r/v.out" 2>&1 || rc=$?; prep=()
+((rc == 1)) && grep -c 'differ' "$r/v.out" >/dev/null || { cat "$r/v.out" >&2; fail "verify refuses coil temperatures far apart"; }
+pass "verify: passes on a healthy playing pair, needs playback, catches swapped calibration"
+
+c9() {  # name, then prep for the tree: param, stamp
+  mktree "$1"
+  [[ ${2:-} == noparam ]] || echo Y > "$r/module/aoc_alsa_dev/parameters/speaker_protection"
+  [[ ${3:-} == nostamp ]] || cp "$tmp/stamp" "$r/state/speaker-protection-verified"
+  rc=0
+  prep=(OMANDROID_SPK_STAGE=c9 OMANDROID_SPK_DIGITAL=817 OMANDROID_SPK_ANALOG=17 FAKE_ANALOG_MAX=17 "${c9prep[@]}")
+  sp start > "$r/out" 2>&1 || rc=$?
+  prep=(); c9prep=()
+}
+c9prep=()
+c9 c9-ok
+((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 817 && $(val "Bottom Analog PCM Volume") == 17 ]] || { cat "$r/out" >&2; fail "stage c9 at stock levels"; }
+c9 c9-noparam noparam; check_refused_early "c9 without speaker_protection=1"
+c9 c9-nostamp '' nostamp; check_refused_early "c9 without a stamp"
+mktree tmpfw; c9prep=(OMANDROID_FW_DIRS=$tmp/otherfw); mkdir -p "$tmp/otherfw/cirrus"
+for f in "$r"/fw/cirrus/*; do echo changed > "$tmp/otherfw/cirrus/${f##*/}"; done
+c9 c9-otherfw; check_refused_early "c9 with a stamp for other firmware"
+prep=(OMANDROID_SPK_ANALOG=11); mktree c8-param; echo Y > "$r/module/aoc_alsa_dev/parameters/speaker_protection"
+rc=0; prep=(OMANDROID_SPK_ANALOG=11 FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+check_refused_early "c8 keeps analog at 10 even with speaker_protection=1"
+pass "stage c9: stock levels only with speaker_protection=1 and a stamp for this firmware"
+
+# status, health and mute
 r=$tmp/run.ok
-out=$(env PATH="$fake:$PATH" FAKE_AMIXER_STATE="$r/amixer.json" FAKE_AMIXER_LOG="$r/cset.log" FAKE_CAL="$r/speaker.cal" \
-      OMANDROID_ASOUND="$r/asound" OMANDROID_SYSBLOCK="$r/block" OMANDROID_DEVDIR="$r/dev" OMANDROID_RUN="$r/run" \
-      OMANDROID_STATE="$r/state" bin/omandroid-speaker-protection status)
-[[ $out == *"Top: PCM Source DSP, Digital 657 (max 817), Analog 6 (max 10)"* ]] || { echo "$out" >&2; fail "status"; }
+out=$(sp status)
+[[ $out == *"Top (spi6.0, power/control on, active): PCM Source DSP, Digital 657 (max 817), Analog 6 (max 10)"* ]] || { echo "$out" >&2; fail "status"; }
 [[ $out == *"calibration in the DSP vs persist: match"* ]] || fail "status compares the calibration"
+[[ $out == *"temp 25.01 C"* ]] || { echo "$out" >&2; fail "status decodes the coil temperature (Q14)"; }
 if grep -E '0x20|8192|8448' <<<"$out"; then fail "status prints no calibration values"; fi
-env PATH="$fake:$PATH" FAKE_AMIXER_STATE="$r/amixer.json" FAKE_AMIXER_LOG="$r/cset.log" \
-    OMANDROID_ASOUND="$r/asound" OMANDROID_RUN="$r/run" bin/omandroid-speaker-protection mute >/dev/null || fail "mute"
+sp health >/dev/null || fail "health"
+sp mute >/dev/null || fail "mute"
 muted || fail "mute mutes both"
-pass "status (no values) and mute"
+pass "status (decoded, no calibration values), health and mute"
+
+# test signals
+python3 -I lib/speaker_dsp.py signal multitone "$tmp/m.wav" --level -20 --seconds 1
+python3 -I lib/speaker_dsp.py signal tone "$tmp/t.wav" --level -20 --seconds 0.5 --channels right
+python3 - "$tmp/m.wav" "$tmp/t.wav" <<'PY' || fail "test signals"
+import array, math, sys, wave
+def stats(p):
+    w = wave.open(p); a = array.array('h', w.readframes(w.getnframes()))
+    l, r = a[0::2], a[1::2]
+    rms = lambda x: math.sqrt(sum(v * v for v in x) / len(x)) / 32767
+    return max(abs(v) for v in a) / 32767, rms(l), rms(r)
+pk, l, r = stats(sys.argv[1])
+assert pk <= 10 ** (-1 / 20) + 1e-3, pk                 # never above -1 dBFS
+assert abs(20 * math.log10(l) + 20) < 1.0, l            # about -20 dBFS RMS
+pk, l, r = stats(sys.argv[2])
+assert l == 0 and abs(20 * math.log10(r) + 20) < 0.5
+PY
+pass "test signals: multitone at its RMS level with peaks below -1 dBFS, one-sided tone"
+
+# the real alsa-lib path, against any card this machine has (read-only)
+if [[ -e /dev/snd/controlC0 ]]; then
+  python3 -I - "$here/lib" <<'PY' || fail "alsa-lib control access"
+import sys
+sys.path.insert(0, sys.argv[1])
+import speaker_dsp as d
+c = d.AlsaCtl(0)
+names = c.names()
+assert names, 'no controls'
+read = [n for n in names[:40] if c.read(n) is not None]
+assert read, 'nothing readable'
+PY
+  pass "alsa-lib control access (ctypes) lists and reads a real card"
+fi
 
 # --- install ---------------------------------------------------------------------
 ./install "$tmp/root"
 for f in usr/bin/omandroid-speaker-protection usr/lib/systemd/system/omandroid-speaker-protection.service \
+         usr/lib/systemd/system/omandroid-speaker-watch.service usr/lib/omandroid-audio/speaker_dsp.py \
+         usr/lib/udev/rules.d/70-omandroid-cs35l41.rules \
          usr/lib/modprobe.d/omandroid-audio.conf etc/omandroid/speaker.conf \
          usr/share/alsa/ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf usr/share/alsa/ucm2/Google/cheetah/HiFi.conf \
          usr/share/wireplumber/wireplumber.conf.d/51-omandroid-aoc.conf; do

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# The speaker protection watchdog (AOC-PLAN.md C8f/C9): mutes both amplifiers
+# if their protection stops working (kernel log errors from the amplifiers,
+# the amplifiers no longer held awake, levels above the stage's ceilings, or,
+# during playback, a DSP that is not running the protection firmware with the
+# calibration applied). Started by omandroid-speaker-protection.service and
+# bound to it; when it stops, for any reason, the amplifiers are muted.
+[Unit]
+Description=Speaker protection watchdog
+BindsTo=omandroid-speaker-protection.service
+After=omandroid-speaker-protection.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/omandroid/speaker.conf
+ExecStart=/usr/bin/omandroid-speaker-protection watch
+ExecStopPost=/usr/bin/omandroid-speaker-protection mute --reason "the speaker watchdog stopped"
+Restart=no

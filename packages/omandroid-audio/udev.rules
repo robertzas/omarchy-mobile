@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+# The speaker amplifiers (AOC-PLAN.md C8f): keep them out of runtime suspend
+# from the moment the driver binds. Once their DSP has run, the mainline
+# cs35l41 driver hibernates it on runtime suspend, and the stock protection
+# firmware does not wake from that (the speaker PCM then fails to open). The
+# kernel's cirrus,dsp-no-hibernate does the same; this covers kernels without it.
+ACTION=="bind", SUBSYSTEM=="spi", DRIVER=="cs35l41", ATTR{power/control}="on"

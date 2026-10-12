@@ -9,6 +9,9 @@ d=${1:?Usage: ./install DESTDIR}
 [[ $d == /* && $d != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
 install -Dm755 bin/omandroid-speaker-protection "$d/usr/bin/omandroid-speaker-protection"
 install -Dm644 systemd/omandroid-speaker-protection.service "$d/usr/lib/systemd/system/omandroid-speaker-protection.service"
+install -Dm644 systemd/omandroid-speaker-watch.service "$d/usr/lib/systemd/system/omandroid-speaker-watch.service"
+install -Dm644 lib/speaker_dsp.py "$d/usr/lib/omandroid-audio/speaker_dsp.py"
+install -Dm644 udev.rules "$d/usr/lib/udev/rules.d/70-omandroid-cs35l41.rules"
 install -Dm644 modprobe.d/omandroid-audio.conf "$d/usr/lib/modprobe.d/omandroid-audio.conf"
 install -Dm644 speaker.conf "$d/etc/omandroid/speaker.conf"
 install -Dm644 ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf "$d/usr/share/alsa/ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf"

@@ -14,6 +14,7 @@
 Description=Speaker amplifiers with protection firmware and factory calibration (hang-safe)
 Requires=omandroid-aoc.service
 After=omandroid-aoc.service
+Wants=omandroid-speaker-watch.service
 Before=systemd-user-sessions.service
 ConditionPathExists=/sys/bus/platform/devices/181d0000.aoc
 
@@ -21,6 +22,8 @@ ConditionPathExists=/sys/bus/platform/devices/181d0000.aoc
 Type=oneshot
 RemainAfterExit=yes
 EnvironmentFile=-/etc/omandroid/speaker.conf
+# start is also the recovery: with the driver already bound it rebinds both
+# amplifiers (a chip reset) before setting them up again
 ExecStart=/usr/bin/omandroid-speaker-protection start
 ExecStop=/usr/bin/omandroid-speaker-protection mute
 TimeoutStartSec=60
