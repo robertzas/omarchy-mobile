@@ -2371,7 +2371,7 @@ What a failure looks like:
 ### 9.15 W3: association fails, "join" needs the versioned layout (2026-10-12)
 
 **W3 on the integration kernel (00126):** the scan works, and
-`nmcli --ask dev wifi connect nevermore` stores the profile. Then every
+`nmcli --ask dev wifi connect <SSID>` stores the profile. Then every
 attempt logs `brcmf_cfg80211_connect: BRCMF_C_SET_SSID failed (-52)` and
 NetworkManager reports "ssid-not-found". There is no trap.
 - -52 is `-EBADE`, brcmfmac's code for "the firmware returned an error"
@@ -2413,8 +2413,8 @@ Build: `logs/{kernel,modules,images}-w3join.log`, wt-pcie release
    firmware's error string for the failing join.**
    ```sh
    tools/phone-ssh 'modprobe -r brcmfmac_wcc brcmfmac; modprobe brcmfmac debug=0x1000; sleep 8;
-     nmcli con up nevermore; sleep 10; dmesg | grep -E "Firmware error|SET_SSID|join" | tail -20'
-   nmcli con modify nevermore connection.autoconnect no   # (on the phone) keep it from retrying
+     nmcli con up <SSID>; sleep 10; dmesg | grep -E "Firmware error|SET_SSID|join" | tail -20'
+   nmcli con modify <SSID> connection.autoconnect no   # (on the phone) keep it from retrying
    ```
    Expect `brcmf_fil_cmd_data: Firmware error: BCME_BADLEN` (or
    `BADARG`) for "join" and for `WLC_SET_SSID`. A different error (e.g.
@@ -2425,7 +2425,7 @@ Build: `logs/{kernel,modules,images}-w3join.log`, wt-pcie release
    ```sh
    # after merging and pushing your integration kernel, with Wi-Fi loaded as before:
    tools/phone-ssh 'dmesg | grep -i "enabling firmware feature: JOIN_V1"'   # needs debug=0x4 at load
-   tools/phone-ssh -t 'nmcli con up nevermore'
+   tools/phone-ssh -t 'nmcli con up <SSID>'
    tools/phone-ssh 'dmesg | grep -E "join \\(v1|SET_SSID|Firmware error" | tail; nmcli -t -f GENERAL.STATE,IP4.ADDRESS dev show wlp1s0'
    ```
    - **Pass:** no "join (v1 ...) failed" and no `SET_SSID failed`;
@@ -2436,7 +2436,7 @@ Build: `logs/{kernel,modules,images}-w3join.log`, wt-pcie release
    - **Associated but the 4-way handshake fails:** try
      `feature_disable=0x82000` (9.14).
    - **Rollback:** `nmcli dev disconnect wlp1s0`, then
-     `nmcli con modify nevermore connection.autoconnect no`.
+     `nmcli con modify <SSID> connection.autoconnect no`.
 
 ### 9.16 W3: the join works, the 4-way handshake does not (2026-10-12)
 
@@ -2503,13 +2503,13 @@ tools/phone-ssh 'modprobe -r brcmfmac_wcc brcmfmac; modprobe brcmfmac debug=0x1c
   dmesg | grep -E "HOST_SFHLLC|JOIN_V1|Firmware: BCM4389"'
 #   pass: "enabling feature: HOST_SFHLLC" (needs 0x4 in the mask for that line; optional), firmware line
 # C1 connect, stream the log (second terminal: tools/phone-ssh dmesg -w > logs/w3-eapol-$(date +%H%M).txt)
-tools/phone-ssh -t 'nmcli con up nevermore'
+tools/phone-ssh -t 'nmcli con up <SSID>'
 # C2 afterwards
 tools/phone-ssh 'dmesg | grep -E "EAPOL|poll: mailboxint|Timeout on response|Failed to reserve|CONSOLE.*(TRAP|trap|ASSERT)|join \(v1" | tail -60;
   nmcli -t -f GENERAL.STATE,IP4.ADDRESS dev show wlp1s0; journalctl -u wpa_supplicant --since "-3min" | tail -20'
 # if the control ring is stuck again: the index state and the firmware console right then
 tools/phone-ssh 'dmesg | grep -E "dump_indices|dump_dma|CONSOLE" | tail -40'
-# rollback: nmcli dev disconnect wlp1s0; nmcli con modify nevermore connection.autoconnect no
+# rollback: nmcli dev disconnect wlp1s0; nmcli con modify <SSID> connection.autoconnect no
 ```
 
 | Line / state | Pass | Meaning if not |
@@ -2649,7 +2649,7 @@ tools/phone-ssh 'modprobe pcie_gs201_sysmmu; dmesg | grep gs201-pcie-sysmmu'
 tools/phone-ssh 'modprobe -r pcie_gs201_sysmmu; modprobe pcie_gs201_sysmmu mode=1; dmesg | grep gs201-pcie-sysmmu | tail -4'
 #   pass: "allowing 0x00000000ff000000..0x0000000100000000 (16 sections)", "enforcing: … VID 1 ctrl 0x…1 …"
 tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
-tools/phone-ssh -t 'nmcli con up nevermore'; tools/phone-ssh 'curl -o /dev/null -w "%{speed_download}\n" https://speed.cloudflare.com/__down?bytes=50000000; dmesg | grep -c "blocked"'
+tools/phone-ssh -t 'nmcli con up <SSID>'; tools/phone-ssh 'curl -o /dev/null -w "%{speed_download}\n" https://speed.cloudflare.com/__down?bytes=50000000; dmesg | grep -c "blocked"'
 #   pass: connects, ~19 MB/s as in W3, 0 "blocked" lines
 #   "blocked … at 0x…" during normal use: some buffer lives outside the pool: send the line
 # F4 ⚠ the negative test (mode=2, empty table): proves VID 1 really carries the Wi-Fi DMA
@@ -2808,7 +2808,7 @@ tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
 reset_wifi; tools/phone-ssh 'modprobe pcie_gs201_sysmmu mode=1 vids=<1<<n>; dmesg | grep gs201-pcie-sysmmu | tail -4'
 #   expect: "allowing 0x…ff000000..0x…100000000 (16 sections)", "table at 0x… (outside the window)"
 tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
-tools/phone-ssh -t 'nmcli con up nevermore'; tools/phone-ssh 'curl -o /dev/null -w "%{speed_download}\n" https://speed.cloudflare.com/__down?bytes=50000000; dmesg | grep -c "blocked"'
+tools/phone-ssh -t 'nmcli con up <SSID>'; tools/phone-ssh 'curl -o /dev/null -w "%{speed_download}\n" https://speed.cloudflare.com/__down?bytes=50000000; dmesg | grep -c "blocked"'
 #   pass: connects, ~19-21 MB/s, 0 "blocked"
 # rollback: reset_wifi; modprobe pcie_gs201_sysmmu (mode=0), or cp "$D.default" "$D" + the two test overlays
 ```
@@ -2937,7 +2937,7 @@ default DTB with no overlays.
 # build/push the int kernel as usual (no DTB overlays for Wi-Fi any more), then:
 bin/omandroid modules-push && bin/omandroid push          # reboots
 # install omandroid-device-cheetah 0.1.12 on the phone (your usual package path), then
-tools/phone-ssh 'nmcli con modify nevermore connection.autoconnect yes'
+tools/phone-ssh 'nmcli con modify <SSID> connection.autoconnect yes'
 tools/phone-ssh 'systemctl reboot'
 
 # boot 1 (repeat for boot 2)
@@ -2947,7 +2947,7 @@ tools/phone-ssh 'uname -r; systemctl is-enabled omandroid-wifi; systemctl status
   dmesg | grep -cE "Invalid chanspec|WARNING"; nmcli -t -f DEVICE,STATE,CONNECTION dev | grep -i wl'
 #   pass: enabled; "omandroid-wifi: up: wlp1s0" (or the renamed interface); no marker file;
 #         pcie_gs201 + brcmfmac loaded, pcie_gs201_sysmmu NOT loaded; the pool assigned to
-#         0000:01:00.0; 0 "Invalid chanspec"; NetworkManager connected to nevermore
+#         0000:01:00.0; 0 "Invalid chanspec"; NetworkManager connected to <SSID>
 tools/phone-ssh 'curl -o /dev/null -w "%{speed_download}\n" https://speed.cloudflare.com/__down?bytes=50000000'
 #   pass: ~19-21 MB/s
 # if a boot hangs: after the watchdog reset, Wi-Fi is skipped and the journal says
