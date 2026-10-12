@@ -1610,3 +1610,73 @@ a 30 s Power hold, then boot the default DTB (9.5).
 - Nothing is written to the chip's OTP or to any phone partition other than
   the boot images; the firmware files stay in `/usr/lib/firmware/updates/brcm/`
   (remove with the 7.6 W2.1 rollback).
+
+### 9.6 Second W2.1 run: "Allocating ring buffers failed" (2026-10-12)
+
+Log: `logs/wifi-w1-20261012-012412-s5.log`. Everything in the 9.4 table
+passed up to `PCIe protocol version 7` and `max rx buf post 1535`
+(shared area at 0x003b26e8 after 0.67 s, and the firmware console shows a
+full boot). Then:
+
+```
+brcmf_pcie_init_ringbuffers Using TCM indices
+brcmf_pcie_init_ringbuffers: Allocating ring buffers failed
+```
+
+**Cause: brcmfmac's DMA mask is 32 bits, and the restricted pool sits above
+4 GiB.** brcmfmac never sets a DMA mask (no `dma_set_mask` anywhere in
+`L/.../brcmfmac/`), so the PCI default of 32 bits applies. The overlay's
+pool has no fixed address, and the kernel placed it at 0xaff000000 (top
+of RAM; first line of the log). With a restricted pool, every
+`dma_alloc_coherent()` is carved from the pool (`L/kernel/dma/direct.c:275-286`),
+and `dma_direct_alloc_swiotlb()` drops any page above the coherent mask
+(`direct.c:104-115`). So the first allocation, the DMA index buffer, failed
+silently ("Using TCM indices" is brcmfmac's fallback). The next one, the
+2.5 KB control ring, failed too (`pcie.c brcmf_pcie_alloc_dma_and_ring()`),
+13 µs later. The ring sizes and counts were never involved: the failure
+is on the first ring. Stock sets a 64-bit mask (`W/dhd_pcie_linux.c:329-330`;
+Google's gs101 builds use 36 bits for the Exynos PCIe DMA,
+`W/dhd_pcie_linux.c:2190-2197`, `W/dhd_pcie.h:826`). RAM ends at
+0xaffffffff, inside 36 bits.
+
+**DMA indices:** stock used them (`R/dmesg.txt:7105`, "H2D DMA WR INDX"), so
+the firmware advertises `BRCMF_PCIE_SHARED_DMA_INDEX`. Our "TCM indices"
+came from the failed index-buffer allocation, not from the flags. The
+new debug line `shared flags 0x...` shows them: bit 16 (0x10000) should be
+set and bit 20 (0x100000, 2-byte indices) clear (stock: "4 * 43").
+
+**Fix** (wt-pcie, now rebased onto `omandroid` so it includes the battery
+model commits `84217ab38`, `fdd6273e1`, `7b0f8b5d1`):
+
+| Commit | Change |
+|---|---|
+| `7151e4834` wifi: brcmfmac: pcie: use a 64-bit DMA mask | `dma_set_mask_and_coherent(64)`, fall back to 32 |
+| `449fdf52b` wifi: brcmfmac: pcie: say why the ring indices fall back to TCM | error line on the fallback; `shared flags 0x%08x` at PCIe debug |
+
+(The earlier six commits are unchanged but have new hashes after the
+rebase: `6505722a9`, `18b233c95`, `f5efa077b`, `9f7b5cac4`, `44dca3e6b`,
+`47b75a6a2`.)
+
+Builds: `logs/{kernel,modules,images}-w2dma.log`, out-pcie with both
+overlays re-applied (plain DTB in `.default`), release
+`7.3.0-rc6-omandroid-push1-00073-g449fdf52b5d2`.
+
+**Next run (same command as 9.4 W2.1):**
+
+```sh
+export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
+bin/omandroid modules-push && bin/omandroid push           # reboots into slot B
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
+```
+
+New lines to expect after `max rx buf post 1535, rx dataoffset 0`:
+
+| Line | Pass | If not |
+|---|---|---|
+| `shared flags 0x...` (just before `PCIe protocol version 7`) | `& 0x10000` set | clear: the firmware wants TCM indices, fine but slower |
+| `Using host memory indices` | present, and no `no DMA memory for ring indices` | the error line: DMA is still failing; check `cat /sys/kernel/debug/swiotlb/*` if present, and the pool line at boot |
+| no `Allocating ring buffers failed` | | still there: note the line before it |
+| `Nr of flowrings is 40` | 40 (stock "max H2D queues 40") | |
+| then the 9.4 table from `Firmware: BCM4389/3 ...` on | | a firmware trap in the console lines: keep the log |
+
+Then 9.4 W2.2-W2.4 (`iw dev`, `iw dev wlan0 scan`, reload). Rollback as 9.5.
