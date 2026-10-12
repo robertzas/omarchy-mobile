@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (MODEM-PLAN.md, stage M2): turn on the HSI1 pin controller,
+ * PCIe GEN4A_0 and its PHY, so pcie-gs201-cp binds. Binding changes nothing:
+ * the PHY stays isolated, PERST# and the modem lines stay as the bootloader
+ * left them, until a debugfs step (module parameter allow_hw=1) drives
+ * them. Applied with fdtoverlay; paths, not labels.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/pinctrl@11840000} {
+	status = "okay";
+};
+
+&{/soc@0/pcie@11920000} {
+	status = "okay";
+};
+
+&{/soc@0/phy@11950000} {
+	status = "okay";
+};
