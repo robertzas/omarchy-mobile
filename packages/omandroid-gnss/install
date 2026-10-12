@@ -12,6 +12,7 @@ d=${1:?Usage: ./install DESTDIR}
 v=$d/usr/lib/omandroid-vendor
 install -Dm755 bin/omandroid-gnss "$d/usr/bin/omandroid-gnss"
 for f in lib/*; do install -Dm755 "$f" "$v/${f#lib/}"; done
+chmod 644 "$v/omandroid-gnss-conf"	# sourced, not run
 install -Dm644 profiles/gnss.conf "$v/profiles/gnss.conf"
 install -Dm644 gnss/props.conf "$v/gnss/props.conf"
 install -Dm644 bionic/prebuilt/omandroid-fp-shim.so "$v/omandroid-fp-shim.so"
@@ -21,5 +22,6 @@ install -Dm644 vendor/systemd/user/omandroid-geoclue-agent.service "$d/usr/lib/s
 install -Dm644 vendor/modprobe.d/omandroid-gnss.conf "$d/usr/lib/modprobe.d/omandroid-gnss.conf"
 install -Dm644 polkit/50-omandroid-gnss.rules "$d/usr/share/polkit-1/rules.d/50-omandroid-gnss.rules"
 install -Dm644 etc/geoclue/conf.d/90-omandroid-gnss.conf "$d/etc/geoclue/conf.d/90-omandroid-gnss.conf"
+install -Dm644 etc/omandroid/gnss.conf "$d/etc/omandroid/gnss.conf"
 install -Dm644 LICENSE "$d/usr/share/licenses/omandroid-gnss/LICENSE"
 install -Dm644 version "$d/usr/share/omandroid/gnss/version"

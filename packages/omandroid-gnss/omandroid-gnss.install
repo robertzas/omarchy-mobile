@@ -6,6 +6,15 @@ post_install() {
 }
 post_upgrade() {
   systemctl daemon-reload 2>/dev/null || true
+  # 0.2.0 added the orbit download timer to the Location switch: follow
+  # the switch's current state
+  if systemctl is-enabled -q omandroid-gnss-nmea.socket 2>/dev/null; then
+    systemctl enable --now omandroid-gnss-lto.timer 2>/dev/null || true
+  fi
+  if [ "$(vercmp "$2" 0.2.0)" -lt 0 ]; then
+    echo "omandroid-gnss 0.2.0: settings in /etc/omandroid/gnss.conf; SUPL is now off"
+    echo "  by default (SUPL=1 there turns it on); orbit predictions download on a timer."
+  fi
 }
 pre_remove() {
   /usr/bin/omandroid-gnss off 2>/dev/null || true

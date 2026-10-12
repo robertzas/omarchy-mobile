@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: MIT
+# shellcheck shell=bash
+# omandroid-gnss-conf: the user's GNSS settings, sourced by the gnss
+# profile and omandroid-gnss-lto. Reads /etc/omandroid/gnss.conf
+# (KEY=VALUE lines; see that file) without executing it: only the keys
+# below are taken, and only values that pass their check. An environment
+# variable OMANDROID_GNSS_<KEY> overrides the file (tests, systemd-run).
+#
+# Sets GNSS_CONF_<KEY> for every key, defaults first.
+
+GNSS_CONF_FILE=${OMANDROID_GNSS_CONF:-/etc/omandroid/gnss.conf}
+
+# key  default  check (extended regex)
+GNSS_CONF_KEYS=(
+  "ASSISTANCE|1|^[01]$"
+  "LTO_URL|http://gllto2.glpals.com/4day/v5/latest/lto2.dat|^https?://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9./_-]*$"
+  "LTO_MAX_AGE_HOURS|20|^[0-9]{1,3}$"
+  "LTO_CELLULAR|0|^[01]$"
+  "INJECT_TIME|1|^[01]$"
+  "REF_POSITION||^(-?[0-9]{1,2}(\.[0-9]+)?,-?[0-9]{1,3}(\.[0-9]+)?(,[0-9]{1,7})?)?$"
+  "SUPL|0|^[01]$"
+  "SUPL_SERVER|supl.google.com:7275|^[A-Za-z0-9.-]+:[0-9]{1,5}$"
+)
+
+gnss_conf_load() {
+  local entry key def re line k v env
+  for entry in "${GNSS_CONF_KEYS[@]}"; do
+    IFS='|' read -r key def re <<< "$entry"
+    printf -v "GNSS_CONF_$key" '%s' "$def"
+  done
+  if [[ -r $GNSS_CONF_FILE ]]; then
+    while IFS= read -r line || [[ -n $line ]]; do
+      [[ $line =~ ^[[:space:]]*([A-Z_]+)[[:space:]]*=[[:space:]]*(.*)$ ]] || continue
+      k=${BASH_REMATCH[1]} v=${BASH_REMATCH[2]}
+      v=${v%%[[:space:]]#*}                # trailing comment
+      v=${v%"${v##*[![:space:]]}"}         # trailing blanks
+      [[ $v =~ ^\"(.*)\"$ || $v =~ ^\'(.*)\'$ ]] && v=${BASH_REMATCH[1]}
+      gnss_conf_set "$k" "$v" "$GNSS_CONF_FILE"
+    done < "$GNSS_CONF_FILE"
+  fi
+  for entry in "${GNSS_CONF_KEYS[@]}"; do
+    key=${entry%%|*}
+    env=OMANDROID_GNSS_$key
+    [[ -n ${!env+x} ]] && gnss_conf_set "$key" "${!env}" "\$$env"
+  done
+  return 0
+}
+
+gnss_conf_set() { # key value origin
+  local entry key def re
+  for entry in "${GNSS_CONF_KEYS[@]}"; do
+    IFS='|' read -r key def re <<< "$entry"
+    [[ $key == "$1" ]] || continue
+    if [[ $2 =~ $re ]]; then
+      printf -v "GNSS_CONF_$key" '%s' "$2"
+    else
+      printf 'omandroid-gnss: %s: ignoring %s=%s (invalid)\n' "$3" "$1" "$2" >&2
+    fi
+    return 0
+  done
+  printf 'omandroid-gnss: %s: unknown setting %s\n' "$3" "$1" >&2
+}
+
+gnss_conf_load

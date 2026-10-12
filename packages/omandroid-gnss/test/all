@@ -5,7 +5,8 @@
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { echo "FAIL: $*" >&2; exit 1; }
-for f in bin/omandroid-gnss lib/omandroid-vendor-chroot lib/omandroid-gnss-start install profiles/gnss.conf; do
+for f in bin/omandroid-gnss lib/omandroid-vendor-chroot lib/omandroid-gnss-start lib/omandroid-gnss-lto \
+         lib/omandroid-gnss-conf install profiles/gnss.conf omandroid-gnss.install; do
   bash -n "$f" || fail "syntax: $f"
 done
 python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/omandroid-gnss-nmea || fail "python: omandroid-gnss-nmea"
@@ -27,7 +28,10 @@ for f in usr/bin/omandroid-gnss usr/lib/omandroid-vendor/omandroid-vendor-chroot
          usr/lib/systemd/system/omandroid-gnss-nmea.service usr/lib/systemd/system/omandroid-gnss-force.service \
          usr/lib/systemd/system/omandroid-gnss-location@.service usr/lib/modprobe.d/omandroid-gnss.conf \
          usr/share/polkit-1/rules.d/50-omandroid-gnss.rules etc/geoclue/conf.d/90-omandroid-gnss.conf \
-         usr/lib/systemd/user/omandroid-geoclue-agent.service; do
+         usr/lib/systemd/user/omandroid-geoclue-agent.service \
+         usr/lib/omandroid-vendor/omandroid-gnss-lto usr/lib/omandroid-vendor/omandroid-gnss-conf \
+         usr/lib/systemd/system/omandroid-gnss-lto.service usr/lib/systemd/system/omandroid-gnss-lto.timer \
+         etc/omandroid/gnss.conf; do
   [[ -e $stage/$f ]] || fail "not staged: $f"
 done
 # Default-off: nothing is enabled by a wants link, and the stack itself has no [Install].
@@ -39,6 +43,67 @@ grep -q '^\[geoclue-where-am-i\]' etc/geoclue/conf.d/90-omandroid-gnss.conf || f
 # status must not print "nono" (forced suffix only when forced)
 grep -q 'forced/yes' bin/omandroid-gnss && fail "status forced suffix"
 grep -q 'blacklist bcm4775x_gnss' vendor/modprobe.d/omandroid-gnss.conf || fail "driver must stay blacklisted from autoload"
+grep -q '^ExecStop=.*omandroid-vendor-chroot gnss stop$' vendor/systemd/system/omandroid-gnss.service ||
+  fail "the stack must stop gpsd's request before the stop signal"
+grep -q 'omandroid-gnss-lto.timer\|LTO_TIMER' bin/omandroid-gnss || fail "the Location switch must handle the LTO timer"
+grep -q 'etc/omandroid/gnss.conf' PKGBUILD || fail "gnss.conf must be a backup file"
+
+# Settings: defaults, the file, the environment, and bad values refused.
+conf() { # FILE-CONTENT [VAR=VALUE...] -> prints the GNSS_CONF_* values
+  local c=$1; shift
+  printf '%s\n' "$c" > "$stage/gnss.conf"
+  env -i PATH="$PATH" OMANDROID_GNSS_CONF="$stage/gnss.conf" "$@" bash -c \
+    'source lib/omandroid-gnss-conf; for v in ${!GNSS_CONF_@}; do echo "$v=${!v}"; done' 2>&1
+}
+out=$(conf "")
+for want in GNSS_CONF_ASSISTANCE=1 GNSS_CONF_SUPL=0 GNSS_CONF_INJECT_TIME=1 GNSS_CONF_REF_POSITION= \
+            GNSS_CONF_LTO_URL=http://gllto2.glpals.com/4day/v5/latest/lto2.dat; do
+  grep -qx "$want" <<< "$out" || fail "default $want: $out"
+done
+# the shipped file must match the defaults: SUPL off, assistance on
+out=$(env -i PATH="$PATH" OMANDROID_GNSS_CONF=etc/omandroid/gnss.conf bash -c \
+  'source lib/omandroid-gnss-conf 2>&1; echo "S=$GNSS_CONF_SUPL A=$GNSS_CONF_ASSISTANCE P=$GNSS_CONF_REF_POSITION"')
+[[ $out == "S=0 A=1 P=" ]] || fail "shipped gnss.conf: $out"
+out=$(conf $'SUPL=1  # on\nREF_POSITION="52.52,13.40,30000"\nASSISTANCE=yes\nLTO_URL=http://x/\$(id)\nBOGUS=1')
+grep -qx GNSS_CONF_SUPL=1 <<< "$out" || fail "SUPL=1 with a comment: $out"
+grep -qx GNSS_CONF_REF_POSITION=52.52,13.40,30000 <<< "$out" || fail "quoted REF_POSITION: $out"
+grep -qx GNSS_CONF_ASSISTANCE=1 <<< "$out" || fail "invalid ASSISTANCE must keep the default: $out"
+grep -q 'ignoring LTO_URL' <<< "$out" || fail "LTO_URL with shell syntax must be refused: $out"
+grep -q 'unknown setting BOGUS' <<< "$out" || fail "unknown keys must be reported: $out"
+out=$(conf "SUPL=1" OMANDROID_GNSS_SUPL=0)
+grep -qx GNSS_CONF_SUPL=0 <<< "$out" || fail "the environment must override the file: $out"
+
+# The generated gps.xml, from the stock one when an extract is at hand
+# (never committed: the user's own image).
+image=
+for i in "${OMANDROID_GNSS_IMAGE:-}" /usr/lib/omandroid-vendor/gnss/root "$HOME/android/vendor-chroot-work/gnss/root"; do
+  [[ -n $i && -f $i/vendor/etc/gnss/gps.xml ]] && { image=$i; break; }
+done
+if [[ -n $image ]]; then
+  gen() { # VAR=VALUE... -> generated config in $stage/gen
+    rm -rf "$stage/gen"
+    env -i PATH="$PATH" OMANDROID_GNSS_CONF=/dev/null "$@" bash -c '
+      set -euo pipefail
+      say() { echo "$*" >&2; }; die() { echo "die: $*" >&2; exit 1; }
+      LIB=$PWD/lib; source profiles/gnss.conf; IMAGE=$1; gnss_config "$2"' _ "$image" "$stage/gen"
+  }
+  gen || fail "gnss_config failed with the defaults"
+  x=$stage/gen/gps.xml
+  grep -q 'SuplEnable="false"' "$x" || fail "default gps.xml must have SUPL off"
+  grep -q 'RtoEnable="true"' "$x" || fail "default gps.xml must keep RTO"
+  for k in EnableGlonass EnableGalileo EnableBeidou; do
+    sed -n '/<gll_features/,/\/>/p' "$x" | grep -q "$k=\"true\"" || fail "$k not in <gll_features>"
+  done
+  grep -q 'MultiCarrRFMode="GL_MULTI_CARR_RF_MODE_L1_L5"' "$x" || fail "stock L1+L5 mode changed"
+  if command -v xmllint >/dev/null; then xmllint --noout "$x" || fail "gps.xml not well-formed"; fi
+  gen OMANDROID_GNSS_SUPL=1 OMANDROID_GNSS_SUPL_SERVER=supl.example.org:7276 OMANDROID_GNSS_ASSISTANCE=0 ||
+    fail "gnss_config failed with SUPL on"
+  grep -q 'SuplEnable="true"' "$x" && grep -q 'acSuplServer="supl.example.org"' "$x" &&
+    grep -q 'SuplPort="7276"' "$x" || fail "SUPL=1 must keep SUPL on with the configured server"
+  grep -q 'RtoEnable="false"' "$x" && grep -q 'RtiEnable="false"' "$x" || fail "ASSISTANCE=0 must turn RTO/RTI off"
+else
+  echo "omandroid-gnss: no vendor extract here; gps.xml generation not checked" >&2
+fi
 if command -v systemd-analyze >/dev/null; then
   SYSTEMD_LOG_LEVEL=err systemd-analyze verify --root="$stage" \
     "$stage"/usr/lib/systemd/system/omandroid-gnss*.service "$stage"/usr/lib/systemd/system/omandroid-gnss*.socket 2>&1 |

@@ -1,0 +1,106 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omandroid-gnss-lto: keep Broadcom's long-term orbit file (LTO, lto2.dat:
+# predicted orbits for about four days) fresh for gpsd, without Google Play
+# services. On stock Android gpsd asks the framework to download it (gps.xml
+# HttpSyncLto) and reads it from LtoDir/LtoFileName, /data/vendor/gps/lto2.dat;
+# here the host fetches the same file into the chroot's /data.
+#
+#   omandroid-gnss-lto [--max-age-hours N] [--timeout SECONDS] [--quiet-offline]
+#
+# Run by omandroid-gnss-lto.timer (enabled with the Location switch) and by
+# the gnss profile before gpsd starts. Downloads only when:
+#   - assistance is on (ASSISTANCE=1 in /etc/omandroid/gnss.conf),
+#   - the file is older than LTO_MAX_AGE_HOURS (default 20),
+#   - there is a default route, and it is not a cellular link unless
+#     LTO_CELLULAR=1 (Wi-Fi, USB or Ethernet are fine).
+# The request is a plain HTTP GET with curl's default headers and
+# If-Modified-Since; the file keeps the server's modification time (curl
+# -R), so its age is the age of the predictions. No account, no device
+# identifier. The server sees the phone's IP address and the time, as for
+# any download.
+set -euo pipefail
+
+LIB=${OMANDROID_VENDOR_LIB:-/usr/lib/omandroid-vendor}
+# shellcheck source=omandroid-gnss-conf
+source "$LIB/omandroid-gnss-conf"
+
+DIR=${OMANDROID_GNSS_LTO_DIR:-/var/lib/omandroid-vendor/gnss/data/vendor/gps}
+FILE=$DIR/lto2.dat
+MIN_BYTES=20000		# the file is ~120 KB; anything tiny is an error page
+MAX_BYTES=2000000
+
+say() { printf 'omandroid-gnss-lto: %s\n' "$*" >&2; }
+
+max_age=$GNSS_CONF_LTO_MAX_AGE_HOURS
+timeout=60
+quiet_offline=0
+while (($#)); do
+  case $1 in
+    --max-age-hours) max_age=${2:?}; shift 2 ;;
+    --timeout) timeout=${2:?}; shift 2 ;;
+    --quiet-offline) quiet_offline=1; shift ;;
+    *) say "unknown argument $1"; exit 2 ;;
+  esac
+done
+[[ $max_age =~ ^[0-9]+$ && $timeout =~ ^[0-9]+$ ]] || { say "bad number"; exit 2; }
+
+if [[ $GNSS_CONF_ASSISTANCE != 1 ]]; then
+  say "assistance is off (ASSISTANCE=0); nothing to do"
+  exit 0
+fi
+
+age_hours() { # file -> whole hours since its mtime, or empty
+  [[ -s $1 ]] || return 0
+  echo $(( ($(date +%s) - $(stat -c %Y "$1")) / 3600 ))
+}
+
+age=$(age_hours "$FILE")
+if [[ -n $age ]] && ((age < max_age)); then
+  say "$FILE is ${age} h old (limit ${max_age} h); not downloading"
+  exit 0
+fi
+
+# The link the download would use. Cellular data costs money: skip it
+# unless allowed. Interface names of Linux modem drivers.
+dev=$(ip -o route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -1)
+if [[ -z $dev ]]; then
+  ((quiet_offline)) || say "no network route; not downloading"
+  exit 0
+fi
+case $dev in
+  wwan*|rmnet*|ccmni*|ppp*|cdc-wdm*)
+    if [[ $GNSS_CONF_LTO_CELLULAR != 1 ]]; then
+      say "the default route is cellular ($dev); not downloading (LTO_CELLULAR=0)"
+      exit 0
+    fi ;;
+esac
+
+mkdir -p "$DIR"
+tmp=$(mktemp "$DIR/.lto2.dat.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+cond=()
+[[ -s $FILE ]] && cond=(-z "$FILE")
+code=$(curl -sS -R --proto =http,https --max-time "$timeout" --max-filesize "$MAX_BYTES" \
+  -o "$tmp" -w '%{http_code}' "${cond[@]}" "$GNSS_CONF_LTO_URL" 2>&1) || {
+  say "download from $GNSS_CONF_LTO_URL failed via $dev: ${code:-curl error}"
+  exit 0
+}
+case $code in
+  304)
+    say "the server has nothing newer than $FILE (304)"
+    exit 0 ;;
+  200) ;;
+  *)
+    say "download from $GNSS_CONF_LTO_URL: HTTP $code; $FILE kept"
+    exit 0 ;;
+esac
+size=$(stat -c %s "$tmp")
+if ((size < MIN_BYTES)) || [[ $(head -c 1 "$tmp") == "<" ]]; then
+  say "downloaded $size bytes that don't look like an LTO file; $FILE kept"
+  exit 0
+fi
+chmod 0644 "$tmp"
+mv -f "$tmp" "$FILE"
+trap - EXIT
+say "downloaded $size bytes via $dev into $FILE"

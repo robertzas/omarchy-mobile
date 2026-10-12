@@ -7,9 +7,9 @@ pkgdesc="Omandroid GNSS for the Pixel 7 Pro: Broadcom's lhd/gpsd in a vendor chr
 arch=(aarch64)
 url="https://github.com/derekross/omandroid"
 license=(MIT)
-depends=(bash python curl util-linux coreutils systemd geoclue libnotify)
+depends=(bash python curl iproute2 util-linux coreutils systemd geoclue libnotify)
 optdepends=('gpsd: NMEA for gpsd clients through /run/omandroid-gnss/nmea-tty')
-backup=(etc/geoclue/conf.d/90-omandroid-gnss.conf)
+backup=(etc/geoclue/conf.d/90-omandroid-gnss.conf etc/omandroid/gnss.conf)
 install=omandroid-gnss.install
 
 check() {

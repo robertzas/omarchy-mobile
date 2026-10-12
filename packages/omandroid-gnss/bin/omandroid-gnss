@@ -4,14 +4,17 @@
 #
 #   omandroid-gnss on       Location on: apps can ask GeoClue for positions,
 #                           and the receiver runs only while one does
-#                           (omandroid-gnss-nmea.socket and the GeoClue
-#                           agent, omandroid-geoclue-agent, enabled)
+#                           (omandroid-gnss-nmea.socket, the GeoClue agent
+#                           omandroid-geoclue-agent and the orbit download
+#                           timer omandroid-gnss-lto.timer enabled)
 #   omandroid-gnss off      Location off: stop the receiver now and let
 #                           nothing start it
 #   omandroid-gnss force    keep the receiver running with no client (tests,
 #                           gpsd on /run/omandroid-gnss/nmea-tty)
 #   omandroid-gnss unforce  back to on-demand
 #   omandroid-gnss status [--json]
+#
+# Settings (assistance, time/position injection, SUPL): /etc/omandroid/gnss.conf.
 #
 # on/off/force/unforce need root. As another user they go through
 # omandroid-gnss-location@.service, which polkit lets the active local user
@@ -24,10 +27,12 @@ BRIDGE=omandroid-gnss-nmea.service
 STACK=omandroid-gnss.service
 FORCE=omandroid-gnss-force.service
 AGENT=omandroid-geoclue-agent.service
+LTO_TIMER=omandroid-gnss-lto.timer
+LTO_FILE=/var/lib/omandroid-vendor/gnss/data/vendor/gps/lto2.dat
 ROOT=/usr/lib/omandroid-vendor/gnss/root
 
 usage() {
-  sed -n '3,14s/^# \{0,1\}//p' "$0" >&2
+  sed -n '3,17s/^# \{0,1\}//p' "$0" >&2
   exit 2
 }
 
@@ -56,21 +61,40 @@ powered() {
   echo no
 }
 
+# Age of the orbit predictions in hours; "unknown" when unreadable (the
+# state directory is root's) and "none" when there is no file.
+lto_age() {
+  local t
+  if [[ -e $LTO_FILE ]]; then
+    t=$(stat -c %Y "$LTO_FILE" 2>/dev/null) || { echo unknown; return; }
+    echo $(( ($(date +%s) - t) / 3600 ))
+  elif [[ -r ${LTO_FILE%/*} ]]; then
+    echo none
+  else
+    echo unknown
+  fi
+}
+
 status() {
-  local location running forced agent powered
+  local location running forced agent powered lto
   location=$([[ $(state is-enabled $SOCKET) == enabled ]] && echo on || echo off)
   running=$([[ $(state is-active $STACK) == active ]] && echo yes || echo no)
   forced=$([[ $(state is-active $FORCE) == active ]] && echo yes || echo no)
   agent=$([[ $(systemctl --global is-enabled $AGENT 2>/dev/null) == enabled ]] && echo on || echo off)
   powered=$(powered)
+  lto=$(lto_age)
   if [[ ${1:-} == --json ]]; then
-    printf '{"location":"%s","running":"%s","forced":"%s","powered":"%s","agent":"%s","installed":%s}\n' \
-      "$location" "$running" "$forced" "$powered" "$agent" "$([[ -d $ROOT ]] && echo true || echo false)"
+    printf '{"location":"%s","running":"%s","forced":"%s","powered":"%s","agent":"%s","lto_age_hours":"%s","installed":%s}\n' \
+      "$location" "$running" "$forced" "$powered" "$agent" "$lto" "$([[ -d $ROOT ]] && echo true || echo false)"
   else
     echo "location: $location"
     echo "receiver running: $running$([[ $forced == yes ]] && echo " (forced)")"
     echo "chip powered: $powered"
     echo "GeoClue agent: $agent"
+    case $lto in
+      none|unknown) echo "orbit predictions (LTO): $lto" ;;
+      *) echo "orbit predictions (LTO): ${lto} h old" ;;
+    esac
     [[ -d $ROOT ]] || echo "vendor files: missing ($ROOT; tools/extract-vendor-chroot -p gnss)"
   fi
 }
@@ -78,13 +102,13 @@ status() {
 case ${1:-} in
   on)
     as_root on
-    systemctl enable --now "$SOCKET"
+    systemctl enable --now "$SOCKET" "$LTO_TIMER"
     systemctl --global enable "$AGENT"
     ;;
   off)
     as_root off
     systemctl stop "$FORCE" "$BRIDGE" "$STACK" 2>/dev/null || true
-    systemctl disable --now "$SOCKET"
+    systemctl disable --now "$SOCKET" "$LTO_TIMER"
     systemctl --global disable "$AGENT"
     ;;
   force)

@@ -7,6 +7,10 @@
 #   omandroid-vendor-chroot PROFILE start         set up and supervise the
 #                                                 profile's daemons in the
 #                                                 foreground (systemd runs it)
+#   omandroid-vendor-chroot PROFILE stop          the profile's graceful stop
+#                                                 (profile_stop), from the
+#                                                 host; systemd's ExecStop=,
+#                                                 before it signals the daemons
 #   omandroid-vendor-chroot PROFILE ns CMD...     a host command in the running
 #                                                 profile's namespaces
 #   omandroid-vendor-chroot PROFILE run CMD...    an Android binary in its chroot
@@ -20,7 +24,9 @@
 #   STATE       the only persistent, writable directory (bound as /data)
 #   BINDER      yes: a private binderfs and servicemanager in the chroot
 #   NO_SERVICES extra service-name prefixes the shim reports as absent
-#   profile_check, profile_setup, profile_start   bash functions, see gnss.conf
+#   profile_check, profile_setup, profile_start, profile_stop
+#               bash functions, see gnss.conf (profile_stop runs on the host
+#               while the daemons still run, and returns within seconds)
 #
 # The chroot is a private mount and PID namespace on a tmpfs. The image is
 # bound read-only; real block devices never enter it; Android processes die
@@ -55,7 +61,7 @@ stop() {
 
 PROFILE=${1:-}
 [[ $PROFILE =~ ^[a-z0-9-]+$ ]] || {
-  echo "usage: omandroid-vendor-chroot PROFILE check | start | ns CMD... | run CMD..." >&2
+  echo "usage: omandroid-vendor-chroot PROFILE check | start | stop | ns CMD... | run CMD..." >&2
   exit 2
 }
 shift
@@ -75,6 +81,7 @@ RUN=/run/omandroid-vendor/$PROFILE
 profile_check() { :; }
 profile_setup() { :; }
 profile_start() { :; }
+profile_stop() { :; }
 # shellcheck source=/dev/null
 source "$PROFILE_CONF"
 ROOT=$RUN/root
@@ -315,8 +322,9 @@ run() {
 case ${1:-} in
   check) check ;;
   start) start ;;
+  stop) [[ $EUID -eq 0 ]] || die "run as root"; profile_stop ;;
   ns) shift; ns "$@" ;;
   run) shift; run "$@" ;;
-  *) echo "usage: omandroid-vendor-chroot PROFILE check | start | ns CMD... | run CMD..." >&2
+  *) echo "usage: omandroid-vendor-chroot PROFILE check | start | stop | ns CMD... | run CMD..." >&2
      exit 2 ;;
 esac

@@ -12,4 +12,7 @@ ConditionPathExists=/usr/lib/omandroid-vendor/gnss/root
 
 [Service]
 ExecStart=/usr/lib/omandroid-vendor/omandroid-gnss-start
+# Before the stop signal: ask gpsd to end its request, so it saves its
+# state (gldata.sto) for the next start. Bounded at ~4 s.
+ExecStop=/usr/lib/omandroid-vendor/omandroid-vendor-chroot gnss stop
 TimeoutStopSec=15
