@@ -1,7 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# extract-vendor-firmware: copy the Wi-Fi and Bluetooth firmware the Pixel 7 Pro
-# (cheetah) needs out of a Google factory image, on the user's own machine.
+# extract-vendor-firmware: copy the Wi-Fi, Bluetooth and haptics firmware the
+# Pixel 7 Pro (cheetah) needs out of a Google factory image, on the user's own
+# machine.
 #
 # Google's firmware is not ours to redistribute, so Omandroid never ships it.
 # Like LineageOS's extract-files, this pulls it from an image the user already
@@ -12,9 +13,15 @@
 #   vendor/firmware/bcmdhd.cal        -> brcm/brcmfmac4389c1-pcie.<board>.txt       (NVRAM)
 #   vendor/firmware/bcmdhd_clm.blob   -> brcm/brcmfmac4389c1-pcie.<board>.clm_blob  (regulatory)
 #   vendor/firmware/brcm/BCM.hcd      -> brcm/BCM.<board>.hcd                       (btbcm)
+#   vendor/firmware/cs40l26.wmfw      -> cs40l26.wmfw            (cs40l26-vibra, RAM firmware)
+#   vendor/firmware/cs40l26.bin       -> cs40l26.bin             (cs40l26-vibra, wavetable)
+#   vendor/firmware/cs40l26-svc.bin   -> cs40l26-svc.bin         (tuning, not loaded yet)
+#   vendor/firmware/cs40l26-dvl.bin   -> cs40l26-dvl.bin         (tuning, not loaded yet)
+#   vendor/firmware/cs40l26-calib.wmfw -> cs40l26-calib.wmfw     (calibration firmware, not loaded yet)
 #
 # <board> is the first string of the DT root compatible ("google,gs201-cheetah"),
-# which brcmfmac and btbcm both try before the generic name.
+# which brcmfmac and btbcm both try before the generic name. The CS40L26 files
+# keep their names (the haptics chip has no board-specific lookup).
 #
 # Output is a tree rooted at /, under usr/lib/firmware/updates (searched before
 # linux-firmware's files, and not owned by any package). Nothing touches the phone.
@@ -26,14 +33,19 @@ set -euo pipefail
 BOARD="google,gs201-cheetah"
 DEVICE="cheetah"
 FW_BASE="brcmfmac4389c1-pcie"
-DEST_REL="usr/lib/firmware/updates/brcm"
+DEST_REL="usr/lib/firmware/updates"
 
-# source path in the vendor partition -> name under $DEST_REL
+# source path in the vendor partition -> path under $DEST_REL
 MAP=(
-  "firmware/fw_bcmdhd.bin|$FW_BASE.$BOARD.bin"
-  "firmware/bcmdhd.cal|$FW_BASE.$BOARD.txt"
-  "firmware/bcmdhd_clm.blob|$FW_BASE.$BOARD.clm_blob"
-  "firmware/brcm/BCM.hcd|BCM.$BOARD.hcd"
+  "firmware/fw_bcmdhd.bin|brcm/$FW_BASE.$BOARD.bin"
+  "firmware/bcmdhd.cal|brcm/$FW_BASE.$BOARD.txt"
+  "firmware/bcmdhd_clm.blob|brcm/$FW_BASE.$BOARD.clm_blob"
+  "firmware/brcm/BCM.hcd|brcm/BCM.$BOARD.hcd"
+  "firmware/cs40l26.wmfw|cs40l26.wmfw"
+  "firmware/cs40l26.bin|cs40l26.bin"
+  "firmware/cs40l26-svc.bin|cs40l26-svc.bin"
+  "firmware/cs40l26-dvl.bin|cs40l26-dvl.bin"
+  "firmware/cs40l26-calib.wmfw|cs40l26-calib.wmfw"
 )
 
 usage() {
@@ -161,26 +173,40 @@ if get_file build.prop "$WORK/build.prop"; then
 fi
 
 dest="$OUT/$DEST_REL"
-mkdir -p "$dest"
+mkdir -p "$dest/brcm"
 for entry in "${MAP[@]}"; do
   from=${entry%%|*} to=${entry#*|}
   get_file "$from" "$dest/$to" || die "/vendor/$from is missing from this image"
   chmod 0644 "$dest/$to"
-  printf '  /vendor/%-26s -> /%s/%s\n' "$from" "$DEST_REL" "$to"
+  printf '  /vendor/%-28s -> /%s/%s\n' "$from" "$DEST_REL" "$to"
 done
 
-# Sanity checks: right chip, text NVRAM.
-grep -aq '4389c1-roml' "$dest/$FW_BASE.$BOARD.bin" ||
+# Sanity checks: right chip, text NVRAM, Cirrus file formats.
+brcm="$dest/brcm"
+grep -aq '4389c1-roml' "$brcm/$FW_BASE.$BOARD.bin" ||
   die "fw_bcmdhd.bin is not a BCM4389C1 PCIe firmware"
-grep -aq 'BCM4389C1' "$dest/BCM.$BOARD.hcd" ||
+grep -aq 'BCM4389C1' "$brcm/BCM.$BOARD.hcd" ||
   die "BCM.hcd is not a BCM4389C1 Bluetooth patch"
-grep -aq '^NVRAMRev=' "$dest/$FW_BASE.$BOARD.txt" ||
+grep -aq '^NVRAMRev=' "$brcm/$FW_BASE.$BOARD.txt" ||
   die "bcmdhd.cal does not look like a Broadcom text NVRAM"
+for f in cs40l26.wmfw cs40l26-calib.wmfw; do
+  # WMFW, Halo core (4): what cs_dsp accepts for this part
+  [[ "$(head -c4 "$dest/$f")" == WMFW && "$(od -An -tu1 -j10 -N1 "$dest/$f" | tr -d ' ')" == 4 ]] ||
+    die "$f is not a Halo Core WMFW firmware"
+done
+grep -aq 'FIRMWARE_CS40L26' "$dest/cs40l26.wmfw" ||
+  die "cs40l26.wmfw is not a CS40L26 firmware"
+grep -aq 'BUZZ_EFFECTS2_BUZZ_LEVEL' "$dest/cs40l26.wmfw" ||
+  die "cs40l26.wmfw has no buzz generator (cs40l26-vibra needs BUZZGEN)"
+for f in cs40l26.bin cs40l26-svc.bin cs40l26-dvl.bin; do
+  [[ "$(head -c4 "$dest/$f")" == WMDR ]] || die "$f is not a WMDR coefficient file"
+done
 
-ver=$(grep -ao 'Version=[0-9.]* ([^)]*)' "$dest/$FW_BASE.$BOARD.bin" | head -1)
-bt=$(grep -ao 'BCM4389C1 [^[]*' "$dest/BCM.$BOARD.hcd" | head -1)
-(cd "$dest" && sha256sum -- * > "$OUT/vendor-firmware.sha256")
+ver=$(grep -ao 'Version=[0-9.]* ([^)]*)' "$brcm/$FW_BASE.$BOARD.bin" | head -1)
+bt=$(grep -ao 'BCM4389C1 [^[]*' "$brcm/BCM.$BOARD.hcd" | head -1)
+(cd "$dest" && find . -type f -printf '%P\n' | sort | xargs sha256sum -- > "$OUT/vendor-firmware.sha256")
 say "Wi-Fi firmware: ${ver:-unknown version}"
 say "Bluetooth patch: ${bt:-unknown version}"
+say "Haptics firmware: cs40l26.wmfw ($(stat -c %s "$dest/cs40l26.wmfw") bytes) and its wavetable"
 say "Staged in $OUT (checksums in $OUT/vendor-firmware.sha256)"
 echo "This is Google's proprietary firmware from your own factory image. Do not redistribute it."

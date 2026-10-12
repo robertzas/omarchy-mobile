@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (HAPTICS-TORCH-PLAN.md, gate H1): the PERIC0 pin controller
+ * and USI8 as I2C (Google's bus 8: CS40L26A at 0x43, NFC at 0x08, a camera
+ * PMIC at 0x75). No client is enabled; reads are done from userspace.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/pinctrl@10840000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109700c0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109700c0/i2c@10970000} {
+	status = "okay";
+};

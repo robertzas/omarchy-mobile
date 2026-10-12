@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""ff-rumble: play one FF_RUMBLE effect on an evdev force-feedback device.
+
+Runs on the phone, no dependencies beyond Python. It goes through the same
+kernel interface feedbackd uses (EVIOCSFF, then an EV_FF write), so it tests
+the driver exactly as the desktop will drive it.
+
+    tools/phone-ssh 'python3 - --ms 100 --strength 25' < tools/ff-rumble
+
+--strength is a percentage of the full rumble magnitude (the CS40L26 driver
+turns it into its buzz level 0-255). The effect is erased before exit.
+"""
+import argparse
+import fcntl
+import glob
+import os
+import struct
+import sys
+import time
+
+EV_FF = 0x15
+FF_RUMBLE = 0x50
+
+
+def ioc(direction, nr, size):
+    # asm-generic ioctl layout, as on arm64
+    return (direction << 30) | (size << 16) | (ord("E") << 8) | nr
+
+
+# struct ff_effect on a 64-bit kernel: type, id, direction, trigger
+# (button, interval), replay (length, delay), 2 bytes of padding, then a
+# 32-byte union (rumble: strong, weak).
+FF_EFFECT = struct.Struct("<HhHHHHH2x HH28x")
+EVIOCSFF = ioc(1, 0x80, FF_EFFECT.size)
+EVIOCRMFF = ioc(1, 0x81, 4)
+# struct input_event: struct timeval (2 x long), type, code, value
+INPUT_EVENT = struct.Struct("<qqHHi")
+
+
+def find_device(name):
+    for ev in sorted(glob.glob("/sys/class/input/event*")):
+        try:
+            with open(os.path.join(ev, "device/name")) as f:
+                if f.read().strip() == name:
+                    return "/dev/input/" + os.path.basename(ev)
+        except OSError:
+            pass
+    return None
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--device", help="event device (default: by --name)")
+    ap.add_argument("--name", default="cs40l26_vibra", help="input device name")
+    ap.add_argument("--ms", type=int, default=100, help="duration in ms (max 2000)")
+    ap.add_argument("--strength", type=int, default=25, help="percent, 1-100")
+    args = ap.parse_args()
+
+    if not 1 <= args.ms <= 2000:
+        sys.exit("--ms must be 1-2000")
+    if not 1 <= args.strength <= 100:
+        sys.exit("--strength must be 1-100")
+
+    dev = args.device or find_device(args.name)
+    if not dev:
+        sys.exit(f"no input device named {args.name!r}")
+
+    magnitude = 0xFFFF * args.strength // 100
+    fd = os.open(dev, os.O_RDWR)
+    try:
+        buf = bytearray(FF_EFFECT.pack(FF_RUMBLE, -1, 0, 0, 0, args.ms, 0,
+                                       magnitude, magnitude))
+        fcntl.ioctl(fd, EVIOCSFF, buf, True)
+        effect_id = struct.unpack_from("<h", buf, 2)[0]
+        print(f"{dev}: effect {effect_id}, {args.ms} ms at {args.strength}%")
+        os.write(fd, INPUT_EVENT.pack(0, 0, EV_FF, effect_id, 1))
+        time.sleep(args.ms / 1000 + 0.2)
+        fcntl.ioctl(fd, EVIOCRMFF, effect_id)
+    finally:
+        os.close(fd)
+
+
+if __name__ == "__main__":
+    main()

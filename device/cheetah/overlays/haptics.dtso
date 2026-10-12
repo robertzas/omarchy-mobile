@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (HAPTICS-TORCH-PLAN.md, gates H2-H3): haptics-i2c plus the
+ * CS40L26A, so cs40l26-vibra probes, loads cs40l26.wmfw and registers the
+ * "cs40l26_vibra" force-feedback device.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/pinctrl@10840000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109700c0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109700c0/i2c@10970000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109700c0/i2c@10970000/haptic-driver@43} {
+	status = "okay";
+};

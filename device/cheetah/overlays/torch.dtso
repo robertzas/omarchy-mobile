@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (HAPTICS-TORCH-PLAN.md, gates T2-T3): torch-i2c plus the
+ * LM3644TT, so leds-lm3644 probes (HWEN up for ~2 ms, ID and reset values
+ * read, nothing written) and registers /sys/class/leds/white:torch.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/pinctrl@10840000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@10da00c0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@10da00c0/i2c@10da0000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@10da00c0/i2c@10da0000/led-controller@63} {
+	status = "okay";
+};
