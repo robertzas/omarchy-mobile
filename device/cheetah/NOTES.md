@@ -154,3 +154,16 @@ Kernel omandroid-int `7.3.0-rc6-omandroid-push1-00145-ga868e7333752` with the br
 - **T1/T2:** LM3644TT (ID 0x04), 17 torch steps, 2550-49110 uA per channel; the camera EEPROM at 0x50 answers on the same bus.
 - **T3:** brightness 1 and 9 for 2 s each, both seen, no fault flags.
 - Shutdown hangs now end in a watchdog reset after a minute (`RebootWatchdogSec=1min`, omandroid-device-cheetah 0.1.6).
+
+## 2026-10-12: everything working so far comes up at boot
+
+Kernel omandroid-int `7.3.0-rc6-omandroid-push1-00171-g907128673cba` with the **default DTB, no test overlays**, and omandroid-device-cheetah 0.1.13. Two reboots in a row (a push, then `systemctl reboot`) gave the same result:
+
+- **GPU:** Panthor bound with frequency scaling through ACPM (A1-A5): 151 MHz idle, capped at 572 MHz, Hyprland idle at 0% CPU.
+  - ACPM A1 first failed with "Channel 3 queues outside the SRAM": a type-2 buffer channel in DRAM at 0xa8200080. The driver now skips unusable channels (14 of 15 usable; DVFS uses channel 0, PMIC 2, thermal 9).
+  - A stale `/etc/modprobe.d/omandroid-acpm.conf` blacklist from A0 overrode the package's options and left the GPU unbound; remove it when moving from a bring-up stage to the package.
+- **Wi-Fi:** omandroid-wifi.service (hang-safe marker), restricted DMA pool, no SysMMU (W4 decision, WIFI-BATTERY-PLAN 9.20/9.21). Autoconnects to the saved network; no "Invalid chanspec" warnings. One download measured 11 MB/s; the earlier ones were 19-21.
+- **Bluetooth:** powered at boot with the bootloader's address. omandroid-bt-addr now powers the controller on before setting the address; set on a never-powered controller, the kernel withdrew the index for good.
+- **Haptics and torch:** load at boot (DT default-on).
+- **No failed units.**
+- **On-screen keyboard:** stopped appearing once because `org.gnome.desktop.a11y.applications screen-keyboard-enabled` read false. Set back to true; what cleared it is not known yet.
