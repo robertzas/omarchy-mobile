@@ -1,0 +1,186 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# wifi-w1-capture: run one staged gs201 PCIe bring-up attempt (gate W1.3) and
+# keep every kernel line on the laptop, even if the phone hangs.
+#
+# A first SSH connection streams /dev/kmsg into logs/wifi-w1-<time>-s<N>.log
+# BEFORE a second one loads the drivers, so the last line written before a bus
+# hang is already on the laptop. The drivers log each hardware step before
+# doing it (trace=1) and sleep briefly after each line so the stream keeps up.
+#
+# Usage:
+#   tools/wifi-w1-capture [options] STAGE      STAGE 0-5 = pcie_gs201 stop_after
+#   tools/wifi-w1-capture --pstore             after a watchdog reset: save /sys/fs/pstore
+#
+# Options:
+#   --watchdog       arm the hardware watchdog (s3c2410, about 15 s) with a
+#                    feeder loop on the phone. A full hang then resets the phone
+#                    by itself (warm reset, so pstore keeps the console), instead
+#                    of needing a 30 s Power hold (cold, RAM lost).
+#   --no-trace       load without trace=1
+#   --ia 0|1         pcie_gs201 use_ia (default 1)
+#   --cmu-acg-off    pcie_gs201 cmu_acg_off=1 (clear CMU_HSI2 automatic clock gating)
+#   --tcxo           phy_gs201_pcie check_tcxo=1
+#   --delay MS       trace_delay_ms for both drivers (default 20)
+#   --wait SECS      how long to wait for the result (default 30)
+#
+# See device/cheetah/WIFI-BATTERY-PLAN.md, section 8 (W1.3 runbook).
+
+set -uo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+SSH="$ROOT/tools/phone-ssh"
+LOGDIR="$ROOT/logs"
+
+watchdog=0 trace=1 ia=1 acg=0 tcxo=0 delay=20 wait_s=30 stage= pstore=0
+
+usage() { sed -n '/^# Usage:/,/^# See /p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
+warn() { printf '\e[33m==> %s\e[0m\n' "$*"; }
+die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
+
+while (($#)); do
+  case "$1" in
+    --watchdog) watchdog=1 ;;
+    --no-trace) trace=0 ;;
+    --ia) ia="${2:?}"; shift ;;
+    --cmu-acg-off) acg=1 ;;
+    --tcxo) tcxo=1 ;;
+    --delay) delay="${2:?}"; shift ;;
+    --wait) wait_s="${2:?}"; shift ;;
+    --pstore) pstore=1 ;;
+    -h|--help) usage ;;
+    [0-5]) stage="$1" ;;
+    *) usage 1 ;;
+  esac
+  shift
+done
+
+mkdir -p "$LOGDIR"
+stamp=$(date +%Y%m%d-%H%M%S)
+
+# A short, bounded SSH call; returns non-zero if the phone does not answer.
+phone() { timeout 15 "$SSH" -o ServerAliveInterval=2 -o ServerAliveCountMax=3 "$@"; }
+
+if ((pstore)); then
+  out="$LOGDIR/wifi-w1-pstore-$stamp"
+  mkdir -p "$out"
+  phone 'ls -l /sys/fs/pstore/' || die "phone not reachable"
+  for f in $(phone 'ls /sys/fs/pstore/'); do
+    phone "cat /sys/fs/pstore/$f" > "$out/$f"
+  done
+  say "saved to $out"
+  grep -h 'gs201\|pcie' "$out"/console-* 2>/dev/null | tail -20
+  exit 0
+fi
+
+[[ -n "$stage" ]] || usage 1
+
+log="$LOGDIR/wifi-w1-$stamp-s$stage.log"
+
+say "phone check"
+phone 'uname -r' || die "phone not reachable over $SSH"
+pre=$(phone 'set -e
+  ls /sys/bus/platform/devices/ | grep -cE "^(14520000\.pcie|14550000\.phy)$" || true
+  grep -c . /usr/lib/modprobe.d/omandroid-wifi.conf 2>/dev/null || echo 0
+  lsmod | grep -c "^pcie_gs201" || true')
+read -r ndev nblk nloaded <<<"$(echo $pre)"
+[[ "$ndev" == 2 ]] || die "14520000.pcie and 14550000.phy must exist (W1.2 DTB with the overlay); found $ndev"
+[[ "$nblk" != 0 ]] || warn "omandroid-wifi.conf blacklist missing on the phone (W1.0)"
+if [[ "$nloaded" != 0 ]]; then
+  say "pcie_gs201 is loaded; unloading it first"
+  phone 'modprobe -r pcie_gs201' || die "could not unload pcie_gs201"
+fi
+
+say "phone: printk level 8 (so the pstore console keeps info lines), PHY driver params"
+phone "dmesg -n 8; modprobe phy_gs201_pcie &&
+  echo $trace > /sys/module/phy_gs201_pcie/parameters/trace &&
+  echo $delay > /sys/module/phy_gs201_pcie/parameters/trace_delay_ms &&
+  echo $tcxo > /sys/module/phy_gs201_pcie/parameters/check_tcxo" ||
+  die "could not load or configure phy_gs201_pcie"
+
+# 1. The log stream. cat (not dmesg) so nothing is buffered on the phone; the
+#    laptop adds its own receive time to every line.
+say "streaming the phone's kernel log to $log"
+{
+  echo "# wifi-w1-capture $stamp stage=$stage trace=$trace use_ia=$ia cmu_acg_off=$acg check_tcxo=$tcxo delay=$delay watchdog=$watchdog"
+  "$SSH" -T -o ServerAliveInterval=1 -o ServerAliveCountMax=5 \
+    'exec cat /dev/kmsg' 2>&1 |
+  while IFS= read -r line; do
+    printf '%s %s\n' "$(date +%T.%3N)" "$line"
+  done
+  echo "# $(date +%T.%3N) log stream ended (connection closed or phone gone)"
+} >> "$log" &
+logger=$!
+trap 'kill $logger 2>/dev/null' EXIT
+
+sleep 2
+phone "echo 'wifi-w1-capture: start stage $stage' > /dev/kmsg" ||
+  die "phone stopped answering before the test"
+
+# 2. Optional watchdog: a feeder loop that stops when the phone hangs.
+if ((watchdog)); then
+  say "arming the hardware watchdog (feeder every 2 s)"
+  phone 'nohup sh -c "exec 3>/dev/watchdog0
+    trap \"printf V >&3; exit 0\" TERM
+    while :; do printf k >&3; sleep 2; done" >/dev/null 2>&1 &
+    echo $! > /run/wifi-w1-wd.pid' || warn "could not arm the watchdog"
+fi
+
+# 3. The test.
+params="trace=$trace trace_delay_ms=$delay use_ia=$ia cmu_acg_off=$acg stop_after=$stage"
+say "modprobe pcie_gs201 $params"
+start=$(date +%s)
+phone "modprobe pcie_gs201 $params; echo modprobe-exit=\$?" &
+modprobe_pid=$!
+
+# Lines of this attempt only (/dev/kmsg replays the whole buffer first)
+since_start() { sed -n "/wifi-w1-capture: start stage $stage/,\$p" "$log"; }
+
+# 4. Wait for an end marker in the log, or for the phone to go quiet.
+result=
+while (( $(date +%s) - start < wait_s )); do
+  sleep 1
+  if since_start | grep -q 'stopped after stage\|link up on try\|Device not found\|Link failed\|stage [0-9] failed\|failed to initialize host'; then
+    result=done; break
+  fi
+done
+wait "$modprobe_pid" 2>/dev/null
+sleep 2
+
+alive=0
+phone 'true' && alive=1
+
+if ((alive)); then
+  say "phone alive"
+  if ((watchdog)); then
+    phone 'kill $(cat /run/wifi-w1-wd.pid) && rm /run/wifi-w1-wd.pid' ||
+      warn "could not stop the watchdog feeder: the phone resets in about 15 s unless /dev/watchdog0 is fed"
+  fi
+  say "UFS still reading (root device, 4 MiB direct I/O)"
+  phone 'dd if=$(findmnt -no SOURCE /) of=/dev/null bs=1M count=4 iflag=direct 2>&1 | tail -1' ||
+    warn "UFS read failed"
+  if [[ "$stage" == 5 ]]; then
+    phone 'lspci -nn; grep -i gs201 /proc/interrupts' | tee -a "$log"
+  else
+    phone 'modprobe -r pcie_gs201' || warn "could not unload pcie_gs201"
+  fi
+else
+  warn "PHONE NOT ANSWERING: the last kernel lines that reached the laptop are below."
+  warn "The line after the last 'trace: about to ...' is the access that hung."
+  if ((watchdog)); then
+    warn "Wait about 15 s for the watchdog reset; after boot run: $0 --pstore"
+  else
+    warn "Recover by holding Power about 30 s (a cold reset; pstore will be empty)."
+  fi
+fi
+
+sleep 1
+kill "$logger" 2>/dev/null
+trap - EXIT
+
+echo
+say "summary ($log)"
+since_start | grep -E 'gs201|pcie|wifi-w1-capture' | sed -E 's/^([0-9:.]+) [0-9]+,[0-9]+,[0-9]+,[^;]*;/\1 /' | tail -25
+[[ -n "$result" ]] || warn "no end marker seen within ${wait_s}s"

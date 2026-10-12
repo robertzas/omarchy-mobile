@@ -2,9 +2,12 @@
 # Wi-Fi, Bluetooth and battery plan (cheetah / gs201)
 
 Status: W0/B0 (offline prep) done, see "G0 status". B1 done on the phone.
-**PCIe drivers for Wi-Fi (W0b) built offline, see section 7**; W1 is next and
-has a runbook there. Written 2026-10-11 against `omandroid` @ `0e73f9013`
-(Linux 7.3-rc6), kernel branch `omandroid-wifi` in `wt-wifi`.
+PCIe drivers for Wi-Fi (W0b) built offline (section 7). **W1 hung the phone
+twice on 2026-10-11; the cause is found and fixed offline, and W1.3 now runs
+in stages with a log capture tool: see section 8, which replaces the W1.3
+step of 7.5.** Written 2026-10-11 against `omandroid` @ `0e73f9013`
+(Linux 7.3-rc6), kernel branch `omandroid-wifi` in `wt-wifi`; PCIe work in
+`omandroid-pcie` (`wt-pcie`).
 
 Goal: Wi-Fi through mainline brcmfmac, Bluetooth through hci_bcm, and battery
 level plus charging through the upstream MAX77759 drivers, each with Google's
@@ -468,7 +471,7 @@ online and the charger switches to charge mode.
 
 ### Gate W1: PCIe controller (medium-high risk)
 
-Runbook with rollbacks: section 7.5. **Pass:** "PCIe Gen.2 x1 link up" and
+Runbook: section 8.4 (staged; 7.5 for W1.0-W1.2). **Pass:** "PCIe Gen.2 x1 link up" and
 `lspci -nn` shows `01:00.0 Network controller [0280]: Broadcom ... [14e4:4441]`.
 (0x4441 is the PCI device ID; 0x4389 is the chip ID that brcmfmac prints at
 W2.) Never touch PMU 0x3ec4 from userspace (see the PMU warnings in
@@ -637,13 +640,13 @@ Kernel branch `omandroid-pcie` in `/home/raven/android/mainline/wt-pcie`
 
 | Commit | What |
 |---|---|
-| `2c53edc02` dt-bindings: phy: add Google gs201 PCIe PHY | `google,gs201-pcie-phy.yaml` |
-| `3edb1537c` phy: samsung: add Google gs201 PCIe PHY driver | `P/drivers/phy/samsung/phy-gs201-pcie.c`, `CONFIG_PHY_GS201_PCIE` (m) |
-| `c7d7cecdb` dt-bindings: PCI: add Google gs201 PCIe host controller | `google,gs201-pcie.yaml` |
-| `1176623e1` PCI: dwc: add Google gs201 PCIe host controller driver | `P/drivers/pci/controller/dwc/pcie-gs201.c`, `CONFIG_PCIE_GS201` (m) |
-| `e0bc2d709` dt-bindings: net: wireless: brcm,bcm4329-fmac: allow a restricted DMA pool | `memory-region` on the Wi-Fi node |
-| `ed54e5553` arm64: dts: exynos: google: gs201: add HSI2 pinctrl and PCIe GEN4A_1 | `pinctrl_hsi2` (enabled), `pcie_1` + `pcie_1_phy` (**disabled**) |
-| `edd3a2137` arm64: dts: exynos: google: gs201-cheetah: wire up the BCM4389 Wi-Fi | WL_REG_ON regulator, root port + `wifi@0,0`, pins, `wifi_dma_pool` (**disabled**) |
+| `c66efda39` dt-bindings: phy: add Google gs201 PCIe PHY | `google,gs201-pcie-phy.yaml` |
+| `cda2eddb1` phy: samsung: add Google gs201 PCIe PHY driver | `P/drivers/phy/samsung/phy-gs201-pcie.c`, `CONFIG_PHY_GS201_PCIE` (m) |
+| `f6e5443d8` dt-bindings: PCI: add Google gs201 PCIe host controller | `google,gs201-pcie.yaml` |
+| `65eb5647f` PCI: dwc: add Google gs201 PCIe host controller driver | `P/drivers/pci/controller/dwc/pcie-gs201.c`, `CONFIG_PCIE_GS201` (m) |
+| `f08655559` dt-bindings: net: wireless: brcm,bcm4329-fmac: allow a restricted DMA pool | `memory-region` on the Wi-Fi node |
+| `3f6c342fe` arm64: dts: exynos: google: gs201: add HSI2 pinctrl and PCIe GEN4A_1 | `pinctrl_hsi2` (enabled), `pcie_1` + `pcie_1_phy` (**disabled**) |
+| `c2b4f9d3d` arm64: dts: exynos: google: gs201-cheetah: wire up the BCM4389 Wi-Fi | WL_REG_ON regulator, root port + `wifi@0,0`, pins, `wifi_dma_pool` (**disabled**) |
 
 omandroid repo: `kernel/configs/omandroid.config` (`PCIE_GS201=m`,
 `PHY_GS201_PCIE=m`, `PCI_PWRCTRL_GENERIC=y` (built in anyway: the arm64
@@ -692,6 +695,12 @@ the PHY and the pool all enabled) reports only the existing `soc_id`.
   pool (`P/drivers/of/device.c:51-58`), so it costs nothing until enabled.
 
 ### 7.3 Design choices, with evidence
+
+> **Corrected 2026-10-11 (section 8.3).** This section was written against
+> Google's `dwc/` driver, which is the Zuma (Pixel 8) one. The driver Google
+> builds for gs201 is `dwc-whi/`. The PMU bit 10, UDBG 0xc800 and PMA 0x32c
+> writes below are gone; the soft resets, RC device type and the newer CAL
+> details were added; and the PHY now leaves isolation before any ELBI access.
 
 - **PHY sequence = Google's CAL, verbatim.** Order in `phy_power_on()`:
   power-down clear (`GD/pcie-exynos-gs201-rc-cal.c:62-88`), then the
@@ -811,14 +820,15 @@ $O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" out/wifi-pcie-test.dtbo
 bin/omandroid images && bin/omandroid push
 tools/phone-ssh 'ls /sys/bus/platform/devices | grep -E "14520000|14550000"; lsmod | grep gs201'
 #       pass: both devices exist; phy_gs201_pcie may be loaded (it only maps registers), pcie_gs201 not
-# DO NOT read the controller's registers here (e.g. devmem 0x145202c8): before
-# pcie_gs201 powers and clocks the block, the read hangs the bus and the phone
-# with it (no panic, so no auto-reboot; recover by holding Power ~30 s). This
-# happened on 2026-10-11. Read ELBI/LTSSM only after W1.3's modprobe.
+# DO NOT read the controller's registers here (e.g. devmem 0x145202c8): ABL
+# leaves the PHY isolated in the PMU, and while it is isolated any ELBI access
+# hangs the SoC (no panic, so no auto-reboot; recover by holding Power ~30 s).
+# This happened on 2026-10-11 (section 8.1). Never devmem PCIe registers at all;
+# the driver logs what is needed.
 #       rollback: cp "$D.default" "$D"; bin/omandroid images && bin/omandroid push
 #       (bin/omandroid kernel also rebuilds the DTB without the overlay)
 
-# W1.3  train the link, by hand
+# W1.3  SUPERSEDED by section 8 (staged, with tools/wifi-w1-capture). Kept for the record:
 tools/phone-ssh 'modprobe phy_gs201_pcie &&
   echo "module pcie_gs201 +p; module phy_gs201_pcie +p" > /sys/kernel/debug/dynamic_debug/control &&
   modprobe pcie_gs201 && sleep 1 && lspci -nn'
@@ -908,3 +918,317 @@ W1.2 DTB.
 - **Suspend.** No L2/PME path yet; keep suspend off (it already is).
 - **Domain number.** We have one host bridge, so the Wi-Fi chip is
   `0000:01:00.0`, not stock's `0001:01:00.0`.
+
+---
+
+## 8. W1 on the phone: two hangs, the cause, and the staged W1.3 (2026-10-11)
+
+Path abbreviations as above, plus `GW/` =
+`GS/drivers/pci/controller/dwc-whi`.
+
+### 8.1 What happened
+
+1. **W1.2** booted fine with `wifi-pcie-test.dtso`: `14520000.pcie` and
+   `14550000.phy` were present and `phy_gs201_pcie` autoloaded (its probe only
+   maps registers). Then `devmem 0x145202c8` (ELBI LTSSM) **hung the whole
+   phone**: no panic, no auto-reboot, recovered with a 30 s Power hold.
+2. **W1.3, try 1:** `modprobe pcie_gs201` failed cleanly with -EBUSY ("can't
+   request region for resource [mem 0x14520000-0x145213ff]"). The DWC core
+   requested "elbi" a second time. Fixed by handing the mapping over
+   (`pci->elbi_base = gp->elbi`), folded into the driver commit.
+3. **W1.3, try 2:** `modprobe phy_gs201_pcie; modprobe pcie_gs201` **hung the
+   whole phone within seconds**. The network went, and there was no panic.
+   Nothing reached the disk (the nohup log and the journal were empty), and
+   pstore was empty after the Power-hold reset.
+
+Why nothing was logged:
+
+- **The disk could not help.** The root file system is UFS, in the same HSI2
+  block. With one CPU stuck in a load that never completes, IPIs and RCU stall
+  the rest within seconds.
+- **pstore could not help either:**
+  - the bootargs carry `quiet`, so the pstore console only got warnings and
+    worse;
+  - a 30 s Power hold is a cold PMIC reset, so DRAM, and with it ramoops, is
+    lost.
+
+### 8.2 Cause, ranked, with evidence
+
+1. **ELBI accessed while the PHY was still isolated (almost certain).**
+   - ABL leaves the channel-1 PHY isolated in the PMU (`0x18063ec4` bit 0 =
+     0). While it is isolated, even a read of the controller's ELBI registers
+     hangs the SoC. Isolation must be released first, through the secure SMC
+     path. Copying Google's probe order verbatim hits this.
+   - **W1.2:** `devmem 0x145202c8` was an ELBI read with the PHY still
+     isolated, which explains hang 1 exactly.
+   - **W1.3:** our old probe did the following, all before `phy_init()` (the
+     only place that released isolation):
+     - wrote ELBI `0x10/0x14/0x18` in `gs201_pcie_init_irq()`;
+     - installed the chained IRQ handler, which reads ELBI;
+     - wrote ELBI `0x54` (LTSSM off) at the top of `host_init`.
+
+     The first access hung. That explains hang 2.
+   - **Google's code agrees:**
+     - its gs201 config accessor refuses DBI reads while `phy_control ==
+       PCIE_PHY_ISOLATION` (`GW/pcie-exynos-rc.c:1269-1290`);
+     - it never isolates ch1 again after probe (`use-phy-isol-con` is not set
+       in the stock DT).
+2. **We ported the wrong Google driver (certain; a link-training risk, and
+   one unknown register write).**
+   - Section 7 used `GS/drivers/pci/controller/dwc/`, which is the Zuma
+     (Pixel 8) driver. Its `get_resource()` requires a "soc" region that the
+     stock cheetah DT does not have.
+   - The gs201 build compiles `GS/drivers/pci/controller/dwc-whi/`. That is
+     the path of the built `pcie-exynos-gs.ko` under
+     `out/bazel/.../gs201_soc/.../dwc-whi/`.
+   - **What `dwc-whi` does differently:**
+     - **No** PMU `0x3ec4` bit 10 write, **no** UDBG `0xc800 = 0x421` and no
+       PMA `0x32c` write. All three are Zuma's. On gs201, UDBG 0xc800 is an
+       undocumented register, so writing it was a hang candidate of its own.
+     - A soft power reset (ELBI `0x3a4` bit 1), **DEVICE_TYPE = 4 (root
+       complex) at ELBI `0x80`**, and a non-sticky reset (bit 3) before the
+       DBI setup (`GW/pcie-exynos-rc.c:3142-3173`). Without them the core may
+       not even be in RC mode.
+     - CAL changes (`GW/pcie-exynos-gs201-rc-cal.c`):
+       - PMA `0x404` in power-down and its clear;
+       - PMA `0x400` bit 7 (PMA off) at power-down;
+       - PCS `0x184` rate switching;
+       - ERIO gating bits 4 and 5, not only 4;
+       - AFC calibration restart (`0xbf4 = 4`);
+       - a reset-value self-check.
+
+       The big PMA tables are identical (checked line by line).
+     - PLL, CDR and offset-calibration polls after the config, each bounded
+       at 10 ms (`:908-935`, `:3122-3160`).
+     - No `XFER_PENDING` writes in the link path.
+3. **CMU_HSI2 global automatic clock gating (unproven; kept as an opt-in
+   experiment).**
+   - Our clk-gs201 writes `CMU_HSI2 CONTROLLER_OPTION` (`0x14400800`) =
+     `0xf1000000` at boot (bit 28 = global HWACG, `clk-exynos-arm64.c:104-112`).
+   - Google's gs201 probe clears bit 28 for ch1 ("Disable automatic clock
+     gating on OSCCLK", `GW/pcie-exynos-rc.c:2690-2712`), and the controller's
+     Q-channel by default allows APB/AXI gating in Detect.Quiet (`QCH_SEL`
+     bits, `GW/pcie-exynos-rc.h:64-85`).
+   - UFS shares this CMU. So it stays off unless stage 2 or 3 still hangs
+     (`cmu_acg_off=1`).
+4. **Lower-ranked, checked:**
+   - The DWC core only issues config cycles to bus 1 when `link_up` is true
+     (`dw_pcie_other_conf_map_bus()`).
+   - The PMU write goes through the SMC (`tensor_sec_update_bits`). A refusal
+     returns an error, not a hang.
+   - There are no unbounded polls in our code.
+   - The clock "enables" are no-ops on CMU_HSI2's auto gates
+     (`samsung_auto_clk_gate_en()` returns 0), so they cannot be the
+     difference.
+
+### 8.3 What changed (all offline)
+
+Kernel `omandroid-pcie` in `wt-pcie`, fixups squashed into the existing
+commits. The new heads:
+
+| Commit | What |
+|---|---|
+| `cda2eddb1` | phy: samsung: add Google gs201 PCIe PHY driver |
+| `f6e5443d8` | dt-bindings: PCI: add Google gs201 PCIe host controller |
+| `65eb5647f` | PCI: dwc: add Google gs201 PCIe host controller driver |
+| `3f6c342fe` | arm64: dts: exynos: google: gs201: add HSI2 pinctrl and PCIe GEN4A_1 |
+
+The other commits are unchanged in content.
+
+**PHY driver:**
+- `phy_init()` releases the isolation through the PMU regmap (SMC), then
+  powers the PHY down. This is Google's probe step, and the first PMA/PCS
+  access happens here.
+- `phy_power_on()` runs the `dwc-whi` CAL and the lock polls.
+- `phy_calibrate()` reports OC after the soft reset.
+- `phy_exit()` **no longer re-isolates**, as stock.
+
+**Controller driver:**
+- The new order follows `GW/`, with the isolation release moved first:
+  1. isolation off and PHY power-down;
+  2. the first ELBI access (interrupt enables off, LTSSM off);
+  3. the chained IRQ handler;
+  4. WL_REG_ON and 200 ms;
+  5. PHY config and I/A;
+  6. soft power reset, RC device type, non-sticky reset;
+  7. PERST# and 20 ms;
+  8. ELBI setup, DBI setup and IOCC;
+  9. DWC root-port setup, then LTSSM.
+- A failed try redoes the PHY, controller and `dw_pcie_setup_rc()`, as stock.
+- The DT has a new optional `samsung,cmu = <&cmu_hsi2>` (binding updated). It
+  is used only for the CMU option read, the dump and `cmu_acg_off`.
+
+**Bring-up aids (module parameters):**
+
+| Module | Parameter | Meaning |
+|---|---|---|
+| `pcie_gs201` | `stop_after=N` (0444) | end probe after stage N, undo, do not bind (returns -ENODEV, silent) |
+| both | `trace=1` (0644) | log each hardware step *before* doing it: "about to read PMA 0x400", "enable clk ...", ... |
+| both | `trace_delay_ms=20` (0644) | sleep after each trace line, so `/dev/kmsg` readers get it before a possible hang |
+| `pcie_gs201` | `use_ia=0` | skip the I/A sequencer |
+| `pcie_gs201` | `cmu_acg_off=1` | clear CMU_HSI2 global automatic clock gating in stage 1 (Google's step) |
+| `phy_gs201_pcie` | `check_tcxo=1` | read PMU `0x3c10` (TCXO_BUF_CTRL; stock reads it raw on every boot) and set bits 2/3/10 via SMC if missing |
+
+Stages:
+
+| N | Stage | Hardware touched |
+|---|---|---|
+| 0 | resources | none (mappings, GPIO PERST# held low) |
+| 1 | clocks | clock refs (no-ops on HSI2); with `samsung,cmu`: one CMU_HSI2 read (option), with trace a dump of the HSI2 gate and PCIe Q-channel registers; `cmu_acg_off=1` writes the option |
+| 2 | PHY isolation off, first register access | PMU 0x3ec4 bit 0 via SMC; PHY power-down (first PMA/PCS writes and reads); ELBI `0x10-0x18`, `0x54` writes; ELBI `0x3a8/0x3a4/0x80` reads |
+| 3 | PHY configuration | power-down clear, PMA reset self-check, CAL tables, ELBI `+0x1400` PHY resets, lock polls; I/A program and start |
+| 4 | controller setup | soft resets, DEVICE_TYPE, first DBI reads (ID, `0x8f8` version), DBI and ELBI setup, IOCC; ELBI `0x2e8/0x2c8` read (the register that hung W1.2) |
+| 5 | link (default) | WL_REG_ON, PERST#, DWC iATU/root port, LTSSM, enumeration |
+
+With `stop_after < 5` WL_REG_ON is never raised, PERST# stays low and no host
+bridge is registered. Each staged run ends with the PHY powered down (not
+isolated) and the clock refs dropped, so stages can be re-run on the same
+boot.
+
+**`tools/wifi-w1-capture`** (MIT), run from the laptop:
+1. Checks the phone: both devices present, the blacklist, and whether
+   `pcie_gs201` is loaded (if so, unloads it).
+2. Sets `dmesg -n 8`, so the pstore console keeps info lines too.
+3. Sets the PHY module's parameters through sysfs.
+4. Starts `cat /dev/kmsg` over a first SSH connection into
+   `logs/wifi-w1-<time>-s<N>.log`, with the laptop's receive time on each
+   line.
+5. Writes a start marker to `/dev/kmsg`.
+6. Optionally (`--watchdog`) arms `/dev/watchdog0` with a 2 s feeder on the
+   phone. A full hang then becomes a warm watchdog reset in about 15 s, with
+   DRAM and ramoops kept, instead of a cold Power hold.
+7. Runs `modprobe pcie_gs201 trace=1 stop_after=N ...` over a second
+   connection.
+8. Waits for an end marker. If the phone still answers, it stops the watchdog,
+   checks that UFS still reads, and unloads (stage < 5) or runs `lspci`
+   (stage 5). If the phone is gone, it prints the last lines that arrived.
+9. `tools/wifi-w1-capture --pstore` saves `/sys/fs/pstore/*` after a watchdog
+   reset.
+
+Builds: `bin/omandroid kernel`, `modules` and `images` with
+`KERNEL_DIR=wt-pcie KERNEL_OUT=out-pcie` exit 0 (`logs/kernel-pcie.log`,
+`modules-pcie.log`, `images-pcie.log`). Both drivers are clean with `W=1`.
+`out-pcie`'s DTB **has the test overlay applied** (`pcie_1` and the PHY
+okay, `samsung,cmu` present); the plain one is
+`gs201-cheetah.dtb.default`. `dt_binding_check` was not re-run (dtschema is
+not installed in the container or on the host); the YAML parses.
+
+### 8.4 W1.3 runbook (staged)
+
+Prerequisites:
+- The W1.0 blacklist is on the phone.
+- The phone boots the `out-pcie` kernel with the test DTB:
+  `bin/omandroid modules-push && bin/omandroid push` with
+  `KERNEL_DIR=$HOME/android/mainline/wt-pcie
+  KERNEL_OUT=$HOME/android/mainline/out-pcie`. The new modules must be on the
+  phone, because the old `pcie_gs201.ko` is the one that hangs.
+- **Never use devmem on any PCIe, PHY or PMU register.**
+
+Run each stage once, in order, on the same boot. Stop at the first stage that
+does not pass.
+
+```sh
+tools/wifi-w1-capture 0              # driver loads, parses DT, no hardware: "stopped after stage 0"
+tools/wifi-w1-capture 1              # clocks + CMU_HSI2 option read (+ gate dump)
+tools/wifi-w1-capture --watchdog 2   # THE decisive step: isolation release, first PHY and ELBI access
+tools/wifi-w1-capture --watchdog 3   # PHY config: look at "PLL lock 1"
+tools/wifi-w1-capture --watchdog 4   # soft resets, RC mode, first DBI access
+tools/wifi-w1-capture --watchdog 5   # WL_REG_ON, PERST#, training, lspci
+```
+
+What each pass looks like (lines from the summary, `14520000.pcie:` /
+`14550000.phy:` prefixes omitted):
+
+- **0:** `stage 0/5: resources (stop_after=0, trace=1, use_ia=1,
+  cmu_acg_off=0)`, then `stopped after stage 0 as asked`.
+- **1:**
+  - `enable clk gout_hsi2_pcie_gen4_1_pcie_003_...` lines;
+  - `CMU_HSI2 option 0x........ (automatic gating on|off)`, plus 8 + 2 dump
+    lines. Write down the option value and the dump: they record ABL's gate
+    state, which we never had;
+  - `stage 1 done`.
+- **2:**
+  - `trace: about to set PMU 0x3ec4 bit 0 (PHY isolation off, SMC)`;
+  - `about to read PMA 0x400 (first PMA read)`, then `about to read PCS 0x184`;
+  - `PHY out of isolation and powered down`;
+  - `about to write ELBI 0x010-0x018 (first ELBI access ...)`;
+  - `ELBI QCH_SEL 0x... SOFT_RESET 0x... DEVICE_TYPE 0x...`;
+  - `stage 2 done`.
+
+  The UFS check prints a `dd` line.
+- **3:**
+  - `PLL lock 1, CDR lock 0|1, OC done 1 (...)`. CDR may be 0: there is no
+    partner, WL_REG_ON is off below stage 5;
+  - possibly `PMA 0x.. after reset: ... (expected ...)` lines (Google's
+    self-check; note them, not fatal);
+  - `about to program the I/A sequencer`, then `stage 3 done`.
+- **4:**
+  - `DBI ID 0x........`: a Samsung or Synopsys ID, **not 0xffffffff**;
+  - `DWC version 0x........`;
+  - possibly `OC not done after soft power reset: ...`;
+  - `D-state 0, LTSSM 0x0`, then `stage 4 done`.
+- **5:**
+  - `about to power the endpoint (WL_REG_ON, gph2-4, 200 ms)`;
+  - `link try 1: ...`, then `link up on try 1`;
+  - the DWC core's `PCIe Gen.2 x1 link up` line;
+  - `lspci -nn` shows `00:00.0 [144d:eced]` and `01:00.0 [14e4:4441]`.
+
+  Then continue with W2 (7.6).
+
+**Reading a hang.**
+- The log's last `trace: about to ...` line names the access that never
+  completed. Lines are ordered and carry the laptop's receive time, so a gap
+  of more than about 1 s before the end means the phone died during that
+  step.
+- With `--watchdog` the phone resets itself in about 15 s. Then run
+  `tools/wifi-w1-capture --pstore`; the `console-ramoops-0` file should end
+  at the same line.
+- What to do next, by the last line:
+
+| Last line | Meaning | Next try (one more reset at most) |
+|---|---|---|
+| `about to set PMU 0x3ec4 bit 0` (stage 2) | the SMC itself stalled, which is unexpected | report; check the SMC path with a known register (reboot-mode's 0x810 works) |
+| `PMU write failed: -22` (stage 2, no hang) | EL3 refused the atomic set-bits form | add a TENSOR_PMUREG_RMW path for this register (Google uses `rmw_priv_reg`), no phone risk |
+| `about to read PMA 0x400` or `PCS 0x184` (stage 2) | PHY APB clock gated | rerun stage 2 with `--cmu-acg-off` |
+| `about to write/read ELBI ...` (stage 2) | isolation release did not take, or the APB clock is gated | `--cmu-acg-off`; if it still hangs, compare the gate dump from stage 1 with stock |
+| `about to poll PMA ...` (stage 3) | should not hang (pure reads after successful ones) | `--ia 0`, `--tcxo` |
+| `about to program the I/A sequencer` (stage 3) | I/A misbehaves | `--ia 0` |
+| `about to read DBI 0x000 ...` (stage 4) | the DWC core is not clocked (no pipe/core clock) | `--cmu-acg-off`; check `PLL lock 1` in stage 3 |
+| `link try N ...` (stage 5) | hang during training (should be impossible) | `--ia 0` |
+
+**Rollback:**
+- A hang: a Power hold of about 30 s (or the watchdog). ABL then boots
+  slot B again, or slot A after its retries.
+- To return to the main kernel: unset `KERNEL_DIR`/`KERNEL_OUT`, then run
+  `bin/omandroid modules-push && bin/omandroid push`. That pushes
+  `~/android/mainline/out`, which has no PCIe at all.
+- To keep `out-pcie` but turn PCIe off: `cp "$D.default" "$D"`, then
+  `bin/omandroid images && bin/omandroid push`.
+
+### 8.5 Still open
+
+- **L1.2 teardown.** A link torn down while in L1.2 can make the next
+  bring-up hang in training: leave L1, send PME_Turn_Off and reach L2 before
+  PERST#. We have no L1 substates yet, so this cannot bite at W1. It
+  matters before ASPM/L1SS or runtime suspend.
+- **brcmfmac for this chip likely needs more than 1.6 lists**, on top of the
+  Pixel 6 work:
+  - H2D sequence numbers (otherwise an "h2d livelock" trap);
+  - ring indices in host memory;
+  - XOR-checksum D2H sync;
+  - the v1 join parameters;
+  - the host builds the 802.3/LLC header;
+  - packet ID 0 never used;
+  - reused ring slots cleared;
+  - **all four save/restore power domains requested through ChipCommon
+    `powerctl` after every reset** (otherwise the backplane faults from a
+    cold boot).
+
+  Our firmware is 20.101.90. Plan W2 with this list.
+- **S2MPU (W4).** Reportedly, touching any
+  S2MPU register other than CTRL0 reset the SoC, and S2MPUs come back with
+  CTRL0 = 1 after a power-domain cycle. Reading CTRL0 (W1.1) stays fine.
+  Revisit W4 (EL1 S2MPU programming) with this in mind.
+- **pstore and `quiet`.** The capture tool raises the console level at run
+  time. To keep boot-time messages in pstore as well, `quiet` would have to
+  leave the DT bootargs. Not done, because it is a user-visible boot change.
