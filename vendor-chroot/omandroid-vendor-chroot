@@ -119,6 +119,8 @@ setup_dev() {
       ln -s "binderfs/$n" "$dev/$n"
     done
   fi
+  # the target lives in the tmpfs just mounted on dev: create it first
+  mkdir -p "$dev/__omandroid_props__"
   mount -t tmpfs -o mode=0755,nosuid,nodev,noexec props "$dev/__omandroid_props__"
   write_props "$dev/__omandroid_props__"
 }

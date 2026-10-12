@@ -135,6 +135,8 @@ setup_dev() {
   done
   # Factory calibration: a read-only copy, never the partition itself.
   [[ -f $STATE/mfg_data.img ]] && bind "$STATE/mfg_data.img" "$dev/block/by-name/mfg_data" ro
+  # the target lives in the tmpfs just mounted on dev: create it first
+  mkdir -p "$dev/__omandroid_props__"
   mount -t tmpfs -o mode=0755,nosuid,nodev,noexec props "$dev/__omandroid_props__"
   write_props "$dev/__omandroid_props__"
 }
