@@ -54,8 +54,9 @@ Path abbreviations:
    PCM (to the AoC) to the HCI transport.
 6. **The factory speaker calibration exists** in `persist`
    (`/mnt/vendor/persist/audio/speaker.cal`, and in our backup `P/persist.img`):
-   per amplifier, ReDC `0x1fd5` / `0x21ac` with status 1 and checksum = ReDC +
-   status, measured at 27 °C. Speaker protection must be fed these values;
+   per amplifier, a ReDC value with status 1 and checksum = ReDC + status,
+   plus the ambient temperature at calibration. (The values are unique to
+   each phone and stay out of the repository.) Speaker protection must be fed these values;
    which value belongs to which amplifier is still to be confirmed.
 
 ---
@@ -82,7 +83,7 @@ Path abbreviations:
 | Gains (stock) | speaker: `AMP PCM Gain` **17** (17.5 dB), `Digital PCM Volume` **817** (0 dB), PCM source DSP (protection firmware); earpiece (`handset`): PCM source **ASP** (DSP bypass), gain **6** (6.5 dB); voice earpiece gain 7 | `V/etc/mixer_paths.xml:80-83,90-99,640-650` |
 | DSP firmware | `cs35l41-dsp1-spk-prot.wmfw` (both amps) + `cs35l41-dsp1-spk-prot.bin` (top) / `R-cs35l41-dsp1-spk-prot.bin` (bottom); also `-spk-cali` and `-spk-diag` sets; firmware 0x400a4 v0.45.0, algorithms `cd` (protection) and `f20b` | `R/vendor-firmware.txt`; `V/firmware/`; `R/dmesg.txt:6468-6486` |
 | Tuning deltas | `fast_switch1..4.txt` ("Fast Use Case" deltas: FIR bypass vs enable). Google-only mechanism, not in mainline | `V/firmware/fast_switch*.txt`; `V/etc/mixer_paths.xml:111-115,667-673` |
-| Calibration | `/mnt/vendor/persist/audio/speaker.cal`, 48 bytes, two records of six LE u32: `0x1fd5, 1, 0x1fd6, 27, 0x11, 0x331` and `0x21ac, 1, 0x21ad, 27, 0x11, 0x331` (CAL_R, CAL_STATUS, CAL_CHECKSUM = R + status, CAL_AMBIENT °C, two unidentified). Applied by the HAL library to the DSP controls `CAL_R`, `CAL_STATUS`, `CAL_CHECKSUM`, `CAL_AMBIENT` | `P/persist.img` (`debugfs -R 'cat /audio/speaker.cal'`); `V/lib64/audio_spk_35l41.so` strings; `V/etc/init/hw/init.pantah.rc:32-33` |
+| Calibration | `/mnt/vendor/persist/audio/speaker.cal`, 48 bytes, two records of six LE u32: `CAL_R, 1, CAL_R + 1, ambient °C, x, y` per amplifier (values not recorded here) (CAL_R, CAL_STATUS, CAL_CHECKSUM = R + status, CAL_AMBIENT °C, two unidentified). Applied by the HAL library to the DSP controls `CAL_R`, `CAL_STATUS`, `CAL_CHECKSUM`, `CAL_AMBIENT` | `P/persist.img` (`debugfs -R 'cat /audio/speaker.cal'`); `V/lib64/audio_spk_35l41.so` strings; `V/etc/init/hw/init.pantah.rc:32-33` |
 
 ### 1.2 Earpiece
 
