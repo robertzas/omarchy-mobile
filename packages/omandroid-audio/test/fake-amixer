@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# A stand-in for amixer, for test/all: the AoC card's amplifier controls as the
+# kernel exposes them (cs35l41 with the AoC card's limits), with the DSP's
+# firmware controls appearing once "DSP1 Preload Switch" is turned on.
+#   FAKE_AMIXER_STATE   JSON state file (created on first use)
+#   FAKE_AMIXER_LOG     every cset is appended here
+#   FAKE_DIGITAL_MAX    Digital PCM Volume max (817 with the kernel limit)
+#   FAKE_ANALOG_MAX     Analog PCM Volume max (10 with the kernel limit)
+#   FAKE_NO_DSP=1       the firmware does not load (no DSP controls)
+import json
+import os
+import sys
+
+state_path = os.environ['FAKE_AMIXER_STATE']
+AMPS = ('Top', 'Bottom')
+DSP_RX = ['Zero', 'ASPRX1', 'ASPRX2', 'VMON', 'IMON', 'VPMON', 'VBSTMON', 'DSPTX1', 'DSPTX2']
+FW = ['Default', 'Protection', 'Calibration']
+
+
+def initial():
+    c = {}
+    for p in AMPS:
+        c[f'{p} Digital PCM Volume'] = {'type': 'INTEGER', 'max': int(os.environ.get('FAKE_DIGITAL_MAX', 817)), 'v': 657}
+        c[f'{p} Analog PCM Volume'] = {'type': 'INTEGER', 'max': int(os.environ.get('FAKE_ANALOG_MAX', 10)), 'v': 0}
+        c[f'{p} PCM Source'] = {'type': 'ENUMERATED', 'items': ['ASP', 'DSP'], 'v': 0}
+        c[f'{p} DSP RX1 Source'] = {'type': 'ENUMERATED', 'items': DSP_RX, 'v': 1}
+        c[f'{p} DSP RX2 Source'] = {'type': 'ENUMERATED', 'items': DSP_RX, 'v': 2}
+        c[f'{p} DSP1 Firmware'] = {'type': 'ENUMERATED', 'items': FW, 'v': 1}
+        c[f'{p} DSP1 Preload Switch'] = {'type': 'BOOLEAN', 'v': 0}
+    c['TDM_0_RX Mixer EP6'] = {'type': 'BOOLEAN', 'v': 0}
+    return c
+
+
+def dsp_controls(c, p):
+    names = [f'{p} DSP1 Protection cd {n}' for n in
+             ('CAL_R', 'CAL_R_SELECTED', 'CAL_STATUS', 'CAL_CHECKSUM', 'CAL_AMBIENT', 'CAL_SET_STATUS',
+              'CSPL_STATE', 'CSPL_TEMPERATURE')]
+    names.append(f'{p} DSP1 Protection f20b CAL_R')       # a decoy from the other algorithm
+    for n in names:
+        c.setdefault(n, {'type': 'BYTES', 'v': [0, 0, 0, 0]})
+
+
+def load():
+    try:
+        with open(state_path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return initial()
+
+
+def save(c):
+    with open(state_path, 'w') as f:
+        json.dump(c, f)
+
+
+def show(name, ctl):
+    t = ctl['type']
+    print(f"numid=1,iface=MIXER,name='{name}'")
+    if t == 'INTEGER':
+        print(f"  ; type=INTEGER,access=rw---R--,values=1,min=0,max={ctl['max']},step=0")
+        print(f"  : values={ctl['v']}")
+    elif t == 'ENUMERATED':
+        print(f"  ; type=ENUMERATED,access=rw------,values=1,items={len(ctl['items'])}")
+        for i, item in enumerate(ctl['items']):
+            print(f"  ; Item #{i} '{item}'")
+        print(f"  : values={ctl['v']}")
+    elif t == 'BOOLEAN':
+        print("  ; type=BOOLEAN,access=rw------,values=1")
+        print(f"  : values={'on' if ctl['v'] else 'off'}")
+    else:
+        print("  ; type=BYTES,access=rw------,values=4")
+        print('  : values=' + ','.join(f'0x{b:02x}' for b in ctl['v']))
+
+
+def main(argv):
+    args = [a for a in argv if a != '-q']
+    if args[:1] == ['-c']:
+        args = args[2:]
+    c = load()
+    cmd = args[0]
+    if cmd == 'controls':
+        for name in c:
+            print(f"numid=1,iface=MIXER,name='{name}'")
+        return 0
+    name = args[1].split('=', 1)[1]
+    if name not in c:
+        print(f'amixer: Cannot find the given element from control hw:0', file=sys.stderr)
+        return 1
+    ctl = c[name]
+    if cmd == 'cget':
+        show(name, ctl)
+        return 0
+    value = args[2]
+    with open(os.environ['FAKE_AMIXER_LOG'], 'a') as log:
+        log.write(f'{name}={value}\n')
+    t = ctl['type']
+    if t == 'INTEGER':
+        ctl['v'] = max(0, min(int(value), ctl['max']))     # the kernel clamps to max
+    elif t == 'ENUMERATED':
+        if value not in ctl['items']:
+            return 1
+        ctl['v'] = ctl['items'].index(value)
+    elif t == 'BOOLEAN':
+        ctl['v'] = 1 if value in ('on', '1') else 0
+        if ctl['v'] and name.endswith('DSP1 Preload Switch') and os.environ.get('FAKE_NO_DSP') != '1':
+            dsp_controls(c, name.split(' ')[0])
+    else:
+        ctl['v'] = [int(b, 0) for b in value.split(',')]
+    save(c)
+    return 0
+
+
+sys.exit(main(sys.argv[1:]))

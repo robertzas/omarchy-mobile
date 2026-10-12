@@ -1,0 +1,17 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omandroid-audio into DESTDIR. Enables nothing: the speaker protection
+# service is enabled by hand once AOC-PLAN.md stage C8 has passed.
+#   ./install DESTDIR
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+d=${1:?Usage: ./install DESTDIR}
+[[ $d == /* && $d != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+install -Dm755 bin/omandroid-speaker-protection "$d/usr/bin/omandroid-speaker-protection"
+install -Dm644 systemd/omandroid-speaker-protection.service "$d/usr/lib/systemd/system/omandroid-speaker-protection.service"
+install -Dm644 modprobe.d/omandroid-audio.conf "$d/usr/lib/modprobe.d/omandroid-audio.conf"
+install -Dm644 speaker.conf "$d/etc/omandroid/speaker.conf"
+install -Dm644 ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf "$d/usr/share/alsa/ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf"
+install -Dm644 ucm2/Google/cheetah/HiFi.conf "$d/usr/share/alsa/ucm2/Google/cheetah/HiFi.conf"
+install -Dm644 wireplumber/51-omandroid-aoc.conf "$d/usr/share/wireplumber/wireplumber.conf.d/51-omandroid-aoc.conf"
+install -Dm644 LICENSE "$d/usr/share/licenses/omandroid-audio/LICENSE"

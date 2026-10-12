@@ -1,0 +1,188 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omandroid-audio, from a copy of this directory alone. The speaker
+# protection script runs against stand-ins for amixer, modprobe and debugfs
+# and a synthetic calibration file (made-up values, not a phone's).
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+tmp=$(mktemp -d); [[ -n ${KEEP:-} ]] || trap 'rm -rf "$tmp"' EXIT; [[ -z ${KEEP:-} ]] || echo "$tmp"
+here=$PWD
+
+bash -n bin/omandroid-speaker-protection || fail "the script parses"
+python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' test/fake-amixer || fail "fake-amixer compiles"
+pass "scripts parse"
+
+# --- UCM: the profile parses (alsa-lib's own parser, a virtual card) --------
+if command -v alsaucm >/dev/null && [[ -r /usr/share/alsa/ucm2/ucm.conf ]]; then
+  u=$tmp/ucm2
+  mkdir -p "$u/conf.virt.d" "$u/Google"
+  cp -r /usr/share/alsa/ucm2/ucm.conf /usr/share/alsa/ucm2/lib "$u/"
+  cp -r ucm2/Google/cheetah "$u/Google/"
+  cp ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf "$u/conf.virt.d/aoctest.conf"
+  # No card here: stand in for the card substitutions, keep the rest as is
+  sed -i -e 's/\${CardId}/0/g' -e 's/\${find-device:[^}]*playback[^}]*}/5/' \
+      -e 's/\${find-device:[^}]*capture[^}]*}/8/' "$u/Google/cheetah/HiFi.conf"
+  ucm() { ALSA_CONFIG_UCM2=$u alsaucm -c aoctest "$@" 2>&1; }
+  [[ $(ucm list _verbs) == *"0: HiFi"* ]] || fail "UCM: the HiFi verb"
+  out=$(ucm list _devices/HiFi)
+  [[ $out == *"0: Speaker"* && $out == *"1: Mic"* ]] || fail "UCM: Speaker and Mic devices"
+  [[ $(ucm get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM: Speaker PCM"
+  [[ $(ucm get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM: Mic PCM"
+  pass "UCM profile parses: HiFi with Speaker and Mic"
+fi
+grep -c "find-device:type=pcm,stream=playback,field=id,regex='^EP6 playback'" ucm2/Google/cheetah/HiFi.conf >/dev/null ||
+  fail "UCM: the Speaker PCM is found by its id"
+grep -c "find-device:type=pcm,stream=capture,field=id,regex='^EP1 capture'" ucm2/Google/cheetah/HiFi.conf >/dev/null ||
+  fail "UCM: the Mic PCM is found by its id"
+if grep -E "cset .*(PCM Volume|PCM Source|DSP|Analog|Digital)" ucm2/Google/cheetah/HiFi.conf; then
+  fail "UCM touches no amplifier control"
+fi
+pass "UCM finds the PCMs by id and leaves the amplifiers alone"
+
+# --- the speaker protection service, with stand-ins ---------------------------
+fake=$tmp/bin
+mkdir -p "$fake"
+ln -s "$here/test/fake-amixer" "$fake/amixer"
+cat > "$fake/modprobe" <<'SH'
+#!/bin/bash
+echo "$*" >> "$FAKE_MODPROBE_LOG"
+SH
+cat > "$fake/debugfs" <<'SH'
+#!/bin/bash
+# debugfs -R 'cat /audio/speaker.cal' DEVICE: never -w
+[[ " $* " != *" -w "* ]] || { echo "debugfs opened for writing" >&2; exit 9; }
+[[ $2 == "cat /audio/speaker.cal" ]] || exit 1
+cat "$FAKE_CAL"
+SH
+chmod +x "$fake/modprobe" "$fake/debugfs"
+
+# Synthetic calibration: two records of six u32 (R, status, checksum, ambient, gain, volume)
+mkcal() {
+  python3 - "$1" "${2:-}" <<'PY'
+import struct, sys
+recs = [(0x2000, 1, 0x2001, 25, 17, 817), (0x2100, 1, 0x2101, 25, 17, 817)]
+if sys.argv[2] == 'badsum':
+    recs[1] = (0x2100, 1, 0x2105, 25, 17, 817)
+if sys.argv[2] == 'uncal':
+    recs[0] = (0x2000, 0, 0x2000, 25, 17, 817)
+open(sys.argv[1], 'wb').write(b''.join(struct.pack('<6I', *r) for r in recs))
+PY
+}
+
+# One scenario in a fresh directory tree; extra VAR=value arguments are set
+# in its environment. Leaves $r (the tree) and $rc (the exit status).
+run() {
+  r=$tmp/run.$1; shift
+  rm -rf "$r"; mkdir -p "$r/asound" "$r/block/sda9" "$r/fw/cirrus" "$r/state" "$r/run"
+  printf ' 0 [googleaocsndcar]: aoc-snd-card - google,aoc-snd-card\n                      google,aoc-snd-card\n' > "$r/asound/cards"
+  printf 'MAJOR=8\nMINOR=9\nDEVNAME=sda9\nPARTNAME=persist\n' > "$r/block/sda9/uevent"
+  for f in cs35l41-dsp1-spk-prot-cheetah.wmfw cs35l41-dsp1-spk-prot-cheetah-top.bin cs35l41-dsp1-spk-prot-cheetah-bottom.bin; do
+    : > "$r/fw/cirrus/$f"
+  done
+  mkcal "$r/speaker.cal"
+  rc=0
+  env PATH="$fake:$PATH" FAKE_AMIXER_STATE="$r/amixer.json" FAKE_AMIXER_LOG="$r/cset.log" \
+      FAKE_MODPROBE_LOG="$r/modprobe.log" FAKE_CAL="$r/speaker.cal" \
+      OMANDROID_ASOUND="$r/asound" OMANDROID_SYSBLOCK="$r/block" OMANDROID_DEVDIR="$r/dev" \
+      OMANDROID_FW_DIRS="$r/fw" OMANDROID_STATE="$r/state" OMANDROID_RUN="$r/run" \
+      OMANDROID_CARD_WAIT=1 OMANDROID_CTL_WAIT=1 "${prep[@]}" \
+      bin/omandroid-speaker-protection start > "$r/out" 2>&1 || rc=$?
+  prep=()
+}
+prep=()
+# amixer against a finished scenario's state
+amx() { FAKE_AMIXER_STATE="$r/amixer.json" FAKE_AMIXER_LOG="$r/cset.log" test/fake-amixer -c 0 "$@"; }
+val() { amx cget "name=$1" | sed -n 's/^ *: values=//p'; }
+muted() { [[ $(val "Top Digital PCM Volume") == 0 && $(val "Bottom Digital PCM Volume") == 0 ]]; }
+
+run ok
+((rc == 0)) || { cat "$r/out" >&2; fail "start succeeds"; }
+[[ $(val "Top PCM Source") == 1 && $(val "Bottom PCM Source") == 1 ]] || fail "both amplifiers through the DSP"
+[[ $(val "Top DSP RX1 Source") == 1 && $(val "Bottom DSP RX2 Source") == 1 ]] || fail "DSP inputs from ASPRX1"
+[[ $(val "Top Digital PCM Volume") == 657 && $(val "Bottom Analog PCM Volume") == 6 ]] || fail "default levels 657 / 6"
+[[ $(val "Top DSP1 Protection cd CAL_R") == 0x00,0x00,0x20,0x00 ]] || fail "record 0 goes to Top"
+[[ $(val "Bottom DSP1 Protection cd CAL_R") == 0x00,0x00,0x21,0x00 ]] || fail "record 1 goes to Bottom"
+[[ $(val "Bottom DSP1 Protection cd CAL_CHECKSUM") == 0x00,0x00,0x21,0x01 ]] || fail "checksum written"
+[[ $(val "Top DSP1 Protection cd CAL_AMBIENT") == 0x00,0x00,0x00,0x19 ]] || fail "ambient written"
+[[ $(val "Top DSP1 Protection f20b CAL_R") == 0x00,0x00,0x00,0x00 ]] || fail "the other algorithm's CAL_R is left alone"
+[[ $(val "Top DSP1 Protection cd CAL_R_SELECTED") == 0x00,0x00,0x00,0x00 ]] || fail "CAL_R_SELECTED is left alone"
+[[ $(head -n2 "$r/cset.log") == $'Top Digital PCM Volume=0\nBottom Digital PCM Volume=0' ]] || fail "the first thing it does is mute"
+[[ $(tail -n2 "$r/cset.log") == $'Top Digital PCM Volume=657\nBottom Digital PCM Volume=657' ]] || fail "the last thing it does is unmute"
+grep -c '^snd_soc_cs35l41_spi$' "$r/modprobe.log" >/dev/null || fail "loads the amplifier driver"
+[[ ! -e $r/state/speaker-protection-started ]] || fail "removes the hang marker"
+[[ $(cat "$r/run/speaker-protection") == ok:* ]] || fail "status ok"
+if grep -E '0x20|8192|8448|2000|2100' "$r/out"; then fail "logs no calibration values"; fi
+pass "start: calibration per amplifier, DSP routing, unmute last, nothing logged"
+
+prep=(OMANDROID_SPK_DIGITAL=600 OMANDROID_SPK_ANALOG=10); run levels
+((rc == 0)) && [[ $(val "Bottom Digital PCM Volume") == 600 && $(val "Top Analog PCM Volume") == 10 ]] || fail "configured levels"
+pass "configured levels within the ceilings"
+
+check_refused() {  # name, then the scenario ran
+  ((rc == 1)) || { cat "$r/out" >&2; fail "$1: start fails"; }
+  muted || fail "$1: both amplifiers muted"
+  [[ $(val "Top PCM Source") == 0 ]] || fail "$1: PCM Source left alone"
+  [[ $(cat "$r/run/speaker-protection") == muted:* ]] || fail "$1: status muted"
+  [[ ! -e $r/state/speaker-protection-started ]] || fail "$1: marker removed after a clean failure"
+}
+prep=(OMANDROID_SPK_DIGITAL=700); run digital-ceiling; check_refused "digital above 657"
+prep=(OMANDROID_SPK_DIGITAL=0); run digital-zero; check_refused "digital 0"
+prep=(OMANDROID_SPK_ANALOG=11); run analog-ceiling; check_refused "analog above 10"
+prep=(FAKE_DIGITAL_MAX=913); run no-kernel-limit; check_refused "kernel digital limit missing"
+prep=(FAKE_ANALOG_MAX=17); run analog-limit; check_refused "kernel analog limit above 10"
+pass "refuses levels above the ceilings and kernels without the limits, muted"
+
+# a firmware directory with the bottom tuning missing
+prep=(OMANDROID_FW_DIRS=$tmp/emptyfw); mkdir -p "$tmp/emptyfw/cirrus"
+: > "$tmp/emptyfw/cirrus/cs35l41-dsp1-spk-prot-cheetah.wmfw"
+: > "$tmp/emptyfw/cirrus/cs35l41-dsp1-spk-prot-cheetah-top.bin"
+run no-bin; check_refused "bottom tuning missing"
+grep -c 'cheetah-bottom.bin' "$r/out" >/dev/null || fail "names the missing tuning"
+prep=(FAKE_NO_DSP=1); run no-dsp; check_refused "firmware did not load"
+pass "refuses without the firmware or its tunings, muted"
+
+mkcal "$tmp/bad.cal" badsum; prep=(FAKE_CAL=$tmp/bad.cal); run badsum; check_refused "bad checksum"
+mkcal "$tmp/uncal.cal" uncal; prep=(FAKE_CAL=$tmp/uncal.cal); run uncal; check_refused "status not 1"
+: > "$tmp/short.cal"; prep=(FAKE_CAL=$tmp/short.cal); run short; check_refused "short file"
+pass "refuses a missing, short or invalid calibration, muted"
+
+# A hang marker from an earlier boot: no driver load, no card touched
+r=$tmp/run.marker
+run marker  # prepares the tree
+mkdir -p "$r/state"; echo 2026-01-01T00:00:00 > "$r/state/speaker-protection-started"
+rm -f "$r/modprobe.log" "$r/amixer.json" "$r/cset.log"
+rc=0
+env PATH="$fake:$PATH" FAKE_AMIXER_STATE="$r/amixer.json" FAKE_AMIXER_LOG="$r/cset.log" FAKE_MODPROBE_LOG="$r/modprobe.log" \
+    FAKE_CAL="$r/speaker.cal" OMANDROID_ASOUND="$r/none" OMANDROID_STATE="$r/state" OMANDROID_RUN="$r/run" \
+    bin/omandroid-speaker-protection start > "$r/out" 2>&1 || rc=$?
+((rc == 1)) || fail "marker: start fails"
+[[ ! -e $r/modprobe.log ]] || fail "marker: the amplifier driver is not loaded"
+[[ -e $r/state/speaker-protection-started ]] || fail "marker: kept for the human"
+pass "a hang marker from the last boot keeps the amplifiers off"
+
+# status and mute
+r=$tmp/run.ok
+out=$(env PATH="$fake:$PATH" FAKE_AMIXER_STATE="$r/amixer.json" FAKE_AMIXER_LOG="$r/cset.log" FAKE_CAL="$r/speaker.cal" \
+      OMANDROID_ASOUND="$r/asound" OMANDROID_SYSBLOCK="$r/block" OMANDROID_DEVDIR="$r/dev" OMANDROID_RUN="$r/run" \
+      OMANDROID_STATE="$r/state" bin/omandroid-speaker-protection status)
+[[ $out == *"Top: PCM Source DSP, Digital 657 (max 817), Analog 6 (max 10)"* ]] || { echo "$out" >&2; fail "status"; }
+[[ $out == *"calibration in the DSP vs persist: match"* ]] || fail "status compares the calibration"
+if grep -E '0x20|8192|8448' <<<"$out"; then fail "status prints no calibration values"; fi
+env PATH="$fake:$PATH" FAKE_AMIXER_STATE="$r/amixer.json" FAKE_AMIXER_LOG="$r/cset.log" \
+    OMANDROID_ASOUND="$r/asound" OMANDROID_RUN="$r/run" bin/omandroid-speaker-protection mute >/dev/null || fail "mute"
+muted || fail "mute mutes both"
+pass "status (no values) and mute"
+
+# --- install ---------------------------------------------------------------------
+./install "$tmp/root"
+for f in usr/bin/omandroid-speaker-protection usr/lib/systemd/system/omandroid-speaker-protection.service \
+         usr/lib/modprobe.d/omandroid-audio.conf etc/omandroid/speaker.conf \
+         usr/share/alsa/ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf usr/share/alsa/ucm2/Google/cheetah/HiFi.conf \
+         usr/share/wireplumber/wireplumber.conf.d/51-omandroid-aoc.conf; do
+  [[ -e $tmp/root/$f ]] || fail "install stages $f"
+done
+[[ -z $(find "$tmp/root" -path '*wants*') ]] || fail "install enables nothing"
+[[ -z $(find "$tmp/root" -name '*.wmfw' -o -name '*.bin' -o -name '*.cal') ]] || fail "no firmware or calibration in the package"
+pass "install stages the package, enables nothing, ships no firmware"
