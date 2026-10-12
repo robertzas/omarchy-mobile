@@ -17,6 +17,7 @@ install -Dm644 gnss/props.conf "$v/gnss/props.conf"
 install -Dm644 bionic/prebuilt/omandroid-fp-shim.so "$v/omandroid-fp-shim.so"
 for f in bionic/prebuilt/stubs/*.so; do install -Dm644 "$f" "$v/stubs/${f##*/}"; done
 for f in vendor/systemd/system/*; do install -Dm644 "$f" "$d/usr/lib/systemd/system/${f##*/}"; done
+install -Dm644 vendor/systemd/user/omandroid-geoclue-agent.service "$d/usr/lib/systemd/user/omandroid-geoclue-agent.service"
 install -Dm644 vendor/modprobe.d/omandroid-gnss.conf "$d/usr/lib/modprobe.d/omandroid-gnss.conf"
 install -Dm644 polkit/50-omandroid-gnss.rules "$d/usr/share/polkit-1/rules.d/50-omandroid-gnss.rules"
 install -Dm644 etc/geoclue/conf.d/90-omandroid-gnss.conf "$d/etc/geoclue/conf.d/90-omandroid-gnss.conf"

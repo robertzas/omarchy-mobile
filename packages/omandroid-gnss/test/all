@@ -26,13 +26,18 @@ for f in usr/bin/omandroid-gnss usr/lib/omandroid-vendor/omandroid-vendor-chroot
          usr/lib/systemd/system/omandroid-gnss.service usr/lib/systemd/system/omandroid-gnss-nmea.socket \
          usr/lib/systemd/system/omandroid-gnss-nmea.service usr/lib/systemd/system/omandroid-gnss-force.service \
          usr/lib/systemd/system/omandroid-gnss-location@.service usr/lib/modprobe.d/omandroid-gnss.conf \
-         usr/share/polkit-1/rules.d/50-omandroid-gnss.rules etc/geoclue/conf.d/90-omandroid-gnss.conf; do
+         usr/share/polkit-1/rules.d/50-omandroid-gnss.rules etc/geoclue/conf.d/90-omandroid-gnss.conf \
+         usr/lib/systemd/user/omandroid-geoclue-agent.service; do
   [[ -e $stage/$f ]] || fail "not staged: $f"
 done
 # Default-off: nothing is enabled by a wants link, and the stack itself has no [Install].
 [[ -z $(find "$stage" -path '*.wants/*') ]] || fail "something is enabled by default"
 grep -q '^\[Install\]' vendor/systemd/system/omandroid-gnss.service && fail "omandroid-gnss.service must not be installable"
 grep -q '^StopWhenUnneeded=yes' vendor/systemd/system/omandroid-gnss.service || fail "stack must stop when unneeded"
+# GeoClue's demo where-am-i identifies itself as geoclue-where-am-i.
+grep -q '^\[geoclue-where-am-i\]' etc/geoclue/conf.d/90-omandroid-gnss.conf || fail "where-am-i desktop id"
+# status must not print "nono" (forced suffix only when forced)
+grep -q 'forced/yes' bin/omandroid-gnss && fail "status forced suffix"
 grep -q 'blacklist bcm4775x_gnss' vendor/modprobe.d/omandroid-gnss.conf || fail "driver must stay blacklisted from autoload"
 if command -v systemd-analyze >/dev/null; then
   SYSTEMD_LOG_LEVEL=err systemd-analyze verify --root="$stage" \

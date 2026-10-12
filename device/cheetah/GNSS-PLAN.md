@@ -590,7 +590,7 @@ try it in a terminal on the phone. Root over ssh skips polkit.
 
 **Quick-settings tile (for the shell):**
 - State: `omandroid-gnss status --json` gives
-  `{"location":"on|off","running":"yes|no","forced":"yes|no","powered":"yes|no|unknown","installed":true|false}`.
+  `{"location":"on|off","running":"yes|no","forced":"yes|no","powered":"yes|no","agent":"on|off","installed":true|false}`.
 - Toggle: run `omandroid-gnss on` or `omandroid-gnss off` as the user.
   This goes through `omandroid-gnss-location@.service` and polkit, with no
   password.
@@ -604,6 +604,92 @@ try it in a terminal on the phone. Root over ssh skips polkit.
 - The hang marker still protects the bring-up. A hang leaves
   `/var/lib/omandroid/gnss-bringup-started`, and later starts are skipped
   until `/usr/lib/omandroid-vendor/omandroid-gnss-start --retry`.
+
+**G5 result (2026-10-12, int 00265, omandroid-gnss 0.1.0):**
+- The package installed. `on` made the socket, and
+  `/run/omandroid-gnss/nmea.sock` exists.
+- `where-am-i` (as root) failed with "Failed to connect to GeoClue2
+  service: Timeout was reached". GeoClue never connected to the socket.
+  The driver was not loaded and no rails were touched.
+- `status` printed "nono" (a bug).
+
+**Cause (from GeoClue 2.8.2's source, Arch's version):**
+- `GetClient` waits for an authorization agent registered for the
+  caller's UID, with no timeout (`gclue-service-manager.c`,
+  `clients_waiting_agent`, NEWS "Replace agent wait timeout with a
+  queue"). With no agent, every client's first call times out after
+  25 s.
+- `allowed=true`/`system=true` entries skip only the agent's question,
+  not the need for an agent.
+- The rest of the setup was right:
+  - `/etc/geoclue/conf.d/*.conf` is read on top of
+    `/etc/geoclue/geoclue.conf`, and same-name app sections merge.
+  - `nmea-socket=` connects directly to the Unix socket. Avahi is only
+    linked (Arch's geoclue depends on it); avahi-daemon need not run.
+  - `geoclue.service` (Type=dbus, User=geoclue, `/usr/lib/geoclue`) can
+    be restarted, and D-Bus starts it again on the next call.
+- A second mistake: the demo identifies itself as `geoclue-where-am-i`,
+  not `where-am-i`.
+
+**Fix (0.1.1):**
+- `omandroid-geoclue-agent.service` (user unit) runs GeoClue's demo
+  agent (`/usr/lib/geoclue-2.0/demos/agent`, desktop id
+  `geoclue-demo-agent`, already in geoclue.conf's agent whitelist).
+  - `omandroid-gnss on` enables it for every user
+    (`systemctl --global`), and `off` disables it.
+  - Run as the user (the tile), `on`/`off` also start/stop it in the
+    current session.
+- The package now depends on geoclue and libnotify (the agent's
+  notifications for apps not in the list).
+- The config section is now `[geoclue-where-am-i]`.
+- `status` reads the GNSS rails from `/sys/class/regulator`, which is
+  readable without root (no regulator means `sec_acpm` is not loaded,
+  so "no"). It also shows the agent; JSON gains `"agent"`.
+
+### G5-2
+
+```sh
+# laptop (the bionic prebuilt/ from G5 is still there; test/all checks it)
+packages/omandroid-gnss/test/all && tools/phone-install-package packages/omandroid-gnss
+tools/phone-ssh 'omandroid-gnss off; omandroid-gnss on; omandroid-gnss status; ls -l /etc/systemd/user/graphical-session.target.wants/;
+  pgrep -a -f geoclue-2.0/demos/agent; systemctl restart geoclue'
+#   expect: location on, receiver no, chip powered no, GeoClue agent on, the agent link;
+#   pgrep may already show an agent if the session runs XDG autostart (geoclue's own
+#   /etc/xdg/autostart entry); a second copy then just exits
+# 1. as root, with an agent for root in a throwaway session bus (the demo agent is a
+#    GApplication and needs a session bus; root over ssh has none)
+tools/phone-ssh '(dbus-run-session -- sh -c "/usr/lib/geoclue-2.0/demos/agent & sleep 2;
+    timeout 120 /usr/lib/geoclue-2.0/demos/where-am-i -a 8 -t 110; kill \$!" > /tmp/g5-wai.txt 2>&1 &);
+  sleep 40; omandroid-gnss status; journalctl -u geoclue -u omandroid-gnss-nmea -u omandroid-gnss --no-pager -n 30 -o cat'
+#   expect: receiver yes, chip powered yes; "listening on the socket systemd passed",
+#   "client connected (1)", "first NMEA sentence received"; lhd/gpsd lines
+# 2. idle exit: where-am-i ends at ~112 s, the bridge 60 s later, then the stack
+tools/phone-ssh 'sleep 150; omandroid-gnss status; cat /tmp/g5-wai.txt | tail -20'
+#   pass: receiver no, chip powered no. where-am-i shows a location only with a fix (or
+#   from GeoClue's Wi-Fi/IP sources); indoors "no location" is fine here.
+# 3. the desktop user's session: the agent there, the polkit switch, where-am-i as the user
+tools/phone-ssh 'u=omandroid; id=$(id -u $u); e="XDG_RUNTIME_DIR=/run/user/$id DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$id/bus";
+  su $u -c "env $e systemctl --user start omandroid-geoclue-agent; env $e systemctl --user --no-pager status omandroid-geoclue-agent | head -5";
+  su $u -c "env $e omandroid-gnss off; omandroid-gnss status --json; env $e omandroid-gnss on; omandroid-gnss status --json";
+  su $u -c "env $e timeout 60 /usr/lib/geoclue-2.0/demos/where-am-i -a 8 -t 50" > /tmp/g5-user.txt 2>&1;
+  tail -5 /tmp/g5-user.txt; omandroid-gnss status'
+#   expect: the agent active; off/on succeed (if polkit refuses over su, repeat those two
+#   in a terminal on the phone); where-am-i connects (no timeout)
+# 4. force/unforce, then leave it off
+tools/phone-ssh 'omandroid-gnss force; sleep 30; omandroid-gnss status; omandroid-gnss unforce; sleep 80; omandroid-gnss status; omandroid-gnss off'
+#   expect: running yes (forced), then no within ~65 s of unforce; powered no at the end
+# rollback: omandroid-gnss off; pacman -R omandroid-gnss
+```
+
+If step 1 still times out, run GeoClue in the foreground with debug
+output. Its config dump and the agent/NMEA steps then show where it stops:
+
+```sh
+tools/phone-ssh 'systemctl stop geoclue; (timeout 150 runuser -u geoclue -- env G_MESSAGES_DEBUG=all /usr/lib/geoclue > /tmp/geoclue-debug.txt 2>&1 &);
+  sleep 2; (dbus-run-session -- sh -c "/usr/lib/geoclue-2.0/demos/agent & sleep 2;
+    timeout 60 /usr/lib/geoclue-2.0/demos/where-am-i -a 8 -t 50; kill \$!" > /tmp/g5-wai.txt 2>&1 &);
+  sleep 70; grep -iE "nmea|agent|socket|config|Network source|error|warn" /tmp/geoclue-debug.txt | head -60; tail -5 /tmp/g5-wai.txt'
+```
 
 Suspend: with lhd open the host_req line is a wake source; measure the
 drain with GNSS running and idle (POWER-PLAN.md) before enabling at boot.
@@ -626,9 +712,11 @@ drain with GNSS running and idle (POWER-PLAN.md) before enabling at boot.
    must speak the HAL's control pipe.
 3. Does bionic's resolver work without netd with `ANDROID_DNS_MODE=local` and
    `net.dns1`? If not, LTO/SUPL fail and the first fix is slower (cold start).
-4. GeoClue authorization on Omarchy: the package ships `system=true`
-   entries for a few apps (G5). A small agent in the shell, with per-app
-   prompts, would replace them.
+4. GeoClue authorization on Omarchy: GeoClue needs an agent per user
+   (G5). The package runs GeoClue's demo agent and lets a few apps through
+   without asking; others get a notification, whose Allow/Deny actions
+   depend on the notification daemon (mako: its action menu). An agent in
+   the shell with proper prompts would replace it.
 5. PPS: mainline `pps-gpio` on gpp15-1 for time sync, later.
 6. Move the fingerprint profile onto the shared runner once it has run on
    the phone (it needs its RPMB, panel and Trusty hooks as profile functions).

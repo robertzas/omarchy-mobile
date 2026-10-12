@@ -4,7 +4,8 @@
 #
 #   omandroid-gnss on       Location on: apps can ask GeoClue for positions,
 #                           and the receiver runs only while one does
-#                           (omandroid-gnss-nmea.socket enabled)
+#                           (omandroid-gnss-nmea.socket and the GeoClue
+#                           agent, omandroid-geoclue-agent, enabled)
 #   omandroid-gnss off      Location off: stop the receiver now and let
 #                           nothing start it
 #   omandroid-gnss force    keep the receiver running with no client (tests,
@@ -14,41 +15,62 @@
 #
 # on/off/force/unforce need root. As another user they go through
 # omandroid-gnss-location@.service, which polkit lets the active local user
-# start (the shell's quick-settings tile uses exactly that).
+# start (the shell's quick-settings tile uses exactly that), and on/off also
+# start/stop the caller's own GeoClue agent right away.
 set -euo pipefail
 
 SOCKET=omandroid-gnss-nmea.socket
 BRIDGE=omandroid-gnss-nmea.service
 STACK=omandroid-gnss.service
 FORCE=omandroid-gnss-force.service
+AGENT=omandroid-geoclue-agent.service
 ROOT=/usr/lib/omandroid-vendor/gnss/root
 
 usage() {
-  sed -n '3,15s/^# \{0,1\}//p' "$0" >&2
+  sed -n '3,14s/^# \{0,1\}//p' "$0" >&2
   exit 2
 }
 
 as_root() { # $1 action
   if [[ $EUID -ne 0 ]]; then
-    exec systemctl start "omandroid-gnss-location@$1.service"
+    systemctl start "omandroid-gnss-location@$1.service"
+    case $1 in
+      on) systemctl --user start "$AGENT" 2>/dev/null || true ;;
+      off) systemctl --user stop "$AGENT" 2>/dev/null || true ;;
+    esac
+    exit 0
   fi
 }
 
 state() { systemctl "$1" "$2" 2>/dev/null || true; }
 
+# The chip's power: the GNSS rails (world-readable, unlike debugfs). No
+# vdd_gnss_core regulator means sec_acpm isn't loaded, so the rails are off.
+powered() {
+  local r
+  for r in /sys/class/regulator/regulator.*; do
+    [[ $(cat "$r/name" 2>/dev/null) == vdd_gnss_core ]] || continue
+    [[ $(cat "$r/state" 2>/dev/null) == enabled ]] && echo yes || echo no
+    return
+  done
+  echo no
+}
+
 status() {
-  local location running forced powered=unknown pins=/sys/kernel/debug/spi5.0/pins
+  local location running forced agent powered
   location=$([[ $(state is-enabled $SOCKET) == enabled ]] && echo on || echo off)
   running=$([[ $(state is-active $STACK) == active ]] && echo yes || echo no)
   forced=$([[ $(state is-active $FORCE) == active ]] && echo yes || echo no)
-  [[ -r $pins ]] && powered=$(awk '$1 == "powered:" { print ($2 ? "yes" : "no") }' "$pins")
+  agent=$([[ $(systemctl --global is-enabled $AGENT 2>/dev/null) == enabled ]] && echo on || echo off)
+  powered=$(powered)
   if [[ ${1:-} == --json ]]; then
-    printf '{"location":"%s","running":"%s","forced":"%s","powered":"%s","installed":%s}\n' \
-      "$location" "$running" "$forced" "$powered" "$([[ -d $ROOT ]] && echo true || echo false)"
+    printf '{"location":"%s","running":"%s","forced":"%s","powered":"%s","agent":"%s","installed":%s}\n' \
+      "$location" "$running" "$forced" "$powered" "$agent" "$([[ -d $ROOT ]] && echo true || echo false)"
   else
     echo "location: $location"
-    echo "receiver running: $running${forced/yes/ (forced)}"
+    echo "receiver running: $running$([[ $forced == yes ]] && echo " (forced)")"
     echo "chip powered: $powered"
+    echo "GeoClue agent: $agent"
     [[ -d $ROOT ]] || echo "vendor files: missing ($ROOT; tools/extract-vendor-chroot -p gnss)"
   fi
 }
@@ -57,11 +79,13 @@ case ${1:-} in
   on)
     as_root on
     systemctl enable --now "$SOCKET"
+    systemctl --global enable "$AGENT"
     ;;
   off)
     as_root off
     systemctl stop "$FORCE" "$BRIDGE" "$STACK" 2>/dev/null || true
     systemctl disable --now "$SOCKET"
+    systemctl --global disable "$AGENT"
     ;;
   force)
     as_root force
