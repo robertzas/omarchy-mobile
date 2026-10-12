@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (AOC-PLAN.md, stage C1): enable the GSA mailbox, so the gsa
+ * module can bind and answer status queries in debugfs. The module stays
+ * blacklisted from autoload during bring-up and is loaded by hand. Applied
+ * to the built gs201-cheetah.dtb with fdtoverlay. Paths, not labels, so the
+ * base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/gsa@17c90000} {
+	status = "okay";
+};
