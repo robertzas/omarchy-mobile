@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""cs35l41-id: read-only ID and state check of the CS35L41 speaker amplifiers.
+
+Runs on the phone (AUDIO-PLAN.md, gate A2), no dependencies beyond Python.
+It talks to the amplifiers through spidev, after the audio-amps-test overlay
+and a driver_override bind (see the plan), and only ever reads: every
+transfer carries the CS35L41 SPI read flag, and only the registers in
+REGS below are read (no interrupt or status registers, nothing that clears
+on read).
+
+    tools/phone-ssh 'python3 -' < tools/cs35l41-id
+
+The CS35L41 SPI frame (as in the kernel's cs35l41_regmap_spi): a 32-bit
+big-endian register address with bit 31 set for a read, 16 bits of padding,
+then the 32-bit big-endian value.
+"""
+import argparse
+import ctypes
+import fcntl
+import glob
+import os
+import struct
+import sys
+
+READ_FLAG = 0x80000000
+
+# address: (name, decoder)
+REGS = {
+    0x0000: "DEVID",
+    0x0004: "REVID",
+    0x0010: "OTPID",
+    0x2014: "PWR_CTRL1",
+    0x2018: "PWR_CTRL2",
+    0x3800: "BSTCVRT_VCTRL1",
+    0x3804: "BSTCVRT_VCTRL2",
+    0x4C00: "DAC_PCM1_SRC",
+    0x6000: "AMP_DIG_VOL_CTRL",
+    0x6C04: "AMP_GAIN_CTRL",
+}
+
+EXPECT_DEVID = 0x35A40          # stock dmesg: "Cirrus Logic CS35L41 (35a40)"
+EXPECT_REVID = 0xB2             # stock dmesg: "Revision: B2"
+
+# <linux/spi/spidev.h>
+SPI_IOC_WR_MODE = 0x40016B01
+SPI_IOC_WR_BITS_PER_WORD = 0x40016B03
+SPI_IOC_WR_MAX_SPEED_HZ = 0x40046B04
+SPI_IOC_MESSAGE_1 = 0x40206B00
+# struct spi_ioc_transfer: tx_buf, rx_buf, len, speed_hz, delay_usecs,
+# bits_per_word, cs_change, tx_nbits, rx_nbits, word_delay_usecs, pad
+XFER = struct.Struct("<QQIIHBBBBBB")
+
+AMPS = {0: "top (earpiece)", 1: "bottom (loudspeaker)"}
+
+
+def find_spidev(cs):
+    """/dev/spidevB.C for amplifier@<cs> under spi@10960000, or None."""
+    for dev in glob.glob("/sys/bus/spi/devices/spi*.%d" % cs):
+        try:
+            node = os.path.realpath(os.path.join(dev, "of_node"))
+        except OSError:
+            continue
+        if node.endswith("spi@10960000/amplifier@%d" % cs):
+            name = os.path.basename(dev)          # spiB.C
+            path = "/dev/spidev" + name[3:]
+            return path if os.path.exists(path) else None
+    return None
+
+
+def read_reg(fd, addr, speed):
+    word = READ_FLAG | addr
+    assert word & READ_FLAG, "refusing a transfer without the read flag"
+    tx = ctypes.create_string_buffer(struct.pack(">IH", word, 0) + bytes(4), 10)
+    rx = ctypes.create_string_buffer(10)
+    xfer = XFER.pack(ctypes.addressof(tx), ctypes.addressof(rx), 10, speed,
+                     0, 8, 0, 0, 0, 0, 0)
+    fcntl.ioctl(fd, SPI_IOC_MESSAGE_1, xfer)
+    return struct.unpack(">I", rx.raw[6:10])[0]
+
+
+def check(cs, path, speed):
+    print("amplifier@%d, %s: %s" % (cs, AMPS[cs], path))
+    fd = os.open(path, os.O_RDWR)
+    try:
+        fcntl.ioctl(fd, SPI_IOC_WR_MODE, struct.pack("B", 0))
+        fcntl.ioctl(fd, SPI_IOC_WR_BITS_PER_WORD, struct.pack("B", 8))
+        fcntl.ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, struct.pack("I", speed))
+        vals = {}
+        for addr, name in REGS.items():
+            vals[addr] = read_reg(fd, addr, speed)
+            print("  0x%04x %-17s 0x%08x" % (addr, name, vals[addr]))
+    finally:
+        os.close(fd)
+
+    devid, revid = vals[0x0000], vals[0x0004] & 0xFF
+    if devid in (0, 0xFFFFFFFF):
+        print("  RESULT: no answer (all %s): amplifier in reset, unpowered,"
+              " or wrong bus/chip select" % ("zeros" if devid == 0 else "ones"))
+        return False
+    if devid != EXPECT_DEVID or revid != EXPECT_REVID:
+        print("  RESULT: unexpected ID (want DEVID 0x%x, REVID 0x%x): STOP" %
+              (EXPECT_DEVID, EXPECT_REVID))
+        return False
+    pwr1, pwr2 = vals[0x2014], vals[0x2018]
+    print("  GLOBAL_EN %d (expect 0: amplifier off)" % (pwr1 & 1))
+    print("  BST_EN %d, AMP_EN %d" % ((pwr2 >> 4) & 3, pwr2 & 1))
+    print("  boost target code 0x%02x, boost control select %d" %
+          (vals[0x3800] & 0xFF, vals[0x3804] & 3))
+    print("  RESULT: CS35L41 rev B2 found%s" %
+          ("" if not pwr1 & 1 else ", BUT GLOBAL_EN IS SET: report it"))
+    return True
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--cs", type=int, choices=(0, 1), action="append",
+                    help="chip select to read (default: both)")
+    ap.add_argument("--speed", type=int, default=4000000,
+                    help="SPI clock in Hz (default 4 MHz, as the kernel driver)")
+    args = ap.parse_args()
+    if args.speed > 25000000:
+        sys.exit("--speed above 25 MHz (stock's rate) refused")
+    sel = args.cs or [0, 1]
+    ok = True
+    for cs in sel:
+        path = find_spidev(cs)
+        if not path:
+            print("amplifier@%d: no spidev node; bind it first (AUDIO-PLAN.md A2)" % cs)
+            ok = False
+            continue
+        ok = check(cs, path, args.speed) and ok
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    main()

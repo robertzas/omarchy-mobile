@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (AUDIO-PLAN.md, gates A2-A3): the PERIC0 pin controller,
+ * USI7 as SPI and the two CS35L41 speaker amplifiers (chip select 0 = top
+ * speaker / earpiece, 1 = bottom loudspeaker). Needs the omandroid-audio
+ * kernel branch.
+ *
+ * A2: keep snd-soc-cs35l41-spi from loading (it is not built by default) and
+ *     bind spidev by driver_override, then read the chip IDs with
+ *     tools/cs35l41-id. Nothing is written to the amplifiers.
+ * A3: load snd-soc-cs35l41-spi: the driver resets each amplifier, reads its
+ *     ID and OTP and writes its boost configuration. There is no sound card
+ *     (the audio port belongs to the AoC), so the output stage is never
+ *     enabled.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/pinctrl@10840000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109600c0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109600c0/spi@10960000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109600c0/spi@10960000/amplifier@0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109600c0/spi@10960000/amplifier@1} {
+	status = "okay";
+};
