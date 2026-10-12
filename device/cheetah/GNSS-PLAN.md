@@ -226,35 +226,102 @@ tools/phone-ssh 'cat /sys/kernel/debug/spi5.0/probe; cat /sys/kernel/debug/spi5.
 # rollback: rmmod bcm4775x-gnss; images without the overlays
 ```
 
+**G1 and G2 passed (2026-10-12, int `...-00238-g3393f8dee945`, DTB +
+gnss-pmic-test + gnss-test + aoc-boot-test):**
+
+- **G1** (`sec_acpm` loaded at 144 s):
+  - All three rails are **off** from ABL, at stock voltages: `vdd_gnss_core`
+    1.2 V, `vdd_gnss_rf` 1.8 V, `vdd_gnss_aux` 1.8 V.
+  - Raw registers: L9S_CTRL 0x26 (selector 38 = 1.2 V, enable bit 7
+    clear), L10S/L11S 0x2c (44 = 1.8 V), CHIPID 0x05.
+  - This answers open question 1. The ACPM bus-1 reads work.
+- **G2**:
+  - The driver binds (`irq 119` on gpa6-4, count 0) and creates all five
+    nodes.
+  - `probe`: `mcu_resp: answered`, HSI_STATUS 0x00, HSI_ERROR_STATUS
+    0x00, twice.
+  - Afterwards the pins are back at 0 and all rails are disabled.
+  - So the supplies, standby, the MCU wake handshake and the SSI debug
+    frames on SPI5 all work.
+
 ### G3: lhd loads the patch
 
+What's on the phone: the int kernel with both GNSS overlays, and
+`/etc/modprobe.d/omandroid-g1.conf` (blacklists `sec_acpm`) and
+`omandroid-gnss.conf` (blacklists `bcm4775x_gnss`). So after each boot
+load both by hand, `sec_acpm` once uptime is past 60 s. Nothing else from
+`vendor-chroot/` is installed yet.
+
+Laptop, from the omandroid repo:
+
 ```sh
-# laptop, once: build and copy the chroot pieces
+# 1. shim + stub (already built in vendor-chroot/out; rebuilding is harmless)
 make -C vendor-chroot CLANG=$HOME/android/omandroid/prebuilts/clang/host/linux-x86/clang-r596125/bin/clang \
   BIONIC=$HOME/android/omandroid/bionic/libc CHROOT=$HOME/android/vendor-chroot-work/gnss/root
+# 2. the profile's Android tree (28 MB, the user's own image) and our pieces, root-owned
 tar -C ~/android/vendor-chroot-work/gnss -cf - root MANIFEST SOURCE STUBS |
-  tools/phone-ssh 'mkdir -p /usr/lib/omandroid-vendor/gnss && tar -C /usr/lib/omandroid-vendor/gnss -xf -'
-tar -C vendor-chroot -cf - omandroid-vendor-chroot profiles gnss/props.conf gnss/omandroid-gnss-start gnss/omandroid-gnss-nmea |
-  tools/phone-ssh 'tar -C /usr/lib/omandroid-vendor -xf - && mv /usr/lib/omandroid-vendor/gnss/omandroid-gnss-* /usr/lib/omandroid-vendor/'
-tar -C vendor-chroot/out -cf - omandroid-fp-shim.so stubs | tools/phone-ssh 'tar -C /usr/lib/omandroid-vendor -xf -'
-# phone
-tools/phone-ssh '/usr/lib/omandroid-vendor/omandroid-vendor-chroot gnss check'
-tools/phone-ssh 'OMANDROID_GNSS_STAGE=lhd timeout 60 /usr/lib/omandroid-vendor/omandroid-vendor-chroot gnss start 2>&1 | tail -40;
-  cat /sys/kernel/debug/spi5.0/pins'
-#   pass: lhd opens the nodes, raises nstandby, downloads SensorHub.patch without
-#   errors and keeps running; "packets" > 0, tx_fail 0. After the timeout: powered 0.
+  tools/phone-ssh 'mkdir -p /usr/lib/omandroid-vendor/gnss && tar --no-same-owner -C /usr/lib/omandroid-vendor/gnss -xf -'
+tar -C vendor-chroot -cf - omandroid-vendor-chroot profiles/gnss.conf |
+  tools/phone-ssh 'tar --no-same-owner -C /usr/lib/omandroid-vendor -xf -'
+tar -C vendor-chroot/out -cf - omandroid-fp-shim.so stubs |
+  tools/phone-ssh 'tar --no-same-owner -C /usr/lib/omandroid-vendor -xf -'
+tools/phone-ssh 'install -m644 /dev/stdin /usr/lib/omandroid-vendor/gnss/props.conf' < vendor-chroot/gnss/props.conf
+tools/phone-ssh 'ls -l /usr/lib/omandroid-vendor /usr/lib/omandroid-vendor/stubs; cat /usr/lib/omandroid-vendor/gnss/SOURCE'
+# 3. drivers (once uptime is past 60 s), then the preconditions check (reads only)
+tools/phone-ssh 'cut -d. -f1 /proc/uptime; modprobe sec_acpm; modprobe bcm4775x-gnss;
+  /usr/lib/omandroid-vendor/omandroid-vendor-chroot gnss check'
+#   pass: "preconditions met"
+# 4. lhd alone for 60 s: the chip is powered only while lhd holds /dev/ttyBCM open
+tools/phone-ssh '(OMANDROID_GNSS_STAGE=lhd OMANDROID_VENDOR_LOGLEVEL=3 timeout 60 \
+    /usr/lib/omandroid-vendor/omandroid-vendor-chroot gnss start > /tmp/g3.log 2>&1 &);
+  sleep 25; echo "== during"; cat /sys/kernel/debug/spi5.0/pins;
+  sleep 45; echo "== after"; cat /sys/kernel/debug/spi5.0/pins;
+  for r in /sys/class/regulator/regulator.*; do case $(cat $r/name) in vdd_gnss*) echo $(cat $r/name) $(cat $r/state);; esac; done;
+  echo "== log"; tail -n 80 /tmp/g3.log; dmesg | grep -iE "bcm4775|ttyBCM" | tail -5'
 ```
 
-### G4: a fix
+Pass:
+- **During:** `powered: 1`, `nstandby: 1`, `packets` rising, `tx_fail: 0`.
+- **Log:** lhd opens the nodes and downloads `SensorHub.patch` without
+  errors, and keeps running.
+- **After:** `powered: 0`, `nstandby: 0`, all three `vdd_gnss_*` disabled.
+  The timeout kills the namespace, lhd's `/dev/ttyBCM` closes, and the
+  driver powers the chip down.
 
-Outdoors, sky view, Wi-Fi up (LTO/SUPL).
+Failure clues:
+- `nstandby` write errors (`EPERM`): lhd raised standby before opening
+  `/dev/ttyBCM`. The driver only allows it while powered. Send the log;
+  the fix is a driver change (power on at the nstandby write too).
+- `servicemanager` or linker errors: `run`-test a binary inside, e.g.
+  `omandroid-vendor-chroot gnss ns ls /dev`, and send the log.
+
+### G4: a fix outdoors, unattended, rails off afterwards
+
+Same set-up as G3, plus Wi-Fi in range if possible (orbit predictions and
+SUPL; without them a cold start can take several minutes). Everything runs
+under systemd with a hard time limit. When it ends, the namespace dies,
+`/dev/ttyBCM` closes and the chip loses power, whether the run worked or
+not. The phone can be unplugged and carried outside.
 
 ```sh
-tools/phone-ssh 'timeout 300 /usr/lib/omandroid-vendor/omandroid-vendor-chroot gnss start > /tmp/gnss.log 2>&1 &
-  sleep 20; timeout 240 cat /var/lib/omandroid-vendor/gnss/data/vendor/gps/nmea_out | grep -E "GSV|RMC|GGA" | tail -20'
-#   pass: GSV sentences with satellites and C/N0, then RMC with status A
-#   nothing on the FIFO: try OMANDROID_GNSS_JOB= (gpsd as a plain daemon), see
-#   open question 4; keep /tmp/gnss.log
+# before going out (USB still connected): drivers loaded as in G3 step 3, then
+tools/phone-ssh 'F=/var/lib/omandroid-vendor/gnss/data/vendor/gps/nmea_out;
+  mkdir -p $(dirname $F); [ -p $F ] || mkfifo -m 600 $F;
+  systemd-run --unit=g4-nmea --property=RuntimeMaxSec=1000 sh -c "cat $F > /var/tmp/g4-nmea.txt";
+  systemd-run --unit=g4-gnss --property=RuntimeMaxSec=900 --setenv=OMANDROID_GNSS_JOB=omandroid \
+    /usr/lib/omandroid-vendor/omandroid-vendor-chroot gnss start;
+  sleep 20; systemctl --no-pager status g4-gnss | tail -5; cat /sys/kernel/debug/spi5.0/pins'
+#   expect: g4-gnss active, powered 1. Unplug, put the phone outdoors with a clear
+#   sky for 10-15 minutes, bring it back, reconnect.
+tools/phone-ssh 'systemctl is-active g4-gnss g4-nmea; cat /sys/kernel/debug/spi5.0/pins;
+  journalctl -u g4-gnss --no-pager | tail -60; wc -l /var/tmp/g4-nmea.txt;
+  grep -E "GSV" /var/tmp/g4-nmea.txt | tail -5; grep -E "RMC" /var/tmp/g4-nmea.txt | grep ",A," | head -3'
+#   pass: both units inactive (time limit), powered 0; GSV lines with satellites and
+#   SNRs; RMC lines with status A (a fix).
+#   empty file: gpsd wrote nothing to the FIFO in job mode; repeat with
+#   --setenv=OMANDROID_GNSS_JOB= (plain daemon) and send both journals.
+# stop early at any time (rails go off the same way):
+tools/phone-ssh 'systemctl stop g4-gnss g4-nmea; cat /sys/kernel/debug/spi5.0/pins'
 ```
 
 ### G5: Linux side and boot integration
@@ -288,7 +355,7 @@ drain with GNSS running and idle (POWER-PLAN.md) before enabling at boot.
 
 ## 6. Open questions
 
-1. ABL's LDO9S-11S state (G1).
+1. ~~ABL's LDO9S-11S state~~: off, at stock voltages (G1).
 2. Does gpsd's job mode produce NMEA on `nmea_out` (G4)? If not, the bridge
    must speak the HAL's control pipe.
 3. Does bionic's resolver work without netd with `ANDROID_DNS_MODE=local` and
