@@ -1,12 +1,15 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Camera plan (cheetah / gs201): raw capture first, then libcamera
 
-Status (2026-10-12): **offline research only. Nothing is built and nothing
-has run on the phone.** Every runbook step in section 7 is a stub marked
-*not yet built*. No kernel branch exists yet; the plan proposes
-`omandroid-camera` in `~/android/mainline/wt-camera`, output
-`~/android/mainline/out-camera`, on top of `omandroid-int` (it needs the
-S2MPG13 regulators from `omandroid-gnss` and the ACPM link).
+Status (2026-10-12): **CAM1-CAM3a built offline, nothing new has run on the
+phone.** Kernel branch `omandroid-camera` in `~/android/mainline/wt-camera`
+(output `~/android/mainline/out-camera`), on `omandroid-int` @ `898ab3c1e`
+(it needs the S2MPG13 regulators from `omandroid-gnss` and the ACPM link):
+the read-only CSIS probe (CAM1), the S2MPG13 GPIO driver, the SLG51002
+camera-PMIC regulator driver, `hsi2c_3` and a bring-up power/ID driver for
+the ultrawide module (CAM2, CAM3a), all disabled or blacklisted until the
+`camera-pwr-test` overlay and the runbook in section 7. CAM0 is partly run.
+Nothing streams yet.
 
 This plan replaces section 4 of `RADIOS-CAMERA-PLAN.md`, which was the
 starting survey. It corrects two of its facts (section 1.7).
@@ -92,7 +95,7 @@ two pinctrl states: function 1 with pull-down (`mclk_off`) and function 2
 
 Sensor part names come from the HAL (`vendor.camera.debug.enable_gn1_*`
 properties in `A/lib64/liblyric_hwl.so`) and from public teardowns; only GN1
-has a string in the HAL. **The CAM2 chip-ID reads settle them** (Sony model
+has a string in the HAL. **The CAM3a chip-ID reads settle them** (Sony model
 ID at `0x0016`, Samsung at `0x0000`). The value width already splits them:
 the ultrawide answers with 8-bit values (Sony style), the other three with
 16-bit (Samsung style).
@@ -155,11 +158,15 @@ Three layers **[V]** (`GD/pantah/dts/gs201-pantah-camera-pmic.dtsi:15-70`,
    - Main: PP3200_BB, PP1300, LDO12S, LDO4 (1 ms), GPIO3, LDO8, LDO1 (2 ms), reset high (1 ms), MCLK on, 9 ms. The main sensor takes reset *before* MCLK.
    - Power-down is the reverse, reset low first (main: MCLK off first).
    - The two **EEPROMs `smaug-*` need only LDO12S** (1 ms). That makes them
-     the first thing we can talk to: one rail, no MCLK, no reset (CAM1).
+     the first thing we can talk to: one rail, no MCLK, no reset (CAM2.3).
 
 Stock writes "revision AA" trim values into the SLG51002 by entering a
-software test mode (`slg51002-core.c:170-190, 265-300`). We do that only if
-the chip ID says revision AA, and only after reading back the current values.
+software test mode (`slg51002-core.c:170-190, 265-300`). **Cheetah's part is
+revision AB** [V]: stock's log reads `slg51002 8-0075: chip_id: 0xb13103`
+(`R/dmesg.txt`), which Google's header names `REVISION_AB`, and the cheetah
+DT has no `dlg,reg-init`, so stock writes nothing in test mode on this phone
+(its probe only enters and leaves it). Our driver never enters test mode;
+on an AA part it would register the LDOs only and say so.
 
 ### 1.3 The capture path: CSIS, its DMA and the PHYs
 
@@ -260,8 +267,8 @@ sensor ──MIPI──> DC-PHY slave n ──> CSIS link n ──┬──> CSI
   are all "on" at 0.30 s, and stock turns most of them off at `sync_state`
   (`R/dmesg.txt`, `GS/drivers/soc/google/exynos-pd.c:443-485`). Our DTB
   boots with `clk_ignore_unused pd_ignore_unused` and we have no gs201 PD
-  driver, so **on our kernel these domains should still be on** [I: CAM0/CAM3
-  confirm it through the kernel's PMU regmap]. Two consequences:
+  driver, so **on our kernel these domains should still be on** [I: CAM1.1
+  confirms it through the kernel's PMU regmap]. Two consequences:
   - CSIS registers are reachable without a power-domain driver, as long
     as nothing cycles the domain. We start there and leave the PD driver
     for later.
@@ -320,10 +327,10 @@ sensor ──MIPI──> DC-PHY slave n ──> CSIS link n ──┬──> CSI
 
 | Piece | Mainline 7.3-rc6 | Ours | Needed |
 |---|---|---|---|
-| `hsi2c_1-4` (PERIC0 USI1-4) | driver yes | no DT nodes (we have USI5, 7, 8) | DT: USI1-4 with `samsung,sysreg = <&sysreg_peric0 0x1000..0x100c>` [I: from stock `usi-offset` 0-0xc and our USI8 at `0x101c`], SPI 674-677, pins gpp2/4/6/8 0-1, 1 MHz (buses 1, 4) and 950 kHz (2, 3) as stock |
-| S2MPG13 LDO12S | — | descriptor in `s2mps11.c`; `pmic-2` disabled by default, proven by GNSS G1 | add `ldo12s` to `pmic-2` |
-| S2MPG13 GPIO bank | no | no | regmap for bank `0x0c` in `sec-acpm.c` + a small gpio driver (port of GPL `s2mpg1x-gpio`) |
-| SLG51002 | no (`slg51000` only) | no | port GPL `slg51002-core/regulator/pinctrl` (about 1.9k lines) as a regulator driver |
+| `hsi2c_1-4` (PERIC0 USI1-4) | driver yes | `hsi2c_3` (USI3, sysreg `0x1008`, SPI 676) built, disabled; 1, 2, 4 not yet | DT: USI1-4 with `samsung,sysreg = <&sysreg_peric0 0x1000..0x100c>` [I: from stock `usi-offset` 0-0xc and our USI8 at `0x101c`], SPI 674-677, pins gpp2/4/6/8 0-1, 1 MHz (buses 1, 4) and 950 kHz (2, 3) as stock |
+| S2MPG13 LDO12S | — | descriptor in `s2mps11.c`; `ldo12s` in `pmic-2`, disabled until camera-pwr-test (built) | — |
+| S2MPG13 GPIO bank | no | `gpio` regmap (ACPM type `0x0c`) in `sec-acpm.c`, `gpio-s2mpg13` (built, blacklisted) | — |
+| SLG51002 | no (`slg51000` only) | `slg51002-regulator` (built, blacklisted): LDO1-8 and the four switches, no test mode, no IRQ | GPIO/pinctrl part not needed |
 | CIS_CLK0-7 | — | in `clk-gs201.c` | DT consumers |
 | DC-PHY RX | no | no | new generic PHY driver (D-PHY first) |
 | CSIS link + WDMA | no | no | new V4L2 driver |
@@ -331,7 +338,7 @@ sensor ──MIPI──> DC-PHY slave n ──> CSIS link n ──┬──> CSI
 | AF actuators | `ak7375`-style drivers exist | — | identify `0x0c`/`0x0f` parts by ID register |
 | SysMMU v8 | no | no | bypass for now |
 | PD driver | no | no | later (runtime PM) |
-| V4L2 core, `VIDEOBUF2_DMA_CONTIG`, DMA-BUF heaps (system, CMA) | yes | built as modules | `CMA_SIZE_MBYTES=32` is too small: add a reserved pool |
+| V4L2 core, `VIDEOBUF2_DMA_CONTIG`, DMA-BUF heaps (system, CMA) | yes | V4L2 modules; heaps built in (`omandroid.config`, built) | `CMA_SIZE_MBYTES=32` is too small: add a reserved pool |
 | libcamera | simple + soft ISP | Arch `libcamera 0.7.2` | one entry in the simple handler's device table, a sensor helper, a tuning file |
 
 ---
@@ -435,13 +442,31 @@ facts in our own words.
 
 ## 5. Design
 
-### 5.1 Kernel (`omandroid-camera`, not yet built)
+### 5.1 Kernel (`omandroid-camera`)
+
+Built (2026-10-12), on `omandroid-int` @ `898ab3c1e`, head @ `6cb2be364`
+(release `7.3.0-rc6-omandroid-push1-00331-g6cb2be364f15`):
+
+- `soc: google: add a read-only gs201 camera receiver probe` (CAM1,
+  bring-up, `gs201-cam-probe`);
+- `dt-bindings: mfd: samsung,s2mpg13-pmic: add the GPIO block`,
+  `mfd: sec: s2mpg13: add the GPIO block`, `gpio: add a driver for the
+  Samsung S2MPG13 PMIC GPIOs` (item 2);
+- `regulator: dt-bindings: add Dialog SLG51002`, `regulator: add a driver
+  for the Dialog SLG51002 camera PMIC` (item 3);
+- `soc: google: add a gs201 camera module power test driver` (CAM2.3/CAM3a,
+  bring-up, `gs201-cam-power`, binding `google,gs201-camera-power-test`);
+- `arm64: dts: exynos: google: gs201: add USI3 and its I2C bus`, and for
+  cheetah the camera power path (S2MPG13 GPIO node, `ldo12s`, the fixed
+  supplies, the SLG51002) and the ultrawide test nodes, all disabled.
+
+Checks: see the end of this section. The plan as written:
 
 1. `arm64: dts: exynos: gs201: add USI1-4 and the camera I2C buses`
-   (disabled).
-2. `mfd: sec: s2mpg13: add the GPIO bank` + `gpio: s2mpg13` (read-only
-   until CAM2), `ldo12s` in `pmic-2`.
-3. `regulator: add SLG51002` (port; binding first).
+   (disabled). USI3 done; USI1, 2, 4 when their cameras come up.
+2. `mfd: sec: s2mpg13: add the GPIO bank` + `gpio: s2mpg13`, `ldo12s` in
+   `pmic-2`. Done.
+3. `regulator: add SLG51002` (port; binding first). Done.
 4. `phy: samsung: add the gs201 MIPI DC-PHY receiver` (`google,gs201-mipi-dcphy-rx`):
    D-PHY 1/2/4 lanes from the GPL `0x0504` settings, isolation through the
    PMU regmap, reset through the CSIS sysreg; C-PHY later.
@@ -457,7 +482,21 @@ facts in our own words.
    (two cells address, one cell size, AGENTS.md gotcha), disabled by default,
    enabled by overlays in `device/cheetah/overlays/camera-*.dtso`.
 8. Config: `CONFIG_VIDEO_GS201_CSIS=m`, `CONFIG_PHY_GS201_MIPI_DCPHY=m`,
-   `CONFIG_REGULATOR_SLG51002=m`, sensor modules.
+   `CONFIG_REGULATOR_SLG51002=m` (done, with `GPIO_S2MPG13`, the two
+   bring-up modules, the DMA-BUF heaps and `VIDEO_CCS`), sensor modules.
+
+**Checks (laptop, 2026-10-12):** `bin/omandroid kernel` exit 0 into
+`out-camera`; `W=1` on `gs201-cam-probe.o`, `gs201-cam-power.o`,
+`gpio-s2mpg13.o`, `slg51002-regulator.o`, `sec-acpm.o`, `sec-common.o`: no
+warnings; the DTB builds `W=1` with only the existing simplefb
+`unit_address_vs_reg` warning; checkpatch `--strict`: only the usual
+no-Signed-off-by and MAINTAINERS items, plus "binding in the same patch"
+on the bring-up power test driver (never sent upstream). `dt-doc-validate`
+and the examples of the three new or changed bindings pass; `dt-validate`
+(dtschema 2026.9) on the default DTB and on default + `camera-pwr-test`:
+only the existing `soc_id` and framebuffer `post-init-providers` reports.
+The overlay applies with `fdtoverlay` and turns on the nine nodes it names.
+Nothing has run on the phone.
 
 ### 5.2 Userspace (not yet built)
 
@@ -496,9 +535,10 @@ facts in our own words.
 |---|---|---|---|
 | CAM0 | Read-only: clocks, pins, LDO12S, libcamera, CMA (current int kernel) | nothing | 0.5 day |
 | CAM1 | Read-only kernel probe: PMU status of the camera domains, then CSIS link versions, one register per boot | probe module | 2-3 days |
-| CAM2 | Rails, one per boot: LDO12S → EEPROMs; S2MPG13 GPIO 0 → SLG51002 chip ID; full ultrawide sequence → sensor chip ID | buses, S2MPG13 GPIO, SLG51002 | 1.5-2 weeks |
+| CAM2 | Rails, one per boot: S2MPG13 GPIOs and the fixed supplies; GPIO 0 → SLG51002 chip ID; LDO12S → ultrawide EEPROM answers | buses, S2MPG13 GPIO, SLG51002 (built) | 1 week |
+| CAM3a | Full ultrawide sequence → sensor chip ID, read-only; then front, tele, main | `gs201-cam-power` (built) | 0.5-1 week |
 | RE1-RE4 | Offline HAL analysis (section 4) | REA | 2-3 weeks, in parallel with CAM2 |
-| CAM3 | Ultrawide streams a test pattern; DC-PHY RX up; the link counts frames, no errors | PHY driver, sensor driver, RE1, RE4 | 2 weeks |
+| CAM3b | Ultrawide streams a test pattern; DC-PHY RX up; the link counts frames, no errors | PHY driver, sensor driver, RE1, RE4 | 2 weeks |
 | CAM4 | CSIS WDMA writes the test pattern, then a real image, to a file (`v4l2-ctl`) | CSIS/WDMA driver, RE2, RE3 | 2-3 weeks |
 | CAM5 | libcamera `cam` photo; PipeWire app preview | libcamera patch | 1 week |
 | CAM6 | Video: 1080p30 preview, recording (software encode), ACPM CAM DVFS | ACPM merged | 2-3 weeks |
@@ -546,25 +586,23 @@ with the ultrawide and front cameras).
 
 ---
 
-## 7. Runbook stubs (gated; none of this is built)
+## 7. Runbooks (gated)
 
-Phone in Arch over USB, from the omandroid repo. Each step: run it only when
-the human says go; record the result here with the date and `uname -r`.
-`ov` is the overlay helper from AUDIO-PLAN.md.
+Phone in Arch over USB, from the omandroid repo. Run each step only when the
+human says go; record the result here with the date and `uname -r`. `ov` is
+the overlay helper from AUDIO-PLAN.md, with `KERNEL_DIR`/`KERNEL_OUT`
+pointing at the kernel being pushed. The staged steps run through
+`tools/camera-stage`, which streams `/dev/kmsg` to `logs/` before it touches
+anything, marks each action in the kernel log, and with `--watchdog` arms the
+hardware watchdog with a feeder, so a hang resets the phone and pstore keeps
+the console (`tools/camera-stage --pstore` afterwards).
 
-### CAM0: read-only, current int kernel (not yet run). Risk: none
+Built (2026-10-12): see section 5.1 for the branch. CAM0 is partly done;
+CAM1, CAM2 and CAM3a are built and waiting for the phone.
+
+### CAM0: read-only, current int kernel (partly run). Risk: none
 
 ```sh
-**CAM0 partial result (2026-10-12, 7.3.0-rc6-omandroid-push1-00306-g60d3ca176c80),
-read-only.** `clk_summary`: the CMU's sensor clocks (`mout/gout/dout_cmu_cis_clk5..7`
-seen) are registered at 24.576 MHz, enable count 0, hardware enable Y, so ABL
-leaves them running with no consumer. No `/dev/dma_heap` (CONFIG_DMABUF_HEAPS
-and the system/CMA heaps are off in our config), CMA 124 MiB total, about
-68 MiB free; no `/dev/video*` or `/dev/media*`; libcamera not installed. Not
-yet done: the pin states (need the reset/MCLK pin names from the plan's
-table) and LDO12S, which needs the pmic-2 regmap (bound only while the GNSS
-power stack runs, as FINGERPRINT-PLAN FB2 found).
-
 # CAM0.1 clocks as ABL left them (software state only)
 tools/phone-ssh 'grep -iE "cis_clk|csis" /sys/kernel/debug/clk/clk_summary'
 #   expect: CIS_CLK0-3 and CSIS_NOC listed; record enable count and rate
@@ -582,50 +620,233 @@ tools/phone-ssh 'pacman -Q libcamera libcamera-tools 2>&1; ls /dev/dma_heap/ /de
 Stop if any read hangs or errors in an unexpected way. Rollback: none (all
 reads). Do **not** dump the `0x50` EEPROM on `hsi2c_15` (section 1.7).
 
-### CAM1: domain status, then CSIS versions (probe module; not yet built). Risk: medium
+**CAM0 partial result (2026-10-12, 7.3.0-rc6-omandroid-push1-00306-g60d3ca176c80),
+read-only.** `clk_summary`: the CMU's sensor clocks (`mout/gout/dout_cmu_cis_clk5..7`
+seen) are registered at 24.576 MHz, enable count 0, hardware enable Y, so ABL
+leaves them running with no consumer. No `/dev/dma_heap` (CONFIG_DMABUF_HEAPS
+and the system/CMA heaps are off in our config), CMA 124 MiB total, about
+68 MiB free; no `/dev/video*` or `/dev/media*`; libcamera not installed. Not
+yet done: the pin states (CAM0.2, now folded into CAM2.0) and LDO12S, which
+needs the pmic-2 regmap (bound only while the GNSS power stack runs, as
+FINGERPRINT-PLAN FB2 found; CAM2.0 reads it on the camera-pwr-test boot).
 
-A throwaway module, `gs201-cam-probe`, under `--watchdog` with the log
-stream on:
+**Note on the MCLK rate.** CIS_CLK0's divider parent is the 24.576 MHz
+oscillator, and the divider rounds down, so asking for stock's 24 MHz would
+give 12.288 MHz. The bring-up driver never sets the rate; it logs what it
+gets. A sensor's ID registers don't depend on the exact MCLK; streaming will
+(CAM3b), and needs a parent that gives 24 MHz (a `dout_cmu_shared*` PLL tap).
 
-```sh
-# CAM1.1 PMU status only: CSIS_STATUS (0x2404) and PDP_STATUS (0x2484) through
-#        the exynos-pmu regmap; DC-PHY isolation (0x3ebc). No other register.
-tools/phone-ssh 'modprobe gs201-cam-probe step=pmu; dmesg | tail -5'
-#   pass: CSIS and PDP status bit 0 = 1 (on)
-#   stop: either domain off -> do not run CAM1.2; the PD driver moves up
-# CAM1.2 next boot: CSIS link 0 version register (0x1a440000), one read
-tools/phone-ssh 'modprobe gs201-cam-probe step=link0; dmesg | tail -3'
-#   pass: a plausible version word (not 0, not 0xffffffff)
-#   then, one per boot: links 1-7, the CSIS DMA first page, the PHY bias block
-# rollback: rmmod gs201-cam-probe (it only reads)
-```
+### K: the camera kernel and the blacklist. Risk: low (K3 flashes)
 
-The module refuses CAM1.2 unless CAM1.1's status check passes in the same
-load.
-
-### CAM2: rails, one change per boot (not yet built). Risk: medium
-
-Overlay `camera-buses-test` (USI1-4, `hsi2c_1-4`), `ldo12s` in `pmic-2`,
-the S2MPG13 GPIO driver, the SLG51002 driver blacklisted until CAM2b.
+Everything in `omandroid-camera` is disabled or blacklisted until a step
+enables it, so K3 should boot exactly like the int kernel it is based on,
+plus `/dev/dma_heap`.
 
 ```sh
-# CAM2a LDO12S on; read the two LDO12S-only EEPROMs (ID bytes only, nothing kept in the repo)
-#   expect: hsi2c_2 0x51 and hsi2c_3 0x50 ACK; i2cdetect shows nothing unexpected
-#   stop: a bus error or a NACK on both -> rail or bus setup wrong; LDO12S off
-# CAM2b S2MPG13 GPIO 0 high (SLG51002 CS), 10 ms; read 0x1105-0x1107 on hsi2c_8 0x75
-#   expect: a 24-bit chip ID; record whether it is revision AA (0xafda01)
-#   stop: haptics on the same bus misbehave -> CS low, stop
-# CAM2c full ultrawide sequence (section 1.2), chip ID at 0x0016, then the full power-down
-#   expect: a Sony model ID (0x0386 if it is the IMX386 [I]); all rails off afterwards
-# CAM2d-f the same for front, tele, main (each its own boot)
-# rollback each: the driver's power-down sequence; images without the overlay
+# K0 (laptop) build: the branch, or omandroid-int after the human merges it
+export KERNEL_DIR=$HOME/android/mainline/wt-camera KERNEL_OUT=$HOME/android/mainline/out-camera
+bin/omandroid kernel && bin/omandroid modules && bin/omandroid initramfs
+# K1 (phone, one file) the camera blacklist, as a bring-up copy until
+#    omandroid-device-cheetah ships modprobe.d/omandroid-camera.conf
+tools/phone-ssh 'cat > /etc/modprobe.d/omandroid-camera-bringup.conf' \
+  < packages/omandroid-device-cheetah/vendor/modprobe.d/omandroid-camera.conf
+tools/phone-ssh 'cat /etc/modprobe.d/omandroid-camera-bringup.conf | grep -c ^blacklist'
+#   expect: 4
+# K2 (laptop) images with the overlays the phone boots today, no camera overlay yet
+ov <the overlays the phone runs now>          # as in AUDIO-PLAN.md / MODEM-PLAN.md
+# K3 flash slot B and reboot (ASK FIRST)
+bin/omandroid push
+# K4 read-only check
+tools/camera-stage k
 ```
 
-### CAM3-CAM5 (outline; runbooks written when the drivers exist)
+- **Expect/Pass (K4):** `uname -r` is the new release; the four modules are
+  listed with paths; `blacklist` lines for all four; `/dev/dma_heap/`
+  lists `system` and the default CMA heap; the camera-pwr-test overlay is
+  not in the DTB. Display, touch, Wi-Fi, audio and GNSS behave as before.
+- **Stop:** a regression anywhere (boot, USB, display), or a camera module
+  missing.
+- **Rollback:** push the previous int images (`$D.default` of the int build)
+  or let the boot fall back to slot A.
 
-- **CAM3:** ultrawide in its test-pattern mode streaming on the link
+### CAM1: domain status, then CSIS registers (gs201-cam-probe). Risk: medium
+
+The module only reads. CAM1.1 reads three PMU registers through the
+kernel's PMU regmap (the same plain read stock's power-domain code uses
+for these offsets; never from userspace, AGENTS.md); CAM1.2 adds exactly one
+register of the camera block, and only if both domains read on. One CAM1.2
+read per boot on the first runs: an abort kills the session.
+
+```sh
+# CAM1.1 (camera kernel, no overlay needed)
+tools/camera-stage --watchdog p1
+#   kernel log: "PMU 0x2404 CSIS_STATUS = ...", "0x2484 PDP_STATUS",
+#   "0x3ebc PHY_CTRL_MIPI_DCPHY_S4S4S4S4", then "pd-csis on, pd-pdp on, DC-PHY ..."
+# CAM1.2, next boot each: link0 first, then link1..link7, wdma, phybias
+tools/camera-stage --watchdog --reg link0 p2
+#   kernel log: "reading 0x1a440000 (CSIS link 0 version)", then its value
+```
+
+- **Pass (1.1):** CSIS_STATUS and PDP_STATUS bit 0 = 1. Record all three
+  words; DC-PHY bit 0 is expected 0 (isolated) while nothing streams [I].
+- **Stop (1.1):** either domain reads off: don't run CAM1.2; the gs201 PD
+  driver (CAM10, shared with GPU-PLAN G4c) moves up. A read error: record
+  it, stop.
+- **Pass (1.2):** a plausible version word (not 0, not 0xffffffff) for
+  link 0, the same for each other link; `wdma` a mask value (0 or a bit
+  pattern); `phybias` only once a later stage has released the isolation
+  (the module refuses it while bit 0 of 0x3ebc is 0).
+- **Stop (1.2):** a hang (the watchdog resets the phone): the read was not
+  safe; save pstore and don't retry that block until we know why.
+  0xffffffff or 0 from a link: stop, compare with the HAL register table
+  (section 4.1).
+- **Rollback:** none needed (the module only reads; camera-stage unloads it).
+
+### CAM2: the camera power path, one change per boot. Risk: low to medium
+
+Before CAM2: **the PMIC backup check (AGENTS.md).** Steps g1-e1 write the
+S2MPG13's GPIO block and the SLG51002, so first confirm the off-repo backup
+still matches:
+
+```sh
+# CAM2-B (read-only, ~430 MB of reads) against the 20261012-radio backup
+tools/phone-ssh 'for p in efs efs_backup modem_userdata persist modem_a modem_b; do
+  d=$(grep -l "^PARTNAME=$p\$" /sys/class/block/*/uevent | head -1 | cut -d/ -f5)
+  printf "%s  %s.img\n" "$(sha256sum < /dev/$d | cut -d" " -f1)" "$p"; done' > logs/cam2-partitions.sha256
+grep -E ' (efs|efs_backup|modem_userdata|persist|modem_a|modem_b)\.img$' \
+  ~/android/reference/cheetah-partition-backup-20261012-radio/SHA256SUMS | sort -k2 |
+  diff - <(sort -k2 logs/cam2-partitions.sha256) && echo BACKUP-MATCH
+```
+
+Stop if it doesn't print `BACKUP-MATCH`: find out why (a slot A boot since
+then? MODEM-PLAN M0.1) and take a fresh backup before going on.
+
+Then boot the overlay. `camera-pwr-test` enables `pmic-2` with `ldo12s`
+described (stock's fixed 1.8 V), the S2MPG13 GPIO node, the two fixed camera
+supplies, the SLG51002 on bus 8, USI3/`hsi2c_3` (950 kHz, as stock) and the
+two `gs201-cam-power` nodes (ultrawide sensor 0x1a, its EEPROM 0x50). With
+the blacklist in place nothing new binds except the bus: the fixed supplies
+and the camera PMIC wait for the GPIO driver, the test nodes for their
+supplies.
+
+```sh
+# CAM2-K overlay boot (ASK FIRST: flashes and reboots)
+ov <the overlays the phone runs now> camera-pwr-test && bin/omandroid push
+# CAM2.0 read-only: S2MPG13 GPIO block and LDO12S over ACPM, camera pins
+tools/camera-stage r0
+```
+
+- **Expect (2.0):** the GPIO regmap dump (registers 02-14). In each pin's
+  control register (05 = GPIO0 ... 0c = GPIO7) bit 6 is output enable and
+  bit 5 the level; record pins 0 (SLG51002 CS), 1 (PP3200_BB_CAM enable)
+  and 3 (PP1300_CAM enable). LDO12S (`37:`) reads 0x2c (off, 1.8 V) or
+  0xac (on). gpp3-0 (MCLK) and gpp6-3 (reset) as ABL left them; gpp6-0/1
+  in function 3 (I2C).
+- **Stop (2.0):** no `-gpio` regmap (pmic-2 didn't bind: check `sec_pmic_acpm`
+  in dmesg); bits 1:0 (pin mode) of pin 0, 1 or 3 not 0: something other
+  than the output register may own the pin [I]; don't run g1 until that is
+  understood. LDO12S's selector not 0x2c: the regulator core will rewrite
+  it to 1.8 V when LDO12S registers, so check stock's value first.
+- **Rollback:** `ov <the overlays the phone runs now> && bin/omandroid push`.
+
+```sh
+# CAM2.1 (this boot) the S2MPG13 GPIO driver. Changes: PP3200_BB_CAM and
+#        PP1300_CAM enables become outputs, driven low (supplies off)
+tools/camera-stage --watchdog g1
+```
+
+- **Expect (2.1):** `gpio-s2mpg13` registers 8 lines; the two fixed
+  regulators probe (`PP3200_BB_CAM`, `PP1300_CAM` in the regulator summary,
+  disabled); registers 06 and 08 show bit 6 set, bit 5 clear; nothing else
+  in the dump changed from 2.0.
+- **Pass:** as expected, phone otherwise unchanged (GNSS still powers if it
+  runs).
+- **Stop:** any other pin register changed; an ACPM error; a regulator
+  enabled.
+- **Rollback:** reboot (the module is blacklisted, so the pins go back to
+  ABL's state only through a full reset; they stay "off" otherwise, which
+  is safe).
+
+```sh
+# CAM2.2 (next boot) the SLG51002. Changes: GPIO0 high (CS), 10 ms; the LDO
+#        voltage selectors set to the stock voltages; every output stays off
+tools/camera-stage --watchdog s1
+```
+
+- **Expect (2.2):** "pattern ID 0xb13103 (revision AB)" (stock's dmesg
+  shows `chip_id: 0xb13103`); 8 LDOs and 4 switches registered, all
+  disabled, with the voltages from the DT (2.85, 2.85, 2.25, 2.9, 2.85, 1.1,
+  1.0, 1.1 V); register 05 (GPIO0) bit 5 set.
+- **Stop:** an I2C error on bus 8 or the haptics stop working (check with
+  `tools/phone-ssh python3 - < tools/ff-rumble`, announce the buzz first):
+  `rmmod slg51002_regulator` (drives CS low) and reboot. Revision AA or an
+  unknown ID: stop; the driver refuses unknown IDs and skips the switches
+  on AA.
+- **Rollback:** `rmmod slg51002_regulator` (CS low), then reboot.
+
+```sh
+# CAM2.3 (next boot) the ultrawide module EEPROM: LDO12S only, one current-
+#        address byte read (no address written: the EEPROM is never written)
+tools/camera-stage --watchdog e1
+```
+
+- **Expect (2.3):** `gs201-cam-power` binds both nodes ("not powered");
+  "dovdd on", "eeprom: ack", "dovdd off"; LDO12S back to off (`37:` bit 7
+  clear). The byte itself is not printed and not kept: it is calibration
+  data.
+- **Stop:** "no answer": the rail, the bus pull-ups or the address is wrong.
+  Power is already off; record the bus error, don't power anything else.
+  Stock pulls the bus lines up only while it transfers; we keep them pulled
+  up while bus 3 is enabled, so if the module ever misbehaves, try the
+  stock idle state (function 0, no pull) first.
+- **Rollback:** `echo 0 > /sys/kernel/debug/gs201-cam-power/*-0050/power`
+  (camera-stage does it), reboot.
+
+### CAM3a: the ultrawide sensor's chip ID, read-only. Risk: medium
+
+Stock's full sequence for the ultrawide (section 1.2), driven by
+`gs201-cam-power` from the DT: reset held asserted (gpp6-3 low) from the
+start; PP3200_BB_CAM (2 ms ramp), PP1300_CAM (2 ms), LDO12S, LDO6 (1.1 V),
+LDO2 (2.85 V), 1 ms; MCLK pad to function 2 and CIS_CLK0 on, 1 ms; reset
+released, 10 ms. Then one register per command from the DT allowlist
+(Sony model ID `0x0016`/`0x0017`, the CCS identification block
+`0x0000-0x0005`); nothing is written to the sensor. Power-down is stock's
+reverse: reset, 1 ms, MCLK off and pad back to output pulled down, 1 ms,
+LDO2, LDO6, LDO12S (1 ms), PP1300, PP3200. Nothing streams.
+
+```sh
+# CAM3a.1 (next boot; or the same boot as a passed CAM2.3)
+tools/camera-stage --watchdog u1
+# optional, a later run: the CCS identification block, one register each
+tools/camera-stage --watchdog --regs "0x0000 0x0001 0x0002 0x0003" u1
+```
+
+- **Expect:** the supplies come on in order ("pp3200 on" ... "avdd on"),
+  "mclk on at 24576000 Hz", "powered up"; the regulator summary shows
+  `vdda_uw` and `vddd_uw` enabled; gpp6-3 an output, high; gpp3-0 in
+  function 2. `0x0016` and `0x0017` each answer; record the pair (the
+  plan's guess is 0x03, 0x86 for an IMX386 [I]). Then "powered down" and
+  every camera supply disabled.
+- **Pass:** both reads answer with the same values on a second run, and the
+  rails go off.
+- **Stop:** an I2C error or timeout: the stage still powers down; check
+  that 2.3 passed, that `vdda_uw`/`vddd_uw` report status `on`
+  (`/sys/class/regulator/*/status`, from the SLG51002's own VOUT_OK flag),
+  and stop. A supply fails to enable: everything already on is turned off
+  in reverse; record which one. Any SLG51002 over-current status: stop.
+- **Rollback:** `tools/camera-stage off`, reboot; images without
+  camera-pwr-test.
+- **Afterwards:** record the model ID in section 1.1 (settles the
+  ultrawide's part), then the same for the front, tele and main cameras
+  (new test nodes on buses 2, 4, 1 with their own stock sequences), each
+  its own boot.
+
+### CAM3b-CAM5 (outline; runbooks written when the drivers exist)
+
+- **CAM3b:** ultrawide in its test-pattern mode streaming on the link
   RE1 names; pass = link frame counter rising and INT0 errors at 0. If RE1
-  is unknown, enable the PHY and link one candidate per boot.
+  is unknown, enable the PHY and link one candidate per boot. Needs the
+  24 MHz MCLK parent (CAM0 note).
 - **CAM4:** WDMA context 0 into the reserved pool: test pattern first
   (compare against the expected bars), then a real image saved with
   `v4l2-ctl --stream-mmap --stream-count=1 --stream-to=`; pass = a
@@ -647,7 +868,8 @@ the S2MPG13 GPIO driver, the SLG51002 driver blacklisted until CAM2b.
 4. Does the CSIS WDMA take 32-bit physical addresses directly, or a
    shifted address (more than 4 GiB reachable)?
 5. Can mainline `ccs` with static data drive the ultrawide (section 5.3)?
-6. Is the SLG51002 revision AA, and is its trim already applied by ABL?
+6. ~~Is the SLG51002 revision AA?~~ No: revision AB (`0xb13103`, stock
+   dmesg), no trim needed (section 1.2). CAM2.2 confirms it on our kernel.
 7. For the main and tele: if they are C-PHY, can the sensor run a D-PHY
    mode over the same board wiring? (Probably not; the wiring decides.)
 8. Can Rockchip's vendor DC-PHY receive code be cited (licensing is GPL;

@@ -1,0 +1,241 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# camera-stage: run one staged gs201 camera bring-up step (device/cheetah/CAMERA-PLAN.md
+# section 7) and keep every kernel line on the laptop, even if the phone hangs.
+#
+# A first SSH connection streams /dev/kmsg into logs/camera-<time>-<stage>.log
+# BEFORE a second one touches the hardware, so the last line written before a
+# hang is already on the laptop. Every step prints what it is about to do into
+# the kernel log first ("camera-stage: ...").
+#
+# Usage:
+#   tools/camera-stage [options] STAGE
+#
+# Stages (run in order, one per boot from g1 on; each needs the previous one
+# to have passed):
+#   k      read-only: kernel, camera modules, blacklist, overlay, DMA-BUF heaps
+#   p1     CAM1.1: gs201_cam_probe step=pmu (PMU status of pd-csis, pd-pdp and
+#          the DC-PHY isolation, through the kernel's PMU regmap)
+#   p2     CAM1.2: gs201_cam_probe step=--reg (link0..link7, wdma, phybias):
+#          the PMU check again, then that one register
+#   r0     CAM2.0, camera-pwr-test booted, no camera module loaded: read the
+#          S2MPG13 GPIO block and LDO12S over ACPM, the camera pins
+#   g1     CAM2.1: load gpio_s2mpg13; the fixed camera supplies probe and
+#          drive their enable pins low (supplies off)
+#   s1     CAM2.2: load slg51002_regulator; chip select high, pattern ID,
+#          LDO voltage selectors set to stock's (all LDOs stay off)
+#   e1     CAM2.3: load gs201_cam_power; LDO12S on, does the ultrawide module
+#          EEPROM (0x50) answer a one-byte read; LDO12S off
+#   u1     CAM3a.1: the ultrawide sensor's stock power-up sequence, then
+#          --regs (default 0x0016 0x0017), one read each; power-down
+#   off    power both test devices down
+#
+# Options:
+#   --watchdog   arm the hardware watchdog (s3c2410, about 15 s) with a feeder
+#                loop on the phone; a full hang then resets the phone by itself
+#                (warm reset, pstore keeps the console)
+#   --reg NAME   p2: link0..link7, wdma or phybias (default link0)
+#   --regs LIST  u1: sensor registers to read, one at a time (default
+#                "0x0016 0x0017"; only those in the DT's allowlist are read)
+#   --pstore     after a watchdog reset: save /sys/fs/pstore
+set -uo pipefail
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+SSH="$ROOT/tools/phone-ssh"
+LOGDIR="$ROOT/logs"
+CP=/sys/kernel/debug/gs201-cam-power
+watchdog=0 stage= pstore=0 reg=link0 regs="0x0016 0x0017"
+usage() { sed -n '/^# Usage:/,/^#   --pstore/p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
+warn() { printf '\e[33m==> %s\e[0m\n' "$*"; }
+die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
+
+while (($#)); do
+  case "$1" in
+    --watchdog) watchdog=1 ;;
+    --reg) reg="${2:?}"; shift ;;
+    --regs) regs="${2:?}"; shift ;;
+    --pstore) pstore=1 ;;
+    -h|--help) usage ;;
+    k|p1|p2|r0|g1|s1|e1|u1|off) stage="$1" ;;
+    *) usage 1 ;;
+  esac
+  shift
+done
+
+case "$reg" in
+  link[0-7]|wdma|phybias) ;;
+  *) die "--reg must be link0..link7, wdma or phybias" ;;
+esac
+for r in $regs; do
+  [[ "$r" =~ ^0x[0-9a-fA-F]{1,4}$ ]] || die "--regs: '$r' is not a 16-bit hex address"
+done
+
+mkdir -p "$LOGDIR"
+stamp=$(date +%Y%m%d-%H%M%S)
+
+# A short, bounded SSH call; returns non-zero if the phone does not answer.
+phone() { timeout 60 "$SSH" -o ServerAliveInterval=2 -o ServerAliveCountMax=3 "$@"; }
+mark() { phone "echo 'camera-stage: $*' > /dev/kmsg"; }
+
+if ((pstore)); then
+  out="$LOGDIR/camera-pstore-$stamp"
+  mkdir -p "$out"
+  phone 'ls -l /sys/fs/pstore/' || die "phone not reachable"
+  for f in $(phone 'ls /sys/fs/pstore/'); do
+    phone "cat /sys/fs/pstore/$f" > "$out/$f"
+  done
+  say "saved to $out"
+  grep -h 'camera-stage\|cam_probe\|cam-power\|slg51002\|s2mpg13' "$out"/console-* 2>/dev/null | tail -20
+  exit 0
+fi
+
+[[ -n "$stage" ]] || usage 1
+log="$LOGDIR/camera-$stamp-$stage.log"
+
+say "phone check"
+phone 'uname -r' || die "phone not reachable over $SSH"
+
+# Is a node of the camera-pwr-test overlay enabled in the running DTB?
+overlay_on='s=$(tr -d "\0" < /sys/firmware/devicetree/base/soc@0/usi@109200c0/i2c@10920000/camera@1a/status 2>/dev/null); [ "$s" = okay ]'
+need_overlay() {
+  phone "$overlay_on" || die "camera-pwr-test is not in the running DTB (CAMERA-PLAN.md CAM2, step K2)"
+}
+need_blacklist() {
+  phone 'grep -h "^blacklist gpio_s2mpg13" /etc/modprobe.d/*.conf /usr/lib/modprobe.d/*.conf 2>/dev/null | grep -c . >/dev/null' ||
+    die "the camera blacklist is not installed (CAMERA-PLAN.md step K1)"
+}
+loaded() { phone "grep -c '^$1 ' /proc/modules >/dev/null"; }
+
+# 1. The log stream. cat (not dmesg) so nothing is buffered on the phone.
+say "streaming the phone's kernel log to $log"
+{
+  echo "# camera-stage $stamp stage=$stage reg=$reg regs=$regs watchdog=$watchdog"
+  "$SSH" -T -o ServerAliveInterval=1 -o ServerAliveCountMax=5 'exec cat /dev/kmsg' 2>&1 |
+  while IFS= read -r line; do printf '%s %s\n' "$(date +%T.%3N)" "$line"; done
+  echo "# $(date +%T.%3N) log stream ended (connection closed or phone gone)"
+} >> "$log" &
+logger=$!
+trap 'kill $logger 2>/dev/null' EXIT
+sleep 2
+mark "start $stage" || die "phone stopped answering before the test"
+
+# 2. Optional watchdog: a feeder loop that stops when the phone hangs.
+if ((watchdog)); then
+  say "arming the hardware watchdog (feeder every 2 s)"
+  phone 'nohup sh -c "exec 3>/dev/watchdog0
+    trap \"printf V >&3; exit 0\" TERM
+    while :; do printf k >&3; sleep 2; done" >/dev/null 2>&1 &
+    echo $! > /run/camera-wd.pid' || warn "could not arm the watchdog"
+fi
+
+# Read-only views. Regmap debugfs over ACPM (never the PMU: AGENTS.md).
+gpio_regs='f=$(ls -d /sys/kernel/debug/regmap/*pmic-2*-gpio 2>/dev/null | head -1);
+  if [ -n "$f" ]; then echo "S2MPG13 GPIO block ($f): 04 status, 05-0c pin 0-7 control"; cat "$f/registers"; else echo "no S2MPG13 gpio regmap (pmic-2 not bound)"; fi'
+ldo12s_reg='f=$(ls -d /sys/kernel/debug/regmap/*pmic-2*-pmic 2>/dev/null | head -1);
+  if [ -n "$f" ]; then echo "LDO12S control (PM 0x37; bit 7 = on, bits 5:0 = selector, 0x2c = 1.8 V):"; grep -E "^37:" "$f/registers"; else echo "no S2MPG13 pmic regmap"; fi'
+cam_pins='grep -hE "\((gpp3-0|gpp6-[0-3])\)" /sys/kernel/debug/pinctrl/*10840000*/pins 2>/dev/null || echo "no PERIC0 pin list"'
+regulators='grep -E "PP3200|PP1300|vddio_cam|vdda_|vddd_|vdd_main_af|vdd_tele|cam_sw" /sys/kernel/debug/regulator/regulator_summary 2>/dev/null || echo "no regulator summary"'
+
+result=ok
+case "$stage" in
+  k)
+    phone 'echo "release $(uname -r)";
+      for m in gs201_cam_probe gs201_cam_power gpio_s2mpg13 slg51002_regulator; do
+        printf "%-20s %s\n" $m "$(modinfo -n $m 2>/dev/null || echo MISSING)"; done;
+      grep -h "^blacklist" /etc/modprobe.d/omandroid-camera*.conf /usr/lib/modprobe.d/omandroid-camera.conf 2>/dev/null || echo "no camera blacklist";
+      ls /dev/dma_heap/ 2>&1; grep -i cma /proc/meminfo' | tee -a "$log" || result=fail
+    if phone "$overlay_on"; then say "camera-pwr-test: in the DTB"; else say "camera-pwr-test: not in the DTB"; fi
+    ;;
+  p1)
+    loaded gs201_cam_probe && phone 'rmmod gs201_cam_probe'
+    mark "about to load gs201_cam_probe step=pmu (PMU 0x2404, 0x2484, 0x3ebc through the PMU regmap)"
+    phone 'modprobe gs201_cam_probe step=pmu; echo modprobe-exit=$?; rmmod gs201_cam_probe' | tee -a "$log" || result=fail
+    ;;
+  p2)
+    loaded gs201_cam_probe && phone 'rmmod gs201_cam_probe'
+    mark "about to load gs201_cam_probe step=$reg (PMU check, then one register)"
+    phone "modprobe gs201_cam_probe step=$reg; echo modprobe-exit=\$?; rmmod gs201_cam_probe" | tee -a "$log" || result=fail
+    ;;
+  r0)
+    need_overlay
+    for m in gpio_s2mpg13 slg51002_regulator gs201_cam_power; do
+      loaded $m && die "$m is already loaded: r0 is for a fresh boot"
+    done
+    mark "read-only: S2MPG13 GPIO block, LDO12S, camera pins"
+    phone "$gpio_regs; $ldo12s_reg; $cam_pins" | tee -a "$log" || result=fail
+    ;;
+  g1)
+    need_overlay; need_blacklist
+    mark "about to load gpio_s2mpg13 (fixed camera supplies will drive their enables low)"
+    phone 'modprobe gpio_s2mpg13; echo modprobe-exit=$?; sleep 2;
+      cat /sys/kernel/debug/gpio 2>/dev/null | sed -n "/s2mpg13/,/^$/p"' | tee -a "$log" || result=fail
+    phone "$gpio_regs; $regulators" | tee -a "$log" || result=fail
+    ;;
+  s1)
+    need_overlay; need_blacklist
+    loaded gpio_s2mpg13 || phone 'modprobe gpio_s2mpg13'
+    mark "about to load slg51002_regulator (S2MPG13 GPIO0 high, 10 ms, pattern ID)"
+    phone 'modprobe slg51002_regulator; echo modprobe-exit=$?; sleep 2' | tee -a "$log" || result=fail
+    phone "$gpio_regs; $regulators" | tee -a "$log" || result=fail
+    ;;
+  e1)
+    need_overlay; need_blacklist
+    loaded gpio_s2mpg13 || phone 'modprobe gpio_s2mpg13'
+    loaded slg51002_regulator || phone 'modprobe slg51002_regulator; sleep 1'
+    mark "about to load gs201_cam_power (nothing powered at probe)"
+    phone 'modprobe gs201_cam_power; echo modprobe-exit=$?; sleep 1; ls '"$CP" | tee -a "$log" || result=fail
+    mark "about to power the ultrawide EEPROM (LDO12S on), one-byte read, power off"
+    phone 'd=$(ls -d '"$CP"'/*-0050 | head -1); echo 1 > $d/power && echo "eeprom: $(cat $d/ack)"; echo 0 > $d/power; echo "power=$(cat $d/power)"' | tee -a "$log" || result=fail
+    phone "$ldo12s_reg; $regulators" | tee -a "$log" || result=fail
+    ;;
+  u1)
+    need_overlay; need_blacklist
+    loaded gpio_s2mpg13 || phone 'modprobe gpio_s2mpg13'
+    loaded slg51002_regulator || phone 'modprobe slg51002_regulator; sleep 1'
+    loaded gs201_cam_power || phone 'modprobe gs201_cam_power; sleep 1'
+    mark "about to power the ultrawide sensor up in stock's order (PP3200, PP1300, LDO12S, LDO6, LDO2, MCLK, reset)"
+    phone 'd=$(ls -d '"$CP"'/*-001a | head -1); echo 1 > $d/power; echo "power=$(cat $d/power)"' | tee -a "$log" || result=fail
+    phone "$regulators; $cam_pins" | tee -a "$log"
+    for r in $regs; do
+      mark "about to read sensor register $r"
+      phone 'd=$(ls -d '"$CP"'/*-001a | head -1); echo '"$r"' > $d/read && cat $d/read' | tee -a "$log" || result=fail
+    done
+    mark "about to power the ultrawide sensor down"
+    phone 'd=$(ls -d '"$CP"'/*-001a | head -1); echo 0 > $d/power; echo "power=$(cat $d/power)"' | tee -a "$log" || result=fail
+    phone "$regulators" | tee -a "$log"
+    ;;
+  off)
+    mark "about to power the camera test devices down"
+    phone 'for d in '"$CP"'/*; do [ -e $d/power ] && echo 0 > $d/power && echo "$d power=$(cat $d/power)"; done; true' | tee -a "$log" || result=fail
+    ;;
+esac
+
+sleep 2
+alive=0
+phone 'true' && alive=1
+if ((alive)); then
+  say "phone alive"
+  if ((watchdog)); then
+    phone 'kill $(cat /run/camera-wd.pid) && rm /run/camera-wd.pid' ||
+      warn "could not stop the watchdog feeder: the phone resets in about 15 s unless /dev/watchdog0 is fed"
+  fi
+else
+  result=hang
+  warn "PHONE NOT ANSWERING: the last kernel lines that reached the laptop are below."
+  if ((watchdog)); then
+    warn "Wait about 15 s for the watchdog reset; after boot run: $0 --pstore"
+  else
+    warn "Recover by holding Power about 30 s (a cold reset; pstore will be empty)."
+  fi
+fi
+
+sleep 1
+kill "$logger" 2>/dev/null
+trap - EXIT
+
+echo
+say "summary ($log): $result"
+sed -n "/camera-stage: start $stage/,\$p" "$log" |
+  grep -E 'camera-stage|cam_probe|cam-power|slg51002|s2mpg13|sec-pmic|regulator|i2c|modprobe-exit|Unable|abort|SError' |
+  sed -E 's/^([0-9:.]+) [0-9]+,[0-9]+,[0-9]+,[^;]*;/\1 /' | tail -30

@@ -1,0 +1,55 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (CAMERA-PLAN.md, stages CAM2/CAM3): the camera power path
+ * for the ultrawide module. Enables the S2MPG13 sub-PMIC (as gnss-pmic-test)
+ * with LDO12S (L12S_CAMIO, 1.8 V) described, the two fixed supplies its
+ * GPIOs switch (PP3200_BB_CAM on GPIO1, PP1300_CAM on GPIO3), the SLG51002
+ * camera PMIC on I2C bus 8 (chip select on GPIO0), USI3 as I2C (bus 3) and
+ * the gs201-cam-power test nodes for the ultrawide sensor (0x1a) and its
+ * module EEPROM (0x50).
+ *
+ * Nothing here switches anything at boot: gpio-s2mpg13, slg51002-regulator
+ * and gs201-cam-power are blacklisted (modprobe.d/omandroid-camera.conf),
+ * so the fixed supplies and the camera PMIC wait for their GPIOs and the
+ * test nodes for their supplies until each module is loaded by hand, one
+ * per boot, as the runbook says. Paths, not labels, so the base DTB needs
+ * no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/firmware/power-management/pmic-2} {
+	status = "okay";
+};
+
+&{/firmware/power-management/pmic-2/regulators/ldo12s} {
+	status = "okay";
+};
+
+&{/regulator-pp3200-bb-cam} {
+	status = "okay";
+};
+
+&{/regulator-pp1300-cam} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109700c0/i2c@10970000/pmic@75} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109200c0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109200c0/i2c@10920000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109200c0/i2c@10920000/camera@1a} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109200c0/i2c@10920000/eeprom@50} {
+	status = "okay";
+};
