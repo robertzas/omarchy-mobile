@@ -57,6 +57,12 @@ screen_off() {
   fi
 }
 
+# The chord marker is cleared on power's release, but Hyprland drops that
+# release once another key went down, so a marker older than this is stale.
+in_chord() {
+  [[ -f $state/chord ]] && (($(now) - $(stat -c %Y "$state/chord") * 1000 < 3000))
+}
+
 chord() {
   touch "$state/chord"
   # Power's release bind won't fire after the second key, so forget it now:
@@ -121,7 +127,7 @@ case "${1:-}" in
     if [[ -f $state/power ]]; then
       chord
     # Part of a chord that's still held: no volume change.
-    elif [[ -f $state/chord ]]; then
+    elif in_chord; then
       :
     # Key repeat while held (or a quick second press): lower right away.
     elif ((press - previous < 700)); then
@@ -130,7 +136,7 @@ case "${1:-}" in
     else
       (
         sleep "$volume_wait"
-        [[ -f $state/power || -f $state/chord ]] || omarchy-audio-output-volume lower
+        [[ -f $state/power ]] || in_chord || omarchy-audio-output-volume lower
       ) >/dev/null 2>&1 &
     fi
     ;;
