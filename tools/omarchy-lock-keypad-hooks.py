@@ -98,6 +98,10 @@ edit("Service.qml", [
     ("  property bool fingerprintConfigured: false\n",
      "  property bool fingerprintConfigured: false\n"
      "  property bool keypad: false\n", 1),
+    ("    id: idleBlankTimer\n    interval: 5000\n",
+     "    id: idleBlankTimer\n"
+     "    // Touch-only devices (the number pad) get longer to find and use it.\n"
+     "    interval: root.keypad ? 10000 : 5000\n", 1),
     ("  function beginLock() {\n",
      "  function beginLock() {\n"
      "    keypadToggle.reload()\n", 1),

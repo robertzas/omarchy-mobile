@@ -166,7 +166,7 @@ index ecec660..8d45f68 100644
          enabled: root.inputEnabled && !root.authenticatingPassword
          readOnly: root.authenticatingPassword
 diff --git i/shell/plugins/lock/Service.qml w/shell/plugins/lock/Service.qml
-index ccd496a..49a9085 100644
+index ccd496a..ad89873 100644
 --- i/shell/plugins/lock/Service.qml
 +++ w/shell/plugins/lock/Service.qml
 @@ -24,6 +24,7 @@ Item {
@@ -201,7 +201,17 @@ index ccd496a..49a9085 100644
        anchors.fill: parent
        backgroundPath: root.backgroundPath
        videoPosterPath: root.videoPosterPath
-@@ -813,6 +817,17 @@ Item {
+@@ -741,7 +745,8 @@ Item {
+ 
+   Timer {
+     id: idleBlankTimer
+-    interval: 5000
++    // Touch-only devices (the number pad) get longer to find and use it.
++    interval: root.keypad ? 10000 : 5000
+     repeat: false
+     property double armedAt: 0
+     onTriggered: {
+@@ -813,6 +818,17 @@ Item {
      else armBlankTimer()
    }
  
