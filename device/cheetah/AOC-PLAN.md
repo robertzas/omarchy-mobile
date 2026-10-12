@@ -992,6 +992,22 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
         is ASP, not DSP"), then `systemctl restart
         omandroid-speaker-protection` to restore.
 
+   **C8f result (2026-10-12, 7.3.0-rc6-omandroid-push1-00306-g60d3ca176c80,
+   omandroid-audio 0.2.1): passed.** Both amplifiers "power/control on,
+   active" with `cirrus,dsp-no-hibernate`. 0.2.0's watchdog crashed at boot
+   (it failed safe, muted): `AlsaCtl._info` kept the previous control's numid,
+   so every read returned the previous control; fixed in 0.2.1 (`2625199`,
+   `snd_ctl_elem_id_clear` before each lookup). Then: `systemctl restart`
+   rebound both amplifiers and came up "healthy"; five cycles of a 2 s tone,
+   stop, 15 s idle and a health check all played (heard), each "healthy",
+   zero "Wake failed / CSPL Error / Timed out / pm_runtime_get" lines, the
+   watchdog active throughout; real YouTube media in Chromium with pauses of
+   30 s and more kept playing (the human). Watchdog negative test: switching
+   Top PCM Source to ASP mid-tone logged "watchdog: Top: PCM Source is ASP,
+   not DSP", muted both and exited; a restart restored "ok". (Minor: `status`
+   then shows "muted: the speaker watchdog stopped", the stop handler's
+   reason, instead of the watchdog's own.)
+
 5. **C9 stock media gains and balance under verified protection**
    (after C8f passed; omandroid-audio 0.2.0 has everything this needs).
 
