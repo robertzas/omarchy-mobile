@@ -992,6 +992,215 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
         is ASP, not DSP"), then `systemctl restart
         omandroid-speaker-protection` to restore.
 
+5. **C9 stock media gains and balance under verified protection**
+   (after C8f passed; omandroid-audio 0.2.0 has everything this needs).
+
+   **What stock does for media on the speaker**, from `V/etc/mixer_paths.xml`,
+   `V/etc/audio_platform_configuration.xml`, `V/etc/waves_config.ini` and
+   our analysis of the stock HAL libraries (`audio.primary.gs201.so`,
+   `audio_spk_35l41.so`, `audio_waves_aoc.so`, `audio.platform.aoc.so`):
+   - **The amplifiers get equal gains:** Digital PCM Volume 817 (0 dB) and
+     AMP PCM Gain 17 (17.5 dB) on both, PCM Source DSP, both DSP inputs
+     from ASPRX1, boost peak 2.5 A for the speaker. Nothing in the HAL
+     sets a per-amplifier media gain. The only per-amplifier change is
+     "acoustic shock" protection: when proximity says the phone is at the
+     ear during media, the amp library saves the top amplifier's Digital
+     PCM Volume, sets it to 0, waits 34 ms and switches the top amplifier
+     off; when the phone moves away it restores both.
+   - **The media delta:** the route code enables a device's path, then at
+     once its "-post" path. For the speaker that is `speaker-post`, which
+     loads `fast_switch3.txt` into the top DSP and `fast_switch4.txt` into
+     the bottom DSP (Google's driver: the word list into
+     `CSPL_UPDATE_PARAMS_CONFIG`, command 8 into `CSPL_COMMAND`, then
+     `CSPL_STATE` must read running). `mixer_paths.xml` calls these "load
+     Bypass FIR"; the voice speaker path loads 1/2, "Enable FIR". Whether
+     the tuning's state after load is the FIR-on (voice) one is not
+     readable from the files: the deltas differ from each other in two
+     words only, and the tuning blobs are opaque. C9b tells by ear.
+   - **The AoC processes the speaker sink:** stock runs Waves MaxxAudio
+     on the AoC's speaker sink (`audio_waves_aoc.so`, module argument
+     `Sink=SPK:1`; `waves_config.ini`: instance 1 on device 0 at 48 kHz,
+     presets SPEAKER_MUSIC / SPEAKER_SAFE_MUSIC and throttled versions, with
+     per-orientation subtypes), with its preset (`V/etc/waves_preset.mps`)
+     sent as tuning data through `/dev/acd-audio_output_tuning`; the
+     speaker back end has its own tuning id (2). The amp library reads
+     "AoC Speaker Mixer ASP Mode" to decide whether Waves or the amplifiers
+     swap left and right with the orientation. **We send none of this**, so
+     our speaker path is flat: no EQ, no dynamics, no loudness. That, more
+     than the amplifier gains, is likely why the top earpiece (bright, near
+     the ear) dominates and the whole is soft. Driving the AoC's tuning
+     interface is a project of its own (C10-tuning, below).
+   - **What protection needs:** the CSPL model reads its voltage and
+     current sense inside the amplifier: DSP1 RX3/RX4 default to VMON/IMON
+     (`cs35l41-lib.c` register defaults), and the driver points RX5-RX7 at
+     VPMON, VBSTMON and TEMPMON (`cs35l41_dsp_init()`); powering the DSP
+     widget powers those monitors (DAPM routes "DSP1" → VMON, IMON, …).
+     The TDM TX slots (ASP TX1/TX2 = VMON/IMON, also the register
+     defaults, as stock sets them) only carry the sense back to the AoC for
+     its own use and need nothing from us.
+   - **Formats** (from the HAL's own conversions): CSPL_TEMPERATURE and
+     BDLOG_MAX_TEMP are unsigned Q14 °C; BDLOG_MAX_EXC unsigned Q19 mm;
+     SPK_OUTPUT_POWER raw / 2^23 × 667.19. States: HALO_STATE 2 = running;
+     CSPL_STATE 0 running, 1 error, 2 muted, 3 reiniting, 6 diagnosing;
+     CAL_SET_STATUS 2 = calibration applied, 1 = defaults.
+     `omandroid-speaker-protection status` / `monitor` print these decoded.
+
+   **Rules for every C9 step.** The watchdog is active
+   (`systemctl is-active omandroid-speaker-watch`); `monitor` runs during
+   every sound (`tools/phone-ssh 'omandroid-speaker-protection monitor 15 1'`
+   in a second terminal, or as below) and its lines go into the results;
+   test signals are the package's multitone (300 Hz-8 kHz, pink, peaks
+   below -1 dBFS) or a 1 kHz tone, 10 s at most per burst, 60 s rest
+   between bursts; PipeWire's sink volume is set explicitly before each
+   burst. **Stop** on any of: CSPL_STATE not 0, CSPL_ERRORNO not 0,
+   BDLOG_OVER_TEMP_COUNT or BDLOG_OVER_EXC_COUNT rising, BDLOG_ABNORMAL_MUTE
+   not 0, a coil temperature above 45 °C or more than 10 °C above its value
+   before the burst, a watchdog mute, any cs35l41 error in dmesg, buzzing,
+   rattling or distortion, a warm phone. CSPL_ATTENUATION moving from its
+   idle value means the protection is limiting: record it, finish the
+   burst, and do not go to a louder step. Rollback for every step:
+   `omandroid-speaker-protection mute`, then the previous
+   `/etc/omandroid/speaker.conf` and `systemctl restart
+   omandroid-speaker-protection`.
+
+   ```sh
+   U='U=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}"); I=$(id -u $U); as_user() { runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/$I "$@"; }'
+   burst() {  # burst FILE SINK-VOLUME: one burst with the DSPs sampled every second
+     tools/phone-ssh "$U"'; as_user wpctl set-volume @DEFAULT_AUDIO_SINK@ '"$2"';
+       (omandroid-speaker-protection monitor 13 1 > /tmp/mon.txt) & sleep 1;
+       as_user timeout 12 pw-play '"$1"'; wait; cat /tmp/mon.txt; dmesg | grep -iE "cs35l41|DSP1" | tail -3'
+   }
+   tools/phone-ssh 'S=omandroid-speaker-protection;
+     $S signal multitone /tmp/mt20.wav --level -20 --seconds 10; $S signal multitone /tmp/mt10.wav --level -10 --seconds 10;
+     $S signal multitone /tmp/mtL.wav --level -20 --seconds 5 --channels left; $S signal multitone /tmp/mtR.wav --level -20 --seconds 5 --channels right'
+   ```
+
+   - **C9a protection proven, still at C8 levels** (risk low):
+     1. Sense paths, read-only, during a 10 s burst (`burst /tmp/mt20.wav
+        1.0` in one terminal, and in another, 3 s into it):
+        ```sh
+        tools/phone-ssh 'for r in /sys/kernel/debug/regmap/spi6.[01]*; do echo $r; grep -E "^0*(2018|4c48|4c4c|4c50|4c54|4c58):" $r/registers; done'
+        ```
+        Expect PWR_CTRL2 (2018) bits 12 and 13 set (VMON, IMON on),
+        4c48 = 0x18, 4c4c = 0x19 (DSP inputs VMON/IMON), 4c58 = 0x3a
+        (TEMPMON). Stop: VMON/IMON off during playback (the model would be
+        blind: report).
+     2. The burst's `monitor` lines: HALO_STATE 2, CSPL_STATE 0,
+        CAL_SET_STATUS 2, the heartbeat moving every second, both
+        temperatures near room temperature and within 1 °C of each other,
+        SPK_OUTPUT_POWER above zero while it plays.
+     3. Tracking: `burst /tmp/mt10.wav 1.0` twice, 5 s apart. Expect the
+        coil temperatures to move with the signal (a small rise while it
+        plays, back down after), not to sit still. Record the largest rise.
+     4. Verify and stamp: start `burst /tmp/mt20.wav 1.0`, and 2 s in:
+        `tools/phone-ssh 'omandroid-speaker-protection verify'`. Expect
+        "verified: … heartbeat moving, coil temperatures …" and "stamp
+        written". Stop: "not verified" (send its reason).
+   - **C9b the stock media delta, at C8 levels** (risk low-medium: the
+     first write into the protection firmware's parameters; listening):
+     1. `burst` a piece of real music the human chooses (copied to the
+        phone, `timeout 12`) and the multitone at 1.0, delta off. Note how
+        the top and bottom sound.
+     2. Turn it on and restart:
+        ```sh
+        tools/phone-ssh 'echo OMANDROID_SPK_MEDIA_DELTA=1 >> /etc/omandroid/speaker.conf; systemctl restart omandroid-speaker-protection; sleep 3; omandroid-speaker-protection status | head -1'
+        ```
+        Then the same bursts. Expect in `journalctl -u
+        omandroid-speaker-watch -b` "Top: stock media delta applied" and the
+        same for Bottom about 2 s into each stream, CSPL_STATE 0 throughout,
+        and a change in the top speaker's sound (less "telephone"). Stop: a
+        watchdog mute ("no media delta", "CSPL_UPDATE_PARAMS_CONFIG is N
+        bytes", "CSPL_STATE not running"): report it, set the switch back to
+        0. If nothing changes by ear, keep it on anyway (it is what stock
+        does) and record that.
+   - **C9c the kernel's limit for stock gains** (risk low; ask before the
+     reboot):
+     ```sh
+     tools/phone-ssh 'echo "options aoc_alsa_dev speaker_protection=1" > /etc/modprobe.d/omandroid-audio-c9-bringup.conf'
+     # reboot, then:
+     tools/phone-ssh 'cat /sys/module/aoc_alsa_dev/parameters/speaker_protection; dmesg | grep aoc_speaker_limits; omandroid-speaker-protection status | head -4'
+     ```
+     Expect `Y`, the Analog limit lines saying 17, and the service still at
+     stage c8 levels (657, top 6, bottom 6). When C9 passes, the option
+     moves into the package and this file is deleted (AGENTS.md).
+   - **C9d stepping up** (risk **medium-high**: louder than anything so
+     far; the human holds the phone at arm's length or lays it on a table
+     screen up; announce every step). Each step: write the levels, restart
+     the service, check status, then `burst /tmp/mt20.wav 1.0`, 60 s rest,
+     `burst /tmp/mt10.wav 1.0`, 60 s rest, recording each burst's
+     `monitor` lines. Stage c9 needs the stamp from C9a.4 and C9c's `Y`.
+     ```sh
+     step() {  # step DIGITAL ANALOG
+       tools/phone-ssh "printf 'OMANDROID_SPK_STAGE=c9\nOMANDROID_SPK_MEDIA_DELTA=1\nOMANDROID_SPK_DIGITAL=$1\nOMANDROID_SPK_ANALOG=$2\n' > /etc/omandroid/speaker.conf;
+         systemctl restart omandroid-speaker-protection; sleep 3; omandroid-speaker-protection status | head -1; systemctl is-active omandroid-speaker-watch"
+     }
+     step 657 10;  step 737 10;  step 817 10;  step 817 13;  step 817 17
+     ```
+     (737 = -10 dB; 817 = 0 dB; analog 17 = 17.5 dB, stock.) Expect at
+     each step a louder but clean sound, CSPL_STATE 0, no over-counts, the
+     temperature rise per 10 s burst staying small (record it; the largest
+     at 817/17 is the baseline for later), and CSPL_ATTENUATION at its idle
+     value at least through -20 dBFS. Stop as in the rules; on a stop,
+     go back to the previous step's levels.
+   - **C9e balance** (at the last step that passed; risk medium):
+     `burst /tmp/mtL.wav 1.0`, then `burst /tmp/mtR.wav 1.0`, with the
+     phone upright in front of the listener at about 30 cm (and, if
+     available, a sound-level meter app on another phone at the same
+     spot: record both numbers). Then real media through PipeWire at
+     50 %, 75 % and 100 % sink volume. Stock's amplifiers are equal, so
+     equal levels are the target; what stock adds on top is the AoC's
+     Waves processing, which we lack. If the top still dominates clearly:
+     lower `OMANDROID_SPK_TOP_DIGITAL` in 24-step (3 dB) steps until the
+     balance sounds right, and record the value: a stand-in, not stock,
+     until C10-tuning. Never raise the bottom above 817/17 to compensate.
+   - **C9f real use** (risk medium): 15 minutes of mixed media at the
+     user's normal volume, the watchdog on, then `omandroid-speaker-protection
+     status` and `journalctl -u omandroid-speaker-watch -b`. Expect no
+     mute, temperatures back near room temperature after, the over-counts
+     unchanged (or explained). Then make it the default: bump
+     omandroid-audio with stage c9, the levels from C9d/C9e, the media
+     delta on, and `options aoc_alsa_dev speaker_protection=1` in its
+     modprobe file; delete `/etc/modprobe.d/omandroid-audio-c9-bringup.conf`
+     and the test lines in `/etc/omandroid/speaker.conf`.
+
+   **Microphones:** stock records with 22 dB soft gain (`handset-mic-post`),
+   and so do we. Speech close to the phone peaked near 15000 (about -7 dBFS)
+   through `arecord` in C7c and a quiet room near 480 (about -37 dBFS) in
+   C8d: a normal floor with 6 dB of headroom for close speech. Keep 22 dB
+   and PipeWire's source at 100 %; revisit only if calls or recordings
+   clip.
+
+   **Loudness filter:** not before C9e. Stock's loudness comes from the
+   AoC's Waves processing, not from the amplifiers. If, at stock gains with
+   the media delta, media is still too soft, a PipeWire filter-chain on the
+   speaker sink only (a 150-200 Hz high-pass, then a lookahead limiter with
+   up to 6 dB of make-up gain and a -1 dBFS ceiling) raises average
+   loudness without raising peaks, so the amplifiers' output and the
+   protection's work stay where C9d measured them. It needs a LADSPA
+   limiter (swh-plugins) on the phone. Stage it as C9g with the same rules.
+
+   **Earpiece and calls (design; after the speaker, with the modem):**
+   stock's `handset` path is the top amplifier alone with PCM Source ASP
+   (DSP bypassed), AMP PCM Gain 6 (7 in a call, `voice-handset`, with boost
+   peak 3.5 A), the bottom amplifier off. Plan: a "Voice Call" UCM verb with
+   an `Earpiece` device (lowest priority, never a default sink) whose enable
+   and disable sequences `exec` a small request to the protection service
+   (a root-owned socket or a polkit-gated `systemctl start
+   omandroid-earpiece@on/off`): the service mutes, sets top ASP / analog ≤ 6,
+   bottom digital 0, and tells the watchdog the mode, so that in earpiece
+   mode it expects the bypass on the top amplifier only at analog ≤ 6 and
+   the bottom muted, and mutes on anything else. Acoustic shock, as stock:
+   the watchdog claims proximity from omandroid-sensor-proxy during speaker
+   playback and mutes the top amplifier (34 ms ramp-down) while the phone
+   is at the ear.
+
+   **C10-tuning (research, later):** drive the AoC's speaker processing
+   as stock does: the tuning interface (`/dev/acd-audio_output_tuning`),
+   Waves' instance and preset selection, the speaker back end's tuning id 2,
+   and "AoC Speaker Mixer ASP Mode". From our analysis of the stock HAL
+   first (the message format and order), then read-only probes of the
+   AoC's replies; nothing is sent to the AoC before that is understood.
+
 ## 0. Top findings
 
 1. **Stock starts the AoC through Trusty; this phone's GSA also takes the
