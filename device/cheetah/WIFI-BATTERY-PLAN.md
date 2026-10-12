@@ -2050,3 +2050,87 @@ How to read it:
 | SysMMU `CTRL` 0x5 or `CTRL_VIDn` bit 0 set, `FAULT_AW_ADDR` ≈ our pool address | the bootloader left the SysMMU translating, and our writes fault and stall in it | fix: disable it the way Google's driver does (`CTRL_VID` = 0, then `CTRL` = 0), or program a page table for VID 1 as stock does: a later, separate gate |
 | S2MPU `CTRL0` 1, `FAULT_INFO` with the RW bit (bit 20) = write and a pool PA | S2MPU write protection | program the S2MPU (W4 work) |
 | everything bypassed and no faults | the block is not on the write path we probed | next: the HSI2 sysreg/SSMT and the IA (the I/A sequencer also has ELBI/AXI hooks; `use_ia=0` is a cheap test: `--ia 0`) |
+
+### 9.12 E1: brcmfmac had the wrong interrupt (2026-10-12)
+
+E1 (`logs/wifi-w1-20261012-024325-s5.log`, `logs/w2-e1-abort-dmesg.txt`,
+`logs/w2-lspci-0243.txt`):
+
+- **Dongle DMA:** the H2D engines move (the chip reads), the D2H engines
+  never move, and DAR errlog is 0. lspci shows no AER errors on either
+  side.
+- **One interrupt got through.** At 16.912 the thread read
+  `mailboxint` = 1, which is `D2H0_DB0` for core rev >= 64
+  (`W/include/pcie_core.h:516`, brcmfmac `BRCMF_PCIE_64_MB_INT_D2H0_DB0`).
+  So the firmware did ring the D2H doorbell once, 20 µs before we read
+  the (still 0) DMA'd D2H indices. Our last dongle-DMA dump was taken
+  *before* that doorbell, so "D2H never moves" is not proven after it.
+- **Then `irq 97: nobody cared`** through `exynos_irq_eint0_15` →
+  `brcmf_pcie_quick_check_isr`, and the IRQ was disabled. After that no
+  interrupt could reach brcmfmac, and the ioctl timed out.
+
+**Cause:** brcmfmac's IRQ was the host-wake GPIO, not the PCIe INTx.
+- The Wi-Fi DT node had `interrupts-extended = <&gpa6 1 IRQ_TYPE_LEVEL_HIGH>`
+  ("host-wake"). For a PCI device with a DT node, `of_irq_parse_pci()`
+  uses the node's own interrupt first (`L/drivers/pci/of.c:465-482`), so
+  `pdev->irq` became the gpa6-1 EINT (IRQ 97).
+- brcmfmac's PCIe bus never uses host-wake: its quick check reads the
+  chip's mailbox status. The chip holds host-wake high (stock arms it,
+  "hostwake_oob enabled", `R/dmesg.txt:7139`), so the level-high EINT
+  fired with `mailboxint` mostly 0, until the kernel disabled it.
+- **Second bug, hidden behind the first:** the host bridge's
+  `interrupt-map` numbered INTA..INTD 0..3, but our INTx domain
+  translates with `pci_irqd_intx_xlate()`, which takes 1..4 and rejects 0
+  (`L/include/linux/pci.h:1884-1899`; `dra7.dtsi` uses 1..4). INTA could
+  not have been mapped even without the host-wake entry.
+
+The D2H mailbox bits for rev 72 are the ones brcmfmac uses (0xC30, bits
+0..15 = DB0..DB7 D2H0/1). The quick check reads the right register. The
+DAR `intstatus` (0xA10) went 0 → 0x80 → 0x100 over the bells; we don't
+need it now.
+
+**In-band device wake / host wake:** the flags offer INBAND_DS and
+NO_OOB_DW. We told the firmware in `host_cap` "no device wake"
+(`DS_NO_OOB_DW` without `DS_INBAND_DW`), which is bcmdhd's "Disable DS
+altogether" branch (`W/dhd_msgbuf.c:3920-3930`). Host-wake only says the
+chip wants attention; stock's out-of-band handler just schedules the same
+work as its INTx handler. So no handshake is owed on it.
+
+**SysMMU, from E1's probe:** `VERSION 0x80200001`, `CTRL 0x24`.
+- Google's values are `CTRL_ENABLE` 0x5 (bit 0 = enable),
+  `CTRL_BLOCK` 0x7, `CTRL_DISABLE` 0 = bypass
+  (`G/iommu/exynos-pcie-iommu-whi.h:99-105`). Bit 0 is clear, so the
+  SysMMU is not translating.
+- Reading 0x70 on this version is a synchronous external abort (it left
+  `pcie_gs201` unremovable, so a reboot is needed). That register is now
+  out of the probe.
+
+| Commit (wt-pcie) | Change |
+|---|---|
+| `1d2d4f08e` arm64: dts: …gs201: number the PCIe INTx map from 1 | interrupt-map INTA..D → 1..4 |
+| `beb64496c` arm64: dts: …gs201-cheetah: let the Wi-Fi chip use INTx | no `interrupts` on the Wi-Fi node; host-wake keeps only its pin config |
+| `2cf2a9426` wifi: brcmfmac: pcie: look at the rings again after an INTx on the BCM4389 | INTx can overtake the DMA'd index update (bcmdhd `dhd_bus_handle_intx_ahead_dma_indices()`): process the rings a second time ~1 ms later; debug dump from the interrupt thread (`isr: …`) |
+| `998f718de` PCI: dwc: gs201: drop the SysMMU fault registers from the HSI2 probe | group 1 ends at INT_STATUS |
+
+Builds: `logs/{kernel,modules,images}-w2intx.log`, release
+`7.3.0-rc6-omandroid-push1-00087-g998f718de3f6`; the standard test DTB
+(wifi node without `interrupts`, interrupt-map 1..4; checked), `.default` rebuilt plain.
+
+**Runbook (after the reboot that clears the stuck module):**
+
+```sh
+export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
+bin/omandroid modules-push && bin/omandroid push
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5        # no --hsi2-probe
+tools/phone-ssh 'grep -E "brcmf|gs201|97:" /proc/interrupts'
+```
+
+| Line | Pass | If not |
+|---|---|---|
+| `/proc/interrupts` | `brcmf_pcie_intr` on the `gs201-pcie-intx` chip, count > 0; nothing on gpa6/IRQ 97 | still an EINT: the DTB on the phone is old |
+| no `nobody cared` | — | note which IRQ |
+| `isr: host … D2H w a b c …` | D2H w becomes non-zero (ring 2, control complete, first) | INTx arrives but D2H w stays 0 even after the second look: the write problem is real; continue with 9.11 (dongle DMA `D2H tx` lines after the doorbell now show) |
+| `Firmware: BCM4389/3 …`, `CLM version = Google.C10sub6` | both | — |
+
+Then 9.4 W2.2-W2.4: `iw dev`, `ip link set wlan0 up && iw dev wlan0 scan`,
+and the reload. Rollback as 9.5 (`--disarm` for a leftover watchdog).
