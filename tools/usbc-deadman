@@ -41,7 +41,10 @@ say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 warn() { printf '\e[33m==> %s\e[0m\n' "$*"; }
 die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '/^# Usage:/,/^# after you/p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
-phone() { "$SSH" "$@"; }
+# Every call gets its own stdin and a hard time limit, so a stuck SSH can
+# neither eat our terminal nor hang the loop.
+phone() { timeout 30 "$SSH" "$@" < /dev/null; }
+phone_in() { timeout 30 "$SSH" "$@"; }   # with our stdin (file uploads)
 
 recovery() {
   cat <<'EOF'
@@ -66,7 +69,7 @@ EOF
 install_phone() {
   phone 'command -v i2cget >/dev/null' ||
     die "i2c-tools missing on the phone: tools/phone-ssh 'pacman -S --needed --noconfirm i2c-tools'"
-  phone 'cat > /usr/local/bin/usbc-deadman-phone && chmod 755 /usr/local/bin/usbc-deadman-phone' \
+  phone_in 'cat > /usr/local/bin/usbc-deadman-phone && chmod 755 /usr/local/bin/usbc-deadman-phone' \
     < "$ROOT/tools/usbc-deadman-phone" || die "could not install the phone half"
 }
 
@@ -101,17 +104,21 @@ stamp=$(date +%Y%m%d-%H%M%S)
 log="$LOGDIR/usbc-$step-$stamp.log"
 
 # Kernel log on the laptop while the link lasts; reconnects after a drop.
+# Its own session (setsid), with every fd pointed at the log, so stopping it
+# kills the whole group (loop, ssh, reader) and nothing keeps our stdout or
+# stderr open after we exit.
 say "streaming the phone's kernel log to $log"
-(
+export SSH
+setsid bash -c '
   while :; do
-    "$SSH" -T -o ConnectTimeout=3 -o ServerAliveInterval=1 -o ServerAliveCountMax=3 \
-      'exec cat /dev/kmsg' 2>/dev/null |
-      while IFS= read -r line; do printf '%s %s\n' "$(date +%T.%3N)" "$line"; done
-    echo "# $(date +%T.%3N) log stream ended" ; sleep 2
-  done
-) >> "$log" &
+    "$SSH" -T -o ServerAliveInterval=1 -o ServerAliveCountMax=3 \
+      "exec cat /dev/kmsg" |
+      while IFS= read -r line; do printf "%s %s\n" "$(date +%T.%3N)" "$line"; done
+    echo "# $(date +%T.%3N) log stream ended"; sleep 2
+  done' < /dev/null >> "$log" 2>&1 &
 logger=$!
-trap 'kill $logger 2>/dev/null' EXIT
+stop_logger() { kill -- -"$logger" 2>/dev/null || kill "$logger" 2>/dev/null; }
+trap stop_logger EXIT
 sleep 2
 
 unit="usbc-deadman-$step-$stamp"
@@ -136,14 +143,14 @@ while (( $(date +%s) < deadline )); do
     if [[ $step == replug ]] && ((!dropped)); then
       printf '.'; sleep 2; continue          # waiting for the unplug
     fi
-    if ((!confirmed)) && { ((!noconfirm)) || (( $(date +%s) > start + confirm + 3 )); }; then
+    if ((!confirmed)) && { ((!noconfirm)) || (( $(date +%s) > start + confirm + 10 )); }; then
       if out=$(phone 'usbc-deadman-phone confirm' 2>/dev/null); then
         confirmed=1
         echo; say "confirmed over a new SSH login after $(( $(date +%s) - start ))s ($out)"
       fi
     fi
     result=$(phone 'cat /run/usbc-deadman/result 2>/dev/null' 2>/dev/null)
-    [[ -n "$result" ]] && break
+    case "$result" in confirmed|reverted|reset) break ;; esac
   else
     ((dropped)) || { echo; warn "link down (expected for replug and once for b4a/b4b); waiting"; }
     dropped=1
@@ -153,19 +160,25 @@ while (( $(date +%s) < deadline )); do
 done
 echo
 
+rc=1
 case "$result" in
   confirmed)
-    say "step $step stays applied. State:"
+    rc=0
+    say "step $step CONFIRMED, it stays applied. State:"
     phone 'usbc-deadman-phone dump; dmesg | grep -iE "max77759|tcpci|tcpm|typec|usbdrd|dwc3|charger" | tail -25'
     ;;
   reverted)
+    rc=$(( noconfirm ? 0 : 3 ))
     warn "step $step was UNDONE by the phone (no confirmation in time); the link is back"
     phone 'tail -20 /var/log/usbc-deadman.log'
     ;;
   *)
+    rc=4
     warn "no result from the phone (result='${result}'). If it does not answer within 2 minutes:"
     recovery
     ;;
 esac
-kill $logger 2>/dev/null
+stop_logger
+trap - EXIT
 say "kernel log: $log"
+exit $rc

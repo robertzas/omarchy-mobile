@@ -138,7 +138,7 @@ laptop's port, with only the fuel gauge loaded:
 | 0x69/0xbd | CHG_CNFG_04 | `CHG_CV_PRM` (bits 5:0) **< 45** | float voltage 4000 + 10 x sel mV; 45 = 4.45 V (stock fv-max). **Write it down**: the bootloader's value is why charging stops short of 100 % |
 | 0x69/0xbb | CHG_CNFG_02 | any, write down | fast charge: 200 + (sel - 3) x 66.67 mA (sel >= 3) |
 | 0x69/0xc2 | CHG_CNFG_09 | any, write down | input limit: 100 + (sel - 3) x 25 mA; bit 7 NO_AUTOIBUS |
-| 0x69/0xbf | CHG_CNFG_06 | bits 3:2 = **0** | protected registers locked |
+| 0x69/0xbf | CHG_CNFG_06 | bits 3:2: R0 read **3** | 3 = protected registers unlocked, as the bootloader leaves them; the driver's init ends with them locked (0) |
 | 0x69/0xc5 | CHG_CNFG_12 | bit 5 (CHGINSEL) = **1** | USB input enabled |
 | 0x69/0xcb | CHG_CNFG_18 | bit 0 (WDTEN) = **0** | no charger watchdog (if 1, charging stops 80 s after nobody kicks it; the driver clears it) |
 | 0x69/0xb5 | CHG_DETAILS_00 | bits 6:5 = **3** | VBUS valid |
@@ -147,6 +147,12 @@ laptop's port, with only the fuel gauge loaded:
 | 0x25/0x93 | USBSW_CTRL | **0x09** while the link works | data switch closed |
 
 Stop if mode is not 5, WDTEN is 1, the vendor ID is wrong, or reads fail.
+
+**R0 reading (2026-10-12, 93 %, on the laptop's port):** mode 5, fast charge
+1933 mA, **float voltage 4350 mV** (bootloader; stock's fv-max is 4450, so
+charging ends early, CHG_DTLS was 4 = done at 93 %), input limit 500 mA,
+CHGPROT 3, WDTEN 0, CHGIN_DTLS 3, USBSW_CTRL 0x09. B3 therefore changes FV
+4350 -> 4450 mV and CC 1933 -> 1467 mA, and keeps the input at 500 mA.
 
 ## 6. Runbook
 
@@ -160,8 +166,8 @@ Shorthand: `O=~/android/mainline/out-usbc`,
 tools/phone-ssh 'pacman -S --needed --noconfirm i2c-tools'
 tools/usbc-deadman install
 tools/usbc-deadman dump                       # section 5 table; keep the output
-tools/usbc-deadman noop                       # expect: CONFIRMED within ~10 s
-tools/usbc-deadman noop --no-confirm          # expect: REVERTED after ~90 s, link up
+tools/usbc-deadman noop                       # expect: CONFIRMED within ~10 s, exit 0
+tools/usbc-deadman noop --no-confirm          # expect: UNDONE after ~100 s, link up, exit 0
 ```
 
 **Pass:** both results as stated, watchdog disarmed (`usbc-deadman log`),

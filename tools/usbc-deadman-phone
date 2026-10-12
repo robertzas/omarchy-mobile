@@ -148,7 +148,10 @@ restore_charger() {
 apply() {
   case "$1" in
     noop|replug) log "step $1: nothing to apply"
-      [[ $1 == replug ]] && log "replug: unplug the cable now, wait 5 s, plug it back in" ;;
+      if [[ $1 == replug ]]; then
+        log "replug: unplug the cable now, wait 5 s, plug it back in"
+      fi
+      return 0 ;;
     b2-core)
       log "modprobe max77759 + gpio_max77759 (charger cell stays blacklisted)"
       modprobe max77759 && modprobe gpio_max77759 ;;
