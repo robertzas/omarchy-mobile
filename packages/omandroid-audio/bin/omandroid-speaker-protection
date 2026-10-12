@@ -83,7 +83,7 @@ log() { echo "omandroid-speaker: $*"; }
 ctl() { amixer -c "$card" "$@"; }
 ctl_set() { ctl -q cset "name=$1" "$2" >/dev/null 2>&1; }
 ctl_values() { ctl cget "name=$1" 2>/dev/null | sed -n 's/^ *: values=//p'; }
-ctl_max() { ctl cget "name=$1" 2>/dev/null | sed -n 's/.*,max=\([0-9-]*\).*/\1/p'; }
+ctl_max() { ctl cget "name=$1" 2>/dev/null | sed -n '/; type=/s/.*,max=\([0-9-]*\).*/\1/p'; }
 # the selected item's name of an enumerated control
 ctl_enum() {
   local out idx

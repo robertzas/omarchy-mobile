@@ -60,6 +60,11 @@ def show(name, ctl):
     if t == 'INTEGER':
         print(f"  ; type=INTEGER,access=rw---R--,values=1,min=0,max={ctl['max']},step=0")
         print(f"  : values={ctl['v']}")
+        # The real volume controls carry a dB description with its own
+        # "max=" (C8b: the parser read "max=12.00dB" as a second maximum).
+        print("  | dBrange-")
+        print("    rangemin=1,,rangemax=913")
+        print("      | dBminmax-min=-102.00dB,max=12.00dB")
     elif t == 'ENUMERATED':
         print(f"  ; type=ENUMERATED,access=rw------,values=1,items={len(ctl['items'])}")
         for i, item in enumerate(ctl['items']):
