@@ -1214,6 +1214,117 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      at 817/17 is the baseline for later), and CSPL_ATTENUATION at its idle
      value at least through -20 dBFS. Stop as in the rules; on a stop,
      go back to the previous step's levels.
+
+     **C9a-C9d results (2026-10-12, 7.3.0-rc6-omandroid-push1-00306,
+     speaker_protection=1, omandroid-audio 0.2.2, media delta on).**
+     - C9a second run passed: the heartbeats moved through every burst, and
+       `verify` wrote the stamp. Real media with pauses gave no false mute.
+     - C9b: the delta was applied on both amplifiers, and both speakers play.
+     - C9c: `Y`, analog limit 17.
+     - C9d step 1 (657/10): largest coil temperature rise 0.07 °C.
+     - C9d step 2 (737/10): at -20 dBFS, top +0.13 °C and bottom +0.06 °C;
+       at -10 dBFS, top +0.43 °C and bottom +0.17 °C. Clean.
+     - **C9d step 3 (817/10) stopped.** In the first -20 dBFS burst the
+       readings (top/bottom, °C) went 25.0/25.0 → 57.2/40.0 within the
+       first second → 66.6/42.0 → 71.3/43.6 → 74.9/44.5 → 77.0/44.8 →
+       78.0/45.4 → 79.9/45.8. They then **fell while the burst still
+       played** (77.6, 75.4, … 69.4 on the top; 45.4 … 43.6 on the bottom).
+       State 0, errorno 0, no over-temperature or over-excursion counts.
+       The watchdog's backstop muted at "Top: coil temperature 80.1 above
+       80.0 C", so the next burst played into muted amplifiers.
+     - By ear (the human): "loud, not too distorted, a little scratchy". The
+       phone was only slightly warm afterwards, which fits a day on charge
+       with the screen on; nothing stood out near the earpiece.
+     - Physically implausible. A coil does not gain 32 °C in one second at
+       -20 dBFS and then cool under the same drive. Step 2's -10 dBFS bursts
+       (737/10) put the same voltage on the speakers as step 3's -20 dBFS
+       burst (817/10), and they rose 0.43 °C.
+
+     **What the firmware's own tables and the stock HAL say** (the .wmfw's
+     coefficient descriptors; our analysis of `audio_spk_35l41.so`):
+     - **Which controls are live.** HALO_STATE, HALO_HEARTBEAT, CSPL_STATE,
+       CSPL_ERRORNO, CSPL_TEMPERATURE, CAL_R_SELECTED, CAL_SET_STATUS,
+       SPK_OUTPUT_POWER and the BDLOG values are volatile: the DSP updates
+       them and we read them live.
+     - **Which are settings.** ATTENUATION, REDUCE_POWER, CH_BAL and
+       CAL_AMBIENT are host-written, so reading them only returns what was
+       written. ATTENUATION is therefore not a measurement: our "None" was
+       a wrong name, and the value would mean nothing anyway. It is gone
+       from `monitor`. SPK_OUTPUT_POWER is live, so its 0 is what the
+       firmware reports. `monitor` now prints it raw.
+     - **Calibration.** Stock writes CAL_R, CAL_STATUS, CAL_CHECKSUM and
+       CAL_AMBIENT, each a big-endian 32-bit word copied from the record
+       unchanged, in that order. We write the same words; only our order
+       differs (ambient first, as mainline cs-amp-lib does). Stock then
+       checks CAL_SET_STATUS (2), which we saw too.
+     - **The record's last two words** are the analog gain (17) and digital
+       volume (817) at which the factory calibration was taken. The HAL
+       only prints them. Stock always plays media at exactly those gains.
+     - **Other DSP controls stock writes for media:** CH_BAL (when it swaps
+       left and right for orientation) and ENABLE_FULL_US_BYPASS. Neither
+       is a gain or a model parameter. The amplifier gains themselves come
+       only from `mixer_paths.xml`.
+     - **Two more live values worth watching.** BDLOG_VMON_LOW_FLAG: the
+       firmware logs when the voltage sense is too low to use. And
+       CAL_R_SELECTED: the coil resistance the model is actually using.
+       `monitor` 0.2.3 shows the flag, and whether CAL_R_SELECTED equals
+       the CAL_R we wrote ("R_selected=CAL_R yes/NO"; never the values).
+
+     **Reading.** Below some level the model has too little sense signal to
+     measure the coil. It holds 25 °C plus a small power-based rise, as in
+     steps 1-2. At step 3 it began estimating temperature from the measured
+     resistance against CAL_R, and the estimate came out high (top +55 °C,
+     bottom +20 °C), then drifted. Candidates, most likely first:
+     1. **The model assumes stock's gains (17 / 817), the conditions of the
+        factory calibration and of every stock media stream.** At step 3
+        the digital volume matched stock but the analog gain was 10, 7 dB
+        below what the model expects. If any part of the estimate uses the
+        expected rather than the measured voltage, a gain mismatch shows up
+        as a resistance error. That could also explain why step 2 (digital
+        737, 10 dB off) never left the hold state (VMON "low" relative to
+        expectation).
+     2. **The test signal.** The multitone has nothing below 300 Hz (our
+        safety rule), so the resistance estimate works where the speaker's
+        impedance is well above its DC resistance (inductance, and the
+        small top speaker's resonance). That would read high, more on the
+        top than the bottom, as seen.
+     3. **The media delta** changes model parameters. It was on in every
+        step, so these results can't separate it.
+     The calibration itself is not the suspect: CAL_SET_STATUS 2 on both;
+     C8c's 25.0 °C agreement on both amplifiers; the same words as stock.
+     CAL_R_SELECTED will confirm the model uses it. "A little scratchy" may
+     be the multitone itself, or the protection starting to act on the
+     false temperature; C9d-2 checks with a pure tone.
+
+   - **C9d-2 the temperature reading** (omandroid-audio 0.2.3; stage c9;
+     nothing above 737 digital until this is explained; each burst ≤ 10 s
+     with 60 s rest; stop as in the C9 rules, and on any reading above
+     45 °C). The order changes one thing at a time; record each burst's
+     `monitor` lines, including "R_selected" and "vmon low".
+     1. Install 0.2.3 (`tools/phone-install-package packages/omandroid-audio;
+        tools/phone-ssh 'systemctl restart omandroid-speaker-protection'`).
+        Then a pure tone at C8 levels (657/6), delta on, then delta off
+        (set `OMANDROID_SPK_MEDIA_DELTA=0` and restart). Use `signal tone
+        /tmp/t1k.wav --level -23 --seconds 3`, a -20 dBFS peak. Listen for
+        scratchiness. Expect clean in both.
+     2. 737/10, delta **off**: `burst /tmp/mt10.wav 1.0`, then a 1 kHz tone
+        at -13 dBFS RMS. Expect the step-2 behaviour (≤ 0.5 °C, vmon low
+        possibly set). This repeats step 2 without the delta.
+     3. **The gain question, at lower output than step 3:** 657/17 (stock
+        analog gain, digital -20 dB), delta off. Its output is 13 dB below
+        step 3's (-20 dB digital, +7 dB analog). Then 737/17 (3 dB below
+        step 3). Multitone at -20 dBFS, then the tone. If the reading stays
+        near room temperature at 737/17 while 817/10 jumped, the model
+        wants stock's analog gain (candidate 1). If 737/17 also jumps by
+        tens of degrees, stop: the signal or the delta is next.
+     4. Only if 3 points at the gain: the same at 737/17 with the delta
+        on (candidate 3).
+     5. Report the lines. The next step is decided then: 817/17 (stock) only
+        once a burst at 737/17 reads plausibly (within a few °C, rising and
+        falling with the signal) with "R_selected=CAL_R yes" on both
+        amplifiers.
+     Rollback for every step: `omandroid-speaker-protection mute`, stage c8
+     levels in `/etc/omandroid/speaker.conf`, restart.
    - **C9e balance** (at the last step that passed; risk medium):
      `burst /tmp/mtL.wav 1.0`, then `burst /tmp/mtR.wav 1.0`, with the
      phone upright in front of the listener at about 30 cm (and, if
