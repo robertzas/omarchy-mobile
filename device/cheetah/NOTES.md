@@ -2,6 +2,27 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-10-12: first sound from the built-in speaker; accelerometer at every boot
+
+- **The top speaker plays** (AOC-PLAN C7d-6, kernel
+  7.3.0-rc6-omandroid-push1-00290-g66446bf5b725): a -20 dBFS 1 kHz tone
+  through AoC EP6 (PCM 5) in copy mode, heard by the human. The AoC drained
+  the ring (Tx = Rx = 291840 bytes) with a PCM interrupt every 80 ms. A
+  second stream in the same boot drained too.
+- **Why it had been silent:** the AoC driver sends the ALSA PCM device
+  number to the AoC as the entry point ID. Our card numbered its PCMs in
+  device-tree link order, which differed from stock, so EP6 playback was
+  PCM 47 and the AoC refused it ("Entrypoint 47 cannot be configured", in
+  its own log at /dev/acd-logging; the driver ignored the rc -1 replies).
+  The card driver now sorts its DAI links into the stock order (EPn
+  playback = PCM n-1, EPn capture = PCM n+7), whatever order the DTB has.
+- **The I3C accelerometer went missing after a warm reboot.** The sensor
+  rails (S2MPG13 LDO7S 1.8 V, LDO5S 3.3 V) stay on across a reboot, so the
+  LSM6DSV kept its state from the previous AoC session and didn't join the
+  new one. The I2C sensors were unaffected. gs201_aoc_rails `cycle=1`
+  switches both off for 150 ms before enabling them, as Google's
+  reset_sensor_power() does; all four sensors now appear at boot.
+
 ## 2026-10-11: hardware buttons (gpio-keys)
 
 - **All three buttons are plain GPIOs**, so one `gpio-keys` node covers them (kernel branch `omandroid-buttons`): Volume Down `gpa10-1` (pull-up), Volume Up `gpa8-5` (FAR_ALIVE, no pull), Power `gpa10-0` (pull-up). All active low, all `wakeup-source`. They appear as `/dev/input/by-path/platform-gpio-keys-event` with KEY_VOLUMEDOWN/UP/POWER.
