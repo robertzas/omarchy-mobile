@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: MIT
 /*
- * Bring-up only (FINGERPRINT-RESEARCH.md, gate F6): enable the PERIC0 pin
- * controller (the sensor's reset line, gpp1-1) and the Goodix sensor node.
- * Apply on top of fingerprint-trusty.dtso. The sensor's supply, S2MPG13
- * LDO15S, is off at boot and needs the ACPM regulator driver: until its
- * node exists, goodix_fp loads without a supply and stage F6 stops after
- * the reset and interrupt checks.
+ * Bring-up only (FINGERPRINT-PLAN.md, gate F6): enable the sub-PMIC (for
+ * the sensor's supply, S2MPG13 LDO15S) and the Goodix sensor node. Apply
+ * on top of aoc-core-test.dtso or fingerprint-trusty.dtso (Trusty). The
+ * PERIC0 pin controller (the sensor's reset line, gpp1-1) is already on in
+ * the default DTB. goodix_fp stays blacklisted from autoload
+ * (omandroid-fingerprint.conf). Paths, not labels, so the base DTB needs
+ * no __symbols__.
  */
 /dts-v1/;
 /plugin/;
 
-&{/soc@0/pinctrl@10840000} {
+&{/firmware/power-management/pmic-2} {
 	status = "okay";
 };
 

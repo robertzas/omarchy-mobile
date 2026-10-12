@@ -1,10 +1,12 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7 Pro (cheetah) fingerprint on Omandroid: plan
 
-Status (2026-10-12): kernel side written and built offline, userspace tools
-written, **nothing run on the phone yet**. Kernel branch
-`omandroid-fingerprint` in `~/android/mainline/wt-fingerprint`, build in
-`~/android/mainline/out-fingerprint`. The runbook is section 7.
+Status (2026-10-12): research and design. **The current status and the
+runbook are in [FINGERPRINT-PLAN.md](FINGERPRINT-PLAN.md)**, which supersedes
+section 7 below (Trusty now runs on int through the AoC work; the branch was
+brought up to int; the bridge, the libfprint driver and the package exist).
+Kernel branch `omandroid-fingerprint` in `~/android/mainline/wt-fingerprint`,
+build in `~/android/mainline/out-fingerprint`.
 
 **Goal.** Enroll a finger and unlock Omarchy's lock screen with it. Omarchy's
 lock already supports fprintd through PAM (`/etc/pam.d/omarchy-lock-fingerprint`),
@@ -241,7 +243,7 @@ package, the HAL is the G7 one, the image is for cheetah.
 Not needed: `hwservicemanager` (without it, HIDL lookups fail at once), the
 Titan M2 (citadel) KeyMint, secretkeeper, `trusty_metricsd`, the face TA.
 
-### 4.2 The chroot: `fingerprint/omandroid-fp-chroot`
+### 4.2 The chroot: `omandroid-fp-chroot` (`packages/omandroid-fingerprint/lib/`)
 
 Installed as `/usr/lib/omandroid-fp/` (image, shim, `props.conf`); state in
 `/var/lib/omandroid-fp` (0700). `start` re-executes itself under
@@ -300,7 +302,7 @@ would provide:
 - **Properties:** `__system_property_{find,get,read,read_callback,serial,area_serial,foreach,set,wait,wait_any}`
   on a directory with one file per property, shared by every process in the
   chroot. The runner fills it from both `build.prop` files, then
-  `fingerprint/props.conf`, then `/var/lib/omandroid-fp/props.conf`.
+  `lib/props.conf`, then `/var/lib/omandroid-fp/props.conf`.
   `ro.*` properties are write-once. `storageproxyd`'s `fs_ready` goes through
   it, which is how the runner knows storage is up.
 - **Logging:** liblog's entry points print `P tag[tid]: message` to stderr,
@@ -316,7 +318,7 @@ would provide:
   `OMANDROID_FP_NO_SERVICES`.
 - **Wake locks:** accepted and dropped.
 
-`fingerprint/props.conf` sets what makes the HAL fit:
+`packages/omandroid-fingerprint/lib/props.conf` sets what makes the HAL fit:
 `persist.vendor.udfps.lhbm_controlled_in_hal_supported=false` (the HAL then
 reports `halControlsIllumination=false` and never asks for the display HAL),
 `als_feed_forward_supported=false` and `sensor_listener_supported=false` (no
@@ -350,7 +352,7 @@ has run. So before enrolling, the bridge does what keystore2 does on Android:
    `IGatekeeper.verify(0, challenge, handle, secret)` -> HAT ->
    `ISession.enroll(HAT)`.
 
-### 4.7 The bridge and fprintd (design; not written yet)
+### 4.7 The bridge and fprintd (written: `fingerprint/bridge/`, `packages/libfprint/`; the protocol in FINGERPRINT-PLAN.md replaces the one below)
 
 **`omandroid-fp-bridge`** (ours, C, bionic, in the chroot, links the image's
 `libbinder_ndk.so`). It speaks the frozen AIDL directly
@@ -464,7 +466,7 @@ checkpointing (the shim says vold is absent).
 
 ---
 
-## 7. Runbook
+## 7. Runbook (superseded by FINGERPRINT-PLAN.md section 6)
 
 Each gate is one change, with its expected result, risk and rollback. Run
 them in order; stop at the first surprise. `$O` = `~/android/mainline/out-fingerprint`,
@@ -647,5 +649,7 @@ Rollback: `systemctl disable --now omandroid-fp`.
 | `device/cheetah/overlays/fingerprint-{trusty,sensor}.dtso` | gate overlays |
 | `tools/extract-fingerprint-vendor` | vendor files from the factory image |
 | `tools/fingerprint-capture` | gates F2-F6 with log streaming and watchdog |
-| `fingerprint/omandroid-fp-chroot`, `fingerprint/props.conf` | the chroot |
+| `packages/omandroid-fingerprint/lib/` | the chroot runner, props, `omandroid-tipc-probe`, `omandroid-fp-ctl` |
+| `fingerprint/bridge/omandroid-fp-bridge.c` | the HAL client fprintd's driver talks to |
+| `packages/libfprint/` | libfprint with the `omandroid_udfps` driver |
 | `fingerprint/shim/omandroid-fp-shim.c`, `fingerprint/Makefile` | the preload shim |
