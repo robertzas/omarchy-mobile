@@ -2437,3 +2437,94 @@ Build: `logs/{kernel,modules,images}-w3join.log`, wt-pcie release
      `feature_disable=0x82000` (9.14).
    - **Rollback:** `nmcli dev disconnect wlp1s0`, then
      `nmcli con modify nevermore connection.autoconnect no`.
+
+### 9.16 W3: the join works, the 4-way handshake does not (2026-10-12)
+
+**What happened.** On omandroid-int 00128 (with `dfc8407db`), JOIN_V1 is
+enabled and the join goes through: wpa_supplicant goes associating →
+4way_handshake. Then "Authentication with … timed out" and "4-Way
+Handshake failed" (reason 3, locally generated)
+(`logs/w3-join-00128-dmesg.txt`, `logs/w3-join-00128-nm.txt`). A second
+try at about 10:13 left the control ring full ("Failed to reserve space in
+commonring", escan -12) until a full reload (`logs/w3-join-00128-dmesg2.txt`).
+
+**Reading the logs:**
+- **Control completions get lost well before the join.**
+  - `brcmf_p2p_create_p2pdev: timeout occurred` at 19.9 s, right after
+    load; that is a missed firmware event.
+  - From 32 s, `Timeout on response for query command` about every 2 s.
+  - Mapping NM's clock to dmesg (wlp1s0 appears at 17.5 s =
+    10:08:52.1), the connect at 10:09:29 is ≈54.8 s. The timeouts run
+    straight through the join and the handshake. Some ioctls (the join
+    itself) complete, others don't.
+  - This is how completions behave when they are only processed by a
+    *later* interrupt.
+  - The 4-way handshake needs the AP's TX flowring. Brcmfmac creates it
+    with a control-ring request and waits for its completion before it
+    sends EAPOL msg 2. With completions going missing, msg 2 can sit in the
+    flowring queue. wpa_supplicant only reaches the 4way_handshake state
+    after it has *received* msg 1, so RX works and TX of msg 2 is the
+    stuck side.
+- **The firmware also asks for host-built TX headers.** Its capability
+  list ends in `host_sfhllc`. For that capability Broadcom's driver posts
+  every TX frame already converted to 802.3 + LLC/SNAP: the whole frame is
+  in the data buffer, the original Ethernet header is in `txhdr`, and the
+  post sets `BCMPCIE_TXPOST_FLAGS_HOST_SFH_LLC` 0x10
+  (`W/dhd_msgbuf.c:5464-5470,8620-8636`; `W/dhd_common.c:10863-10963`,
+  `dhd_ether_to_8023_hdr()`). It reverses this on TX completion. RX is
+  plain Ethernet either way.
+- **Not the cause:**
+  - `Invalid chanspec 0x5001`: a 6 GHz chanspec (band bits 0x4000) that
+    brcmutil's D11AC decoder doesn't know. 6 GHz channels are skipped,
+    which is harmless for now.
+  - `WLC_SET_ROAM_TRIGGER error (-52)`: a roam setting.
+  - The flow ring create request matches bcmdhd's
+    `tx_flowring_create_request_t` field for field.
+- **Not ruled out yet:** a firmware trap after association. The console
+  was never read, because `debug=0x4` has no FWCON. The runbook below
+  reads it.
+
+| Commit (wt-pcie) | Change |
+|---|---|
+| `bbad7a1c6` wifi: brcmfmac: msgbuf: build the 802.3/LLC TX header on the host for the BCM4389 | `HOST_SFHLLC` feature from "cap" (4389 only; feature bit 27, `feature_disable=0x8000000` turns it off); TX frames converted as bcmdhd does, flag 0x10, converted back before completion; `TX EAPOL …`, `TX EAPOL done … status N`, `RX EAPOL …` at the msgbuf debug level |
+| `e1c6379cf` wifi: brcmfmac: pcie: poll the D2H rings after interrupts on the BCM4389 | after each interrupt and doorbell, process the D2H rings every 10 ms for 500 ms (bcmdhd re-runs its interrupt work for INTx with DMA'd indices); mutex between poll and IRQ thread; `poll: mailboxint … pending without an interrupt` at PCIe debug |
+
+Build: `logs/{kernel,modules,images}-w3eapol.log`, wt-pcie release
+`7.3.0-rc6-omandroid-push1-00092-ge1c6379cf4e3` (standard test DTB).
+
+**Capture runbook** (after merging into omandroid-int and pushing). The debug
+mask 0x1c8000 is MSGBUF + PCIE + FWCON + CONN; PCIE is chatty but carries
+the index dumps.
+
+```sh
+# C0 load with the capture mask, poll the firmware console every ~80 ms
+tools/phone-ssh 'modprobe -r brcmfmac_wcc brcmfmac; modprobe brcmfmac debug=0x1c8000; sleep 8;
+  echo 20 > /sys/kernel/debug/ieee80211/phy0/console_interval;
+  dmesg | grep -E "HOST_SFHLLC|JOIN_V1|Firmware: BCM4389"'
+#   pass: "enabling feature: HOST_SFHLLC" (needs 0x4 in the mask for that line; optional), firmware line
+# C1 connect, stream the log (second terminal: tools/phone-ssh dmesg -w > logs/w3-eapol-$(date +%H%M).txt)
+tools/phone-ssh -t 'nmcli con up nevermore'
+# C2 afterwards
+tools/phone-ssh 'dmesg | grep -E "EAPOL|poll: mailboxint|Timeout on response|Failed to reserve|CONSOLE.*(TRAP|trap|ASSERT)|join \(v1" | tail -60;
+  nmcli -t -f GENERAL.STATE,IP4.ADDRESS dev show wlp1s0; journalctl -u wpa_supplicant --since "-3min" | tail -20'
+# if the control ring is stuck again: the index state and the firmware console right then
+tools/phone-ssh 'dmesg | grep -E "dump_indices|dump_dma|CONSOLE" | tail -40'
+# rollback: nmcli dev disconnect wlp1s0; nmcli con modify nevermore connection.autoconnect no
+```
+
+| Line / state | Pass | Meaning if not |
+|---|---|---|
+| `RX EAPOL pktid … len 121…` | M1 (and later M3) arrive | no RX EAPOL: the AP never got as far as M1, or RX completions are lost; look at `poll:` lines |
+| `TX EAPOL pktid … (802.3+LLC)` | M2 posted, flagged | no TX line: msg 2 never left the flowring queue; look for the flowring create completion (`Flow Create` lines at MSGBUF level) and `Timeout` lines |
+| `TX EAPOL done … status 0` | firmware sent it | status ≠ 0: the firmware rejected the frame. Try `feature_disable=0x8000000` (SFH off) once to compare |
+| `poll: mailboxint … pending without an interrupt` | rare | frequent: INTx delivery is losing doorbells; the poll covers it; a host-side INTx fix is still owed (gs201 ELBI INTA event latching) |
+| no `Timeout on response for query command` | none | still there with the poll: completions are not in the ring at all → firmware console |
+| `CONSOLE: … TRAP` / `ASSERT` | none | symbolise pc/lr/stack with `fw_bcmdhd.map` (9.13 method) and send |
+| NM `GENERAL.STATE:100 (connected)`, an IPv4 address | yes | then 9.14 W3.2-W3.5 |
+
+If the handshake still fails with all of the above clean, two cheap
+comparisons:
+- `feature_disable=0x8000000`: SFH off, the old TX format.
+- `feature_disable=0x2000`: firmware supplicant off (FWSUP is bit 13 in
+  this kernel's list; Omarchy's Apple value 0x82000 also turns off bit 19,
+  which in this kernel is SAE, so don't reuse it here).
