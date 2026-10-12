@@ -92,7 +92,10 @@ modprobe gsa || fail "gsa failed"
 
 # 3. Rails
 if ((rails)); then
-  modprobe gs201_aoc_rails enable=1 || fail "gs201_aoc_rails failed"
+  # cycle=1: sensor rails left on by a warm reboot are turned off for 150 ms
+  # first, or the LSM6DSV (I3C) keeps the old AoC session's state and the new
+  # AoC never finds it (no accelerometer).
+  modprobe gs201_aoc_rails enable=1 cycle=1 || fail "gs201_aoc_rails failed"
   rmmod gs201_aoc_rails 2>/dev/null
 fi
 

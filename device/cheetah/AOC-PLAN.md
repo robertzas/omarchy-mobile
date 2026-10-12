@@ -235,6 +235,33 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      loaded (not their contents).
    Rollback: `systemctl enable omandroid-sensor-proxy`.
 
+   **C6d result: neither timing nor calibration.** The proxy started about
+   95 s after the AoC and still found no accelerometer, and every boot
+   loads the same eight calibration files. The difference is the rails: on
+   the boot where the accelerometer worked, `gs201_aoc_rails` found LDO7S
+   (ctrl 0x2c) and LDO5S (0x3c) off and turned them on before the
+   firmware; on every boot since, they read on (0xac, 0xbc) at 4.9 s,
+   left powered through the warm reboot. The I3C LSM6DSV then keeps the
+   previous AoC session's state and the new AoC never finds it; the I2C
+   sensors don't care. Google's driver power-cycles these supplies around
+   an AoC restart (`reset_sensor_power()`: off in reverse order, 150 ms,
+   on). Kernel `829fd316a` adds `gs201_aoc_rails cycle=1` (with
+   `enable=1`): sensor rails already on are turned off (LDO5S, then
+   LDO7S) for `cycle_ms` (150) ms first; device-cheetah 0.1.22 passes it.
+
+   **C6e** (same boot as C7d-6; re-enable the proxy first:
+   `systemctl enable omandroid-sensor-proxy`; warm reboot from a session
+   where the AoC ran, so the rails start on):
+   ```sh
+   tools/phone-ssh 'dmesg | grep gs201-aoc-rails; journalctl -u omandroid-sensor-proxy -b --no-pager | grep -E "settle|sensors:"'
+   ```
+   Expect "LDO5S prox: was on (ctrl 0xbc), cycled: off for 150 ms", the
+   same for LDO7S, then both "enabled", and the proxy's "sensors: accel
+   (handle …), light …, proximity …, compass …". Stop: a rail that does not
+   come back on (no microphones or sensors; reboot), or accel still
+   missing (send the `gs201-aoc-rails` lines). Rollback: device-cheetah
+   0.1.21's start script (no `cycle`).
+
    **Don't `rmmod` the AoC modules.** Removing `aoc_alsa_dev`,
    `aoc_alsa_dev_util`, `aoc_core`, `gs201_aoc_sysmmu` and `gsa` while
    `aoc_core` waited for deferred probe oopsed the deferred-probe worker
@@ -515,26 +542,30 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      The snapshots read Audio DSP State 1 (Playback), DSP Mode 0, Sink 0
      Processing State 1, Speaker Sink Channel Bitmap 32.
 
-     Fixes:
-     - `aoc-sound-test.dtso` is now written with every new subtree in
-       reverse (`tools/dtso-reverse-nodes`), so the applied card has the
-       stock link order: EP1-EP8 playback are PCM 0-7, EP1-EP6 capture PCM
-       8-13, as in Google's HAL configuration (checked by applying the three
-       overlays with `fdtoverlay` and listing the links; only phandle
-       numbers differ from before). **The DTB changes.**
+     Fixes (second attempt; the first, writing the overlay in reverse,
+     changed nothing on the phone: the applied DTB kept the source order and
+     the PCM numbers stayed the same, so node order cannot be relied on and
+     the overlay is back in the stock order):
+     - kernel `24d9b9826` (`aoc_alsa_dev.ko`): the card sorts its parsed
+       DAI links by link id into the stock order (the known front ends in
+       Google's order, other front ends, then the back ends), whatever the
+       device tree order: EP1-EP8 playback are PCM 0-7, EP1-EP6 capture
+       PCM 8-13, as in Google's HAL configuration.
      - kernel `71c7777b0` (`aoc_alsa_dev_util.ko`): the PCM driver refuses
        to open an EP playback or capture PCM whose number does not match its
-       link id, logging "… is PCM N, expected PCM M: the card's DAI links are
-       not in the stock order", instead of configuring another entry point.
+       link id ("… is PCM N, expected PCM M: the card's DAI links are not
+       in the stock order"), instead of configuring another entry point.
 
-   - **C7d-6** (DTB with the new `aoc-sound-test`, kernel `omandroid-aoc` @
-     `71c7777b0`; fresh boot; C7b and the C7d tone step first):
+   - **C7d-6** (kernel `omandroid-aoc` @ `829fd316a`, modules only:
+     `aoc_alsa_dev.ko`, `aoc_alsa_dev_util.ko`, `gs201-aoc-rails.ko`; the
+     overlay content is unchanged; device-cheetah 0.1.22; one boot together
+     with C6e; C7b and the C7d tone step first):
      1. Numbering, read-only:
         ```sh
         tools/phone-ssh 'head -2 /proc/asound/card0/pcm5p/info /proc/asound/card0/pcm8c/info; dmesg | grep -c "not in the stock order"'
         ```
         Expect `id: EP6 playback` for pcm5p, `id: EP1 capture` for pcm8c,
-        and 0. Stop otherwise (the overlay was not rebuilt).
+        and 0. Stop otherwise (the new `aoc_alsa_dev.ko` is not loaded).
      2. First sound, top amplifier, -20 dB digital, analog 6:
         ```sh
         tools/phone-ssh 'AOCLOG=1 EP=6 MODES="copy" bash -s' < tools/aoc-audio-diag > logs/c7d6a.txt 2>&1
