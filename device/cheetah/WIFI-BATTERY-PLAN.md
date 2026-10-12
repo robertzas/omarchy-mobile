@@ -2723,3 +2723,95 @@ images, `gs201-cheetah.dtb.firewall` beside it. Merge `omandroid-w4`
 `wifi-w1-capture`: the `grep -q` checks are now `grep -c … >/dev/null`.
 With `pipefail` and a large log, `grep -q` exiting early SIGPIPEd
 `since_start` and silently skipped steps.
+
+### 9.19 F4 failed: why, the table placement, new F3/F4 (2026-10-12, offline)
+
+F2 passed and F3 "passed", but **F4 failed**: with an empty table on VID 1
+(mode=2) brcmfmac came up normally and nothing was blocked. The firewall
+was a no-op.
+
+**Why F4 can pass on stock but fail here.** Stock enables the SysMMU
+(`pcie_sysmmu_enable()`, VID from `pcie-vid-num` = 1) in the power-on path
+before link-up, then swaps the Wi-Fi device's DMA ops so every buffer is
+mapped **1:1** (IOVA = PA). So stock never shows that VID 1 really carries
+the controller's traffic: a bypassed VID works just as well. Google's
+sources contain no code that assigns a VID to the PCIe master:
+- no AxUSER/VID field in the RC driver or the gs201 CAL;
+- the only HSI2 sysreg write is shareability (0x730);
+- the `soc` region write (`0x4000`) is a clock-source select, and gs201
+  doesn't even map that region.
+
+Our enable sequence matches `__sysmmu_enable_nocount()`. The capability
+registers from F1 show the controller has **VM support** (`CAPA1` bit 14,
+so 8 VIDs), **one port** and **one TLB**. So the master's traffic most likely
+carries a VID other than 1, and that VID is not translating, so it passes
+through untouched. The other possibility is that this SysMMU is not in the
+Wi-Fi DMA path at all. The next run tells the two apart.
+
+Also fixed: with VM support, the fault registers are per VID at
+`0x1000 + 0x10·vid` (`0x1004 + …` for the info). The old 0x1010/0x1014
+were VID 1's only.
+
+**Table placement.** pt_base was an address (PPN << 12), and it really was
+inside the pool. The cause: the SysMMU node used `memory-region = <&wifi_dma_pool>`.
+For a restricted-dma-pool, `of_dma_configure()` gives that pool to the
+SysMMU device as its own swiotlb, so `dma_map_single()` of the table
+**bounced it into the window**. The chip could then have rewritten its own
+page table. Fixes:
+- the property is now `google,dma-window` (binding + cheetah DT), so the
+  SysMMU device gets no pool;
+- the driver refuses a table whose DMA address differs from its physical
+  address or overlaps the window;
+- the log says `table at 0x… (outside the window)`.
+
+**New in `pcie_gs201_sysmmu`** (wt-pcie `omandroid-w4`: `aecc19faa`,
+`528c3381f`, `841baece6`):
+- `vids=<mask>`: the VIDs to translate (default: the DT's `google,vid`);
+- `mode=3`: everything 1:1 **except** the window. Only DMA into the window
+  faults, and nothing else lives there, so it is safe to turn on for all
+  VIDs (`vids=0xff`). The "blocked" line names the VID;
+- on remove, each VID's CTRL is restored.
+
+Build: `logs/{kernel,modules,images}-w4c.log`, release
+`7.3.0-rc6-omandroid-push1-00100-g841baece617c`. The images carry the
+standard test DTB, with `gs201-cheetah.dtb.firewall` beside it (rebuilt:
+it now has `google,dma-window`). **The old firewall DTB will not work:**
+the driver no longer reads `memory-region`.
+
+#### Runbook (after merging `omandroid-w4` @ `841baece6` into int)
+
+```sh
+export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
+O=$KERNEL_OUT D=$O/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb
+cp "$D.firewall" "$D"; bin/omandroid images && bin/omandroid modules-push && bin/omandroid push
+reset_wifi() { tools/phone-ssh 'modprobe -r brcmfmac_wcc brcmfmac; modprobe -r pcie_gs201; modprobe -r pcie_gs201_sysmmu'; }
+
+# F4a ⚠ find the VID: block only the window, on all eight VIDs
+reset_wifi; tools/phone-ssh 'modprobe pcie_gs201_sysmmu mode=3 vids=0xff; dmesg | grep gs201-pcie-sysmmu | tail -12'
+#   expect: "blocking only 0x…ff000000..0x…100000000, everything else 1:1",
+#           "table at 0x… (outside the window)" with an address NOT in ff000000-ffffffff,
+#           "enforcing: VID n ctrl 0x…1 … table at <same address>" for n = 0..7
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
+tools/phone-ssh 'dmesg | grep "blocked" | head -5'
+#   pass: brcmfmac fails (timeouts) AND "blocked WRITE|READ at 0xff…… (… VID n …)": note n
+#   no "blocked" lines and Wi-Fi works: this SysMMU is not in the Wi-Fi path at all → stop,
+#     tell me (the firewall then has to be the S2MPU, probe groups 3-5)
+#   UFS/USB/touch must be unaffected either way (nothing outside the window is changed)
+
+# F4b ⚠ the real negative test, on that VID only (vids = 1 << n, e.g. 0x01 for VID 0)
+reset_wifi; tools/phone-ssh 'modprobe pcie_gs201_sysmmu mode=2 vids=<1<<n>'
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
+#   pass: brcmfmac fails AND "blocked … (… VID n …)" lines
+#   If the stuck master raises a fault storm: lines are rate-limited, and the watchdog is armed
+
+# F3 ⚠ enforce on that VID, then Wi-Fi as W3
+reset_wifi; tools/phone-ssh 'modprobe pcie_gs201_sysmmu mode=1 vids=<1<<n>; dmesg | grep gs201-pcie-sysmmu | tail -4'
+#   expect: "allowing 0x…ff000000..0x…100000000 (16 sections)", "table at 0x… (outside the window)"
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
+tools/phone-ssh -t 'nmcli con up nevermore'; tools/phone-ssh 'curl -o /dev/null -w "%{speed_download}\n" https://speed.cloudflare.com/__down?bytes=50000000; dmesg | grep -c "blocked"'
+#   pass: connects, ~19-21 MB/s, 0 "blocked"
+# rollback: reset_wifi; modprobe pcie_gs201_sysmmu (mode=0), or cp "$D.default" "$D" + the two test overlays
+```
+
+If n ≠ 1: put `google,vid = <n>` in the cheetah DT (one-line DT commit), and
+`omandroid-wifi-start` needs nothing else. Nothing ships until F4b passes.
