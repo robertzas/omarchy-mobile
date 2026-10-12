@@ -81,6 +81,10 @@ Mainline v7.3-rc6 boots from slot B, with all 8 CPUs, 11.5 GB of RAM, USB networ
 - **Testing a change safely:** arm `systemd-run --unit=fw-deadman --on-active=90 /usr/bin/ufw disable` first, check that a *fresh* SSH connection opens, then stop the timer.
 - **To do:** the image build should run the same steps. Should SSH-over-USB stay open on user builds? It is a developer feature.
 
+## 2026-10-12: display rate and power baseline (read-only)
+- **Refresh rate (DISPLAY-PLAN D5a, `tools/display-hz --secs 10`):** 602 frames in 10.006 s = 60.16 Hz. DSIM underrun count 0x1f09 and TE timers 0x33eb/0x3b26 are ABL's 60 Hz values; no underrun. 120 Hz is DISPLAY-PLAN D5c.
+- **Power P0 (POWER-PLAN 5.1):** no `cpuidle` directory (WFI only), broadcast timer `bc_hrtimer`, no PMU SMC failures. UFS `auto_hibern8` is "Operation not supported", so step U1 is skipped. Clock gating is on with a 150 ms delay. Battery 4.33 V, -1.9 mA average on USB.
+
 ## Host changes to undo later
 
 Made on the development laptop to give the phone internet over USB. Revert when no longer needed:
@@ -105,7 +109,7 @@ Made on the development laptop to give the phone internet over USB. Revert when 
 - **Done (2026-10-11): power button menu.** Omarchy already binds XF86PowerOff to the system menu, so our extra binding toggled it twice; removed. Omarchy's menu drew its card at the top for one frame while its window still had a placeholder size (`patches/omarchy/0002-*`, applied on the phone, to send upstream). Suspend is hidden with Omarchy's `suspend-off` toggle until the kernel can suspend; later, short press = screen off + suspend, long press = menu, like Android.
 - **Screensaver isn't phone-shaped.** It runs in a terminal, so focusing it pops up the on-screen keyboard. Its art (`~/.config/omarchy/branding/screensaver.txt`) is one ~80-column line of lettering, too wide for portrait. On exit it sets `cursor:invisible false`, which brings back the pointer we hide. Needs a portrait art file, no keyboard, and the phone's cursor setting kept.
 - **Lock screen and PIN.** Wanted: Omarchy's lock after boot (autologin, then lock) and after the screensaver, unlocked with a PIN/password or fingerprint. Omarchy's lock (shell `lock` plugin, PAM) hides every other surface while locked, including the on-screen keyboard, so the phone needs a PIN pad inside the lock view. The PIN is the user's password, so `sudo` and the lock agree.
-- **Fingerprint.** Omarchy's lock already supports fprintd. The Pixel 7 Pro sensor is under the display and normally driven through Google's secure world; feasibility research in `FINGERPRINT-RESEARCH.md`.
+- **Fingerprint.** Omarchy's lock already supports fprintd. The plan (Google's HAL and Trusty TA in a minimal chroot, Trusty driver port, panel LHBM, staged runbook) is in `FINGERPRINT-RESEARCH.md`.
 - **Omarchy's per-user install never fully ran on the phone (2026-10-11).** Example: no default keyring, so the first app to use the keyring (Chromium, during an agent login) popped up a desktop-sized "create a keyring password" prompt. Fixed by hand with Omarchy's own `install/user/default-keyring.sh`. The phone image must run Omarchy's user install (`install/user/all.sh`), not a hand-picked subset; audit the other steps (theme, chromium, git, xcompose, mise) too.
 - **Chromium's first-run dialogs don't fit.** Its "Additional Terms of Service" page (blank text in open-source builds) put Accept off-screen and blocked an OAuth login. `omandroid-setup-user` adds `--no-first-run` to `~/.config/chromium-flags.conf`.
 - **System dialogs aren't phone-shaped.** gcr-prompter (keyring), polkit and portal dialogs are GTK windows sized for desktops. Now that every window is maximized they fit the width, but they'll want a phone-friendly look.
