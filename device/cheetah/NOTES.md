@@ -186,3 +186,16 @@ Kernel omandroid-int `7.3.0-rc6-omandroid-push1-00171-g907128673cba` with the **
   - The DPP format for DRM XRGB8888 is code 4: Google's regs-dpp.h names formats by byte order. Code 7 gave a green screen.
 - Mistake to avoid: our phone `devmem` is `devmem ADDR [VALUE]`, so `devmem ADDR 32` WRITES 0x20. It briefly clobbered DSIM 0x34/0x88; restored to 0x1f09/0x33eb3b26.
 - Also today: GNSS G1/G2 passed (sub-PMIC rails read-only at stock voltages; the BCM4775x MCU answers over SPI5 with HSI status 0). The AoC loads through the GSA (command 90) and reaches "running" with RELEASE_RESET, but publishes no control block yet (AOC-PLAN).
+
+## 2026-10-12: the AoC (audio and sensor DSP) boots under Linux; Trusty runs
+
+On omandroid-int `7.3.0-rc6-omandroid-push1-00247-gc779a9f42a1d`, with the aoc-boot-test and fingerprint-trusty overlays:
+
+- **Trusty** comes up from Linux: "trusty_ipc virtio0: is online", `/dev/trusty-ipc-dev0`. This is fingerprint gate F2 as well.
+- **Load:** the GSA authenticates and loads Google's `aoc.bin` (mailbox command 90): state 1, loaded.
+- **Start:** only works through Trusty's `com.android.trusty.gsa.hwmgr.aoc`. "AoC cmd 1 (Trusty): 2", then **"firmware up: 82 services"** 0.43 s later: control block magic 0xa0c00a0c, the same service count as stock.
+  - The services include audio playback/capture/control, `com.google.usf` (sensors), `com.google.chre` and `sound_trigger`.
+  - No SysMMU faults. The AoC rang doorbells: a32 mailbox INTSR1 0x401.
+- **What didn't work:** mailbox command 91 START leaves the A32 held (GSA state 4). RELEASE_RESET (5) runs it, but the firmware stays silent.
+- Also learned: reading the AoC PCU (0x19a00000) while the A32 is in reset aborts.
+- **Next (AOC-PLAN):** an automatic start path, the AoC IPC core and character devices, a USF sensor client (auto-rotate), then aoc_alsa for the speakers and mics.
