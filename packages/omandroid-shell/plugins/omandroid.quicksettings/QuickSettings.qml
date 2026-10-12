@@ -549,7 +549,19 @@ Item {
   QtObject {
     id: audio
 
-    readonly property var sink: Pipewire.defaultAudioSink
+    // PipeWire names no default sink until something uses one (a volume key
+    // through wpctl did), which left the row "No audio output" after boot.
+    // Fall back to the first audio sink until it does.
+    readonly property var sink: Pipewire.defaultAudioSink || firstSink()
+
+    function firstSink() {
+      var nodes = Pipewire.nodes ? Pipewire.nodes.values : []
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i]
+        if (node && node.isSink && !node.isStream && node.audio) return node
+      }
+      return null
+    }
     readonly property bool available: !!sink && !!sink.audio
     readonly property real volume: available ? Math.min(1, sink.audio.volume) : 0
     readonly property bool muted: available ? sink.audio.muted : false
