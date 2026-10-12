@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (RADIOS-CAMERA-PLAN.md, stages M0/N0): enable the HSI1 pin
+ * controller (banks gph0, gph1), so the modem's and the NFC controller's
+ * lines can be read through the pinctrl and GPIO debugfs files instead of
+ * /dev/mem. Registering the controller changes no pin's function, pull or
+ * level: no consumer requests them, so they keep the bootloader's state
+ * (the same driver already does this for HSI2 and PERIC0). Applied to
+ * the built gs201-cheetah.dtb with fdtoverlay. Paths, not labels, so the
+ * base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/pinctrl@11840000} {
+	status = "okay";
+};
