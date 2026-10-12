@@ -1818,3 +1818,90 @@ tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
 ```
 
 Rollback otherwise as 9.5.
+
+### 9.9 Runs A and B: the chip reads host memory, its writes never show (2026-10-12)
+
+Logs: `logs/wifi-w1-20261012-015240-s5.log` (A, coherent) and
+`…-015339-s5.log` (B, `dma-coherent` removed). The two are identical:
+- IOCC holds in A (AxCACHE 0x10101010, shareability 0x13).
+- The TCM copies show the chip **fetching** our H2D write indices from the
+  pool (one doorbell behind) and consuming all 1023 rxpost and 5 control
+  entries.
+- But the host's copies of the read indices and all D2H write indices stay
+  0, `mailboxint` stays 0, and there is no AER/fault line.
+
+So DMA reads from 0xaff000000 work and DMA writes do not, and it is not
+caching.
+
+**Checked in Google's driver:** nothing programs a separate write path. The
+only sysreg write is the shareability (`G/pcie-exynos-rc.c:2008`);
+`PCIE_APP_XFER_PENDING` (ELBI 0x74) only gates L1 entry around config
+accesses (`:1813,3597,3798`), and there is no MPS, inbound ATU or AXI
+user-bit setup. One real difference from stock: **stock never DMAs above
+4 GiB.** Its HSI2 PCIe SysMMU is on (`R/dmesg.txt:656-659` "Probe HSI2
+block", "PCIe SysMMU is ENABLED" at `:2075`) and hands the chip 32-bit
+IOVAs, so a write path with fewer address bits than the read path would
+never show in stock. Our pool sits at the top of RAM because the overlay
+gives it no range.
+
+**Leading hypothesis:** the chip's (or the HSI2 fabric's) write addresses
+lose the bits above 31, so the writes land at `addr & 0xffffffff`. For the
+pool that is 0xff000000-0xffffffff, which is in the CMA area
+(`cma: Reserved 32 MiB at 0xfe000000`): ordinary RAM, so nothing faults.
+Other possibilities: writes dropped (an S2MPU or SysMMU in write-protect
+mode; no fault registers are readable without devmem on HSI2, which
+section 7.5 forbids), or the D2H path stalls in the chip.
+
+**This build separates them:**
+
+| Commit / file | What |
+|---|---|
+| `e765e7004` wifi: brcmfmac: pcie: watch the 32-bit aliases of high DMA buffers | at PCIe debug level: snapshot the RAM at the low-32-bit alias of the index buffer and of the control and rx completion rings before the first doorbell, and with each index dump report which words changed (`alias <name> +0x..: old -> new`, `alias <name>: N words changed`). Read-only |
+| `device/cheetah/overlays/wifi-dma-pool-low-test.dtso` | `alloc-ranges` 0x80000000-0xffffffff for the pool: the pool below 4 GiB, so no address bit above 31 |
+
+Builds: `logs/{kernel,modules,images}-w2alias.log`, release `7.3.0-rc6-omandroid-push1-00079-ge765e70044e3`. out-pcie has the
+standard test DTB (pcie_1 + pool, coherent); `.default` was rebuilt
+plain.
+
+**Run C (diagnosis, same command; pool high as before):**
+
+```sh
+export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
+bin/omandroid modules-push && bin/omandroid push      # also replaces the run-B DTB on the phone
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
+```
+
+| Line | Reading |
+|---|---|
+| `alias watch indices: dma 0xaff0..... -> 0xff0....., N bytes` (and `ctrl complete`, `rx complete`) | the watch is armed (pool above 4 GiB, alias is RAM). Missing: the pool moved below 4 GiB, so go straight to run D |
+| `alias indices: N words changed` with N > 0, and the changed offsets are those of the read indices (`+0x..` = 4 × ring for H2D r, after the 43 H2D w slots) with values 1023 / 5 | **truncation proven**: the writes land at the 32-bit alias. Fix = DMA below 4 GiB (run D) |
+| `alias ctrl complete: N words changed` > 0 | the ioctl completion was written to the alias |
+| all aliases `0 words changed`, host r still 0 | **writes are dropped** (or never issued): run D still tells whether the address is the trigger |
+
+**Run D (the candidate fix): pool below 4 GiB.**
+
+```sh
+O=$KERNEL_OUT D=$O/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb
+cp "$D" "$D.highpool"
+$O/scripts/dtc/dtc -q -I dts -O dtb -o out/wifi-dma-pool-low-test.dtbo device/cheetah/overlays/wifi-dma-pool-low-test.dtso
+$O/scripts/dtc/fdtoverlay -i "$D.highpool" -o "$D" out/wifi-dma-pool-low-test.dtbo
+bin/omandroid images && bin/omandroid push
+tools/phone-ssh 'dmesg | grep "restricted DMA pool"'    # expect an address below 0x100000000
+tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
+#   rollback: cp "$D.highpool" "$D"; bin/omandroid images && bin/omandroid push
+```
+
+| Line | Pass |
+|---|---|
+| `created restricted DMA pool at 0x00000000........` | below 4 GiB |
+| no `alias watch` lines | (nothing to watch below 4 GiB) |
+| `update rptr: host H2D w … r 5 1023 …` | host read indices now move |
+| `mailboxint 0x…` non-zero, D2H w moving | the chip signals |
+| `Firmware: BCM4389/3 …`, `CLM version = Google.C10sub6` | then 9.4 W2.2-W2.4 |
+
+If D passes, the permanent fix is DT only: keep `alloc-ranges` below
+4 GiB in the pool node (W4 wants a fixed region anyway). Until the S2MPU/
+SysMMU question is settled, no device DMA above 4 GiB. If D fails the
+same way as A/B, writes are dropped regardless of address: the next
+suspect is the HSI2 SysMMU at 0x145c0000 (stock enables it; we leave it
+as ABL did), and that needs its own staged, read-only probe.

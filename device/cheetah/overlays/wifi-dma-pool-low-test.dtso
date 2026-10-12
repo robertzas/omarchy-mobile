@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (gate W2): keep the Wi-Fi restricted DMA pool below 4 GiB.
+ * Apply after wifi-pcie-test.dtso and wifi-dma-pool-test.dtso. Without a
+ * range the kernel places the dynamic pool at the top of RAM (0xaff000000),
+ * and the BCM4389's writes to host memory there were never seen (W2.1 runs
+ * A/B, WIFI-BATTERY-PLAN 9.9). Stock never DMAs above 4 GiB: its PCIe SysMMU
+ * hands the chip 32-bit IOVAs.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/reserved-memory/wifi-dma-pool} {
+	alloc-ranges = <0x0 0x80000000 0x0 0x80000000>;
+};
