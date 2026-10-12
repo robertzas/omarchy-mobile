@@ -136,7 +136,8 @@ cmd_modules_push() {
   "$ssh" "set -e; rm -rf /usr/lib/modules/.$rel.new; mkdir -p /usr/lib/modules/.$rel.new
     zstd -dc | tar -C /usr/lib/modules/.$rel.new -xf -
     rm -rf /usr/lib/modules/$rel; mv /usr/lib/modules/.$rel.new/$rel /usr/lib/modules/$rel
-    rmdir /usr/lib/modules/.$rel.new; depmod -a $rel; sync" < "$tarball"
+    rmdir /usr/lib/modules/.$rel.new; depmod -a $rel
+    echo $(sha256sum < "$tarball" | cut -d' ' -f1) > /usr/lib/modules/$rel/.omandroid-tarball; sync" < "$tarball"
   "$ssh" "find /usr/lib/modules/$rel -name '*.ko*' | wc -l; ls /usr/lib/modules/$rel/modules.dep"
 }
 
@@ -317,9 +318,11 @@ cmd_push() {
   local img="$KERNEL_OUT/images" ssh="$ROOT/tools/phone-ssh" p dev want got rel
   "$ssh" true || die "phone not reachable at 172.16.42.1"
   # A kernel whose modules aren't installed boots without its drivers (the GPU
-  # among them): install them first.
+  # among them): install them first. A config change can keep the release
+  # name, so compare the tarball's checksum, not just the directory.
   rel=$(kernel_release)
-  "$ssh" "test -f /usr/lib/modules/$rel/modules.dep" || cmd_modules_push
+  want=$(sha256sum < "$KERNEL_OUT/modules-$rel.tar.zst" | cut -d' ' -f1)
+  [[ "$("$ssh" "cat /usr/lib/modules/$rel/.omandroid-tarball 2>/dev/null")" == "$want" ]] || cmd_modules_push
   for p in boot init_boot vendor_boot vendor_kernel_boot dtbo; do
     [[ -f "$img/$p.img" ]] || die "missing $img/$p.img (run: omandroid images)"
     # Find the partition by GPT name; the init guard leaves only these writable
