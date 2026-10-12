@@ -31,9 +31,10 @@
 #   c4b  start: GSA_AOC_START over the mailbox, wait for the firmware's
 #        control block, list the services; clears the hang marker on success
 #   stop GSA_AOC_SHUTDOWN (back to "loaded")
-#   diag read-only: the AoC S2MPU, A32 reset control, System MMU, boot
-#        breadcrumbs (kernel log) and a hex dump of the ramdump header and IPC
-#        area
+#   diag read-only, registers already read fine on the phone: info, the
+#        AoC S2MPU's CTRL0 and the System MMU (kernel log), the control block
+#   ramdump  read-only, not yet tried: hex dump of the ramdump header
+#        (carve-out + 32 MiB, boot breadcrumbs) and of the IPC area
 #   release  GSA_AOC_RELEASE_RESET (5): only after a start that left GSA
 #        state 4 without a control block (AOC-PLAN.md C4b-2)
 #   rails    turn the five AoC LDOs on (gs201_aoc_rails enable=1; stock
@@ -71,7 +72,7 @@ while (($#)); do
     --fw) FW="${2:?}"; shift ;;
     --pstore) pstore=1 ;;
     -h|--help) usage ;;
-    c2|c2p|c3|c4a|c4b|stop|diag|release|rails) stage="$1" ;;
+    c2|c2p|c3|c4a|c4b|stop|diag|ramdump|release|rails) stage="$1" ;;
     *) usage 1 ;;
   esac
   shift
@@ -182,7 +183,12 @@ case "$stage" in
   diag)
     phone "test -d $DBG" || die "run c2 first"
     mark "diagnostics (reads only)"
-    phone "cat $DBG/info; cat $DBG/blk; cat $DBG/ramdump" | tee -a "$log" || result=fail
+    phone "cat $DBG/info; cat $DBG/blk; cat $DBG/control" | tee -a "$log" || result=fail
+    ;;
+  ramdump)
+    phone "test -d $DBG" || die "run c2 first"
+    mark "about to read the ramdump header (carve-out + 32 MiB) and the IPC area"
+    phone "cat $DBG/ramdump" | tee -a "$log" || result=fail
     ;;
   release)
     phone "test -d $DBG" || die "run c2 first"

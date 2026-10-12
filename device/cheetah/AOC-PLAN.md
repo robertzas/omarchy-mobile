@@ -4,7 +4,8 @@
 Status (2026-10-12): **C1, C2, C3 and C4a passed on the phone; C4b (start)
 did not finish** (section 0.2): the GSA accepted `START` but reported state
 4, and the firmware never wrote its control block. C4b-2 (diagnostics,
-setup re-apply, release reset) is built and is next. Kernel branch
+setup re-apply, release reset) is built; its first try hit an abort reading
+the AoC PCU (fixed, section 7 C4b-2), and the rerun is next. Kernel branch
 `omandroid-aoc` in `~/android/mainline/wt-aoc` (out dir
 `~/android/mainline/out-aoc`), on `omandroid` @ `7b0f8b5d1` plus the Trusty
 commits of `omandroid-fingerprint`. Everything new is disabled by default.
@@ -368,6 +369,7 @@ merges cleanly into `omandroid-int` @ `741b6ed1d` (`git merge-tree`).
 | `3a71f0471` soc: google: add the gs201 AoC supplies over ACPM | `gs201-aoc-rails.c` (`CONFIG_GS201_AOC_RAILS`): reads S2MPG12/13 CHIPID and the five LDOs; sets their enable bits only with `enable=1`, never a voltage | module, no DT |
 | `973b54b71` arm64: dts: ... gs201: add the AoC and its System MMU | `sysmmu@1a090000` (SPI 118), `aoc@181d0000` | `disabled` |
 | `0e5c2082d`, `edfb4e5df`, `aa453aaee`, `c868f906b` C4b diagnostics | System MMU "lost" check and reprogram, VID 0 fault registers in the dump; the AoC node gains the PCU (`0x19a00000`) and the watchdog interrupt (SPI 116); the boot driver logs S2MPU, PCU reset control, System MMU, IPC words and ramdump breadcrumbs around `START`, re-applies a cleared S2MPU/System MMU setup first (`reapply=1`), and gains `cmd` (any GSA AoC command) and `ramdump` (hex dump) | - |
+| `deb7b47bd` gate the PCU read, no lock in read-only views | after the PCU read aborted (C4b-2 first try) | - |
 | `2f785843b`, `615b5188a` unload | `gsa_unload_aoc_fw_image()` (cmd 92 or Trusty `UNLOAD_IMG`); debugfs `unload` (shutdown, unload, System MMU off, as `aoc_take_offline()`) | - |
 
 Build in `out-aoc`: release `7.3.0-rc6-omandroid-push1-00079-g615b5188a148`
@@ -571,9 +573,20 @@ tools/aoc-stage --watchdog c4b
 
 ### C4b-2: diagnose the start (one boot)
 
-Rebuild int with `omandroid-aoc` @ `c868f906b` (merge again) and push as
-before. The overlay is unchanged; the AoC node now also has the PCU range
-and the watchdog interrupt, from `gs201.dtsi`.
+**First try (int 00214, `c868f906b`): synchronous external abort** in
+`aoc_diag+0xdc` during C2's `blk` read. `llvm-objdump` puts `+0xdc` on the
+load from `ab->pcu + 0`: the **PCU at 0x19a00000 aborts** with BLK_AOC on
+and the AoC in reset (the S2MPU and System MMU reads just before it were
+fine, as in the first C2). The `blk` task died holding the driver's lock,
+so load and start blocked. Fixed in `deb7b47bd`: the PCU is read only with
+`diag_pcu=1` from its own `pcu` file, the ramdump header only with
+`diag_ramdump=1` or from the `ramdump` file, the System MMU fault registers
+only with `gs201_aoc_sysmmu dump_faults=1`; read-only views take no lock,
+and optional reads around start run outside it. `blk` and the start
+diagnostics now read only what has already read fine on the phone.
+
+Rebuild int with `omandroid-aoc` @ `deb7b47bd` (merge again) and push as
+before, same overlay. Then:
 
 ```sh
 tools/phone-ssh 'rm -f /var/lib/omandroid/aoc-bringup-started'
@@ -584,22 +597,31 @@ tools/aoc-stage --watchdog c4b
 tools/aoc-stage diag
 ```
 
-Read, in the kernel log (each line is prefixed with blk/before/after/5 s):
+Read, in the kernel log (prefixed blk/before/after/5 s):
 
 - `aoc s2mpu CTRL0`: 0 after our load, or 0x5 again (a block reset).
-- `pcu reset 0x…`: bit 0 is the A32 run bit that Google's non-GSA path sets
-  (`aoc_release_from_reset()`); record it before and after `START`.
 - the System MMU lines: global ctrl bit 0 and VID 0 ctrl bit 0 set, table at
-  our address; "VID 0 fault va … info …"; `int` status.
+  our address, `int` status.
 - "AoC S2MPU CTRL0 is 0x… again, setting 0" or "System MMU setup was
   cleared, programming it again": printed by the re-apply before `START`.
 - `ipc …`: 0a0cda7a … (our parameters) or a0c00a0c … (the firmware's).
-- `ramdump magic … crumbs …`: "AOCDUMP" and non-zero breadcrumbs mean the
-  firmware ran.
 - "AoC watchdog interrupt": the firmware ran and stopped.
 
-Then, only if `START` gave state 4, `pcu reset` bit 0 is clear and nothing
-came up:
+Then the ramdump header, one read on its own (never read before; it is
+ordinary DRAM outside the locked body, and Google's driver reads it after a
+crash):
+
+```sh
+tools/aoc-stage --watchdog ramdump
+```
+
+- **Expect:** a hex dump. "AOCDUMP" at offset 0 and non-zero words at 0x318
+  (the breadcrumbs) mean the firmware ran; all zeros mean it never wrote
+  there.
+- **Stop:** an abort (the watchdog resets the phone): the region is
+  protected; never read it again.
+
+Then, only if `START` gave state 4 and nothing came up:
 
 ```sh
 tools/aoc-stage --watchdog release    # GSA_AOC_RELEASE_RESET (5)
@@ -612,7 +634,14 @@ tools/aoc-stage stop
   state (record it). `stop` returns the AoC to "loaded"; a reboot clears
   everything.
 
-Send the four logs (`logs/aoc-*-diag.log`, `-c4b.log`, `-release.log`).
+The PCU stays unread: it aborts with the AoC in reset. If everything above
+is inconclusive, a later step reads it once **after** a start that left
+state 4, with `echo 1 > /sys/module/gs201_aoc_boot/parameters/diag_pcu`
+and `cat /sys/kernel/debug/aoc/pcu`, armed watchdog, as the last action of
+a boot.
+
+Send the logs (`logs/aoc-*-diag.log`, `-c4b.log`, `-ramdump.log`,
+`-release.log`).
 
 ### C4b-3: rails first (separate boot, if C4b-2 shows the A32 running but no control block)
 
