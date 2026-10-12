@@ -1,0 +1,286 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omandroid-fp-chroot: run Google's fingerprint stack for the Pixel 7 Pro in a
+# minimal chroot (device/cheetah/FINGERPRINT-RESEARCH.md, section 4).
+#
+#   omandroid-fp-chroot check            preconditions only; changes nothing
+#   omandroid-fp-chroot start [STAGE]    start the stack up to STAGE, in the
+#                                        foreground (systemd runs it), and
+#                                        supervise it until stopped
+#   omandroid-fp-chroot ns CMD...        run a host command (ls, cat, kill)
+#                                        in the running stack's namespaces
+#   omandroid-fp-chroot run CMD...       run an Android binary in the chroot
+#
+# STAGE (each includes the ones before):
+#   storage    servicemanager, vndservicemanager, storageproxyd
+#   apploader  + trusty_apploader g7.app
+#   keys       + Trusty KeyMint and Gatekeeper HALs
+#   hal        + the Goodix fingerprint HAL (default)
+#
+# The Android files come from tools/extract-fingerprint-vendor (Google's,
+# never shipped by Omandroid) in $IMAGE; our preload shim in $SHIM. The
+# chroot is a private mount namespace on a tmpfs: the image is bind-mounted
+# read-only, and only $STATE (Trusty's secure storage files, the HAL's data)
+# persists. It shares the host's network namespace on purpose: the sensor
+# driver's netlink socket exists only in the initial one.
+set -euo pipefail
+
+IMAGE=${OMANDROID_FP_IMAGE:-/usr/lib/omandroid-fp/root}
+SHIM=${OMANDROID_FP_SHIM:-/usr/lib/omandroid-fp/omandroid-fp-shim.so}
+PROPS_EXTRA=${OMANDROID_FP_PROPS_EXTRA:-/usr/lib/omandroid-fp/props.conf}
+STATE=${OMANDROID_FP_STATE:-/var/lib/omandroid-fp}
+RUN=/run/omandroid-fp
+ROOT=$RUN/root
+NSPID=$RUN/ns.pid
+
+# The UFS RPMB well-known LUN (stock storageproxyd: -r /dev/sg1).
+RPMB_LUN=49476
+
+say() { printf 'omandroid-fp: %s\n' "$*" >&2; }
+die() { say "error: $*"; exit 1; }
+
+rpmb_sg() {
+  local d
+  for d in /sys/class/scsi_generic/sg*; do
+    [[ -e $d/device ]] || continue
+    [[ $(basename "$(readlink -f "$d/device")") == *:$RPMB_LUN ]] && { basename "$d"; return; }
+  done
+}
+
+check() {
+  local ok=1 sg
+  [[ $EUID -eq 0 ]] || die "run as root"
+  [[ -f $IMAGE/vendor/bin/hw/android.hardware.biometrics.fingerprint-service.goodix ]] ||
+    { say "no vendor image in $IMAGE (tools/extract-fingerprint-vendor)"; ok=0; }
+  [[ -f $SHIM ]] || { say "no shim at $SHIM (fingerprint/Makefile)"; ok=0; }
+  [[ -c /dev/trusty-ipc-dev0 ]] || { say "no /dev/trusty-ipc-dev0 (trusty_ipc loaded?)"; ok=0; }
+  [[ -c /dev/goodix_fp ]] || say "no /dev/goodix_fp: only stages before 'hal' can run"
+  grep -qw binder /proc/filesystems || { say "kernel has no binderfs"; ok=0; }
+  sg=$(rpmb_sg)
+  [[ -n $sg ]] || { say "no SCSI generic node for the RPMB LUN $RPMB_LUN (modprobe sg)"; ok=0; }
+  [[ -n $sg ]] && say "RPMB: /dev/$sg"
+  [[ -f $STATE/mfg_data.img ]] ||
+    say "no $STATE/mfg_data.img: the HAL will run without factory calibration"
+  ((ok)) || exit 1
+  say "preconditions met"
+}
+
+# Bind $1 onto $2 (created as a file or directory to match), optionally ro.
+bind() {
+  local src=$1 dst=$2 mode=${3:-rw}
+  if [[ -d $src ]]; then mkdir -p "$dst"; else mkdir -p "$(dirname "$dst")"; : > "$dst"; fi
+  mount --bind "$src" "$dst"
+  [[ $mode == ro ]] && mount -o remount,bind,ro "$dst"
+  return 0
+}
+
+# Property store: one file per property (see the shim).
+write_props() {
+  local dir=$1 f line k v
+  mkdir -p "$dir"
+  for f in "$ROOT/system/build.prop" "$ROOT/vendor/build.prop" "$PROPS_EXTRA" "$STATE/props.conf"; do
+    [[ -f $f ]] || continue
+    while IFS= read -r line; do
+      [[ $line =~ ^[[:space:]]*# || $line != *=* ]] && continue
+      k=${line%%=*} v=${line#*=}
+      [[ $k =~ ^[A-Za-z0-9_.:@-]+$ ]] || continue
+      printf '%s' "$v" > "$dir/$k"
+    done < "$f"
+  done
+}
+
+# Fake sysfs: only what the HAL reads, plus the real LHBM attributes.
+setup_sys() {
+  local sys=$ROOT/sys bl
+  mount -t tmpfs -o mode=0755,nosuid,nodev,noexec sysfs-skel "$sys"
+  bind /sys/devices/system/cpu "$sys/devices/system/cpu" ro
+  bind /sys/firmware/devicetree "$sys/firmware/devicetree" ro
+  [[ -d /sys/class/thermal ]] && bind /sys/class/thermal "$sys/class/thermal" ro
+  for m in trusty_core trusty_virtio; do
+    [[ -d /sys/module/$m ]] && bind "/sys/module/$m" "$sys/module/$m"
+  done
+  mkdir -p "$sys/devices/platform/exynos-drm/primary-panel"
+  echo sdc-s6e3hc4 > "$sys/devices/platform/exynos-drm/primary-panel/panel_name"
+  echo 60 > "$sys/devices/platform/exynos-drm/primary-panel/op_hz"
+  # The panel driver's backlight device carries local_hbm_mode and
+  # local_hbm_max_timeout; expose it under Google's name.
+  bl=$(grep -l . /sys/class/backlight/*/local_hbm_mode 2>/dev/null | head -1 || true)
+  mkdir -p "$sys/class/backlight/panel0-backlight"
+  echo 0 > "$sys/class/backlight/panel0-backlight/hbm_mode"
+  echo on > "$sys/class/backlight/panel0-backlight/state"
+  if [[ -n $bl ]]; then
+    bl=$(dirname "$bl")
+    bind "$bl/local_hbm_mode" "$sys/class/backlight/panel0-backlight/local_hbm_mode"
+    bind "$bl/local_hbm_max_timeout" "$sys/class/backlight/panel0-backlight/local_hbm_max_timeout"
+  fi
+  mount -o remount,ro "$sys"
+}
+
+setup_dev() {
+  local dev=$ROOT/dev sg=$1 n
+  mount -t tmpfs -o mode=0755,nosuid dev "$dev"
+  for n in null zero full random urandom kmsg; do bind "/dev/$n" "$dev/$n"; done
+  bind /dev/trusty-ipc-dev0 "$dev/trusty-ipc-dev0"
+  [[ -c /dev/trusty-log0 ]] && bind /dev/trusty-log0 "$dev/trusty-log0"
+  [[ -c /dev/goodix_fp ]] && bind /dev/goodix_fp "$dev/goodix_fp"
+  # RPMB only: no other SCSI generic node enters the chroot
+  bind "/dev/$sg" "$dev/sg-rpmb"
+  mkdir -p "$dev/socket" "$dev/binderfs" "$dev/block/by-name"
+  # A private binder instance: binder, hwbinder and vndbinder are created at
+  # mount (CONFIG_ANDROID_BINDER_DEVICES).
+  mount -t binder binder "$dev/binderfs"
+  for n in binder hwbinder vndbinder; do
+    [[ -e $dev/binderfs/$n ]] || die "binderfs has no $n (CONFIG_ANDROID_BINDER_DEVICES)"
+    ln -s "binderfs/$n" "$dev/$n"
+  done
+  # Factory calibration: a read-only copy, never the partition itself.
+  [[ -f $STATE/mfg_data.img ]] && bind "$STATE/mfg_data.img" "$dev/block/by-name/mfg_data" ro
+  mount -t tmpfs -o mode=0755,nosuid,nodev,noexec props "$dev/__omandroid_props__"
+  write_props "$dev/__omandroid_props__"
+}
+
+setup_data() {
+  mkdir -p "$STATE/data/vendor/ss" "$STATE/data/vendor/fingerprint" \
+    "$STATE/data/vendor_de/0/fpdata" "$STATE/data/vendor/goodix" \
+    "$STATE/data/vendor/tombstones/fingerprint" "$STATE/persist-ss"
+  chmod 0700 "$STATE"
+  bind "$STATE/data" "$ROOT/data"
+  # Trusty's tamper-detect-persistent files (stock: persist/ss). We use a
+  # Linux-owned copy; FINGERPRINT-RESEARCH.md section 6 explains why.
+  mkdir -p "$ROOT/data/vendor/ss/persist"
+  mount --bind "$STATE/persist-ss" "$ROOT/data/vendor/ss/persist"
+}
+
+# Build the chroot in the current (private) mount namespace.
+setup() {
+  local sg=$1
+  mkdir -p "$ROOT"
+  mount -t tmpfs -o mode=0755,nosuid omandroid-fp "$ROOT"
+  for d in system vendor apex; do bind "$IMAGE/$d" "$ROOT/$d" ro; done
+  mkdir -p "$ROOT/proc" "$ROOT/sys" "$ROOT/dev" "$ROOT/data" "$ROOT/tmp" \
+    "$ROOT/mnt/vendor/persist" "$ROOT/linkerconfig" "$ROOT/omandroid"
+  ln -s /system/bin "$ROOT/bin"
+  ln -s /system/etc "$ROOT/etc"
+  mount -t tmpfs -o mode=1777,nosuid,nodev tmp "$ROOT/tmp"
+  mount -t proc -o nosuid,nodev,noexec proc "$ROOT/proc"
+  bind "$SHIM" "$ROOT/omandroid/omandroid-fp-shim.so" ro
+  setup_dev "$sg"
+  setup_sys
+  setup_data
+}
+
+# Run an Android binary in the chroot as a supervised child.
+# $1 name, $2 vendor|system (library search order), $3... command
+LIBS_VENDOR=/vendor/lib64:/vendor/lib64/hw:/system/lib64
+LIBS_SYSTEM=/system/lib64:/vendor/lib64
+spawn() {
+  local name=$1 kind=$2; shift 2
+  local libs=$LIBS_VENDOR
+  [[ $kind == system ]] && libs=$LIBS_SYSTEM
+  say "starting $name"
+  env -i PATH=/system/bin:/vendor/bin \
+    LD_LIBRARY_PATH="$libs" LD_PRELOAD=/omandroid/omandroid-fp-shim.so \
+    OMANDROID_FP_PROPS=/dev/__omandroid_props__ \
+    OMANDROID_FP_LOGLEVEL="${OMANDROID_FP_LOGLEVEL:-3}" \
+    ANDROID_ROOT=/system ANDROID_DATA=/data \
+    chroot "$ROOT" "$@" 2>&1 | sed -u "s/^/[$name] /" &
+  PIDS[$name]=$!
+}
+
+wait_prop() { # $1 name, $2 value, $3 timeout s
+  local f=$ROOT/dev/__omandroid_props__/$1 i
+  for ((i = 0; i < $3 * 10; i++)); do
+    [[ -f $f && $(cat "$f") == "$2" ]] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+declare -A PIDS=()
+
+start() {
+  local stage=${1:-hal} sg
+  case $stage in storage|apploader|keys|hal) ;; *) die "unknown stage $stage" ;; esac
+  check
+  sg=$(rpmb_sg)
+  mkdir -p "$RUN"
+  if [[ -z ${OMANDROID_FP_IN_NS:-} ]]; then
+    # Re-exec in a private mount namespace (and PID namespace, so the
+    # Android processes die with us). Not a network namespace: see above.
+    rm -f "$NSPID"
+    exec unshare --mount --propagation private --pid --fork --kill-child \
+      env OMANDROID_FP_IN_NS=1 "$0" start "$stage"
+  fi
+  # unshare's child: PID 1 inside, its parent is unshare outside. /run is
+  # shared with the host until our mounts, so record the host PID for ns/run.
+  awk '/^NSpid:/ {print $2}' /proc/self/status > "$NSPID"
+  trap 'say "stopping"; kill 0 2>/dev/null; exit 0' TERM INT
+  setup "$sg"
+
+  spawn servicemanager system /system/bin/servicemanager
+  spawn vndservicemanager vendor /vendor/bin/vndservicemanager /dev/vndbinder
+  sleep 1
+  # storageproxyd sets ro.vendor.trusty.storage.fs_ready=1 once Trusty's
+  # storage is mounted; trusty_apploader blocks until it runs.
+  spawn storageproxyd vendor /vendor/bin/storageproxyd -d /dev/trusty-ipc-dev0 \
+    -r /dev/sg-rpmb -p /data/vendor/ss -t ufs
+  wait_prop ro.vendor.trusty.storage.fs_ready 1 60 ||
+    die "storageproxyd did not report fs_ready in 60 s"
+  say "secure storage ready"
+
+  if [[ $stage != storage ]]; then
+    say "loading g7.app"
+    env -i LD_LIBRARY_PATH=$LIBS_VENDOR LD_PRELOAD=/omandroid/omandroid-fp-shim.so \
+      OMANDROID_FP_PROPS=/dev/__omandroid_props__ \
+      timeout 60 chroot "$ROOT" /vendor/bin/trusty_apploader /vendor/firmware/g7.app ||
+      die "trusty_apploader failed ($?)"
+    say "g7.app loaded"
+  fi
+
+  if [[ $stage == keys || $stage == hal ]]; then
+    spawn keymint vendor /vendor/bin/hw/android.hardware.security.keymint-service.trusty \
+      --dev /dev/trusty-ipc-dev0
+    spawn gatekeeper vendor /vendor/bin/hw/android.hardware.gatekeeper-service.trusty \
+      --dev /dev/trusty-ipc-dev0
+  fi
+
+  if [[ $stage == hal ]]; then
+    [[ -c $ROOT/dev/goodix_fp ]] || die "no /dev/goodix_fp in the chroot"
+    spawn fingerprint vendor /vendor/bin/hw/android.hardware.biometrics.fingerprint-service.goodix
+  fi
+
+  say "stage $stage running"
+  # Supervise: any child exiting stops the whole stack (systemd restarts it).
+  wait -n || true
+  say "a service exited; stopping the stack"
+  kill 0 2>/dev/null || true
+  exit 1
+}
+
+# $NSPID holds the namespace's PID 1 as seen from the host.
+ns_pid() {
+  [[ -f $NSPID ]] || die "not running"
+  cat "$NSPID"
+}
+
+ns() {
+  (($#)) || die "usage: omandroid-fp-chroot ns CMD..."
+  exec nsenter --target "$(ns_pid)" --mount --pid "$@"
+}
+
+run() {
+  (($#)) || die "usage: omandroid-fp-chroot run /vendor/bin/... ARGS"
+  exec nsenter --target "$(ns_pid)" --mount --pid \
+    env -i LD_LIBRARY_PATH=$LIBS_VENDOR LD_PRELOAD=/omandroid/omandroid-fp-shim.so \
+    OMANDROID_FP_PROPS=/dev/__omandroid_props__ OMANDROID_FP_LOGLEVEL=2 \
+    chroot "$ROOT" "$@"
+}
+
+case ${1:-} in
+  check) check ;;
+  start) start "${2:-hal}" ;;
+  ns) shift; ns "$@" ;;
+  run) shift; run "$@" ;;
+  *) echo "usage: omandroid-fp-chroot check | start [storage|apploader|keys|hal] | ns CMD... | run CMD..." >&2
+     exit 2 ;;
+esac

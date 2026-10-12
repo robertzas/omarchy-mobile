@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (FINGERPRINT-RESEARCH.md, gate F2): enable the Trusty node,
+ * so the trusty modules can bind. They stay blacklisted from autoload
+ * (omandroid-device-cheetah: modprobe.d/omandroid-fingerprint.conf) and are
+ * loaded by hand. Applied to the built gs201-cheetah.dtb with fdtoverlay.
+ * Paths, not labels, so the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/trusty} {
+	status = "okay";
+};

@@ -1,0 +1,318 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# extract-fingerprint-vendor: build the fingerprint chroot's Android files for
+# the Pixel 7 Pro (cheetah) out of a Google factory image, on the user's own
+# machine.
+#
+# Fingerprint on Omandroid runs Google's own fingerprint HAL against the
+# Goodix trusted application (g7.app) in Trusty, inside a small chroot
+# (device/cheetah/FINGERPRINT-RESEARCH.md). Those binaries are Google's and
+# not ours to redistribute, so Omandroid never ships them: this tool pulls
+# exactly what the chroot needs from an image the user already has (the
+# factory zip from developers.google.com/android/images, or the
+# image-*.zip inside it) and nothing else.
+#
+# What it takes:
+#   vendor:  the Goodix AIDL HAL, Trusty Gatekeeper and KeyMint HALs,
+#            storageproxyd, trusty_apploader, vndservicemanager, g7.app,
+#            build.prop, the VINTF manifests, and the shared libraries those
+#            binaries need (their DT_NEEDED closure, vendor copies first)
+#   system:  servicemanager, the VINTF manifests and matrices, and the
+#            libraries the above need from /system (closure again)
+#   runtime: the bionic linker and libc/libm/libdl from com.android.runtime
+#
+# The output is the chroot's read-only image tree:
+#   OUT/root/{system,vendor,apex/com.android.runtime}
+#   OUT/MANIFEST         one line per file: sha256, mode, path
+#   OUT/SOURCE           the vendor build fingerprint it came from
+# Install it on the phone under /usr/lib/omandroid-fp/root (see
+# tools/omandroid-fp-chroot). Nothing here touches the phone.
+#
+# Needs: unzip, debugfs (e2fsprogs), readelf (binutils) or llvm-readelf,
+# sha256sum; simg2img and lpunpack (android-tools) for sparse or super images.
+set -euo pipefail
+
+DEVICE="cheetah"
+
+# Entry points, relative to their partition root.
+VENDOR_BINS=(
+  bin/hw/android.hardware.biometrics.fingerprint-service.goodix
+  bin/hw/android.hardware.gatekeeper-service.trusty
+  bin/hw/android.hardware.security.keymint-service.trusty
+  bin/storageproxyd
+  bin/trusty_apploader
+  bin/vndservicemanager
+)
+VENDOR_FILES=(
+  firmware/g7.app
+  build.prop
+)
+VENDOR_DIRS=(etc/vintf)
+SYSTEM_BINS=(system/bin/servicemanager)
+SYSTEM_FILES=(system/build.prop)
+SYSTEM_DIRS=(system/etc/vintf)
+RUNTIME_APEX="system/apex/com.android.runtime.apex"
+RUNTIME_FILES=(bin/linker64 lib64/bionic/libc.so lib64/bionic/libm.so
+               lib64/bionic/libdl.so lib64/bionic/libdl_android.so)
+
+usage() {
+  cat <<USAGE
+Usage: extract-fingerprint-vendor [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
+
+  SOURCE   Google factory zip (cheetah-*-factory-*.zip) or the
+           image-cheetah-*.zip inside it
+  -o DIR   output directory (default: ./out/fingerprint-vendor)
+  -w DIR   scratch directory for vendor.img and system.img, about 2.5 GB
+           (default: a temp dir in \$TMPDIR)
+  -f       skip the device checks
+
+Install on the phone (from the omandroid repo):
+  tar -C OUTDIR -cf - root MANIFEST SOURCE |
+    tools/phone-ssh 'mkdir -p /usr/lib/omandroid-fp && tar -C /usr/lib/omandroid-fp -xf -'
+USAGE
+}
+
+say() { printf '==> %s\n' "$*"; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null || die "$1 not found ($2)"; }
+
+OUT="./out/fingerprint-vendor" WORK="" FORCE=""
+while getopts "o:w:fh" opt; do
+  case $opt in
+    o) OUT=$OPTARG ;;
+    w) WORK=$OPTARG ;;
+    f) FORCE=1 ;;
+    h) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+done
+shift $((OPTIND - 1))
+[[ $# -eq 1 ]] || { usage >&2; exit 2; }
+SRC=$(readlink -f "$1")
+[[ -f "$SRC" ]] || die "no such file: $1"
+
+need unzip "install unzip"
+need debugfs "install e2fsprogs"
+need sha256sum "install coreutils"
+if command -v readelf >/dev/null; then READELF=readelf
+elif command -v llvm-readelf >/dev/null; then READELF=llvm-readelf
+else die "readelf not found (install binutils or llvm)"; fi
+
+if [[ -n "$WORK" ]]; then
+  mkdir -p "$WORK"
+  WORK=$(mktemp -d "$WORK/xfp.XXXXXX")
+else
+  WORK=$(mktemp -d "${TMPDIR:-/tmp}/xfp.XXXXXX")
+fi
+trap 'rm -rf "$WORK"' EXIT
+
+magic_at() { od -An -tx4 -j "$2" -N4 "$1" | tr -d ' \n'; }
+zip_member() { unzip -Z1 "$1" | grep -E "(^|/)$2\$" | head -1 || true; }
+
+unsparse() {
+  if [[ "$(magic_at "$1" 0)" == ed26ff3a ]]; then
+    need simg2img "install android-tools"
+    simg2img "$1" "$1.raw" && mv "$1.raw" "$1"
+  fi
+}
+
+# Get vendor.img and system.img out of SOURCE into $WORK.
+fetch_images() {
+  local src=$1 m inner part
+  [[ "$(magic_at "$src" 0)" == 04034b50 ]] || die "$(basename "$src") is not a zip"
+  inner=$(zip_member "$src" "image-[^/]*\.zip")
+  if [[ -n "$inner" ]]; then
+    say "Unpacking $inner from the factory zip"
+    unzip -p "$src" "$inner" > "$WORK/image.zip"
+    src="$WORK/image.zip"
+  fi
+  m=$(zip_member "$src" "android-info\.txt")
+  if [[ -n "$m" && -z "$FORCE" ]]; then
+    unzip -p "$src" "$m" | grep -qE "^require board=(.*\|)?$DEVICE(\|.*)?\$" ||
+      die "this image is not for $DEVICE (android-info.txt); use -f to override"
+  fi
+  for part in vendor system; do
+    m=$(zip_member "$src" "$part\.img")
+    if [[ -n "$m" ]]; then
+      say "Unpacking $part.img"
+      unzip -p "$src" "$m" > "$WORK/$part.img"
+      unsparse "$WORK/$part.img"
+      continue
+    fi
+    m=$(zip_member "$src" "super\.img")
+    [[ -n "$m" ]] || die "no $part.img or super.img in $(basename "$src")"
+    need lpunpack "install android-tools"
+    if [[ ! -f "$WORK/super.img" ]]; then
+      say "Unpacking super.img"
+      unzip -p "$src" "$m" > "$WORK/super.img"
+      unsparse "$WORK/super.img"
+    fi
+    mkdir -p "$WORK/super"
+    lpunpack -p "${part}_a" "$WORK/super.img" "$WORK/super" 2>/dev/null ||
+      lpunpack -p "$part" "$WORK/super.img" "$WORK/super"
+    mv "$WORK/super/$part"*.img "$WORK/$part.img"
+  done
+  rm -rf "$WORK/super" "$WORK/super.img" "$WORK/image.zip"
+}
+
+is_ext4() { [[ "$(od -An -tx2 -j 1080 -N2 "$1" | tr -d ' ')" == ef53 ]]; }
+
+# rdump one path ($2, no leading /) from ext4 image $1 into directory $3.
+# Symlinks are kept as symlinks.
+rdump() {
+  mkdir -p "$3"
+  debugfs -R "rdump /$2 $3" "$1" 2>&1 |
+    grep -v -e '^debugfs ' -e 'Operation not permitted while changing ownership' >&2 || true
+}
+
+fetch_images "$SRC"
+for part in vendor system; do
+  is_ext4 "$WORK/$part.img" ||
+    die "$part.img is not ext4 (EROFS images need fsck.erofs --extract; not supported yet)"
+done
+
+# The vendor partition says which device it was built for.
+mkdir -p "$WORK/v"
+debugfs -R "dump /build.prop $WORK/v/build.prop" "$WORK/vendor.img" 2>/dev/null
+[[ -s "$WORK/v/build.prop" ]] || die "vendor.img has no build.prop"
+dev=$(sed -n 's/^ro.product.vendor.device=//p' "$WORK/v/build.prop" | head -1)
+[[ "$dev" == "$DEVICE" || -n "$FORCE" ]] ||
+  die "vendor partition is for '${dev:-unknown}', not $DEVICE; use -f to override"
+fp=$(sed -n 's/^ro.vendor.build.fingerprint=//p' "$WORK/v/build.prop" | head -1)
+say "Vendor partition: $fp"
+
+# Stage whole lib directories and the entry points into $WORK/{v,s,r}, then
+# copy only the closure into the output.
+say "Reading the vendor partition"
+for d in bin lib64 firmware etc; do rdump "$WORK/vendor.img" "$d" "$WORK/v"; done
+say "Reading the system partition"
+mkdir -p "$WORK/s/system"
+for d in bin lib64 etc apex; do
+  [[ $d == apex ]] && { mkdir -p "$WORK/s/system/apex"
+    debugfs -R "dump /system/apex/com.android.runtime.apex $WORK/s/system/apex/com.android.runtime.apex" \
+      "$WORK/system.img" 2>/dev/null; continue; }
+  rdump "$WORK/system.img" "system/$d" "$WORK/s/system"
+done
+debugfs -R "dump /system/build.prop $WORK/s/system/build.prop" "$WORK/system.img" 2>/dev/null
+[[ -s "$WORK/s/$RUNTIME_APEX" ]] || die "no $RUNTIME_APEX in system.img"
+
+say "Reading com.android.runtime"
+unzip -p "$WORK/s/$RUNTIME_APEX" apex_payload.img > "$WORK/runtime.img"
+is_ext4 "$WORK/runtime.img" || die "com.android.runtime payload is not ext4"
+mkdir -p "$WORK/r"
+for d in bin lib64; do rdump "$WORK/runtime.img" "$d" "$WORK/r"; done
+
+# Where a library lives inside the chroot, searching like the chroot's
+# LD_LIBRARY_PATH does: vendor binaries see /vendor first, system binaries
+# /system first; bionic itself always comes from the runtime APEX.
+declare -A PICKED=()
+lib_path() { # $1 soname, $2 vendor|system -> "<stage dir>|<chroot path>"
+  local n=$1 order c
+  case $n in
+    libc.so|libm.so|libdl.so|libdl_android.so)
+      echo "$WORK/r/lib64/bionic/$n|apex/com.android.runtime/lib64/bionic/$n"; return ;;
+  esac
+  if [[ $2 == vendor ]]; then order="v:lib64 v:lib64/hw s:system/lib64"
+  else order="s:system/lib64 v:lib64"; fi
+  for c in $order; do
+    local tree=${c%%:*} dir=${c#*:} prefix
+    [[ $tree == v ]] && prefix=vendor/ || prefix=
+    if [[ -e "$WORK/$tree/$dir/$n" ]]; then
+      echo "$WORK/$tree/$dir/$n|$prefix$dir/$n"; return
+    fi
+  done
+}
+
+# Follow a staged symlink the way it resolves inside the chroot.
+stage_target() {
+  local f=$1 t
+  while [[ -L $f ]]; do
+    t=$(readlink "$f")
+    case $t in
+      /apex/com.android.runtime/*) f="$WORK/r/${t#/apex/com.android.runtime/}" ;;
+      /system/*) f="$WORK/s$t" ;;
+      /vendor/*) f="$WORK/v/${t#/vendor/}" ;;
+      /*) die "$f points outside the chroot: $t" ;;
+      *) f="$(dirname "$f")/$t" ;;
+    esac
+  done
+  echo "$f"
+}
+
+needed() { "$READELF" -d "$1" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'; }
+
+missing=()
+walk() { # $1 file on disk, $2 vendor|system
+  local n hit src dst
+  while read -r n; do
+    [[ -n $n ]] || continue
+    [[ -n "${PICKED[$2:$n]:-}" ]] && continue
+    hit=$(lib_path "$n" "$2")
+    if [[ -z $hit ]]; then missing+=("$n"); PICKED[$2:$n]=missing; continue; fi
+    PICKED[$2:$n]=${hit#*|}
+    src=${hit%%|*}
+    walk "$(stage_target "$src")" "$2"
+  done < <(needed "$1")
+}
+
+for b in "${VENDOR_BINS[@]}"; do
+  [[ -f "$WORK/v/$b" ]] || die "/vendor/$b is missing from this image"
+  walk "$WORK/v/$b" vendor
+done
+for b in "${SYSTEM_BINS[@]}"; do
+  [[ -f "$WORK/s/$b" ]] || die "/$b is missing from this image"
+  walk "$WORK/s/$b" system
+done
+((${#missing[@]} == 0)) || die "unresolved libraries: ${missing[*]}"
+
+# Copy into the output tree. A library picked through a symlink into the
+# runtime APEX (system/lib64/libc.so -> /apex/...) keeps the symlink.
+root="$OUT/root"
+rm -rf "$root"; mkdir -p "$root"
+put() { # $1 source on disk, $2 path in chroot
+  mkdir -p "$root/$(dirname "$2")"
+  if [[ -L "$1" ]]; then cp -P "$1" "$root/$2"; else cp "$1" "$root/$2"; fi
+}
+for b in "${VENDOR_BINS[@]}" "${VENDOR_FILES[@]}"; do put "$WORK/v/$b" "vendor/$b"; done
+for d in "${VENDOR_DIRS[@]}"; do mkdir -p "$root/vendor/$d"; cp -a "$WORK/v/$d/." "$root/vendor/$d/"; done
+for b in "${SYSTEM_BINS[@]}" "${SYSTEM_FILES[@]}"; do put "$WORK/s/$b" "$b"; done
+for d in "${SYSTEM_DIRS[@]}"; do mkdir -p "$root/$d"; cp -a "$WORK/s/$d/." "$root/$d/"; done
+for f in "${RUNTIME_FILES[@]}"; do put "$WORK/r/$f" "apex/com.android.runtime/$f"; done
+mkdir -p "$root/system/bin"
+ln -sfn /apex/com.android.runtime/bin/linker64 "$root/system/bin/linker64"
+for key in "${!PICKED[@]}"; do
+  dst=${PICKED[$key]}
+  [[ $dst == apex/* || -e "$root/$dst" || -L "$root/$dst" ]] && continue
+  case $dst in
+    vendor/*) put "$WORK/v/${dst#vendor/}" "$dst" ;;
+    *)        put "$WORK/s/$dst" "$dst" ;;
+  esac
+done
+# /system/lib64 also needs the bionic symlinks for system binaries.
+for n in libc.so libm.so libdl.so libdl_android.so; do
+  ln -sfn "/apex/com.android.runtime/lib64/bionic/$n" "$root/system/lib64/$n"
+done
+chmod -R u+w,go-w "$root"
+
+# Every symlink must resolve inside the chroot.
+while read -r l; do
+  t=$(readlink "$l")
+  [[ $t == /* ]] && t="$root$t" || t="$(dirname "$l")/$t"
+  [[ -e "$t" ]] || die "dangling symlink in the chroot: ${l#"$root"/} -> $(readlink "$l")"
+done < <(find "$root" -type l)
+
+# Sanity checks: the TA is a signed Trusty app; the HAL is the Goodix one.
+head -c 64 "$root/vendor/firmware/g7.app" | grep -aq TrustyApp ||
+  die "g7.app does not look like a Trusty application package"
+grep -aq 'g7_trusty' "$root/vendor/bin/hw/android.hardware.biometrics.fingerprint-service.goodix" ||
+  die "the fingerprint HAL is not the Goodix G7 one"
+
+(cd "$root" && find . -type f -printf '%m %P\n' | sort -k2 |
+  while read -r mode path; do
+    printf '%s %s %s\n' "$(sha256sum "$path" | cut -d' ' -f1)" "$mode" "$path"
+  done) > "$OUT/MANIFEST"
+echo "$fp" > "$OUT/SOURCE"
+
+say "$(wc -l < "$OUT/MANIFEST") files, $(du -sh "$root" | cut -f1), in $root"
+say "Source: $fp"
+echo "These are Google's proprietary binaries from your own factory image. Do not redistribute them."

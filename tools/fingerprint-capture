@@ -1,0 +1,152 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# fingerprint-capture: run one fingerprint bring-up step on the phone and keep
+# every kernel line on the laptop, even if the phone hangs.
+#
+# As tools/wifi-w1-capture: a first SSH connection streams /dev/kmsg into
+# logs/fingerprint-<time>-<step>.log BEFORE a second one runs the step, so
+# the last line written before a hang is already on the laptop.
+#
+# Usage:
+#   tools/fingerprint-capture [--watchdog] [--wait SECS] STEP
+#   tools/fingerprint-capture --pstore        after a watchdog reset
+#
+# STEP (device/cheetah/FINGERPRINT-RESEARCH.md, section 7):
+#   trusty-core   modprobe trusty_core (first calls into the secure world)
+#   trusty-log    modprobe trusty_log (/dev/trusty-log0)
+#   trusty-ipc    modprobe trusty_ipc, then trusty_virtio (/dev/trusty-ipc-dev0)
+#   hotplug       try to take CPU 7 offline: must be refused (EBUSY)
+#   sg            modprobe sg; show which node is the RPMB well-known LUN
+#   goodix        modprobe goodix_fp (reset and IRQ lines, supply if any)
+#
+# --watchdog arms the s3c2410 watchdog with a feeder loop on the phone, so a
+# full hang resets the phone by itself (warm, pstore keeps the console).
+
+set -uo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+SSH="$ROOT/tools/phone-ssh"
+LOGDIR="$ROOT/logs"
+
+watchdog=0 wait_s=20 step= pstore=0
+
+usage() { sed -n '/^# Usage:/,/^# full hang/p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
+warn() { printf '\e[33m==> %s\e[0m\n' "$*"; }
+die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
+
+while (($#)); do
+  case "$1" in
+    --watchdog) watchdog=1 ;;
+    --wait) wait_s="${2:?}"; shift ;;
+    --pstore) pstore=1 ;;
+    -h|--help) usage ;;
+    trusty-core|trusty-log|trusty-ipc|hotplug|sg|goodix) step="$1" ;;
+    *) usage 1 ;;
+  esac
+  shift
+done
+
+mkdir -p "$LOGDIR"
+stamp=$(date +%Y%m%d-%H%M%S)
+phone() { timeout 15 "$SSH" -o ServerAliveInterval=2 -o ServerAliveCountMax=3 "$@"; }
+
+if ((pstore)); then
+  out="$LOGDIR/fingerprint-pstore-$stamp"
+  mkdir -p "$out"
+  phone 'ls -l /sys/fs/pstore/' || die "phone not reachable"
+  for f in $(phone 'ls /sys/fs/pstore/'); do phone "cat /sys/fs/pstore/$f" > "$out/$f"; done
+  say "saved to $out"
+  grep -h -i 'trusty\|goodix' "$out"/console-* 2>/dev/null | tail -20
+  exit 0
+fi
+[[ -n "$step" ]] || usage 1
+
+# What each step runs on the phone, and the log line that ends it.
+case $step in
+  trusty-core)
+    pre='test -d /sys/firmware/devicetree/base/trusty && grep -q okay /sys/firmware/devicetree/base/trusty/status'
+    cmd='modprobe trusty_core dyndbg=+p'
+    done_re='selected api version|trusty.*(failed|error)' ;;
+  trusty-log)
+    pre='lsmod | grep -q ^trusty_core'
+    cmd='modprobe trusty_log && ls -l /dev/trusty-log0'
+    done_re='trusty-log0 registered|trusty-log.*(failed|error)' ;;
+  trusty-ipc)
+    pre='lsmod | grep -q ^trusty_core'
+    cmd='modprobe trusty_ipc && modprobe trusty_virtio && sleep 1 && ls -l /dev/trusty-ipc-dev0'
+    done_re='is online|trusty.*virtio.*(failed|error)' ;;
+  hotplug)
+    pre='lsmod | grep -q ^trusty_core'
+    cmd='echo 0 > /sys/devices/system/cpu/cpu7/online; echo exit=$?; cat /sys/devices/system/cpu/online'
+    done_re='refusing to take cpu' ;;
+  sg)
+    pre='true'
+    cmd='modprobe sg && for d in /sys/class/scsi_generic/sg*; do echo "${d##*/} $(basename $(readlink -f $d/device))"; done'
+    done_re='Attached scsi generic' ;;
+  goodix)
+    pre='test -c /dev/trusty-ipc-dev0 && grep -q okay /sys/firmware/devicetree/base/fingerprint/status'
+    cmd='modprobe goodix_fp && ls -l /dev/goodix_fp && grep -i goodix /proc/interrupts'
+    done_re='goodix-fp.*(irq|failed|error)' ;;
+esac
+
+log="$LOGDIR/fingerprint-$stamp-$step.log"
+say "phone check"
+phone 'uname -r' || die "phone not reachable over $SSH"
+phone "$pre" || die "precondition for '$step' not met on the phone: $pre"
+
+say "streaming the phone's kernel log to $log"
+{
+  echo "# fingerprint-capture $stamp step=$step watchdog=$watchdog"
+  "$SSH" -T -o ServerAliveInterval=1 -o ServerAliveCountMax=5 'exec cat /dev/kmsg' 2>&1 |
+  while IFS= read -r line; do printf '%s %s\n' "$(date +%T.%3N)" "$line"; done
+  echo "# $(date +%T.%3N) log stream ended (connection closed or phone gone)"
+} >> "$log" &
+logger=$!
+trap 'kill $logger 2>/dev/null' EXIT
+sleep 2
+phone "dmesg -n 8; echo 'fingerprint-capture: start $step' > /dev/kmsg" || die "phone stopped answering before the step"
+
+if ((watchdog)); then
+  say "arming the hardware watchdog (feeder every 2 s)"
+  phone 'nohup sh -c "exec 3>/dev/watchdog0
+    trap \"printf V >&3; exit 0\" TERM
+    while :; do printf k >&3; sleep 2; done" >/dev/null 2>&1 &
+    echo $! > /run/fingerprint-wd.pid' || warn "could not arm the watchdog"
+fi
+
+say "running: $cmd"
+start=$(date +%s)
+phone "$cmd" 2>&1 | tee -a "$log" &
+step_pid=$!
+
+since_start() { sed -n "/fingerprint-capture: start $step/,\$p" "$log"; }
+result=
+while (( $(date +%s) - start < wait_s )); do
+  sleep 1
+  if since_start | grep -Eq "$done_re"; then result=done; break; fi
+done
+wait "$step_pid" 2>/dev/null
+sleep 2
+
+if phone true; then
+  say "phone alive"
+  if ((watchdog)); then
+    phone 'kill $(cat /run/fingerprint-wd.pid) && rm /run/fingerprint-wd.pid' ||
+      warn "could not stop the watchdog feeder: the phone resets in about 15 s unless /dev/watchdog0 is fed"
+  fi
+else
+  warn "PHONE NOT ANSWERING: the last kernel lines that reached the laptop are below."
+  if ((watchdog)); then warn "Wait about 15 s for the watchdog reset; after boot run: $0 --pstore"
+  else warn "Recover by holding Power about 30 s (a cold reset; pstore will be empty)."; fi
+fi
+
+sleep 1
+kill "$logger" 2>/dev/null
+trap - EXIT
+echo
+say "summary ($log)"
+since_start | grep -E -i 'trusty|goodix|scsi generic|cpu|fingerprint-capture' |
+  sed -E 's/^([0-9:.]+) [0-9]+,[0-9]+,[0-9]+,[^;]*;/\1 /' | tail -25
+[[ -n "$result" ]] || warn "no end marker seen within ${wait_s}s"
