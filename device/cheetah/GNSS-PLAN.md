@@ -1102,6 +1102,27 @@ for the LTO download):
 - Pass: `g4b-1` inactive, receiver no, chip powered no; a fix; at least
   two constellations used.
 
+**Steps 2-3 result (2026-10-13, 7.3.0-rc6-omandroid-push1-00375-gc73a652bd07a,
+omandroid-gnss 0.2.0): passed.** Daylight, outdoors, still; the LTO file
+was current (downloaded over Wi-Fi) and the system time injected. The
+capture started indoors and the phone was carried out, so the TTFF is an
+upper bound.
+- **First fix:** 148.5 s after start (GGA quality 1).
+- **In view (strong ≥ 30 dB-Hz):** BeiDou 13 (9), GLONASS 9 (6), GPS 10
+  (7), Galileo 10 (7); max C/N0 42-47 dB-Hz.
+- **Used (max per epoch):** GPS 15, Galileo 6, a multi-constellation
+  solution of 12. BeiDou and QZSS showed none used.
+- **Accuracy:** HDOP median 0.4 (best 0.3, 56 fixes). The last 28 fixes
+  scattered 3.9 m median and 6.2 m at 95 % around their mean.
+- **Power:** gpsd's estimate is 39.0 mA.
+
+**G5-2 (GeoClue) passed the same day.** `where-am-i` run as the desktop
+user (not root: GeoClue waits for the caller's agent) connected to the
+bridge ("client connected (1)"). Indoors it reported only a 25 km fallback
+position. GNOME Maps, installed from Arch Linux ARM, showed the user's
+position outdoors from the GPS. Chromium's web geolocation does not use
+GeoClue on Linux, so web maps can't locate: use GNOME Maps.
+
 **Step 4 (optional, each a separate run of steps 2-3, 3-5 min):**
 - **Hot start:** right after step 2, again outdoors. Expect a fix within
   seconds if gpsd kept its state (7.3).
