@@ -19,7 +19,8 @@
  *  - binder: no LSM provides security contexts, so a binder node that asks
  *    for its callers' context (FLAT_BINDER_FLAG_TXN_SECURITY_CTX) would fail
  *    every transaction. The context manager falls back to the plain ioctl,
- *    and nodes never ask.
+ *    and nodes never ask. Callers' contexts then come back NULL, so
+ *    IPCThreadState::getCallingSid() answers the fixed context too.
  *  - services that do not exist here (power, sensors, stats, vold, thermal,
  *    suspend, the Pixel display HAL): lookups return nothing at once
  *    instead of waiting several seconds each (OMANDROID_FP_NO_SERVICES adds
@@ -499,6 +500,28 @@ EXPORT int ioctl(int fd, int request, ...)
 	if (!real_ioctl)
 		real_ioctl = (ioctl_fn)dlsym(RTLD_NEXT, "ioctl");
 	return real_ioctl(fd, request, arg);
+}
+
+/*
+ * android::IPCThreadState::getCallingSid() const. With no context in the
+ * transaction it returns NULL, and the vendor service manager, inside a
+ * synchronous call, aborts ("Did not get context from PID ...") instead of
+ * asking getpidcon(). Answer with the same fixed context getpidcon() gives;
+ * a real context, if one ever arrives, still wins.
+ */
+typedef const char *(*calling_sid_fn)(const void *self);
+
+EXPORT const char *_ZNK7android14IPCThreadState13getCallingSidEv(const void *self)
+{
+	static calling_sid_fn real_calling_sid;
+	const char *sid = NULL;
+
+	if (!real_calling_sid)
+		real_calling_sid = (calling_sid_fn)dlsym(RTLD_NEXT,
+			"_ZNK7android14IPCThreadState13getCallingSidEv");
+	if (real_calling_sid)
+		sid = real_calling_sid(self);
+	return sid ? sid : FIXED_CONTEXT;
 }
 
 struct AIBinder;
