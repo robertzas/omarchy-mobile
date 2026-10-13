@@ -135,7 +135,7 @@ Findings that shaped these (from the vendor binaries and our captures):
 | Item | Risk | Notes |
 |---|---|---|
 | **Secure storage (F4)** | **Irreversible**, human decision | The first `storageproxyd` run writes the RPMB (write counter, super blocks). Stock's TD state is already gone with the old userdata; TP/TDP are reused. Decide TDP before F4 (section 5) |
-| TA load (F5) | Medium | Depends on F4. Fails silently if storage is not up (the loader waits 60 s). dma heap now handled |
+| TA load (F5) | Medium | Depends on F4. Fails silently if storage is not up (the loader waits 60 s). dma heap handled; the memref oops of the first run is fixed in `b9af5fe2d` |
 | Sensor power (F6) | Low-medium | LDO15S over ACPM like the GNSS rails. Its voltage at hand-off is unknown: FB2 reads it before any kernel change |
 | HAL dependencies (F6c) | Medium | Absent services are short-circuited by the shim; KeyMint wants version and patch-level properties (system and vendor `build.prop` give them); `mfg_data` is a read-only copy. Expect one or two shim/props iterations |
 | LHBM (F7) | Medium | No TE-aligned trigger and no peak-refresh switch yet (Google's driver does both); int can now switch 60/120 Hz, so F7 tries 60 Hz first, then 120 Hz. Stop on flicker or a wrong circle |
@@ -377,6 +377,55 @@ the `goodix` port `open`. **Stop** on a 60 s timeout (storage not up) or a
 policy failure in Trusty's log. Rollback: stop the unit; the app stays
 loaded until reboot (harmless).
 
+#### F5 first run (2026-10-13): kernel oops in the memref path; fixed, re-run
+
+The first F5 (on int `7.3.0-rc6-omandroid-push1-00395-g6c0e876bd580`, after
+F4 passed) oopsed in the kernel as soon as `trusty_apploader` sent `g7.app`:
+a level 1 translation fault at `ffff801000000000` in
+`dcache_clean_poc_nosync`, called from `dma_direct_map_sg` <-
+`trusty_transfer_memory` <- `tipc_ioctl`. The heap was not the problem:
+the loader allocates from `/dev/dma_heap/system` (ordinary linear-mapped
+pages). The Trusty driver mapped the dma-buf twice: once properly, through
+the attachment, and then again with `dma_map_sg()` on the table it got back.
+The second mapping reads the table's struct pages, which an importer must
+not use, and our config has `CONFIG_DMABUF_DEBUG=y` (the default with
+`DEBUG_KERNEL`): the dma-buf core then hands importers a copy of the table
+with only DMA addresses and NULL pages. A NULL page became a physical
+address far outside RAM (`0x801080000000`), and the cache clean for it
+faulted. Google's 6.1 kernel builds without that check, which is why the
+same code works on stock.
+
+Fix: `omandroid-fingerprint` `b9af5fe2d` "trusty: share a dma-buf by its
+attachment's DMA addresses". The memref path now shares the attachment's
+DMA addresses (dma-direct, no offset, so they are the physical addresses
+FF-A wants) and no longer maps a second time; new
+`trusty_transfer_mapped_memory()`/`trusty_reclaim_mapped_memory()`, other
+callers unchanged. Built in `out-fingerprint`
+(`7.3.0-rc6-omandroid-push1-00296-gb9af5fe2d95d`), W=1 clean for
+`drivers/trusty`, checkpatch clean apart from the Signed-off-by the human
+adds; `git merge-tree` against `omandroid-int` is clean.
+
+**F5 re-run** (after the human merges `omandroid-fingerprint` into int,
+builds int and pushes it; one boot; risk low). Storage must come up first,
+as in F4; the TDP choice and the RPMB state are unchanged:
+
+```sh
+tools/phone-ssh 'uname -r; grep -c trusty_transfer_mapped_memory /proc/kallsyms'
+tools/phone-ssh 'systemd-run --unit=omandroid-fp-stage -p KillMode=control-group /usr/lib/omandroid-fp/omandroid-fp-chroot start apploader'
+tools/phone-ssh 'sleep 5; journalctl -u omandroid-fp-stage -b --no-pager | grep -E "g7|apploader|storage" | tail; dmesg | grep -E "trusty|Unable to handle|Internal error" | tail -20'
+tools/phone-ssh 'python3 - goodix' < packages/omandroid-fingerprint/lib/omandroid-tipc-probe
+```
+
+Expect: the new release, a non-zero `kallsyms` count (`trusty_core`
+loaded with the fix), "loading g7.app" then "g7.app loaded" within seconds,
+no oops, the `goodix` port `open`, and Trusty's log showing the app
+starting. **Stop** on any oops (collect `dmesg` and `--pstore`), on
+`trusty_transfer_memory`/`SMC_FC_FFA_MEM_SHARE failed` errors (Trusty
+refused the share: note r1/r2), or on a 60 s loader timeout (storage not
+up). Rollback: `systemctl stop omandroid-fp-stage`; the app stays loaded
+until reboot. The old int kernel must not run F5 again: it oopses the same
+way (a reboot recovers; nothing is written).
+
 ### F6: sensor power and the HAL
 
 F6a (boot with the sensor node; `goodix_fp` stays blacklisted, so nothing
@@ -494,3 +543,4 @@ falls back to the PIN. Rollback: `rm /etc/pam.d/omarchy-lock-fingerprint`,
 | Step | Date | `uname -r` | Result |
 |---|---|---|---|
 | F0 offline | 2026-10-12 | (build) `…-00295-g1e5a4a7011b6` | kernel, modules, images, W=1, dt-validate, bridge and shim build, package and libfprint tests pass |
+| F5 | 2026-10-13 | `7.3.0-rc6-omandroid-push1-00395-g6c0e876bd580` | **Oops**: `trusty_transfer_memory` re-mapped the dma-buf's importer table, whose pages `CONFIG_DMABUF_DEBUG` hides; cache clean at a bogus address. Fixed in `b9af5fe2d` (section 6, F5 first run); re-run pending |
