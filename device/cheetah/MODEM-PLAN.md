@@ -12,8 +12,9 @@ CP boot) and M4 (registration, SMS, data, voice) below. Next on the phone:
 M3.4, held for the human. Section 6.3 lists what our CPIF port still lacks
 for data and suspend.
 Kernel branch `omandroid-modem` in `~/android/mainline/wt-modem` (head
-`781b9c3d8`), build in `~/android/mainline/out-modem` (last full build
-`7.3.0-rc6-omandroid-push1-00349-g781b9c3d8523`, `logs/kernel-modem7.log`).
+`23e3d01c4`, section 6.3), build in `~/android/mainline/out-modem` (last
+full build `7.3.0-rc6-omandroid-push1-00356-g23e3d01c4543`,
+`logs/kernel-modem8.log`).
 Everything new is disabled by default. RADIOS-CAMERA-PLAN.md section 1 is
 the survey this follows.
 
@@ -868,7 +869,8 @@ tools/phone-ssh 'systemd-run --unit=x-modem-off --on-active=90 sh -c "C=/sys/ker
 tools/phone-ssh 'C=/sys/kernel/debug/gs201-pcie-cp/ctl; echo cp_on > $C; sleep 0.2; echo link_up > $C &&
   echo atu > $C && echo id > $C && echo bus > $C; dmesg | grep -E "pcie-cp|11920000|pcieport|144d" | tail -20;
   cat /sys/kernel/debug/gs201-pcie-cp/status | grep -E "LTSSM|faults"'
-#   pass: "link up: Gen1 x1"; "MSI: 160 vectors, target 0x00000000f6200000";
+#   pass: "link up: Gen1 x1"; "MSI: 160 vectors, target 0x00000000f6200000"
+#   (from `000a39ed3`: "MSI: 32 vectors, target 0x00000000f6200000, 4 queue blocks");
 #   "<dom>:00:00.0 144d:ecec class 060400" and "<dom>:01:00.0 144d:a5a5 class ..." (dom 0001 or the next free);
 #   M3.2 head: "faults: 0x0, ctrl irq on", LTSSM 0x11
 
@@ -1057,7 +1059,10 @@ going up, or a handler pass while the modem is up and not changing power.
    the modem idles), or the human waives it.
 2. Kernel: int with `omandroid-modem` at `781b9c3d8` or later, built, the
    modules tarball pushed with the images; overlay `modem-cpif-test`
-   (M3.3-B passed on it).
+   (M3.3-B passed on it). With `23e3d01c4` (section 6.3) and the
+   2026-10-13 config fragment: the channel extension is on, the packet
+   processor is built but stays off without `modem-cpif-pktproc`, and the
+   link waits for training to end after the first L0.
 3. The modem chroot image, from the user's own factory image, **re-run
    with the 2026-10-13 tool** (it adds the shell and toybox), never
    committed: `tools/extract-vendor-chroot -p modem -o
@@ -1149,7 +1154,8 @@ tools/phone-ssh 'dmesg | grep -c ufshcd_err_handler; systemctl start --no-block 
 #   pass: state ONLINE; the marker file is gone; "faults: 0x0"; err_handler count unchanged
 #     (power-on and a running link were clean in M2.5); rfsd logs NV file requests (names only)
 #   record: Gen/width of the main link, the time from POWER_ON to ONLINE, cbd's last lines,
-#     the "capability part:0 AP:0x..." line (section 6.3: no pktproc, no channel extension)
+#     the "capability part:0 AP:0x..." line (from `907f73727` with CONFIG_CH_EXTENSION:
+#     0x00000002; 0x00000003 with modem-cpif-pktproc, the uplink processor; section 6.3)
 tools/phone-ssh 'systemctl stop x-modem-deadman.timer'     # only once ONLINE was seen
 #   stop (record, then reboot-to omandroid; expect one UFS pass at the power-off):
 #   - an Oops, a panic line, the watchdog;
@@ -1401,25 +1407,51 @@ our kernel still lacks.
 3. rfsd forces a CP crash right after the NV requests: the checksum check
    should have caught it; read rfsd's log for the file name.
 4. BOOTING, then nothing at the INIT handshake: the AP capability word
-   without pktproc (open question 7): port pktproc (6.3) before trying again.
+   without pktproc (open question 7): boot again with
+   `modem-cpif-pktproc` after `modem-cpif-test` (stock's packet
+   processor, 6.3; needs the 2026-10-13 config fragment).
 5. A shell or tar error from cbd: the chroot image predates the 2026-10-13
    tool; re-extract.
 
-### 6.3 Kernel: their CPIF and PCIe port against `omandroid-modem` (report only)
+### 6.3 Kernel: their CPIF and PCIe port against `omandroid-modem`
 
 Their port is the same Google CPIF (CPIF-20220408R1, from a public mirror
 of Google's gs201 kernel) in nine patches, on their own channel-0 PCIe host
-that exports the `exynos_pcie_*` API, separated MSI included. Our branch was
-not changed; what it lacks, by when it matters:
+that exports the `exynos_pcie_*` API, separated MSI included. What ours
+lacked, by when it matters, and its status.
+
+**2026-10-13, offline (`omandroid-modem` `907f73727`..`23e3d01c4`, built
+`7.3.0-rc6-omandroid-push1-00356-g23e3d01c4543`, `logs/kernel-modem8.log`;
+`W=1` clean on the touched objects, checkpatch clean apart from Google's
+own style; nothing run on the phone):**
+
+| Commit | What |
+|---|---|
+| `907f73727` soc: google: cpif: add the channel extension option | `CONFIG_CH_EXTENSION` (default y with CPIF) |
+| `3bb1b619d` soc: google: cpif: import Google's packet processor | `link_rx_pktproc.c`, `link_tx_pktproc.c` from `CP/`, unchanged, not built |
+| `000a39ed3` PCI: dwc: gs201-cp: give MSI blocks 1-4 to the modem's packet queues | DWC MSI domain = block 0 (32 vectors); `msi1`..`msi4` are the queues', `gs201_pcie_cp_register_queue()`, re-armed at every link_up |
+| `27a9eb4e9` soc: google: cpif: port the packet processor | `CONFIG_CP_PKTPROC`, `CONFIG_CP_PKTPROC_UL` (default n), `CONFIG_LINK_DEVICE_PCIE_IOCC` (y); memremap of the no-map regions, DT range checks, no panics; **runtime switch:** used only when the cpif node has `pktproc_dl_support`/`pktproc_ul_support` |
+| `db2aaa156` soc: google: cpif: give the packet queues their own MSI blocks | `register_separated_msi_vector()` mapped; each exclusive queue's handler run once after every PCIe power-on (the ring check) |
+| `1ae88f591` PCI: dwc: gs201-cp: wait for the link to settle before using it | after 3 ms, up to 48 ms for L0..L1_IDLE with training over; below the target speed retried, kept on the last try |
+| `23e3d01c4` soc: google: cpif: add the uplink priority queue option | `CONFIG_MODEM_IF_QOS` (default n): TCP ACKs on the high-priority UL queue |
+
+Config fragment (uncommitted in this repo, 2026-10-13):
+`CONFIG_CH_EXTENSION=y`, `CONFIG_CP_PKTPROC=y`, `CONFIG_CP_PKTPROC_UL=y`,
+`CONFIG_MODEM_IF_QOS=y`. Overlay (uncommitted):
+`device/cheetah/overlays/modem-cpif-pktproc.dtso`, stock's 33 `pktproc_*`
+properties, applied after `modem-cpif-test`. Without that overlay the
+packet processor code is built but idle: the AP capability word is
+`0x2` (channel extension only) and data uses the legacy buffers, as
+before. With it: `0x3`, four DL queues on MSI blocks 1-4, two UL queues.
 
 | Missing in ours | Needed for | Detail |
 |---|---|---|
-| `CONFIG_CH_EXTENSION` (no Kconfig symbol in our port) | **M4 data** | Stock's `pantah_defconfig` and the working stack both enable it. Our `modem-cpif-test` overlay copies stock's iodevs, whose rmnet channels are the extended ones (`iod,ch = <0xb5>`: 181 = `SIPC_CH_EX_ID_PDP_0`, 30 channels). Without it `sipc_ps_ch()` covers only 10-24 and the AP doesn't advertise `AP_CAP_0_CH_EXTENSION`, so PS traffic on 181+ isn't handled as rmnet data: registration and SIT can work while rmnet0 carries nothing. Add the symbol (default y with `EXYNOS_MODEM_IF`) and build it in |
-| `CONFIG_CP_PKTPROC`, `CONFIG_CP_PKTPROC_UL`, `CONFIG_CPIF_PAGE_RECYCLING`; separated MSI for the queues | possibly M3.4 (open question 7); data throughput | The working stack runs 4 DL and 2 UL queues. Their exclusive interrupts need `register_separated_msi_vector()` (ours returns -EOPNOTSUPP), MSI blocks 1-4 on SPI 389-392. Their host also re-checks each pktproc receive ring after the link wakes (descriptors survive a link power collapse, the MSI can be lost in the retrain) |
-| `CONFIG_MODEM_IF_QOS` | later | priority queue for rmnet (stock: m) |
-| Suspend refusal propagated | suspend with the modem on | their patch makes `modem_suspend()` return the S5100 suspend hook's error, so the AP does not sleep while CP2AP_WAKEUP is asserted; Google's code (and ours) drops it |
+| `CONFIG_CH_EXTENSION` (no Kconfig symbol in our port). **Done, `907f73727`** | **M4 data** | Stock's `pantah_defconfig` and the working stack both enable it. Our `modem-cpif-test` overlay copies stock's iodevs, whose rmnet channels are the extended ones (`iod,ch = <0xb5>`: 181 = `SIPC_CH_EX_ID_PDP_0`, 30 channels). Without it `sipc_ps_ch()` covers only 10-24 and the AP doesn't advertise `AP_CAP_0_CH_EXTENSION`, so PS traffic on 181+ isn't handled as rmnet data: registration and SIT can work while rmnet0 carries nothing. Add the symbol (default y with `EXYNOS_MODEM_IF`) and build it in |
+| `CONFIG_CP_PKTPROC`, `CONFIG_CP_PKTPROC_UL`, `CONFIG_CPIF_PAGE_RECYCLING`; separated MSI for the queues. **Done, `27a9eb4e9`, `000a39ed3`, `db2aaa156`; untested on hardware; behind `modem-cpif-pktproc`.** Page recycling not ported: only the CPIF IOMMU's buffer manager uses it (their build doesn't load it either) | possibly M3.4 (open question 7); data throughput | The working stack runs 4 DL and 2 UL queues. Their exclusive interrupts need `register_separated_msi_vector()` (ours returns -EOPNOTSUPP), MSI blocks 1-4 on SPI 389-392. Their host also re-checks each pktproc receive ring after the link wakes (descriptors survive a link power collapse, the MSI can be lost in the retrain) |
+| `CONFIG_MODEM_IF_QOS`. **Done, `23e3d01c4`** (needs the UL processor) | later | priority queue for rmnet (stock: m) |
+| Suspend refusal propagated. **Already in ours:** Google's gs-6.1 `modem_suspend()` (what we imported) returns `suspend_cp()`'s -EBUSY; their patch fixes the older gs201 tree they started from. Nothing to change | suspend with the modem on | their patch makes `modem_suspend()` return the S5100 suspend hook's error, so the AP does not sleep while CP2AP_WAKEUP is asserted; that older tree drops it, gs-6.1 (and ours, `L/drivers/soc/google/cpif/modem_main.c` `modem_suspend()`) does not |
 | Pull on cp2ap-wakeup (gpa8-3) | M3.4 and suspend | keep the bootloader's pull-up (M0.3 found `PUD` 0x3); stock's pull-down lost the ROM's wake signal on this phone model. Our port takes no pin states, so nothing to change; don't add them (2.1) |
-| Link settle check | M3.4 (low) | after the first L0 the link can report a transient Gen1 while it retrains: their host waits 2.8-3 ms and checks the requested speed, the training bit and L0 again before touching the endpoint. Ours waits 3 ms and logs the speed but doesn't re-check L0 or the training bit |
+| Link settle check. **Done, `1ae88f591`** | M3.4 (low) | after the first L0 the link can report a transient Gen1 while it retrains: their host waits 2.8-3 ms and checks the requested speed, the training bit and L0 again before touching the endpoint. Ours waits 3 ms and logs the speed but doesn't re-check L0 or the training bit |
 | ROM link speed | M3.4 (check) | the PCI core must leave the ROM link's Gen1 target alone; their config ops keep it even if generic link recovery tries to raise it. M3.1 bound `pcieport` services (bandwidth notification included) on our root port: watch for a retrain in the M3.4 kmsg |
 | PME without L2 | link power-off | a ROM or BL link sometimes acknowledged PME_Turn_Off without entering L2; ours logs "no L2 idle" and goes on, which is the right behaviour |
 
