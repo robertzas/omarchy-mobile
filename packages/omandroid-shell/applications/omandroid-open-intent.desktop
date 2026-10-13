@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Android link handler
-Comment=Open Android intent links in the browser
+Comment=Ignore Android intent links (no app to hand off to)
 Exec=omandroid-open-intent %u
 MimeType=x-scheme-handler/intent;
 NoDisplay=true
