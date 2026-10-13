@@ -1,0 +1,25 @@
+--- a/plugins/nfctype4.c
++++ b/plugins/nfctype4.c
+@@ -381,6 +381,22 @@
+ 
+ 	data_length = near_get_be16(resp + NFC_STATUS_BYTE_LEN);
+ 
++	/*
++	 * A formatted tag with an empty NDEF file (NLEN 0) holds no message.
++	 * near_tag_add_data() can't allocate zero bytes and fails with
++	 * -ENOMEM, which dropped the tag. Publish it with no records instead,
++	 * and keep it marked formatted so a write goes straight to the NDEF
++	 * file rather than through format.
++	 */
++	if (data_length == 0) {
++		DBG("Empty NDEF file");
++		near_tag_set_blank(tag, FALSE);
++		near_tag_set_ro(tag, cookie->write_access == T4_READ_ONLY);
++		near_tag_add_records(tag, NULL, cookie->cb, 0);
++
++		return t4_cookie_release(0, cookie);
++	}
++
+ 	/* Add data to the tag */
+ 	err = near_tag_add_data(cookie->adapter_idx, cookie->target_idx, NULL,
+ 				data_length);

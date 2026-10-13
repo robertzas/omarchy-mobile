@@ -8,11 +8,14 @@
 #    kernel's NFC netlink API directly; the N2/N3 stages use them.
 #  - no --enable-ese: the ST54J's secure element is never driven from Linux.
 #  - neard.service is installed but not enabled: start it by hand.
+#  - 0001: a formatted Type 4 tag with an empty NDEF file was dropped
+#    (-ENOMEM from a zero-byte allocation), so blank cards could be neither
+#    seen nor written. The patch publishes them with no records.
 #  - never use `nfctool -w` (firmware download) on this phone.
 
 pkgname=neard
 pkgver=0.20
-pkgrel=1
+pkgrel=2
 pkgdesc='Near Field Communication manager, with nfctool'
 arch=(aarch64)
 url='https://github.com/linux-nfc/neard'
@@ -20,11 +23,14 @@ license=(GPL-2.0-only)
 depends=(dbus glib2 glibc libnl)
 makedepends=(autoconf autoconf-archive automake libtool)
 backup=(etc/neard/main.conf)
-source=("$pkgname-$pkgver.tar.gz::https://github.com/linux-nfc/neard/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('2b3c12e7ce77901a649237ea044d9af5b4df54c0cbeed5036b5342dbc89dc3fd')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/linux-nfc/neard/archive/refs/tags/v$pkgver.tar.gz"
+        0001-nfctype4-publish-empty-ndef-tags.patch)
+sha256sums=('2b3c12e7ce77901a649237ea044d9af5b4df54c0cbeed5036b5342dbc89dc3fd'
+            'bb5a446d11d2ec95515d44336aad55b8a7636d8e6e09ef6c23a6a4b2761040e1')
 
 prepare() {
   cd "$pkgname-$pkgver"
+  patch -Np1 -i ../0001-nfctype4-publish-empty-ndef-tags.patch
   ./bootstrap
 }
 
