@@ -5,20 +5,29 @@
   gen OUT.wav --channel left|right [--level DBFS] [--fmin HZ] [--fmax HZ] [--per-octave N]
         the stimulus: silence, a 1 kHz marker, then one tone per step on one
         channel (left = the top speaker / earpiece, right = the bottom one)
-  analyze REC.wav [same options] [--mic N]
+  analyze REC.wav [same options] [--mic N] [--mic-cal FILE] [--json OUT]
+                  [--sink-gain-db DB] [--source NAME] [--listener]
         the response from a recording of it, made by any microphone (the
         phone's own, or a laptop's at the listening position): per step, the
         tone's level relative to the stimulus, by a windowed Goertzel at the
         known frequency, timed from the marker; the noise at each frequency
-        from the silence before it
+        from the silence before it; the 2nd and 3rd harmonics relative to the
+        tone (distortion, or bass processing that adds harmonics on purpose).
+        --mic-cal subtracts a microphone's own response (lines "HZ DB");
+        --listener marks a microphone at the listening position (only then
+        does suggest propose a balance trim)
   suggest LEFT.json RIGHT.json
         a bounded starting point for omandroid-speaker-eq from two analyses
+  compare A.json B.json
+        B minus A per step (two settings, two levels, processing on and off)
 
 Levels are relative: a microphone's own response and its distance are in
 them, so compare steps, speakers and settings measured the same way, not
 absolute numbers. Tones at -30 dBFS RMS by default, 0.25 s each, 100 Hz up:
 at the everyday amplifier level (stage media) that is far below what music
-puts into the speakers.
+puts into the speakers. The phone's own microphones sit next to the bottom
+speaker and 15 cm from the top one, so a balance between the two speakers is
+only meaningful from a microphone at the listening position.
 """
 import argparse
 import json
@@ -134,7 +143,32 @@ def find_marker(x, rate):
     return None
 
 
-def analyze(path, freqs, level_db, mic=None):
+def read_mic_cal(path):
+    """[(freq, dB)] sorted by frequency: a microphone's own response."""
+    pts = []
+    with open(path) as f:
+        for line in f:
+            line = line.split('#', 1)[0].strip()
+            if line:
+                a, b = line.replace(',', ' ').split()[:2]
+                pts.append((float(a), float(b)))
+    if not pts:
+        raise ValueError(f'{path}: no "HZ DB" lines')
+    return sorted(pts)
+
+
+def mic_cal_at(pts, f):
+    """The calibration at f, linear in log frequency, held beyond the ends."""
+    if f <= pts[0][0]:
+        return pts[0][1]
+    for (f0, d0), (f1, d1) in zip(pts, pts[1:]):
+        if f <= f1:
+            t = math.log(f / f0) / math.log(f1 / f0) if f1 > f0 else 0.0
+            return d0 + t * (d1 - d0)
+    return pts[-1][1]
+
+
+def analyze(path, freqs, level_db, mic=None, mic_cal=None):
     rate, chans = read_wav(path)
     best = None
     for c, x in enumerate(chans):
@@ -161,10 +195,18 @@ def analyze(path, freqs, level_db, mic=None):
         nz = goertzel_db(x, noise_at, n, f, rate) if noise_at >= 0 else None
         if lv is None:
             break
-        rows.append({'freq': f, 'db': round(lv - level_db, 2),
-                     'snr': None if nz is None else round(lv - nz, 1)})
-    return {'file': path, 'mic': c, 'rate': rate, 'peak_dbfs': round(20 * math.log10(max(peak, 1e-9)), 1),
-            'level': level_db, 'steps': rows}
+        row = {'freq': f, 'db': round(lv - level_db - (mic_cal_at(mic_cal, f) if mic_cal else 0.0), 2),
+               'snr': None if nz is None else round(lv - nz, 1)}
+        for k in (2, 3):
+            if k * f < rate / 2 * 0.9:
+                h = goertzel_db(x, st, n, k * f, rate)
+                hn = goertzel_db(x, noise_at, n, k * f, rate) if noise_at >= 0 else None
+                # only when the harmonic stands out of the noise at its frequency
+                row[f'h{k}'] = round(h - lv, 1) if hn is None or h - hn >= 6 else None
+        rows.append(row)
+    pdb = round(20 * math.log10(max(peak, 1e-9)), 1)
+    return {'file': path, 'mic': c, 'rate': rate, 'peak_dbfs': pdb, 'clipped': pdb > -1,
+            'level': level_db, 'mic_cal': bool(mic_cal), 'steps': rows}
 
 
 def band(rows, lo, hi):
@@ -186,13 +228,28 @@ def clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
 
+def same_setup(a, b):
+    """Why two analyses can't be compared level for level, or None."""
+    for key, what in (('mic', 'microphone channel'), ('source', 'recording source'),
+                      ('sink_gain_db', 'speaker volume'), ('level', 'stimulus level'),
+                      ('mic_cal', 'microphone calibration')):
+        if a.get(key) != b.get(key):
+            return f'different {what} ({a.get(key)} / {b.get(key)})'
+    return None
+
+
 def suggest(left, right):
-    """A bounded starting point, never more than +6 dB of boost or a channel
-    raised: the ear decides (AOC-PLAN C9g)."""
+    """A bounded starting point per speaker, never more than +6 dB of boost
+    or a channel raised: the ear decides (AOC-PLAN C9g)."""
     out, notes = {}, []
-    sides = {'top': left['steps'], 'bottom': right['steps']}
+    sides = {'top': left, 'bottom': right}
     info = {}
-    for side, rows in sides.items():
+    for side, res in sides.items():
+        if res.get('clipped'):
+            notes.append(f'{side}: the recording clipped (peak {res.get("peak_dbfs")} dBFS): '
+                         'measure again with a lower --level; not used')
+            continue
+        rows = res['steps']
         ref = band(rows, 1000, 3000)
         if ref is None:
             notes.append(f'{side}: no usable steps between 1 and 3 kHz')
@@ -208,12 +265,15 @@ def suggest(left, right):
                      f'{"-" if low is None else f"{low - ref:+.1f}"} dB just above the corner, '
                      f'{"-" if pres is None else f"{pres - ref:+.1f}"} dB at 2.5-5 kHz, '
                      f'{"-" if hi is None else f"{hi - ref:+.1f}"} dB at 6-12 kHz')
-    b = info.get('bottom') or info.get('top')
-    if b and b['corner']:
-        out['hp'] = clamp(round(b['corner'] * 0.5 / 10) * 10, 60, 200)
-        out['bass_freq'] = clamp(round(b['corner'] * 2 / 10) * 10, 200, 800)
-        if b['low'] is not None:
-            out['bass'] = round(clamp((b['ref'] - b['low']) / 2, 0, 6), 1)
+    for side, i in info.items():
+        if not i['corner']:
+            continue
+        # the high-pass an octave under the corner, the shelf an octave above
+        # it, lifting by half of what the speaker lacks there
+        out[f'hp_{side}'] = clamp(round(i['corner'] * 0.5 / 10) * 10, 60, 200)
+        out[f'bass_freq_{side}'] = clamp(round(i['corner'] * 2 / 10) * 10, 200, 800)
+        if i['low'] is not None:
+            out[f'bass_{side}'] = round(clamp((i['ref'] - i['low']) / 2, 0, 6), 1)
     pres = [i['pres'] - i['mid'] for i in info.values() if i['pres'] is not None and i['mid'] is not None]
     if pres:
         p = sum(pres) / len(pres)
@@ -221,13 +281,49 @@ def suggest(left, right):
     for side in ('top', 'bottom'):
         i = info.get(side)
         if i and i['hi'] is not None:
-            out[f'treble_{side}'] = round(-clamp(i['hi'] - i['ref'] - 2, 0, 4), 1)
-    if 'top' in info and 'bottom' in info and info['top']['avg'] is not None and info['bottom']['avg'] is not None:
-        d = info['top']['avg'] - info['bottom']['avg']
-        notes.append(f'balance (500 Hz-4 kHz): top {d:+.1f} dB against bottom at this microphone')
-        if abs(d) >= 1:
-            out['trim_top' if d > 0 else 'trim_bottom'] = round(-clamp(abs(d), 0, 6), 1)
+            cut = clamp(i['hi'] - i['ref'] - 2, 0, 4)
+            if not sides[side].get('mic_cal'):
+                # an uncalibrated MEMS microphone reads high up there itself
+                cut /= 2
+            out[f'treble_{side}'] = round(-cut, 1)
+    if any(not r.get('mic_cal') for r in sides.values()):
+        notes.append('no microphone calibration: the 6-12 kHz figures include the microphone\'s own '
+                     'rise, so the treble suggestions are halved')
+    t, b = info.get('top'), info.get('bottom')
+    if t and b and t['corner'] and b['corner'] and t['corner'] > b['corner'] * 1.2:
+        x = clamp(round(t['corner'] / 10) * 10, 200, 1500)
+        notes.append(f'the earpiece rolls off at {t["corner"]:g} Hz, the bottom speaker at {b["corner"]:g} Hz: '
+                     f'try "bassmono=1 xover={x:g}" by ear (the bass below it to the bottom speaker)')
+    if b and b['corner']:
+        notes.append(f'bass harmonics, by ear: "harm_freq={clamp(round(b["corner"] * 0.8 / 10) * 10, 60, 400):g} '
+                     'harm=0.5" (against harm=0 and harm=1)')
+    if t and b and t['avg'] is not None and b['avg'] is not None:
+        why = same_setup(left, right)
+        d = t['avg'] - b['avg']
+        if why:
+            notes.append(f'balance: not computed: {why}')
+        elif not (left.get('listener') and right.get('listener')):
+            notes.append(f'balance (500 Hz-4 kHz): top {d:+.1f} dB against bottom at this microphone; '
+                         'no trim suggested: only a microphone at the listening position measures the '
+                         'balance (analyze --listener)')
+        else:
+            notes.append(f'balance (500 Hz-4 kHz) at the listening position: top {d:+.1f} dB against bottom')
+            if abs(d) >= 1:
+                out['trim_top' if d > 0 else 'trim_bottom'] = round(-clamp(abs(d), 0, 6), 1)
     return out, notes
+
+
+def compare(a, b):
+    """[(freq, B - A in dB, A's h2, B's h2)] over the steps both measured
+    above the noise."""
+    rows = []
+    bs = {r['freq']: r for r in b['steps']}
+    for r in a['steps']:
+        s = bs.get(r['freq'])
+        if s is None or any(x['snr'] is not None and x['snr'] < 10 for x in (r, s)):
+            continue
+        rows.append((r['freq'], round(s['db'] - r['db'], 2), r.get('h2'), s.get('h2')))
+    return rows
 
 
 def main(argv):
@@ -244,17 +340,33 @@ def main(argv):
             p.add_argument('--channel', choices=('left', 'right', 'both'), required=True)
         else:
             p.add_argument('--mic', type=int, default=None)
+            p.add_argument('--mic-cal', default=None, help='the microphone\'s own response, lines "HZ DB"')
+            p.add_argument('--sink-gain-db', type=float, default=None,
+                           help='the speaker volume during the recording (recorded, for comparisons)')
+            p.add_argument('--source', default=None, help='which microphone (recorded, for comparisons)')
+            p.add_argument('--listener', action='store_true',
+                           help='the microphone was at the listening position')
             p.add_argument('--json', default=None, help='also write the result here')
-    s = sub.add_parser('suggest')
-    s.add_argument('left')
-    s.add_argument('right')
+    for name in ('suggest', 'compare'):
+        s = sub.add_parser(name)
+        s.add_argument('a')
+        s.add_argument('b')
     args = ap.parse_args(argv)
-    if args.cmd == 'suggest':
-        with open(args.left) as f:
-            left = json.load(f)
-        with open(args.right) as f:
-            right = json.load(f)
-        out, notes = suggest(left, right)
+    if args.cmd in ('suggest', 'compare'):
+        with open(args.a) as f:
+            a = json.load(f)
+        with open(args.b) as f:
+            b = json.load(f)
+        if args.cmd == 'compare':
+            why = same_setup(a, b)
+            if why:
+                print(f'note: {why}')
+            print(' freq Hz   B-A dB   h2 A    h2 B')
+            for f, d, ha, hb in compare(a, b):
+                h = lambda v: '   -  ' if v is None else f'{v:+6.1f}'
+                print(f'{f:8.0f}   {d:+6.1f}  {h(ha)}  {h(hb)}')
+            return 0
+        out, notes = suggest(a, b)
         for n in notes:
             print(n)
         print('suggested: omandroid-speaker-eq set ' + ' '.join(f'{k}={v:g}' for k, v in out.items()))
@@ -267,22 +379,25 @@ def main(argv):
               f'{len(s) / RATE:.1f} s, {args.channel}')
         return 0
     try:
-        res = analyze(args.file, freqs, args.level, args.mic)
-    except ValueError as e:
+        cal = read_mic_cal(args.mic_cal) if args.mic_cal else None
+        res = analyze(args.file, freqs, args.level, args.mic, cal)
+    except (ValueError, OSError) as e:
         print(f'{args.file}: {e}')
         return 1
+    res.update(sink_gain_db=args.sink_gain_db, source=args.source, listener=args.listener)
     if args.json:
         with open(args.json, 'w') as f:
             json.dump(res, f)
     print(f'{args.file}: microphone channel {res["mic"]}, peak {res["peak_dbfs"]} dBFS'
-          + ('  (CLIPPED: lower --level or move the microphone)' if res['peak_dbfs'] > -1 else ''))
-    print(' freq Hz   dB re stimulus   SNR dB')
+          + ('  (CLIPPED: lower --level or move the microphone; suggest ignores it)' if res['clipped'] else ''))
+    print(' freq Hz   dB re stimulus   SNR dB   h2 dB   h3 dB')
     for r in res['steps']:
         bar = '#' * max(0, int((r['db'] + 60) / 2))
         snr = '-' if r['snr'] is None else f'{r["snr"]:.0f}'
         flag = '' if r['snr'] is None or r['snr'] >= 10 else '  (noise)'
-        print(f'{r["freq"]:8.0f}   {r["db"]:+7.1f}   {snr:>6}  {bar}{flag}')
-    return 0
+        h = lambda v: '    -' if v is None else f'{v:+5.0f}'
+        print(f'{r["freq"]:8.0f}   {r["db"]:+7.1f}   {snr:>6}   {h(r.get("h2"))}   {h(r.get("h3"))}  {bar}{flag}')
+    return 2 if res['clipped'] else 0
 
 
 if __name__ == '__main__':

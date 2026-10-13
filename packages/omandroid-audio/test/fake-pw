@@ -1,20 +1,32 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-# A stand-in for pw-dump and pw-cli set-param, for test/all: the speaker
-# filter's input node with its graph controls in FAKE_PW_STATE (JSON
-# {"node:Control": value}), created from the package file's values.
+# A stand-in for pw-dump, pw-cli set-param, wpctl get-volume, pw-play and
+# pw-record, for test/all: the speaker filter's input node with its graph
+# controls in FAKE_PW_STATE (JSON {"node:Control": value}), created from the
+# package file's values; its output node, linked to the speaker sink when
+# FAKE_PW_LINKED=1; the sink's volume from FAKE_WPCTL (e.g. "0.80" or
+# "0.80 [MUTED]"). pw-play logs its arguments to FAKE_PW_LOG; pw-record
+# copies FAKE_REC to its output file and waits to be stopped.
 import json
 import os
 import re
+import shutil
+import signal
 import sys
+import time
 
-state = os.environ['FAKE_PW_STATE']
-NODE_ID = 33
+state = os.environ.get('FAKE_PW_STATE', '')
+NODE_ID, OUT_ID, SINK_ID = 33, 34, 30
 
 
 def load():
     with open(state) as f:
         return json.load(f)
+
+
+def log(line):
+    with open(os.environ['FAKE_PW_LOG'], 'a') as f:
+        f.write(line + '\n')
 
 
 me = os.path.basename(sys.argv[0])
@@ -23,12 +35,22 @@ if me == 'pw-dump':
     flat = []
     for k, v in vals.items():
         flat += [k, v]
-    print(json.dumps([
-        {'id': 30, 'type': 'PipeWire:Interface:Node', 'info': {'props': {'node.name': 'alsa_output.x'}}},
+    objs = [
+        {'id': SINK_ID, 'type': 'PipeWire:Interface:Node',
+         'info': {'props': {'node.name': 'alsa_output.platform-sound-aoc.HiFi__Speaker__sink',
+                            'media.class': 'Audio/Sink'}}},
         {'id': NODE_ID, 'type': 'PipeWire:Interface:Node',
          'info': {'props': {'node.name': 'effect_input.omandroid_speaker_loudness'},
                   'params': {'Props': [{'volume': 1.0, 'params': ['monitor.channel-volumes', False]},
-                                       {'params': flat}]}}}]))
+                                       {'params': flat}]}}},
+        {'id': OUT_ID, 'type': 'PipeWire:Interface:Node',
+         'info': {'props': {'node.name': 'effect_output.omandroid_speaker_loudness'}}}]
+    if os.environ.get('FAKE_PW_LINKED') == '1':
+        objs.append({'id': 50, 'type': 'PipeWire:Interface:Link',
+                     'info': {'output-node-id': OUT_ID, 'input-node-id': SINK_ID, 'state': 'active'}})
+        objs.append({'id': 51, 'type': 'PipeWire:Interface:Link',
+                     'info': {'output-node-id': 77, 'input-node-id': NODE_ID, 'state': 'active'}})
+    print(json.dumps(objs))
     sys.exit(0)
 if me == 'pw-cli':
     args = sys.argv[1:]
@@ -42,7 +64,19 @@ if me == 'pw-cli':
         vals[k] = float(v)
     with open(state, 'w') as f:
         json.dump(vals, f)
-    with open(os.environ['FAKE_PW_LOG'], 'a') as f:
-        f.write(args[3] + '\n')
+    log(args[3])
     sys.exit(0)
+if me == 'wpctl':
+    if sys.argv[1:2] != ['get-volume'] or sys.argv[2] != str(SINK_ID):
+        sys.exit(1)
+    print(f'Volume: {os.environ.get("FAKE_WPCTL", "1.00")}')
+    sys.exit(0)
+if me == 'pw-play':
+    log('pw-play ' + ' '.join(sys.argv[1:]) + ' with ' + json.dumps(load()))
+    sys.exit(int(os.environ.get('FAKE_PLAY_RC', '0')))
+if me == 'pw-record':
+    shutil.copy(os.environ['FAKE_REC'], sys.argv[-1])
+    signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+    while True:
+        time.sleep(0.1)
 sys.exit(2)

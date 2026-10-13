@@ -13,6 +13,7 @@ install -Dm644 systemd/omandroid-speaker-watch.service "$d/usr/lib/systemd/syste
 install -Dm644 lib/speaker_dsp.py "$d/usr/lib/omandroid-audio/speaker_dsp.py"
 install -Dm644 lib/speaker_response.py "$d/usr/lib/omandroid-audio/speaker_response.py"
 install -Dm755 bin/omandroid-speaker-eq "$d/usr/bin/omandroid-speaker-eq"
+install -Dm644 systemd/omandroid-speaker-orient.service "$d/usr/lib/systemd/user/omandroid-speaker-orient.service"
 install -Dm644 udev.rules "$d/usr/lib/udev/rules.d/70-omandroid-cs35l41.rules"
 install -Dm644 modprobe.d/omandroid-audio.conf "$d/usr/lib/modprobe.d/omandroid-audio.conf"
 install -Dm644 speaker.conf "$d/etc/omandroid/speaker.conf"

@@ -158,6 +158,10 @@ grep -c '^healthy' "$r/out" >/dev/null || fail "health check before unmute"
 if grep -E '0x20|8192|8448|2000|2100' "$r/out"; then fail "logs no calibration values"; fi
 pass "start: amplifiers held awake, calibration per amplifier, DSP routing, health, unmute last, nothing logged"
 
+[[ $(grep -o '^Top DSP1 Protection cd CAL_[A-Z]*' "$r/cset.log" | tr '\n' ' ') == "Top DSP1 Protection cd CAL_AMBIENT Top DSP1 Protection cd CAL_R Top DSP1 Protection cd CAL_STATUS Top DSP1 Protection cd CAL_CHECKSUM " ]] || fail "calibration in mainline's order by default"
+prep=(OMANDROID_SPK_CAL_ORDER=stock); run cal-order
+((rc == 0)) && [[ $(grep -o '^Bottom DSP1 Protection cd CAL_[A-Z]*' "$r/cset.log" | tr '\n' ' ') == "Bottom DSP1 Protection cd CAL_R Bottom DSP1 Protection cd CAL_STATUS Bottom DSP1 Protection cd CAL_CHECKSUM Bottom DSP1 Protection cd CAL_AMBIENT " ]] &&
+  [[ $(val "Bottom DSP1 Protection cd CAL_AMBIENT") == 0x00,0x00,0x00,0x19 ]] || fail "OMANDROID_SPK_CAL_ORDER=stock: ambient last, as stock"
 prep=(OMANDROID_SPK_DIGITAL=600 OMANDROID_SPK_BOTTOM_ANALOG=10); run levels
 ((rc == 0)) && [[ $(val "Bottom Digital PCM Volume") == 600 && $(val "Bottom Analog PCM Volume") == 10 && $(val "Top Analog PCM Volume") == 6 ]] || fail "configured levels"
 prep=(OMANDROID_SPK_TOP_DIGITAL=500 OMANDROID_SPK_BOTTOM_ANALOG=9); run per-amp
@@ -438,18 +442,27 @@ fi
 conf=pipewire/60-omandroid-speaker-loudness.conf
 grep -c 'condition = \[ { omandroid.speaker-eq = package } \]' "$conf" >/dev/null &&
   grep -c 'omandroid.speaker-eq = package' "$conf" | grep -qx 2 || fail "filter: loads only while no user copy is saved"
+grep -c 'flags = \[ nofail \]' "$conf" >/dev/null || fail "filter: PipeWire starts without it if it fails to load"
 grep -c 'filter.smart.target = { node.name = "alsa_output.platform-sound-aoc.HiFi__Speaker__sink" }' "$conf" >/dev/null || fail "filter: the speaker sink only"
-grep -c '"Input gain (dB)" = 0.0 "Limit (dB)" = -3.0' "$conf" >/dev/null || fail "filter: the limiter adds no gain, ceiling -3 dBFS"
-python3 - "$conf" <<'PY' || fail "filter: graph links each channel through hp, bass, dip, treble, trim to the limiter"
+[[ $(grep -c '"Input gain (dB)" = 0.0 "Limit (dB)" = -3.0' "$conf") == 2 ]] || fail "filter: both limiters add no gain, ceiling -3 dBFS"
+python3 - "$conf" <<'PY' || fail "filter: graph links each speaker through its chain to its own limiter, options off by default"
 import re, sys
 s = open(sys.argv[1]).read()
-links = re.findall(r'output = "(\w+):\w+"\s+input = "(\w+):[\w ]+"', s)
-for c in 'lr':
-    chain = [f'hp_{c}', f'bass_{c}', f'dip_{c}', f'treble_{c}', f'trim_{c}', 'limiter']
+links = re.findall(r'output = "(\w+):[\w ]+"\s+input = "(\w+):[\w ]+"', s)
+for c, t in (('l', 't'), ('r', 'b')):
+    chain = [f'pre_{t}', f'hp_{c}', f'hp2_{c}', f'bass_{c}', f'dip_{c}', f'treble_{c}', f'trim_{c}', f'lim_{t}']
     assert all((a, b) in links for a, b in zip(chain, chain[1:])), c
-assert 'inputs = [ "hp_l:In" "hp_r:In" ]' in s and 'outputs = [ "limiter:Output 1" "limiter:Output 2" ]' in s
+assert 'inputs = [ "in_l:In" "in_r:In" ]' in s and 'outputs = [ "lim_t:Output 1" "lim_b:Output 1" ]' in s
+inputs = re.findall(r'input = "(\w+:[\w ]+)"', s)
+assert len(inputs) == len(set(inputs)), 'an input port linked twice'
+ctl = dict(re.findall(r'name = (\w+)\s+label = mixer\s+control = \{ ([^}]*) \}', s))
+g = lambda n: dict((k, float(v)) for k, v in re.findall(r'"([^"]+)" = ([0-9.]+)', ctl[n]))
+assert g('mtx_t') == {'Gain 1': 1, 'Gain 2': 0} and g('mtx_b') == {'Gain 1': 0, 'Gain 2': 1}, 'top = left'
+assert g('pre_t') == {'Gain 1': 1, 'Gain 2': 0, 'Gain 3': 0}, 'bassmono and harmonics off (top)'
+assert g('pre_b') == {'Gain 1': 1, 'Gain 2': 0, 'Gain 3': 0, 'Gain 4': 0}, 'bassmono and harmonics off (bottom)'
 PY
 ln -sf "$here/test/fake-pw" "$fake/pw-dump"; ln -sf "$here/test/fake-pw" "$fake/pw-cli"
+ln -sf "$here/test/fake-pw" "$fake/wpctl"; ln -sf "$here/test/fake-pw" "$fake/pw-play"; ln -sf "$here/test/fake-pw" "$fake/pw-record"
 pwt=$tmp/pw; mkdir -p "$pwt"
 eqrun() { env PATH="$fake:$PATH" FAKE_PW_STATE="$pwt/state.json" FAKE_PW_LOG="$pwt/log" XDG_CONFIG_HOME="$pwt/xdg" \
           OMANDROID_EQ_CONF="$here/$conf" OMANDROID_AUDIO_LIB="$here/lib" "${eqprep[@]}" bin/omandroid-speaker-eq "$@"; }
@@ -457,35 +470,51 @@ eqprep=()
 python3 - "$conf" "$pwt/state.json" <<'PY'
 import json, re, sys
 s = open(sys.argv[1]).read(); vals = {}
-for m in re.finditer(r'name\s*=\s*(\w+)\s+label\s*=\s*(\w+)\s+control\s*=\s*\{([^}]*)\}', sys.argv[1] and s):
+for m in re.finditer(r'name\s*=\s*(\w+)\s+(?:plugin\s*=\s*\S+\s+)?label\s*=\s*(\w+)\s+control\s*=\s*\{([^}]*)\}', s):
     for k, v in re.findall(r'"([^"]+)"\s*=\s*(-?[0-9.]+)', m.group(3)):
         vals[f'{m.group(1)}:{k}'] = float(v)
     if m.group(2).startswith('bq_'):
         vals.setdefault(f'{m.group(1)}:Gain', 0.0)
 json.dump(vals, open(sys.argv[2], 'w'))
 PY
+cp "$pwt/state.json" "$pwt/state0.json"
 out=$(eqrun show) || fail "eq: show"
 [[ $out == *"top (left)      hp 100 Hz | bass +4 dB at 400 Hz | dip -2 dB at 3500 Hz"*"trim +0.0 dB"* ]] || { echo "$out" >&2; fail "eq: show reads the filter's values"; }
-eqrun set bass=6 trim_top=-3 >/dev/null || fail "eq: set"
+[[ $out == *"width 1 | swap 0 | bassmono 0 at 500 Hz | harm top 0 bottom 0 below 200 Hz | drive 0/0 dB"* ]] || { echo "$out" >&2; fail "eq: show reads the options"; }
+[[ $out == *"NOT in the path"* ]] || fail "eq: show says when the filter is not linked"
+out=$(eqprep=(FAKE_PW_LINKED=1); eqrun show)
+[[ $out == *"in the path: plays into alsa_output.platform-sound-aoc.HiFi__Speaker__sink; 1 stream link(s)"* ]] || { echo "$out" >&2; fail "eq: show says where the filter plays"; }
+eqrun set bass=6 trim_top=-3 hp=80 >/dev/null || fail "eq: set"
 st() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); print(" ".join(f"{k}={v[k]:g}" for k in sys.argv[2:]))' "$pwt/state.json" "$@"; }
-[[ $(st bass_l:Gain bass_r:Gain trim_l:Mult trim_r:Mult) == "bass_l:Gain=6 bass_r:Gain=6 trim_l:Mult=0.707946 trim_r:Mult=1" ]] || { st bass_l:Gain trim_l:Mult >&2; fail "eq: set changes both channels, a trim in dB as a factor"; }
+[[ $(st bass_l:Gain bass_r:Gain trim_l:Mult trim_r:Mult hp_l:Freq hp2_r:Freq) == "bass_l:Gain=6 bass_r:Gain=6 trim_l:Mult=0.707946 trim_r:Mult=1 hp_l:Freq=80 hp2_r:Freq=80" ]] || { st bass_l:Gain trim_l:Mult >&2; fail "eq: set changes both channels and both high-pass stages, a trim in dB as a factor"; }
+eqrun set width=0.5 swap=1 bassmono=1 xover=600 harm_bottom=1 harm_freq=150 drive=3 >/dev/null || fail "eq: set the options"
+[[ $(st mtx_t:Gain\ 1 mtx_t:Gain\ 2 mtx_b:Gain\ 1 mtx_b:Gain\ 2) == "mtx_t:Gain 1=0.25 mtx_t:Gain 2=0.75 mtx_b:Gain 1=0.75 mtx_b:Gain 2=0.25" ]] || { st mtx_t:Gain\ 1 mtx_t:Gain\ 2 >&2; fail "eq: width and swap set the input matrix"; }
+[[ $(st pre_t:Gain\ 1 pre_t:Gain\ 2 pre_b:Gain\ 3 xlp2:Freq xhp_t1:Freq pre_b:Gain\ 4 pre_t:Gain\ 3 hhp2:Freq hlp:Freq lim_t:Input\ gain\ \(dB\) lim_b:Input\ gain\ \(dB\)) == "pre_t:Gain 1=0 pre_t:Gain 2=1 pre_b:Gain 3=1 xlp2:Freq=600 xhp_t1:Freq=600 pre_b:Gain 4=1 pre_t:Gain 3=0 hhp2:Freq=150 hlp:Freq=600 lim_t:Input gain (dB)=3 lim_b:Input gain (dB)=3" ]] || fail "eq: bassmono, xover, harm, harm_freq and drive"
+out=$(eqrun show); [[ $out == *"width 0.5 | swap 1 | bassmono 1 at 600 Hz | harm top 0 bottom 1 below 150 Hz | drive 3/3 dB"* ]] || { echo "$out" >&2; fail "eq: show reads the options back"; }
+eqrun set width=1 >/dev/null; [[ $(st mtx_t:Gain\ 1 mtx_t:Gain\ 2) == "mtx_t:Gain 1=0 mtx_t:Gain 2=1" ]] || fail "eq: width keeps the swap"
+eqrun orient right-up >/dev/null && [[ $(st mtx_t:Gain\ 1) == "mtx_t:Gain 1=1" ]] || fail "eq: orient right-up: earpiece on the left"
+eqrun orient left-up >/dev/null && [[ $(st mtx_t:Gain\ 1 mtx_b:Gain\ 1) == "mtx_t:Gain 1=0 mtx_b:Gain 1=1" ]] || fail "eq: orient left-up swaps"
+if eqrun orient sideways >/dev/null 2>&1; then fail "eq: orient refuses an unknown orientation"; fi
 eqrun preset flat >/dev/null
-[[ $(st hp_l:Freq bass_r:Gain dip_l:Gain treble_r:Gain trim_l:Mult) == "hp_l:Freq=20 bass_r:Gain=0 dip_l:Gain=0 treble_r:Gain=0 trim_l:Mult=1" ]] || fail "eq: preset flat"
+[[ $(st hp_l:Freq hp2_r:Freq bass_r:Gain dip_l:Gain treble_r:Gain trim_l:Mult pre_b:Gain\ 3 pre_t:Gain\ 3 lim_t:Input\ gain\ \(dB\) mtx_b:Gain\ 1) == "hp_l:Freq=20 hp2_r:Freq=20 bass_r:Gain=0 dip_l:Gain=0 treble_r:Gain=0 trim_l:Mult=1 pre_b:Gain 3=0 pre_t:Gain 3=0 lim_t:Input gain (dB)=0 mtx_b:Gain 1=1" ]] || fail "eq: preset flat (and it leaves the orientation alone)"
 eqrun preset default >/dev/null
-[[ $(st hp_r:Freq bass_l:Gain dip_r:Gain dip_r:Freq) == "hp_r:Freq=100 bass_l:Gain=4 dip_r:Gain=-2 dip_r:Freq=3500" ]] || fail "eq: preset default is the package file"
-for bad in trim_top=1 bass=9 hp=10 dip=4 limiter:Limit=0 'limiter:Input gain (dB)=6' foo=1 bass=x; do
+[[ $(st hp_r:Freq bass_l:Gain dip_r:Gain dip_r:Freq lim_b:Input\ gain\ \(dB\) mtx_b:Gain\ 1) == "hp_r:Freq=100 bass_l:Gain=4 dip_r:Gain=-2 dip_r:Freq=3500 lim_b:Input gain (dB)=0 mtx_b:Gain 1=1" ]] || fail "eq: preset default is the package file (but the orientation)"
+grep -c '"sum:' "$pwt/log" >/dev/null && fail "eq: never touches the bass-management sum"
+for bad in bass=9 hp=10 trim_top=1 trim=-3 dip_freq=200 nope=1 limiter:Limit\ \(dB\)=0 drive=7 width=2 swap=0.5 harm=3 xover=100 sum:Gain\ 1=1; do
   if eqrun set "$bad" >/dev/null 2>&1; then fail "eq: refuses $bad"; fi
 done
 [[ $(st bass_l:Gain) == "bass_l:Gain=4" ]] || fail "eq: a refused change changes nothing"
 rc=0; eqprep=(FAKE_PW_IGNORE=1); eqrun set bass=2 >/dev/null 2>&1 || rc=$?; eqprep=()
 ((rc == 1)) || fail "eq: says so when the filter does not take a value"
-eqrun set bass=3 trim_bottom=-2 --save >/dev/null || fail "eq: --save"
+eqrun set bass=3 trim_bottom=-2 drive=2 width=0.8 --save >/dev/null || fail "eq: --save"
 u=$pwt/xdg/pipewire/pipewire.conf.d/61-omandroid-speaker-eq.conf
 [[ $(grep -c 'omandroid.speaker-eq = user' "$u") == 2 && $(grep -c 'speaker-eq = package' "$u") == 0 ]] || fail "eq: the saved copy switches the package filter off"
 grep -c 'name = bass_r   label = bq_lowshelf  control = { "Freq" = 400 "Q" = 0.707 "Gain" = 3 }' "$u" >/dev/null &&
-  grep -c '"Mult" = 0.794328' "$u" >/dev/null && grep -c '"Limit (dB)" = -3.0' "$u" >/dev/null || { cat "$u" >&2; fail "eq: the saved copy carries the values and keeps the limiter"; }
+  grep -c '"Mult" = 0.794328' "$u" >/dev/null && [[ $(grep -c '"Input gain (dB)" = 2 "Limit (dB)" = -3.0' "$u") == 2 ]] &&
+  grep -c 'name = mtx_t    label = mixer        control = { "Gain 1" = 0.9 "Gain 2" = 0.1 }' "$u" >/dev/null &&
+  grep -c 'flags = \[ nofail \]' "$u" >/dev/null || { cat "$u" >&2; fail "eq: the saved copy carries the values, the width but not the swap, and keeps the limiters' ceiling"; }
 eqrun reset >/dev/null; [[ ! -e $u && $(st bass_l:Gain) == "bass_l:Gain=4" ]] || fail "eq: reset removes the copy and goes back to the package values"
-pass "speaker filter: hp, bass, dip, treble, trim, limiter per channel; omandroid-speaker-eq show/set/preset/save/reset within limits"
+pass "speaker filter: input matrix, bass management, harmonics, hp, bass, dip, treble, trim, a limiter per speaker; omandroid-speaker-eq show/set/preset/orient/save/reset within limits"
 
 # the response measurement, on a simulated speaker (a 700 Hz roll-off, a 3.5 kHz peak)
 python3 -I - "$here/lib" "$tmp" <<'PY' || fail "response: recovers a known speaker response within 1 dB"
@@ -514,21 +543,78 @@ hp, pk = bq('hp', 700, 0.9, 0), bq('pk', 3500, 1.5, 6)
 random.seed(1)
 y = [random.gauss(0, 10 ** (-75 / 20)) for _ in range(int(0.4 * 48000))] + \
     [v * 10 ** (-10 / 20) + random.gauss(0, 10 ** (-75 / 20)) for v in run(run(ch[1], hp), pk)]
+# a speaker with a little 2nd-harmonic distortion: 0.1 x^2 (about -36 dB at -10 dBFS)
+y = [v + 3 * v * v for v in y]
 with wave.open(f'{tmp}/rec.wav', 'wb') as w:                       # a mono "microphone"
     w.setnchannels(1); w.setsampwidth(2); w.setframerate(48000)
     w.writeframes(b''.join(struct.pack('<h', max(-32768, min(32767, int(v * 32767)))) for v in y))
 res = r.analyze(f'{tmp}/rec.wav', freqs, -30)
-assert len(res['steps']) == len(freqs)
+assert len(res['steps']) == len(freqs) and not res['clipped']
 for s in res['steps']:
     exp = mag(hp, s['freq']) + mag(pk, s['freq']) - 10
     assert s['snr'] is None or s['snr'] < 10 or abs(s['db'] - exp) < 1.0, (s, exp)
+k = min(res['steps'], key=lambda s: abs(s['freq'] - 2000))
+lvl = 10 ** ((k['db'] - 30) / 20) * math.sqrt(2)                    # peak amplitude at the "microphone"
+assert k['h2'] is not None and abs(k['h2'] - 20 * math.log10(3 * lvl / 2)) < 1.5, k  # 3 a^2/2 at 2f
+# a microphone calibration: a +3 dB rise above 5 kHz in the mic reads as 3 dB less
+open(f'{tmp}/cal.txt', 'w').write('# test\n100 0\n4000 0\n5000 3\n20000 3\n')
+rc = r.analyze(f'{tmp}/rec.wav', freqs, -30, mic_cal=r.read_mic_cal(f'{tmp}/cal.txt'))
+for a, b in zip(res['steps'], rc['steps']):
+    want = 3 if a['freq'] >= 5000 else (0 if a['freq'] <= 4000 else None)
+    assert want is None or abs((a['db'] - b['db']) - want) < 1e-6, (a, b)
+res.update(source='default', sink_gain_db=0.0)
 json.dump(res, open(f'{tmp}/R.json', 'w')); json.dump(res, open(f'{tmp}/L.json', 'w'))
 out, notes = r.suggest(res, res)
-assert 0 < out['bass'] <= 6 and out['dip'] < 0 and 60 <= out['hp'] <= 200, out
+assert 0 < out['bass_top'] <= 6 and out['dip'] < 0 and 60 <= out['hp_bottom'] <= 200, out
 assert all(v <= 0 for k, v in out.items() if k.startswith(('trim', 'treble', 'dip'))), out
+assert not any(k.startswith('trim') for k in out) and any('listening position' in n for n in notes), (out, notes)
+other = dict(res, mic=1)
+_, notes = r.suggest(res, other)
+assert any('different microphone channel' in n for n in notes), notes
+_, notes = r.suggest(dict(res, clipped=True, peak_dbfs=-0.2), res)
+assert any('top: the recording clipped' in n for n in notes), notes
+quiet = dict(res, steps=[dict(s, db=s['db'] - 6) if s['freq'] < 1000 else s for s in res['steps']])
+d = r.compare(res, quiet)
+assert d and all(x[1] == -6 for x in d if x[0] < 1000) and all(x[1] == 0 for x in d if x[0] >= 1000), d
 PY
-python3 -I lib/speaker_response.py suggest "$tmp/L.json" "$tmp/R.json" | grep -c '^suggested: omandroid-speaker-eq set hp=' >/dev/null || fail "response: suggest prints a command"
-pass "response measurement: stepped tones on one channel, recovered within 1 dB, a bounded suggestion"
+python3 -I lib/speaker_response.py suggest "$tmp/L.json" "$tmp/R.json" | grep -c '^suggested: omandroid-speaker-eq set hp_top=' >/dev/null || fail "response: suggest prints a command"
+python3 -I lib/speaker_response.py compare "$tmp/L.json" "$tmp/R.json" | grep -c ' +0.0 ' >/dev/null || fail "response: compare prints the differences"
+pass "response measurement: stepped tones on one channel, recovered within 1 dB, harmonics, a mic calibration, a bounded per-speaker suggestion, compare"
+
+# measure: the filter flat (and the orientation normal) while the tones play, then restored
+cp "$pwt/state0.json" "$pwt/state.json"; : > "$pwt/log"
+eqrun set swap=1 bass=5 >/dev/null
+out=$(eqprep=(FAKE_PW_LINKED=1 FAKE_WPCTL=0.50 FAKE_REC="$tmp/rec.wav"); eqrun measure right --out "$pwt/m" 2>&1) || { echo "$out" >&2; fail "eq: measure"; }
+python3 - "$pwt/log" <<'PY' || { cat "$pwt/log" >&2; fail "eq: measure plays with the filter flat and the orientation normal"; }
+import json, sys
+line = [l for l in open(sys.argv[1]) if l.startswith('pw-play ')][0]
+assert '--target effect_input.omandroid_speaker_loudness ' in line and 'right-stimulus.wav' in line
+v = json.loads(line.split(' with ', 1)[1])
+assert v['bass_l:Gain'] == 0 and v['hp_r:Freq'] == 20 and v['mtx_t:Gain 1'] == 1 and v['mtx_t:Gain 2'] == 0, v
+PY
+[[ $(st bass_r:Gain mtx_t:Gain\ 2) == "bass_r:Gain=5 mtx_t:Gain 2=1" ]] || fail "eq: measure restores the filter"
+[[ $out == *"volume -18.1 dB"* ]] && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["sink_gain_db"] == -18.1 and r["source"] == "default"' "$pwt/m/right-result.json" ||
+  { echo "$out" >&2; fail "eq: measure records the speaker volume with the result"; }
+if (eqprep=(FAKE_PW_LINKED=1 FAKE_WPCTL="0.50 [MUTED]" FAKE_REC="$tmp/rec.wav"); eqrun measure left --out "$pwt/m") >/dev/null 2>&1; then fail "eq: measure refuses a muted speaker"; fi
+: > "$pwt/log"
+out=$(eqprep=(FAKE_PW_LINKED=1 FAKE_PLAY_RC=1 FAKE_REC="$tmp/rec.wav"); eqrun measure left --play-only --out "$pwt/m" 2>&1) && fail "eq: measure fails when pw-play fails"
+[[ $out == *"pw-play failed"* && $(st bass_r:Gain) == "bass_r:Gain=5" ]] || { echo "$out" >&2; fail "eq: a failed play still restores the filter"; }
+if eqrun measure left --level -10 >/dev/null 2>&1; then fail "eq: measure refuses a level above -20 dBFS"; fi
+pass "measure: filter flat and orientation normal during the tones, restored after (also on failure), the volume recorded, muted refused"
+
+# follow: the swap from the sensor proxy's orientation, now and on each change
+cat > "$fake/gdbus" <<'SH'
+#!/bin/bash
+case $1 in
+  call) echo "(<'left-up'>,)" ;;
+  monitor) echo "/net/hadess/SensorProxy: org.freedesktop.DBus.Properties.PropertiesChanged ('net.hadess.SensorProxy', {'AccelerometerOrientation': <'right-up'>}, @as [])"
+           echo "/net/hadess/SensorProxy: org.freedesktop.DBus.Properties.PropertiesChanged ('net.hadess.SensorProxy', {'LightLevel': <2.0>}, @as [])" ;;
+esac
+SH
+chmod +x "$fake/gdbus"
+out=$(eqprep=(OMANDROID_EQ_FOLLOW_ONCE=1); eqrun follow 2>&1) || { echo "$out" >&2; fail "eq: follow"; }
+[[ $out == *"left-up: swap 1"*"right-up: swap 0"* && $(st mtx_t:Gain\ 1) == "mtx_t:Gain 1=1" ]] || { echo "$out" >&2; fail "eq: follow applies the orientation now and on each change"; }
+pass "follow: the speakers' left and right from the sensor proxy's orientation"
 
 # --- install ---------------------------------------------------------------------
 ./install "$tmp/root"
@@ -539,7 +625,7 @@ for f in usr/bin/omandroid-speaker-protection usr/lib/systemd/system/omandroid-s
          usr/share/alsa/ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf usr/share/alsa/ucm2/Google/cheetah/HiFi.conf \
          usr/share/wireplumber/wireplumber.conf.d/51-omandroid-aoc.conf \
          usr/share/pipewire/pipewire.conf.d/60-omandroid-speaker-loudness.conf usr/bin/omandroid-speaker-eq \
-         usr/lib/omandroid-audio/speaker_response.py; do
+         usr/lib/omandroid-audio/speaker_response.py usr/lib/systemd/user/omandroid-speaker-orient.service; do
   [[ -e $tmp/root/$f ]] || fail "install stages $f"
 done
 [[ -z $(find "$tmp/root" -path '*wants*') ]] || fail "install enables nothing"

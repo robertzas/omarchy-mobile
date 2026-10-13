@@ -382,8 +382,14 @@ start() {
   done
   for i in "${!AMPS[@]}"; do
     p=${AMPS[i]}
-    # the order mainline cs-amp-lib writes them in
-    for f in CAL_AMBIENT:${cal_ambient[i]} CAL_R:${cal_r[i]} CAL_STATUS:${cal_status[i]} CAL_CHECKSUM:${cal_checksum[i]}; do
+    # the order mainline cs-amp-lib writes them in; OMANDROID_SPK_CAL_ORDER=stock
+    # writes them in the stock HAL's order, ambient last (AOC-PLAN C9d-8,
+    # a prepared test for the gain-17 runaway)
+    order=(CAL_AMBIENT:${cal_ambient[i]} CAL_R:${cal_r[i]} CAL_STATUS:${cal_status[i]} CAL_CHECKSUM:${cal_checksum[i]})
+    if [[ ${OMANDROID_SPK_CAL_ORDER:-mainline} == stock ]]; then
+      order=("${order[@]:1}" "${order[0]}")
+    fi
+    for f in "${order[@]}"; do
       c=$(dsp_ctl "$p" "${f%%:*}") || fail "$p: no ${f%%:*} control"
       want=$(be_bytes "${f#*:}")
       ctl_set "$c" "$want" || fail "$p: writing ${f%%:*} failed"
