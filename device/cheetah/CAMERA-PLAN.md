@@ -1093,6 +1093,27 @@ tools/camera-stage --watchdog x --cmd 'for m in gpio_s2mpg13 slg51002_regulator 
 - **Rollback:** `rmmod gs201_csis imx386` (powers the module down), reboot;
   images without the overlay.
 
+**CAM3b.0/3b.1 results (2026-10-12, 7.3.0-rc6-omandroid-push1-00359-g3cb70218b6cd:
+int 3cb70218b with omandroid-camera 35295a9ab; overlays as before with
+camera-stream-link1 instead of camera-pwr-test; capture blacklist in
+`/etc/modprobe.d/omandroid-camera-capture-bringup.conf`).**
+
+- **3b.0: passed.** `extract-camera-data` on the user's HAL APEX: init 139
+  writes; modes 4032x3016 at 30 fps (FLL 3098, link 774.144 MHz),
+  4032x2272 at 60 fps (link 794.624 MHz), 2016x1508 and 2016x1136 binned
+  at 60 fps; the 1864-byte file installed under
+  `/usr/lib/firmware/omandroid/camera/`.
+- **3b.1: passed, with one driver bug.** `sec_acpm`, `gpio_s2mpg13`,
+  `slg51002_regulator` (pattern ID 0xb13103), then `imx386`: probe ok,
+  bound to `0-001a`, "mode 4032x2272: link frequency 794624000 not in DT,
+  dropped" (expected), runtime-suspended afterwards with every camera rail
+  at use count 0. But "Runtime PM usage count underflow!" twice right after
+  probe: the control handler took `pm_runtime_get_if_in_use()`'s -EINVAL
+  (runtime PM not yet enabled during probe) for "in use" and dropped a
+  reference it never took. Fixed in `e6fd4a6b5` (writes only on a positive
+  count), which also logs "model 0x0386" at probe. Re-check on the next
+  build: no underflow, and the model line in dmesg.
+
 ### CAM4: the CSIS WDMA writes frames. Risk: high (first DMA)
 
 The WDMA writes to the buffer address it is given, with its SysMMU in
