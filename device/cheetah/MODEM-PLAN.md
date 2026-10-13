@@ -666,6 +666,48 @@ realistically two to three months away, M3 included, and calls need the
 AoC voice path on top (M5).
 The SIT transport, message IDs, layouts and a minimal client are in [MODEM-SIT-RESEARCH.md](MODEM-SIT-RESEARCH.md).
 
+
+**M2.5 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00345-g606b84c7a9fd, int
+with omandroid-modem 1344a9e0b; overlays incl. `modem-link-test`): power-off
+of the modem disturbs UFS every time; the rest is clean.**
+- M2.5.0: four "watching cp2ap-... (now 0)", "steps enabled, modem lines here".
+- M2.5.1 baseline, 60 s of `dd` reads with the modem off: err_handler count 0,
+  every UFS stats counter 0.
+- M2.5.2 (powered, no link, 60 s under load): `cp2ap-wakeup -> 1` 18 ms after
+  "modem power-on sequence"; **no** event at +20 s (the M2 event at 21 s did
+  not repeat); no UFS error while powered. 0.15 s after "modem power-off
+  sequence": `ufshcd_err_handler` (saved_err 0x4, saved_uic_err 0x40), back
+  to operational; stats then PHY Adapter 6, Data Link 20518.
+- M2.5.3 (stock timing): "link up: Gen1 x1 (target Gen1), try 1" 0.28 s after
+  power-on; 60 s up under load with no link-down and no UFS error; at
+  link_down + cp_off: **"PHY isolated (PMU 0x3ec0 = 0x0)"** (the M2.4 fix
+  works), status PMU 0x0, perst 1, "faults: 0x0, ctrl irq off". 0.08 s after
+  the power-off sequence: the same UFS handler pass (+3 PHY Adapter, +5540
+  Data Link).
+- In every case: no I/O error, no ext4 error, Host Resets 0, SCSI aborts 0,
+  Logical Unit Resets 0.
+- **Conclusion:** the modem's power-off sequence (not power-on, not a running
+  link) disturbs the UFS link, as the agent's analysis suspected (the
+  modem's own supplies collapsing; stock powers the modem off only at
+  shutdown). The modem stack must keep the modem on once it's up and avoid
+  power cycles; investigate the power-off ordering (PDA_ACTIVE, PM/CP reset
+  lines, a delay) and whether quiescing UFS around a power-off is needed.
+
+**M3.1 result (same boot): passed.** ASPM policy set to `performance`. One
+command did power-on, link, ATU, ID and bus scan: "bridge configuration
+invalid ... reconfiguring" (normal for a fresh bus), then `0001:00:00.0
+144d:ecec` (root port) and `0001:01:00.0 [144d:a5a5] type 00 class 0x000000
+PCIe Endpoint`, BARs 0 and 2-5 sized 1 MiB (unassigned: CPIF assigns them),
+ROM 64 KiB, "ASPM: default states L1"; LTSSM 0x11, "faults: 0x0, ctrl irq
+on". No driver bound to the endpoint (and none to the root port).
+`link_down` + `cp_off`: config space read `ffffffff` (no hang), PMU 0x3ec0
+0x0, "state: cp 0, phy 0/0, link 0, atu 0", "faults: 0x0, ctrl irq off",
+no link-down event. The power-off again gave one recovered UFS handler pass.
+`rmmod pcie_gs201_cp` removed domain 0001. UFS totals after M2.5 and M3.1:
+PHY Adapter 12, Data Link 76021, no resets or aborts, no I/O errors.
+Next: M3.3-B (bind only) needs a boot with `modem-cpif-test` instead of
+`modem-link-test`.
+
 #### M3.1: the bus on the ROM link (after M2.5, same boot or the next)
 
 **Kernel:** int with `omandroid-modem` at the M3.2 head (section 2.1) or
