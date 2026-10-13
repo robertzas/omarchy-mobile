@@ -12,11 +12,11 @@ kernel from this branch: runbook P comes first.** On the phone (2026-10-13): P p
 PHY file), CAM-M passed M.1-M.4 (the S5KGN1 answers, its C-PHY link
 counts 30 fps), M.5's first DMA in the 2032x1536 mode stopped with
 `LASTADDR`, and so did 2016x1136 (M.5b, either start value); next
-CAM-M.5c (error-bit counts, then LRTE at its reset value) with CAM7 in
-parallel. Kernel branch
-`omandroid-camera` head `32e190c83` (`cb502b561` error-bit counters,
-`32e190c83` LRTE parameter and last-packet log, on top of `c91185280`,
-which int has; the two are not merged);
+CAM-M.5c (error bits: only `ERR_WRONG_CONFIG`; LRTE no effect; the
+overrun's last packet is a VC 1 RAW10 line), next CAM-M.5d (VC 1 on its
+own link channel) with CAM7 in parallel. Kernel branch
+`omandroid-camera` head `8c93e69cb` (`8c93e69cb` VC parameters, on top
+of `32e190c83` and `cb502b561`, which int `0470612d2` has; not merged);
 libcamera 0.7.2-4.6 (patches 0013-0014: the front and
 telephoto sensors, a near-size mode rule) built and checked offline, the
 phone still runs 4.4. Ultrawide quality: CAM5.3, Snapshot CAM5.4, what to
@@ -2546,6 +2546,93 @@ tools/raw10-stats logs/camm-bars.raw --width 2016 --height 1136 --stride 2560 --
 - If M.5c-2 passes: 0x7fff7fff becomes the C-PHY default in the driver
   (a small commit), then M.5b-3 (4080x3072), M.6, M.7.
 - **Rollback:** reboot; parameters are per load; the previous int kernel.
+
+**CAM-M.5c results (2026-10-13, int `0470612d2` =
+`7.3.0-rc6-omandroid-push1-00451-g0470612d2158`: `8070cddd9` +
+`cb502b561` + `32e190c83`; same overlays):**
+- **M.5c-0 (link only, LRTE 0x7fff):** FS/FE 144, 26399 link errors,
+  **INT0 bit 3 (`ERR_WRONG_CONFIG`) only**: no overflow, no CRC/ECC, no
+  resolution mismatch.
+- **M.5c-1 (same boot, `lrte_config=0x7fff7fff`):** FS/FE 143, 23251, bit
+  3 only. LRTE makes no difference on the link.
+- **M.5c-2 (fresh boot, DMA, 2016x1136, `lrte_config=0x7fff7fff`):**
+  "WDMA error 0x00008000 ... 2016x1136, 2560 bytes a line, 2908160 a
+  frame; link last packet **0x09d86b00**, FRM_CNT 0x00000001, LRTE
+  0x7fff7fff"; FS/FE 143, link errors 27890 (bit 3 only), WDMA done 0,
+  256 errors, **WDMA bits 15 (`LASTADDR`) x254, 20 x2**; no data. LRTE
+  is not the cause.
+- **The packet at the overrun is a 2520-byte RAW10 line on VC 1**
+  (identifier 0x6b): the GN1's second stream is full-width RAW10 lines,
+  not small phase-detection packets.
+
+**Why, third pass (offline):**
+- WDMA bit 20 is channel 0's `OVERLAP` (GPL bit names): a frame start
+  while the channel was still busy with the last frame, as expected once
+  it is stuck at its last address.
+- The only link error is `ERR_WRONG_CONFIG`, about 180-200 interrupts a
+  frame (coalesced; consistent with one per VC 1 line, the 2016x1136
+  mode's settings set a manufacturer register to 284, a quarter of the
+  height, perhaps that stream's line count [I]). The link flags those
+  packets as matching no channel, yet the WDMA overruns with one as the
+  last header: **the VC 1 lines most likely reach WDMA channel 0
+  anyway**, so channel 0 gets 1136 + N lines and hits its last address
+  in the first frame. That an unmatched packet falls through to channel
+  0's output is [I]; it would also explain why the ultrawide works (its
+  only extra is one short embedded line a frame, a smaller overrun the
+  WDMA may tolerate) and fits the earlier note that a channel on VC 1
+  changed what channel 0 delivered (section 4.4).
+- Our VC filter is in the right place: channel 0's config reads 0x20ac
+  (VC field 20:16 = 0), channels 1-3 0x000f20fc (VC 15, data type 0x3f).
+  The shared-context change (`123ac15cd`) only shares context 0 between
+  links that stream one at a time; it routes nothing extra, and WDMA
+  channels 1-3 are never enabled.
+- Stock gives VC 1 a channel (1, with "no data type" 0x3f, section 4.4)
+  and runs its RAW output on WDMA channel 2; it never leaves the VC 1
+  stream unmatched. The working set-up elsewhere is what we copied (VC
+  15 parking), but it may have captured with the second stream off or
+  smaller (real images, not the colour bars our runs use: unknown).
+- **Not CAM 664 MHz:** no overflow bit on the link or the WDMA.
+
+**Built:** `8c93e69cb` `media: gs201-csis: choose the virtual channels of
+link channels 0 and 1` (W=1 clean; defaults unchanged): `ch1_vc=N`
+gives link channel 1 virtual channel N with channel 0's data type and
+size (its WDMA channel stays off), so the second stream has a channel of
+its own; `ch0_vc=N` makes channel 0 (and the WDMA) take VC N instead, to
+capture the second stream by itself.
+
+### CAM-M.5d: give VC 1 its own channel (and look at the second stream). Risk: medium (DMA in d-3)
+
+```sh
+# M.5d-K kernel: int + omandroid-camera 8c93e69cb, the same overlays (ASK FIRST)
+tools/phone-ssh 'modinfo -p gs201_csis | grep -E "ch0_vc|ch1_vc"'
+P='modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 1;'
+# M.5d-0 (this boot, link only) the second stream without the colour bars
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=0 PATTERN=0 bash -s" --script tools/camera-cap-test
+#   record: the INT0 b3 count per frame (M.5c: ~180) and link1+0x6a0
+# M.5d-1 (same boot, link only, colour bars) VC 1 on channel 1
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=0 CSIS_OPTS=ch1_vc=1 bash -s" --script tools/camera-cap-test
+#   record: b3 count (pass: about 0: every VC 1 packet now matches channel 1), any INT1
+#   b5/b6 (channel 1's size differs from the second stream's: record, harmless here),
+#   link1+0x050 = 0x000120ac in the scan
+# M.5d-2 (same boot, link only) channel 0 on VC 1: does the second stream form frames?
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=0 CSIS_OPTS=ch0_vc=1 bash -s" --script tools/camera-cap-test
+#   record: FS/FE, error bits (INT1 b6 = V size mismatch: its line count isn't 1136)
+# M.5d-3 (next boot) DMA with VC 1 on channel 1; if M.5d-0 showed no VC 1 traffic
+#   without the bars, use PATTERN=0 instead of ch1_vc=1 (one change either way)
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=1 FRAMES=4 CSIS_OPTS=ch1_vc=1 bash -s" --script tools/camera-cap-test
+tools/phone-ssh 'cat /tmp/cam-2016x1136.raw' > logs/camm-bars.raw
+tools/raw10-stats logs/camm-bars.raw --width 2016 --height 1136 --stride 2560 --bars 8
+#   pass: wdma_done 4, errors 0, 11 632 640 bytes, eight bars
+#   stop: LASTADDR again: record the error line and bits; next (one boot later):
+#   DMA of the second stream alone (ch0_vc=1, real image) to see what it is
+```
+
+- If M.5d-3 passes: VC 1 on channel 1 becomes the driver's default for
+  the S5KGN1 (a DT property for "the sensor's second stream is on VC n"
+  or always giving VC 1 a data-typed channel; a small commit), then
+  M.5b-3 (4080x3072), M.6, M.7.
+- **Rollback:** reboot; parameters per load.
+- CAM7 (front) can run in between as 7.R says.
 
 ### CAM5.3: ultrawide quick wins. Risk: low to medium
 
