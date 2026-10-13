@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Builds and releases for many devices
 
-How Omarchy Mobile goes from one hand-built Pixel 7 Pro to a project that builds and releases for several Pixels with the same tools. This is the design; the order of the work is the "Multi-device builds and releases" track in [ROADMAP.md](ROADMAP.md) §3.8. Status (2026-10-13): step 1 (the device descriptor and `DEVICE=` in `bin/omamobile`) is done for cheetah. Everything after it is design.
+How Omarchy Mobile goes from one hand-built Pixel 7 Pro to a project that builds and releases for several Pixels with the same tools. This is the design; the order of the work is the "Multi-device builds and releases" track in [ROADMAP.md](ROADMAP.md) §3.8. Status (2026-10-13): step 1 (the device descriptor and `DEVICE=` in `bin/omamobile`) is done for cheetah, and so is most of §6: the root image (`tools/build-rootfs`), the installer (`tools/install-phone`, the bundle's `install`), the first-boot setup (`omamobile-firstboot`), the bundle (`tools/make-bundle`), aarch64 package builds without a phone (`tools/build-packages`) and per-phone provisioning (`tools/phone-provision`). They are tested offline (`tests/all`) and not yet run on a phone: [REINSTALL-RUNBOOK](../device/cheetah/REINSTALL-RUNBOOK.md) is their first use. The kernel package (§4), the package hook (§5) and signed releases (§7-§11) are still design.
 
 The safety model in [CONTRIBUTING.md](../CONTRIBUTING.md) §3 and [AGENTS.md](../AGENTS.md) §1 is not up for redesign here. Every tool, hook and installer below keeps it:
 
@@ -164,7 +164,23 @@ The same Alpine-based initramfs, with release differences:
 
 ## 6. Release bundles and the installer
 
-For a first install, or to recover a phone that won't boot. One bundle per device per release:
+For a first install, or to recover a phone that won't boot. One bundle per device per release.
+
+**What exists (2026-10-13).** Built and tested offline; the first real use is [REINSTALL-RUNBOOK](../device/cheetah/REINSTALL-RUNBOOK.md):
+
+| Piece | Where | Notes |
+| --- | --- | --- |
+| aarch64 packages without a phone | `tools/build-packages` | makepkg in an Arch Linux ARM container (the official tarball, MD5 and signature checked against the pinned build key, `tools/lib/alarm.sh`) under the laptop's qemu-user; signs with `keys/` into `out/repo/aarch64`. Mesa, Hyprland and libcamera take hours this way, so they're built only when named, once per version |
+| The shared root image | `tools/build-rootfs`, `rootfs/` | pacstrap in that container: `rootfs/packages.base`, then Omarchy's own `install/omarchy-base.packages` (minus `rootfs/packages.omarchy-skip` and what isn't built for aarch64), then `rootfs/packages.omamobile` and the device package, the `[omamobile]` repository itself, the kernel modules of the current build, and `patches/omarchy`. Output `out/omamobile-rootfs-<date>-aarch64.img.zst`, `.sha256` and a `MANIFEST` with every package version (also inside, `/usr/share/omamobile/rootfs/MANIFEST`) |
+| First boot | `packages/omamobile-firstboot` | reads `/etc/omamobile/firstboot.conf` (data, never sourced), creates the user, SSH keys, ufw with SSH on `usb0`, runs Omarchy's own setup leaves (skipping four that don't fit a phone), SDDM autologin and the lock, Omarchy's and our user setup, then deletes the file |
+| Growing the root | `device/cheetah/initramfs/init` (`grow_root`) | `resize2fs` before mounting, only for a file system labelled `omamobile-root` smaller than its partition; `omamobile.noresize` skips it |
+| The installer | `tools/install-phone` (the bundle's `install`) | as described below, steps 1, 3-5; the factory-image step (2) is `tools/phone-provision` after the first boot instead |
+| The bundle | `tools/make-bundle` | `out/bundle/omamobile-<codename>-<date>/` as below, `SHA256SUMS.sig` from `keys/` |
+| Per-phone data | `tools/phone-provision` | the extract tools on the user's factory image, pushed over USB SSH, plus the phone's own backup (modem board id and NV checksums, camera data, settings, home screens, fingerprint state only with `--fingerprint`) |
+
+Decisions taken in building it: the device packages are **installed** in the image, not only cached (one device so far; a first boot without a package step has one less way to fail; §12 decision 6 stays open for the second device); the image's `[omarchy]` is Omarchy's **edge** channel, the only one with aarch64 builds of `omarchy`, `omarchy-settings` and `quickshell`; the image is per device (its `MANIFEST` names the device, and the installer refuses a mismatch).
+
+The design:
 
 ```
 omamobile-<codename>-<version>/
@@ -180,7 +196,7 @@ omamobile-rootfs-<version>-aarch64.img.zst   shared by every device, downloaded 
 
 **The shared root image** is an ext4 Arch Linux ARM root with Omarchy, the `[omamobile]` repository configured and its keyring, `linux-omamobile`, `omamobile-shell` and every device package in the package cache but **none installed**. It is built by `pacstrap` in an aarch64 container. It contains no Google file. Its size is a few GB, flashed sparse; the first boot grows it to the whole `userdata` partition (`resize2fs` in the initramfs, before mounting).
 
-**`install`**, run on the laptop with the phone in fastboot:
+**`install`** (`tools/install-phone`), run on the laptop with the phone in fastboot:
 
 1. Checks the bundle's signature and checksums, and that `fastboot getvar product` is this bundle's codename, the bootloader is unlocked, and both slots carry the same bootloader version. Any doubt stops it.
 2. Asks for the user's factory zip, checks its `board=`, and runs the device's firmware and chroot extraction on the laptop.
@@ -260,6 +276,6 @@ Per release, in order. Stop at any failed step.
 3. **The package hook on development phones:** opt-in by `AUTO_WRITE=yes` (proposed), or on by default with `bin/omamobile push` turning it off.
 4. **Signing key:** keep the one key for bundles too, or create a release key (or subkeys) before the repository is public.
 5. **CI host** for aarch64 packages: GitHub's arm64 runners, another arm64 machine, or the phone as today.
-6. **Root image:** device packages in the cache and installed on first boot (proposed), or one root image per device.
+6. **Root image:** device packages in the cache and installed on first boot, or one root image per device. The first build (§6) installs them, so its image is per device; revisit with the second device.
 7. **Bundle hosting:** GitHub Releases on this repository, or next to the `[omamobile]` repository.
 8. **Second device:** which Pixel proves the model (a gs201 sibling such as panther needs mostly a DTS; a gs101 phone also tests the different boot image set).

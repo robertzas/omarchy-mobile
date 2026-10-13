@@ -6,11 +6,26 @@ Native Omarchy on Google Pixel phones: Arch Linux ARM, Hyprland and Omarchy's ow
 
 Plan: https://claude.ai/code/artifact/060038bc-beff-497e-9643-4f322318b2be
 
+## Quick start
+
+You need a Pixel 7 Pro with an unlocked bootloader, an Omarchy (Arch) laptop with Docker, `android-tools` and `e2fsprogs`, and Google's factory image for the phone. Stock Android stays on slot A as the way back; installing erases `userdata`.
+
+```sh
+tools/build-packages                 # Omarchy Mobile's packages for aarch64 (out/repo)
+tools/build-rootfs                   # the root image: Arch Linux ARM, Omarchy, our packages
+tools/install-phone --dry-run        # phone in fastboot: checks it, asks for your user, shows every command
+tools/install-phone                  # writes only slot B's boot images and userdata
+tools/phone-provision FACTORY.zip    # after the first boot: firmware from your own factory image
+```
+
+The kernel and boot images come from `bin/omamobile kernel`, `modules`, `initramfs` and `images` (CONTRIBUTING.md §4). Step by step, with what to expect at each point: [device/cheetah/REINSTALL-RUNBOOK.md](device/cheetah/REINSTALL-RUNBOOK.md).
+
 ## Layout
 
 | Path | What it is |
 | --- | --- |
 | `bin/omamobile` | Build and flash tooling: `capture`, `kernel`, `modules`, `initramfs`, `images`, `flash`, `push`, `kexec`, `fastboot` |
+| `tools/build-packages`, `tools/build-rootfs`, `tools/install-phone`, `tools/phone-provision`, `tools/make-bundle` | The installer: aarch64 packages and the root image built on the laptop, the narrow fastboot installer, per-phone provisioning, release bundles (`rootfs/` holds the image's package lists; `tests/` their tests) |
 | `tools/` | Staged bring-up and capture tools, on-phone probes, firmware extraction from the user's factory image, package and repository helpers |
 | `packages/` | pacman packages: `omamobile-shell` (the phone profile for Omarchy's shell), `omamobile-apps` (the mobile apps desktop Omarchy lacks: Maps, NFC), `omamobile-device-cheetah` (Pixel 7 Pro support), `omamobile-sensors` (sensors and auto-rotate through the AoC), `omamobile-gnss` (location on demand), `omamobile-mirror` (the phone's screen and input on a computer over USB, VNC), `omamobile-audio` (PipeWire and speaker protection), `omamobile-speaker-tuning` (stock's speaker tuning, off by default), `omamobile-fingerprint` with a patched `libfprint`, `omamobile-modem` (the modem's vendor chroot profile), `omamobile-modem-sit` (the SIT client daemon, not yet run on the phone), `neard`, `omamobile-keyring` (the `[omamobile]` repository's signing key), patched `mesa` and `hyprland`. `tools/phone-install-package` builds one on the phone and installs it |
 | `patches/omarchy/` | Changes to Omarchy for touch devices, to send upstream (`bridge-*` ones are stopgaps for the phone's older Omarchy) |

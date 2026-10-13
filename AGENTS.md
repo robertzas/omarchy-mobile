@@ -87,6 +87,9 @@ tools/phone-ssh CMD    -> run anything; stream files with  ssh 'cat > f' < f
 | `tools/extract-vendor-firmware`, `extract-vendor-chroot`, `extract-fingerprint-vendor` | Google's files from the user's own factory image, on the laptop |
 | `tools/phone-mirror` | The phone's screen in a VNC viewer on the laptop with input (`omamobile-mirror on` on the phone, wayvnc on 172.16.42.1:5900 only); `--keep` leaves it on. Affects the phone's feel: announce it |
 | `tools/phone-install-package packages/X` | Build a package on the phone and install it |
+| `tools/build-packages`, `tools/build-rootfs` | aarch64 packages (signed, `out/repo`) and the root image, built on the laptop in an Arch Linux ARM container (qemu-user); no phone |
+| `tools/install-phone` | The installer: fastboot checks, the owner's answers into a local image copy, then only slot B's images and `userdata`. Asks the human to type the codename; `--dry-run` first. Never run it without the human's go |
+| `tools/phone-provision` | After a fresh install: Google's files from the user's factory image and the phone's own data from the backup. `--fingerprint` copies Trusty's state but never starts the service |
 | `tools/repo-build`, `tools/repo-push` | Maintainer only: the signed `[omamobile]` repository (needs `keys/`, never committed) |
 | `tools/publish-kernel` | Maintainer only: publish `omamobile` to GitHub on a squashed upstream base |
 
