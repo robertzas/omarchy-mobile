@@ -1,0 +1,179 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omamobile-firstboot, from a copy of this directory alone: the
+# staged layout; firstboot.conf parsing and validation (--check) against a
+# scratch root; and a whole run against a scratch root with fake system
+# commands, which must create the user, keys, firewall rule, Wi-Fi
+# connection and autologin, never log a secret, delete the conf, and be
+# safe to run again.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+pkg=$PWD
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+
+bash -n bin/omamobile-firstboot || fail "omamobile-firstboot parses"
+bash -n install || fail "install parses"
+pass "scripts parse"
+
+./install "$t/stage"
+for f in usr/bin/omamobile-firstboot usr/lib/systemd/system/omamobile-firstboot.service \
+         etc/ssh/sshd_config.d/10-omamobile.conf usr/share/licenses/omamobile-firstboot/LICENSE; do
+  [[ -e $t/stage/$f ]] || fail "install stages $f"
+done
+[[ $(readlink "$t/stage/usr/lib/systemd/system/multi-user.target.wants/omamobile-firstboot.service") == ../omamobile-firstboot.service ]] ||
+  fail "the unit is enabled by a vendor wants link"
+grep -qx 'ConditionPathExists=/etc/omamobile/firstboot.conf' systemd/omamobile-firstboot.service || fail "the unit only runs with a conf"
+grep -qx 'Before=display-manager.service' systemd/omamobile-firstboot.service || fail "the unit runs before the login screen"
+grep -qx 'PasswordAuthentication no' ssh/10-omamobile.conf || fail "sshd takes keys only"
+pass "install stages the package"
+
+# --- a scratch root -----------------------------------------------------------
+R=$t/root
+mkdir -p "$R"/etc/omamobile "$R"/etc/ufw "$R"/usr/share/zoneinfo/Europe "$R"/usr/local/share/wayland-sessions \
+         "$R"/home "$R"/root "$R"/etc/pacman.d
+: > "$R/usr/share/zoneinfo/UTC"
+: > "$R/usr/share/zoneinfo/Europe/Paris"
+: > "$R/usr/local/share/wayland-sessions/omarchy.desktop"
+echo 'ENABLED=no' > "$R/etc/ufw/ufw.conf"
+cat > "$R/etc/passwd" <<'EOF'
+root:x:0:0::/root:/bin/bash
+bin:x:1:1::/:/usr/bin/nologin
+sddm:x:964:964::/var/lib/sddm:/usr/bin/nologin
+nobody:x:65534:65534:Kernel Overflow User:/:/usr/bin/nologin
+EOF
+cat > "$R/etc/group" <<'EOF'
+root:x:0:root
+wheel:x:998:
+audio:x:995:
+video:x:986:
+input:x:994:
+sddm:x:964:
+EOF
+
+HASH='$6$abcdefgh$D7W7qyozKBT.t6FD3DVYHvADbIO0eSyI4.p20LaEUjro8PqTGYYo/EQcuNjhFbzo9Yg5ir1KIEqFY/yJpgFph0'
+KEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl laptop'
+PSK='correct horse $battery'
+good() {
+  cat <<EOF
+# written by tools/install-phone
+USERNAME=alice
+PASSWORD_HASH=$HASH
+HOSTNAME=alice-phone
+TIMEZONE=Europe/Paris
+SSH_KEY=$KEY
+WIFI_SSID=Home Net
+WIFI_PSK=$PSK
+CREDENTIAL=pin
+FULL_NAME=Alice Example
+EMAIL=alice@example.org
+EOF
+}
+
+check() { OMAMOBILE_FIRSTBOOT_ROOT=$R bin/omamobile-firstboot --check "$1" 2>&1; }
+good > "$t/good.conf"
+out=$(check "$t/good.conf") || fail "a good conf passes: $out"
+grep -q 'user:      alice' <<<"$out" || fail "--check names the user"
+grep -q 'Home Net (WPA-PSK)' <<<"$out" || fail "--check names the network"
+grep -qF "$PSK" <<<"$out" && fail "--check never prints the passphrase"
+grep -qF "$HASH" <<<"$out" && fail "--check never prints the hash"
+pass "--check accepts a good conf and prints no secret"
+
+# Each bad conf must be refused, with a reason
+refuse() {
+  local why=$1 conf=$t/bad.conf out
+  cat > "$conf"
+  if out=$(check "$conf"); then fail "refuses $why"; fi
+  [[ -n $out ]] || fail "says why it refuses $why"
+}
+for name in root alarm omamobile omandroid omarchy sddm systemd-network nobody bin; do
+  good | sed "s/^USERNAME=.*/USERNAME=$name/" | refuse "reserved user $name"
+done
+good | sed 's/^USERNAME=.*/USERNAME=Alice/' | refuse "an upper-case user name"
+good | sed 's/^USERNAME=.*/USERNAME=1alice/' | refuse "a user name starting with a digit"
+good | sed 's/^USERNAME=.*/USERNAME=al ice/' | refuse "a user name with a space"
+good | sed 's/^USERNAME=.*/USERNAME=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/' | refuse "a 33-character user name"
+good | sed '/^USERNAME=/d' | refuse "a missing user name"
+good | sed 's/^PASSWORD_HASH=.*/PASSWORD_HASH=hunter2/' | refuse "a plain-text password"
+good | sed 's/^PASSWORD_HASH=.*/PASSWORD_HASH=$1$abc$def/' | refuse "an md5-crypt hash"
+good | sed 's/^HOSTNAME=.*/HOSTNAME=-bad/' | refuse "a bad host name"
+good | sed 's/^TIMEZONE=.*/TIMEZONE=..\/..\/etc\/passwd/' | refuse "a time zone outside zoneinfo"
+good | sed 's/^TIMEZONE=.*/TIMEZONE=Mars\/Base/' | refuse "an unknown time zone"
+good | sed 's/^SSH_KEY=.*/SSH_KEY=not a key/' | refuse "a bad SSH key"
+good | sed 's/^WIFI_PSK=.*/WIFI_PSK=short/' | refuse "a short passphrase"
+good | sed '/^WIFI_SSID=/d' | refuse "a passphrase without a network"
+good | sed 's/^CREDENTIAL=.*/CREDENTIAL=pattern/' | refuse "an unknown credential type"
+good | sed 's/^FULL_NAME=.*/FULL_NAME=a:b/' | refuse "a colon in the full name"
+{ good; echo 'EXTRA=1'; } | refuse "an unknown key"
+{ good; echo 'USERNAME=bob'; } | refuse "a key given twice"
+{ good; echo 'not a line'; } | refuse "a line that isn't KEY=value"
+{ good; printf 'EMAIL=a@b\x07c\n'; } | sed '/^EMAIL=alice/d' | refuse "a control character"
+pass "--check refuses bad confs"
+
+# A value is data: a $(...) in it is never run
+mark=$t/ran
+good | sed "s|^FULL_NAME=.*|FULL_NAME=\$(touch $mark)|" > "$t/inject.conf"
+check "$t/inject.conf" >/dev/null || true
+[[ ! -e $mark ]] || fail "a value is never executed"
+pass "values are data, never executed"
+
+# --- a whole run against fakes ------------------------------------------------
+F=$t/fakes; mkdir -p "$F"; CALLS=$t/calls; : > "$CALLS"
+fake() { printf '#!/bin/bash\n%s\n' "$2" > "$F/$1"; chmod +x "$F/$1"; }
+for cmd in pacman-key systemctl ufw chown hostname nmcli usermod omamobile-setup-system; do
+  fake "$cmd" 'echo "$(basename "$0") $*" >> "$CALLS"'
+done
+fake useradd 'echo "useradd $*" >> "$CALLS"; u=${@: -1}; echo "$u:x:1000:1000::/home/$u:/bin/bash" >> "$R/etc/passwd"; mkdir -p "$R/home/$u"'
+fake chpasswd 'echo "chpasswd $* $(cat)" >> "$CALLS.secret"'
+fake id 'echo 1000'
+fake runuser 'echo "runuser $*" >> "$CALLS"; shift 3; [[ $1 == env ]] && { shift; while [[ $1 == -i || $1 == *=* ]]; do shift; done; }; case $1 in mkdir|touch|sh) "$@" ;; esac'
+export CALLS R
+run() { OMAMOBILE_FIRSTBOOT_ROOT=$R OMARCHY_PATH=$t/no-omarchy PATH="$F:$PATH" bin/omamobile-firstboot > "$t/run.out" 2>&1; }
+
+good > "$R/etc/omamobile/firstboot.conf"
+run || { cat "$t/run.out"; fail "a run with a good conf succeeds"; }
+[[ ! -e $R/etc/omamobile/firstboot.conf ]] || fail "the conf is deleted after a run"
+[[ -f $R/var/lib/omamobile/firstboot/done ]] || fail "the run is recorded"
+grep -q '^useradd -m -G wheel,audio,video,input -s /bin/bash -c Alice Example alice$' "$CALLS" || fail "the user gets the groups and name"
+grep -q "^chpasswd -e alice:$HASH" "$CALLS.secret" || fail "the hash goes to chpasswd -e"
+grep -q '^usermod -L root$' "$CALLS" || fail "root stays locked"
+grep -qx '%wheel ALL=(ALL:ALL) ALL' "$R/etc/sudoers.d/00-omarchy-wheel" || fail "wheel gets sudo"
+grep -qxF "$KEY" "$R/root/.ssh/authorized_keys" || fail "root gets the SSH key"
+grep -qxF "$KEY" "$R/home/alice/.ssh/authorized_keys" || fail "the user gets the SSH key"
+[[ $(stat -c %a "$R/home/alice/.ssh/authorized_keys") == 600 ]] || fail "authorized_keys is private"
+grep -q '^ufw allow in on usb0 to any port 22 proto tcp$' "$CALLS" || fail "ufw allows SSH on usb0"
+grep -qx 'ENABLED=yes' "$R/etc/ufw/ufw.conf" || fail "ufw is on from the next boot"
+for unit in sshd.service systemd-networkd.service NetworkManager.service sddm.service ufw.service; do
+  grep -q "^systemctl enable $unit\$" "$CALLS" || fail "enables $unit"
+done
+grep -qx alice-phone "$R/etc/hostname" || fail "the host name"
+[[ $(readlink "$R/etc/localtime") == /usr/share/zoneinfo/Europe/Paris ]] || fail "the time zone"
+wifi=$(ls "$R"/etc/NetworkManager/system-connections/*.nmconnection)
+grep -qx 'ssid=Home Net' "$wifi" && grep -qxF "psk=$PSK" "$wifi" || fail "the Wi-Fi connection"
+[[ $(stat -c %a "$wifi") == 600 ]] || fail "the Wi-Fi connection is root-only"
+printf '[Autologin]\nUser=alice\nSession=omarchy.desktop\n' | cmp -s - "$R/etc/sddm.conf.d/autologin.conf" || fail "SDDM logs alice in"
+grep -qx pin "$R/home/alice/.config/omamobile/credential" || fail "the credential type"
+[[ -e $R/home/alice/.local/state/omarchy/toggles/lock-on-start ]] || fail "the phone locks after boot"
+grep -qF "$PSK" "$R/var/log/omamobile/firstboot.log" "$t/run.out" && fail "the log never has the passphrase"
+grep -qF "$HASH" "$R/var/log/omamobile/firstboot.log" "$t/run.out" && fail "the log never has the hash"
+pass "a run sets everything up and deletes the conf"
+
+: > "$CALLS"
+run || fail "without a conf, nothing to do"
+[[ ! -s $CALLS ]] || fail "without a conf, nothing runs"
+good | sed '/^WIFI_/d' > "$R/etc/omamobile/firstboot.conf"
+run || { cat "$t/run.out"; fail "a second run succeeds"; }
+grep -q '^usermod -aG wheel,audio,video,input' "$CALLS" || fail "a second run updates the user it made"
+[[ $(grep -cxF "$KEY" "$R/home/alice/.ssh/authorized_keys") == 1 ]] || fail "a second run doesn't duplicate the key"
+pass "running again is safe"
+
+# An essential step failing keeps the conf (minus the Wi-Fi secret) for the next boot
+rm -f "$R/var/lib/omamobile/firstboot/user"
+sed -i '/^alice:/d' "$R/etc/passwd"
+fake useradd 'exit 1'
+good > "$R/etc/omamobile/firstboot.conf"
+run && fail "a failed user step fails the run"
+[[ -f $R/etc/omamobile/firstboot.conf ]] || fail "a failed run keeps the conf"
+grep -q '^WIFI_' "$R/etc/omamobile/firstboot.conf" && fail "the Wi-Fi secret leaves the conf as soon as it is stored"
+pass "a failed run keeps the conf for the next boot, without the Wi-Fi secret"

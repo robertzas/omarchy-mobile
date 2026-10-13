@@ -1,0 +1,448 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-firstboot: set up a freshly installed Omarchy Mobile phone, once.
+#
+# tools/install-phone writes /etc/omamobile/firstboot.conf into the root image
+# it flashes. On the first boot omamobile-firstboot.service runs this before
+# the display manager. It does what Omarchy's own first-boot provisioning
+# (omarchy-provision-owner) and system setup (omarchy-apply-system) do on a
+# computer, without the questions (the installer asked them on the laptop):
+#
+#   1. the pacman keyring (the image ships none: a keyring's private key must
+#      not be shared between phones);
+#   2. hostname, time zone, locale (omamobile-setup-system);
+#   3. the user: groups wheel, audio, video, input; the password hash;
+#      root stays locked; sudo for wheel, as Omarchy does;
+#   4. the SSH key for root and the user, sshd on;
+#   5. Omarchy's system setup leaves (install/{config,hardware,login,
+#      post-install}), minus the few that don't fit a phone (SKIP below);
+#   6. the services the phone needs, and ufw with SSH allowed on usb0 only;
+#   7. optional Wi-Fi, stored as a NetworkManager connection (and then removed
+#      from firstboot.conf at once);
+#   8. SDDM autologin for the user, then Omarchy's lock (lock-on-start, once a
+#      PIN or password exists, which it does here);
+#   9. Omarchy's user setup (omarchy-provision-user), then
+#      omamobile-setup-user, as the user;
+#  10. deletes firstboot.conf.
+#
+# Every step is idempotent, so a failed run can simply run again (the unit
+# reruns at the next boot while firstboot.conf exists). The log is
+# /var/log/omamobile/firstboot.log. It never logs the password hash or the
+# Wi-Fi passphrase.
+#
+#   omamobile-firstboot            run (root; the unit does this)
+#   omamobile-firstboot --check [FILE]
+#                                  parse and validate FILE (default the conf),
+#                                  print what would be set up, change nothing
+#
+# firstboot.conf is data, never sourced: KEY=value lines, the value taken
+# literally to the end of the line (no quotes, no escapes), # comments and
+# blank lines. Keys:
+#   USERNAME        required; ^[a-z_][a-z0-9_-]{0,31}$, not reserved, not a
+#                   system account
+#   PASSWORD_HASH   required; sha512-crypt ($6$...), as openssl passwd -6 makes
+#   HOSTNAME        default omamobile
+#   TIMEZONE        default UTC; a zone under /usr/share/zoneinfo
+#   SSH_KEY         an OpenSSH public key; may repeat
+#   WIFI_SSID       optional; WIFI_PSK with it (none for an open network)
+#   CREDENTIAL      pin or password: how the lock screen asks (default pin)
+#   FULL_NAME, EMAIL  optional; git identity, as Omarchy's installer asks
+set -euo pipefail
+
+# Tests run the whole thing against a scratch root and fake commands.
+ROOT=${OMAMOBILE_FIRSTBOOT_ROOT:-}
+if [[ -n $ROOT ]]; then
+  [[ -d $ROOT && $ROOT != / ]] || { echo "OMAMOBILE_FIRSTBOOT_ROOT must be a scratch directory" >&2; exit 2; }
+fi
+CONF=$ROOT/etc/omamobile/firstboot.conf
+STATE=$ROOT/var/lib/omamobile/firstboot
+LOGDIR=$ROOT/var/log/omamobile
+LOG=$LOGDIR/firstboot.log
+OMARCHY_PATH=${OMARCHY_PATH:-$ROOT/usr/share/omarchy}
+
+# Names a person can't take: the system's own, Omarchy's and this project's
+# (old and new), and Omarchy's reserved list (install/provisioning/setup-form.sh).
+RESERVED='^(root|alarm|omamobile|omandroid|omarchy|bin|daemon|mail|ftp|http|nobody|dbus|systemd-.*|tss|uuidd|alpm|git|avahi|cups|cups-browsed|lp|_talkd|polkitd|rtkit|qemu|brltty|gluster|rpc|libvirt-qemu|pcscd|nvidia-persistenced|sddm|builder|admin)$'
+USERNAME_RE='^[a-z_][a-z0-9_-]{0,31}$'
+HOSTNAME_RE='^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$'
+HASH_RE='^\$6\$(rounds=[0-9]{4,9}\$)?[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{86}$'
+SSHKEY_RE='^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/]+={0,3}( [ -~]*)?$'
+TZ_RE='^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$'
+GROUPS_WANTED=(wheel audio video input)
+
+# Omarchy setup leaves that don't fit a phone. The rest run as Omarchy runs them.
+SKIP=(
+  post-install/pacman.sh   # installs Omarchy's x86_64 pacman.conf over the aarch64 one
+  hardware/pacman.sh       # the same step's repository additions (Apple T2 only)
+  config/snapper.sh        # snapshots need btrfs; the phone's root is ext4
+  hardware/network.sh      # disables systemd-networkd, which runs the USB link
+)
+
+die() { echo "omamobile-firstboot: $*" >&2; exit 1; }
+
+# --- Parsing and validation (also used by --check) ---------------------------
+
+declare -A C=()
+SSH_KEYS=()
+
+parse() {
+  local file=$1 line n=0 key value
+  [[ -f $file ]] || die "no $file"
+  while IFS= read -r line || [[ -n $line ]]; do
+    n=$((n + 1))
+    [[ $line =~ ^[[:space:]]*(#.*)?$ ]] && continue
+    [[ $line =~ ^([A-Z_]+)=(.*)$ ]] || die "$file:$n: not a KEY=value line"
+    key=${BASH_REMATCH[1]} value=${BASH_REMATCH[2]}
+    [[ $value != *[$'\x01'-$'\x1f\x7f']* ]] || die "$file:$n: $key has control characters"
+    case $key in
+      SSH_KEY) SSH_KEYS+=("$value") ;;
+      USERNAME|PASSWORD_HASH|HOSTNAME|TIMEZONE|WIFI_SSID|WIFI_PSK|CREDENTIAL|FULL_NAME|EMAIL)
+        [[ -z ${C[$key]+x} ]] || die "$file:$n: $key given twice"
+        C[$key]=$value ;;
+      *) die "$file:$n: unknown key $key" ;;
+    esac
+  done < "$file"
+}
+
+# A system account already in the image (uid below 1000, or nobody)?
+system_account() {
+  awk -F: -v u="$1" '$1 == u && ($3 < 1000 || $3 == 65534) {found = 1} END {exit !found}' "$ROOT/etc/passwd" 2>/dev/null
+}
+existing_account() { awk -F: -v u="$1" '$1 == u {found = 1} END {exit !found}' "$ROOT/etc/passwd" 2>/dev/null; }
+
+validate() {
+  # Byte ranges ([ -~] is printable ASCII) whatever the locale
+  local LC_ALL=C
+  local u=${C[USERNAME]:-} k ssid psk
+  [[ -n $u ]] || die "USERNAME is required"
+  [[ $u =~ $USERNAME_RE ]] || die "USERNAME '$u' must match $USERNAME_RE"
+  [[ ! $u =~ $RESERVED ]] || die "USERNAME '$u' is reserved"
+  ! system_account "$u" || die "USERNAME '$u' is a system account"
+  # A normal account of that name exists only if an earlier run made it
+  if existing_account "$u" && [[ $(cat "$STATE/user" 2>/dev/null) != "$u" ]]; then
+    die "USERNAME '$u' already exists and wasn't created by firstboot"
+  fi
+  [[ ${C[PASSWORD_HASH]:-} =~ $HASH_RE ]] || die "PASSWORD_HASH must be a sha512-crypt hash (\$6\$...)"
+  C[HOSTNAME]=${C[HOSTNAME]:-omamobile}
+  [[ ${C[HOSTNAME]} =~ $HOSTNAME_RE ]] || die "HOSTNAME '${C[HOSTNAME]}' must be 1-63 letters, digits or dashes"
+  C[TIMEZONE]=${C[TIMEZONE]:-UTC}
+  [[ ${C[TIMEZONE]} =~ $TZ_RE && ${C[TIMEZONE]} != *..* ]] || die "TIMEZONE '${C[TIMEZONE]}' is not a zone name"
+  [[ -f $ROOT/usr/share/zoneinfo/${C[TIMEZONE]} ]] || die "TIMEZONE '${C[TIMEZONE]}' is not in /usr/share/zoneinfo"
+  for k in "${SSH_KEYS[@]}"; do
+    [[ $k =~ $SSHKEY_RE ]] || die "SSH_KEY is not an OpenSSH public key: ${k:0:40}..."
+  done
+  ssid=${C[WIFI_SSID]-} psk=${C[WIFI_PSK]-}
+  if [[ -n ${C[WIFI_PSK]+x} && -z ${C[WIFI_SSID]+x} ]]; then die "WIFI_PSK without WIFI_SSID"; fi
+  if [[ -n ${C[WIFI_SSID]+x} ]]; then
+    (( $(printf %s "$ssid" | wc -c) >= 1 && $(printf %s "$ssid" | wc -c) <= 32 )) || die "WIFI_SSID must be 1-32 bytes"
+    if [[ -n ${C[WIFI_PSK]+x} ]]; then
+      [[ $psk =~ ^[\ -~]{8,63}$ || $psk =~ ^[0-9A-Fa-f]{64}$ ]] || die "WIFI_PSK must be 8-63 printable ASCII characters or 64 hex digits"
+    fi
+  fi
+  C[CREDENTIAL]=${C[CREDENTIAL]:-pin}
+  [[ ${C[CREDENTIAL]} =~ ^(pin|password)$ ]] || die "CREDENTIAL must be pin or password"
+  [[ ${C[FULL_NAME]:-} != *[:,]* ]] || die "FULL_NAME can't contain : or ,"
+  [[ -z ${C[EMAIL]:-} || ${C[EMAIL]} =~ ^[^[:space:]@]+@[^[:space:]@]+$ ]] || die "EMAIL '${C[EMAIL]}' is not an address"
+}
+
+summary() {
+  echo "user:      ${C[USERNAME]} (groups ${GROUPS_WANTED[*]}, password set, ${C[CREDENTIAL]} unlock)"
+  echo "hostname:  ${C[HOSTNAME]}"
+  echo "time zone: ${C[TIMEZONE]}"
+  echo "ssh keys:  ${#SSH_KEYS[@]}"
+  if [[ -n ${C[WIFI_SSID]+x} ]]; then
+    echo "wi-fi:     ${C[WIFI_SSID]} ($([[ -n ${C[WIFI_PSK]+x} ]] && echo WPA-PSK || echo open))"
+  else
+    echo "wi-fi:     none"
+  fi
+  [[ -n ${C[FULL_NAME]:-}${C[EMAIL]:-} ]] && echo "git:       ${C[FULL_NAME]:-} <${C[EMAIL]:-}>"
+  return 0
+}
+
+if [[ ${1:-} == --check ]]; then
+  parse "${2:-$CONF}"
+  validate
+  summary
+  exit 0
+fi
+[[ $# == 0 ]] || die "usage: omamobile-firstboot [--check [FILE]]"
+[[ -n $ROOT || $EUID == 0 ]] || die "run as root"
+[[ -f $CONF ]] || { echo "omamobile-firstboot: no $CONF, nothing to do"; exit 0; }
+
+mkdir -p "$LOGDIR" "$STATE"
+chmod 700 "$STATE"
+touch "$LOG" && chmod 600 "$LOG"
+exec > >(tee -a "$LOG") 2>&1
+echo "=== omamobile-firstboot $(date -Is 2>/dev/null || date) ==="
+
+parse "$CONF"
+validate
+summary
+U=${C[USERNAME]}
+
+WARNINGS=()
+FATAL=0
+# step NAME FUNCTION: run one step, log its result, keep going on failure.
+# Essential steps (the account, the password, SSH, the login) keep
+# firstboot.conf in place when they fail, so the next boot tries again.
+step() {
+  local name=$1 essential=$2 fn=$3 status
+  echo "--- $name"
+  # A subshell outside any condition, so errexit holds inside it
+  set +e
+  ( set -euo pipefail; "$fn" )
+  status=$?
+  set -e
+  if ((status == 0)); then
+    echo "    done"
+  else
+    echo "    FAILED ($status)"
+    WARNINGS+=("$name")
+    [[ $essential == essential ]] && FATAL=1
+  fi
+  return 0
+}
+
+s_keyring() {
+  if [[ ! -f $ROOT/etc/pacman.d/gnupg/trustdb.gpg ]]; then
+    pacman-key --init
+  fi
+  pacman-key --populate
+}
+
+s_identity() {
+  printf '%s\n' "${C[HOSTNAME]}" > "$ROOT/etc/hostname"
+  [[ -n $ROOT ]] || hostname "${C[HOSTNAME]}" 2>/dev/null || true
+  ln -sfn "/usr/share/zoneinfo/${C[TIMEZONE]}" "$ROOT/etc/localtime"
+  if command -v omamobile-setup-system >/dev/null; then
+    omamobile-setup-system "${C[TIMEZONE]}"
+  fi
+}
+
+user_groups() {
+  local groups=() g
+  for g in "${GROUPS_WANTED[@]}" $(cat "$ROOT/var/lib/omarchy/provisioning/groups" 2>/dev/null); do
+    [[ $g == docker ]] && continue  # Omarchy keeps docker opt-in
+    grep -q "^$g:" "$ROOT/etc/group" 2>/dev/null || continue
+    [[ " ${groups[*]} " == *" $g "* ]] || groups+=("$g")
+  done
+  local IFS=,
+  echo "${groups[*]}"
+}
+
+s_user() {
+  local groups
+  groups=$(user_groups)
+  printf '%s\n' "$U" > "$STATE/user"
+  if existing_account "$U"; then
+    usermod -aG "$groups" ${C[FULL_NAME]:+-c "${C[FULL_NAME]}"} "$U"
+  else
+    useradd -m -G "$groups" -s /bin/bash ${C[FULL_NAME]:+-c "${C[FULL_NAME]}"} "$U"
+  fi
+  printf '%s:%s\n' "$U" "${C[PASSWORD_HASH]}" | chpasswd -e
+  # root has no password: SSH with the key only (sshd_config.d/10-omamobile.conf)
+  usermod -L root
+  mkdir -p "$ROOT/etc/sudoers.d"
+  echo "%wheel ALL=(ALL:ALL) ALL" > "$ROOT/etc/sudoers.d/.00-omarchy-wheel.new"
+  chmod 440 "$ROOT/etc/sudoers.d/.00-omarchy-wheel.new"
+  mv -f "$ROOT/etc/sudoers.d/.00-omarchy-wheel.new" "$ROOT/etc/sudoers.d/00-omarchy-wheel"
+}
+
+home_of() { awk -F: -v u="$1" '$1 == u {print $6}' "$ROOT/etc/passwd"; }
+
+# Add keys to an authorized_keys file, keeping what's there
+add_keys() {
+  local dir=$1 owner=$2 file k
+  file=$dir/authorized_keys
+  mkdir -p "$dir"
+  touch "$file"
+  for k in "${SSH_KEYS[@]}"; do
+    grep -qxF -- "$k" "$file" || printf '%s\n' "$k" >> "$file"
+  done
+  chmod 700 "$dir"
+  chmod 600 "$file"
+  chown -R "$owner" "$dir"
+}
+
+s_ssh() {
+  local home
+  home=$ROOT$(home_of "$U")
+  [[ -n $home ]] || return 1
+  if ((${#SSH_KEYS[@]})); then
+    add_keys "$ROOT/root/.ssh" root:root
+    add_keys "$home/.ssh" "$U:$U"
+  fi
+  systemctl enable sshd.service
+}
+
+# Omarchy's setup leaves, in Omarchy's order, as Omarchy's own runner runs them
+s_omarchy_system() {
+  local install=$OMARCHY_PATH/install part leaf rel
+  [[ -f $install/helpers/logging.sh ]] || { echo "no Omarchy install scripts at $install"; return 1; }
+  export OMARCHY_PATH OMARCHY_INSTALL=$install OMARCHY_INSTALL_USER=$U OMARCHY_FIRST_INSTALL=1 OMARCHY_UPGRADE=0
+  export OMARCHY_INSTALL_LOG_FILE=$ROOT/var/log/omarchy-install.log
+  export PATH="$OMARCHY_PATH/bin:$PATH"
+  # shellcheck disable=SC1091
+  source "$install/helpers/logging.sh"
+  start_install_log
+  local failed=0
+  for part in config hardware login post-install; do
+    while read -r leaf; do
+      rel=${leaf#"$install/"}
+      if [[ " ${SKIP[*]} " == *" $rel "* ]]; then
+        echo "    skip $rel (not for a phone)"
+        continue
+      fi
+      if run_logged "$leaf"; then echo "    ok   $rel"; else echo "    fail $rel (see $OMARCHY_INSTALL_LOG_FILE)"; failed=1; fi
+    done < <(sed -n 's/^run_logged "\$OMARCHY_INSTALL\/\(.*\)"$/\1/p' "$install/$part/all.sh" | sed "s|^|$install/|")
+  done
+  stop_install_log
+  # A leaf for other hardware failing is normal; it's in the log either way.
+  return 0
+}
+
+# The services a phone needs whatever Omarchy's leaves did, and the firewall:
+# Omarchy's rules plus SSH on the USB link (NOTES 2026-10-12, firewall).
+s_services() {
+  local unit
+  for unit in NetworkManager.service systemd-networkd.service systemd-resolved.service sshd.service \
+              sddm.service bluetooth.service systemd-timesyncd.service ufw.service; do
+    systemctl enable "$unit" || echo "    could not enable $unit"
+  done
+  systemctl mask systemd-networkd-wait-online.service NetworkManager-wait-online.service || true
+  if [[ ! -L $ROOT/etc/resolv.conf ]]; then
+    ln -sfn /run/systemd/resolve/stub-resolv.conf "$ROOT/etc/resolv.conf"
+  fi
+  ufw default deny incoming
+  ufw default allow outgoing
+  ufw allow 53317/udp
+  ufw allow 53317/tcp
+  ufw allow in on usb0 to any port 22 proto tcp
+  # Active from the next boot, as Omarchy's installer leaves it
+  sed -i 's/^ENABLED=.*/ENABLED=yes/' "$ROOT/etc/ufw/ufw.conf"
+}
+
+# GKeyFile string escaping for NetworkManager's keyfile format
+kf_escape() {
+  local v=${1//\\/\\\\}
+  [[ $v == " "* ]] && v="\\s${v:1}"
+  printf '%s' "$v"
+}
+
+s_wifi() {
+  [[ -n ${C[WIFI_SSID]+x} ]] || return 0
+  local dir=$ROOT/etc/NetworkManager/system-connections name file uuid
+  name=$(printf '%s' "${C[WIFI_SSID]}" | tr -c 'A-Za-z0-9._-' '_')
+  file=$dir/omamobile-wifi-$name.nmconnection
+  uuid=$(cat /proc/sys/kernel/random/uuid)
+  [[ -f $file ]] && uuid=$(sed -n 's/^uuid=//p' "$file")
+  mkdir -p "$dir"
+  ( umask 077
+    {
+      echo "[connection]"
+      echo "id=$(kf_escape "${C[WIFI_SSID]}")"
+      echo "uuid=$uuid"
+      echo "type=wifi"
+      echo "autoconnect=true"
+      echo
+      echo "[wifi]"
+      echo "mode=infrastructure"
+      echo "ssid=$(kf_escape "${C[WIFI_SSID]}")"
+      if [[ -n ${C[WIFI_PSK]+x} ]]; then
+        echo
+        echo "[wifi-security]"
+        echo "key-mgmt=wpa-psk"
+        echo "psk=$(kf_escape "${C[WIFI_PSK]}")"
+      fi
+      echo
+      echo "[ipv4]"
+      echo "method=auto"
+      echo
+      echo "[ipv6]"
+      echo "method=auto"
+    } > "$file.new"
+  )
+  mv "$file.new" "$file"
+  chmod 600 "$file"
+  # The passphrase now lives only in NetworkManager's root-only store
+  local tmp
+  tmp=$(mktemp "$CONF.XXXXXX")
+  grep -v '^WIFI_' "$CONF" > "$tmp" || true
+  chmod 600 "$tmp"
+  mv "$tmp" "$CONF"
+  if [[ -z $ROOT ]] && systemctl is-active --quiet NetworkManager; then
+    nmcli connection reload || true
+  fi
+}
+
+s_login() {
+  # Omarchy's session (omarchy-settings puts it in /usr/local/share)
+  local session="" dir
+  for dir in "$ROOT/usr/local/share/wayland-sessions" "$ROOT/usr/share/wayland-sessions"; do
+    [[ -f $dir/omarchy.desktop ]] && { session=omarchy; break; }
+  done
+  [[ -n $session ]] || { echo "Omarchy's Wayland session (omarchy.desktop) isn't installed"; return 1; }
+  mkdir -p "$ROOT/etc/sddm.conf.d" "$ROOT/var/lib/sddm"
+  # A phone logs in by itself and then locks (lock-on-start, s_user_setup),
+  # like Android; the PIN or password opens the lock.
+  printf '[Autologin]\nUser=%s\nSession=%s.desktop\n' "$U" "$session" > "$ROOT/etc/sddm.conf.d/autologin.conf"
+  printf '[Last]\nSession=%s.desktop\nUser=%s\n' "$session" "$U" > "$ROOT/var/lib/sddm/state.conf"
+  chown -R sddm:sddm "$ROOT/var/lib/sddm" 2>/dev/null || true
+}
+
+# Run a command as the user, with a user manager and session bus (gsettings,
+# systemctl --user), the way a login would have them
+as_user() {
+  local uid home
+  uid=$(id -u "$U") home=$ROOT$(home_of "$U")
+  runuser -u "$U" -- env -i HOME="$home" USER="$U" LOGNAME="$U" SHELL=/bin/bash \
+    PATH="$OMARCHY_PATH/bin:/usr/local/bin:/usr/bin" LANG=en_US.UTF-8 \
+    XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+    OMARCHY_PATH="$OMARCHY_PATH" OMARCHY_INSTALL="$OMARCHY_PATH/install" \
+    OMARCHY_SETUP_CONTEXT=provision-owner OMARCHY_LOG_TO_STDOUT=1 \
+    OMARCHY_USER_NAME="${C[FULL_NAME]:-}" OMARCHY_USER_EMAIL="${C[EMAIL]:-}" "$@"
+}
+
+s_user_setup() {
+  local uid home toggles failed=0
+  uid=$(id -u "$U") home=$ROOT$(home_of "$U")
+  systemctl start "user@$uid.service" || echo "    no user manager; continuing without it"
+  as_user omarchy-provision-user --force --first-install || { echo "    omarchy-provision-user failed"; failed=1; }
+  if command -v omamobile-setup-user >/dev/null; then
+    as_user omamobile-setup-user || { echo "    omamobile-setup-user failed"; failed=1; }
+  fi
+  # PIN or password, as omamobile-set-pin records it; then lock after boot
+  toggles=$home/.local/state/omarchy/toggles
+  as_user mkdir -p "$home/.config/omamobile" "$toggles"
+  as_user sh -c 'printf "%s\n" "$1" > "$2"' sh "${C[CREDENTIAL]}" "$home/.config/omamobile/credential"
+  as_user touch "$toggles/lock-keypad" "$toggles/lock-on-start"
+  if [[ ${C[CREDENTIAL]} == password ]]; then
+    as_user touch "$toggles/credential-password"
+  else
+    rm -f "$toggles/credential-password"
+  fi
+  systemctl stop "user@$uid.service" || true
+  return $failed
+}
+
+step "pacman keyring" optional s_keyring
+step "hostname, time zone, locale" optional s_identity
+step "user ${U}" essential s_user
+step "SSH keys" essential s_ssh
+step "Omarchy system setup" optional s_omarchy_system
+step "services and firewall" essential s_services
+step "Wi-Fi" optional s_wifi
+step "login" essential s_login
+step "user setup" optional s_user_setup
+
+if ((FATAL)); then
+  echo "=== firstboot incomplete: ${WARNINGS[*]}; firstboot.conf kept, the next boot tries again ==="
+  exit 1
+fi
+rm -f "$CONF"
+date -Is > "$STATE/done" 2>/dev/null || date > "$STATE/done"
+if ((${#WARNINGS[@]})); then
+  echo "=== firstboot done, with warnings: ${WARNINGS[*]} (rerun the user setup after login: omarchy-provision-user --force) ==="
+else
+  echo "=== firstboot done ==="
+fi

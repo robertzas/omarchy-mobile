@@ -1,0 +1,16 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-firstboot into DESTDIR. The unit is enabled by a vendor
+# wants link and does nothing unless /etc/omamobile/firstboot.conf exists.
+#   ./install DESTDIR
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+d=${1:?Usage: ./install DESTDIR}
+[[ $d == /* && $d != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+install -Dm755 bin/omamobile-firstboot "$d/usr/bin/omamobile-firstboot"
+install -Dm644 systemd/omamobile-firstboot.service "$d/usr/lib/systemd/system/omamobile-firstboot.service"
+install -d "$d/usr/lib/systemd/system/multi-user.target.wants"
+ln -sfn ../omamobile-firstboot.service "$d/usr/lib/systemd/system/multi-user.target.wants/omamobile-firstboot.service"
+install -Dm644 ssh/10-omamobile.conf "$d/etc/ssh/sshd_config.d/10-omamobile.conf"
+install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-firstboot/LICENSE"
+install -Dm644 version "$d/usr/share/omamobile/firstboot/version"
