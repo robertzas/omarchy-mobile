@@ -173,11 +173,13 @@ class Tuner:
             log(f'{what}: not sent, {reason}')
             self.errors += 1
             return -errno.EACCES, b''
+        self.port.last_reply = None
         rc, rx = self.port.set_get_bulk(BLOCK_SPEAKER, COMPONENT_WAVES, payload)
         if rc == ETIMEDOUT:
             log(f'{what}: timed out, one retry')
             rc, rx = self.port.set_get_bulk(BLOCK_SPEAKER, COMPONENT_WAVES, payload)
-        log(f'{what}: rc {rc}' + (f', reply {len(rx)} bytes, sha256 {sha(rx)}' if rx else ''))
+        log(f'{what}: rc {rc}' + (f' ({self.port.last_reply})' if self.port.last_reply else '')
+            + (f', reply {len(rx)} bytes, sha256 {sha(rx)}' if rx else ''))
         if rc != 0:
             self.errors += 1
         self._record(n, payload, rc, rx)

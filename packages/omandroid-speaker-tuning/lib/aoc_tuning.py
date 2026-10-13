@@ -104,6 +104,8 @@ class AocTuningPort:
         self.opener = opener
         self.timeout = timeout
         self.counter = 0
+        self.counter_noted = False
+        self.last_reply = None      # the last reply's header, for the logs
         self.lock = threading.Lock()
         self.log = log or (lambda msg: None)
 
@@ -134,6 +136,11 @@ class AocTuningPort:
             n += 1
 
     def _wait_reply(self, fd, cid, counter):
+        """The reply to our command: the first message with its command ID,
+        as stock matches it. The AoC does not echo our counter (T3.2: the
+        first replies on the phone carried the right ID and another counter),
+        so the counter is only reported; one exchange at a time and the
+        drain before each one keep an old reply from being taken."""
         deadline = time.monotonic() + self.timeout
         while True:
             left = deadline - time.monotonic()
@@ -147,10 +154,14 @@ class AocTuningPort:
             except BlockingIOError:
                 continue
             p = parse_reply(msg)
-            if p and p[0] == cid and p[1] == counter & 0xff:
+            if p and p[0] == cid:
+                if p[1] != counter & 0xff and not self.counter_noted:
+                    self.counter_noted = True
+                    self.log(f'the AoC\'s reply counter is not ours (sent {counter & 0xff}, '
+                             f'got {p[1]}): replies are matched by command ID, as stock does')
                 return p
-            self.log(f'ignored a stray reply ({len(msg)} bytes, id 0x{p[0]:04x})' if p else
-                     f'ignored a short reply ({len(msg)} bytes)')
+            self.log(f'ignored a reply for another command ({len(msg)} bytes, id 0x{p[0]:04x})'
+                     if p else f'ignored a short message ({len(msg)} bytes)')
 
     def _next(self):
         self.counter = (self.counter + 1) & 0xff
@@ -183,10 +194,11 @@ class AocTuningPort:
                 rep = self._wait_reply(tun, CMD_SET_GET_PARAM_BULK, counter)
                 if rep is None:
                     return ETIMEDOUT, b''
-                _, _, rc, fields = rep
+                _, rcounter, rc, fields = rep
                 if fields is None:
                     return -errno.EPROTO, b''
                 rx_size = fields[12]   # u16 at offset 24
+                self.last_reply = f'reply counter {rcounter}, rx_size {rx_size}'
                 if rc != 0 or not rx_size:
                     return rc, b''
                 if rx_size > BULK_SIZE:

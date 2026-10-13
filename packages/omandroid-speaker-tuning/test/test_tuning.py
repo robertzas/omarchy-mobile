@@ -93,6 +93,7 @@ class FakeAoc:
                 self.drop -= 1
                 return
             f[4] = rc
+            f[1] = (f[1] + 0x80) & 0xff   # the AoC does not echo our counter (T3.2)
             f[12] = len(self.rx) if rc == 0 else 0
             tun.send(at.SET_GET_BULK.pack(*f))
             if rc == 0 and self.rx:
@@ -105,6 +106,7 @@ class FakeAoc:
                 f[4] = -22
             else:
                 f[8] = self.asp_mode
+            f[1] = (f[1] + 0x80) & 0xff
             tun.send(at.GET_PARAM.pack(*f))
         else:
             self.violations.append(f'command 0x{cid:04x} ({len(msg)} bytes)')
@@ -161,7 +163,11 @@ class Port(unittest.TestCase):
 
     def test_exchange(self):
         self.aoc.rx = b'\x05\x00\x00\x00ok'
+        notes = []
+        self.port.log = notes.append
         rc, rx = self.port.set_get_bulk(16, 2, b'\x01' * 100)
+        self.assertTrue(any('matched by command ID' in n for n in notes), notes)
+        self.assertFalse(any('ignored' in n for n in notes), notes)
         self.assertEqual((rc, rx), (0, b'\x05\x00\x00\x00ok'))
         self.assertEqual(self.aoc.commands, [('bulk', 16, 2, 100)])
         self.assertEqual(self.aoc.violations, [])

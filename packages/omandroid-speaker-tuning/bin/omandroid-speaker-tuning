@@ -11,7 +11,7 @@ run       the daemon (omandroid-speaker-tuning.service). --dry-run starts the
           would send and answers the controller with RC (default -110, a
           timeout). --once sends the configured state once, now, and exits
           (no stream detection; a live --once still needs the speaker
-          watchdog). --record keeps every exchange under DIR (root only;
+          watchdog active and the AoC DSP in playback, as every send does). --record keeps every exchange under DIR (root only;
           for the determinism check, AOC-TUNING-RESEARCH.md T5; never commit).
 status    the daemon's state (/run/omandroid/speaker-tuning) and the setup.
 
@@ -39,9 +39,15 @@ from waves_host import WavesHost  # noqa: E402
 
 
 def gate_for(cfg):
+    playback = st.Playback(cfg.asound)
+
     def gate():
         if not st.watch_active():
             return f'{st.WATCH_UNIT} is not active'
+        # as stock: tuning goes to the AoC only while its DSP plays
+        dsp = playback.dsp_state()
+        if dsp != 'Playback':
+            return f'the AoC DSP is {dsp or "in an unknown state"}, not in playback (stock sends only then)'
         if cfg.mode == 'music' and not os.path.isfile(cfg.stamp):
             return f'music needs the protection verification stamp ({cfg.stamp}, AOC-PLAN.md C9a)'
         return None
