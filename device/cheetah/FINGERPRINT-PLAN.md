@@ -299,6 +299,20 @@ Expect "write error: Device or resource busy", CPUs 0-7 online, "refusing to
 take cpu 7 offline". If CPU 7 went offline: `echo 1 > .../cpu7/online` and
 **stop** (the guard is not active).
 
+**F2 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00365-g23c2869425ea,
+unattended): passed.** "trusty version: Project: cloudripper", "selected api
+version: 5", trusty-virtio initialised; /dev/trusty-ipc-dev0 and
+/dev/trusty-log0 present; `allow_cpu_offline` N; the probe opened
+`com.android.trusty.apploader`, `.keymaster` and `.gatekeeper` (connect and
+close). F2c: `echo 0 > cpu7/online` → "Device or resource busy", online
+0-7, "refusing to take cpu 7 offline (trusty_core.allow_cpu_offline=0)".
+
+**Before F3 (not run):** this root has no `/dev/disk/by-partlabel`; find
+`persist` and `mfg_data` by `PARTNAME` (as MODEM-PLAN M0). And a read-only
+ext4 mount still replays a dirty journal, which writes to the partition:
+mount `persist` with `-o ro,noload` (or read the files with `debugfs`, as
+the speaker calibration does), never plain `-o ro`. Waits for the human.
+
 ### F3: the RPMB node and read-only copies (no writes; risk low)
 
 ```sh
