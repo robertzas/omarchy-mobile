@@ -183,6 +183,10 @@ Trusty's tamper-detect-persistent files are on `persist/ss` on stock.
 
 Record the decision and the date here before F4.
 
+**Decision (2026-10-13):** the human gave the go for F4 (the first RPMB
+write from Linux), with **A**: Trusty's TDP files are served from F3's
+read-only copy, and nothing is written to `persist`.
+
 ## 6. Runbook
 
 Variables (laptop):
