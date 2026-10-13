@@ -263,6 +263,196 @@ test("command output", () => {
   assert.strictEqual(M.commandText("", 3), "")
 })
 
+test("the clock follows the system's 12- or 24-hour choice", () => {
+  assert.strictEqual(M.systemTimeFormat("ddd MMM d  h:mm AP"), "h:mm AP")
+  assert.strictEqual(M.systemTimeFormat("hh:mm ap"), "h:mm AP")
+  assert.strictEqual(M.systemTimeFormat("dddd HH:mm"), "HH:mm")
+  assert.strictEqual(M.systemTimeFormat("HH:mm 'h'"), "HH:mm")
+  assert.strictEqual(M.systemTimeFormat(""), "HH:mm")
+  assert.strictEqual(M.widgetSpec("clock").config.timeFormat, "")
+})
+
+// ---------------------------------------------------------------- the user's own widgets
+
+const U = require(path.join(__dirname, "../plugins/omandroid.home/UserWidgets.js"))
+
+const record = (id, extra) => Object.assign({
+  id, source: "user", dir: "/home/u/.config/omandroid/widgets/" + id, status: "ok", errors: [], warnings: [], hash: "h-" + id,
+  manifest: { id, name: "Widget " + id, icon: "x", entry: "Widget.qml", size: [2, 1], min: [1, 1], max: [3, 2],
+              capabilities: [], defaults: { text: "hi", count: 3 }, schema: [{ key: "count", type: "integer", min: 1, max: 9 }] },
+  detected: [], undeclared: [], lint: null
+}, extra || {})
+const scanOf = (...widgets) => U.parseScan(JSON.stringify({ version: 1, dir: "/home/u/.config/omandroid/widgets", widgets, examples: [] }))
+
+test("user widget discovery: the scan's verdicts, bad records dropped", () => {
+  const scan = scanOf(record("u.ok"), record("u.bad", { status: "error", errors: ["no manifest.json"], manifest: null }),
+    { id: "../escape" }, { id: "Upper" }, null, "junk")
+  assert.ok(scan.ok)
+  assert.deepStrictEqual(scan.widgets.map((r) => r.id), ["u.ok", "u.bad"])
+  assert.strictEqual(U.findRecord(scan, "u.ok").status, "ok")
+  // "ok" without a manifest is not ok.
+  assert.strictEqual(scanOf(record("u.x", { manifest: null })).widgets[0].status, "error")
+  for (const bad of ["", "{", "[]", '{"widgets": 3}'])
+    assert.strictEqual(U.parseScan(bad).ok, false, bad)
+})
+
+test("the catalog sizes user widgets by their manifests", () => {
+  const cat = U.catalog(scanOf(record("u.ok"), record("u.bad", { status: "error", errors: ["x"] }), record("u.none", { manifest: null })))
+  assert.deepStrictEqual(Object.keys(cat).sort(), ["u.bad", "u.ok"])
+  assert.deepStrictEqual([cat["u.ok"].size, cat["u.ok"].min, cat["u.ok"].max], [[2, 1], [1, 1], [3, 2]])
+  assert.deepStrictEqual(cat["u.ok"].config, { text: "hi", count: 3 })
+  assert.ok(cat["u.ok"].user)
+  assert.strictEqual(M.widgetSpec("user:u.ok", cat), cat["u.ok"])
+  assert.strictEqual(M.widgetSpec("user:u.none", cat), null)
+  assert.strictEqual(M.widgetSpec("u.ok", cat), null)          // only through the prefix
+  assert.strictEqual(M.widgetSpec("user:clock", cat), null)     // never a built-in
+  assert.ok(M.isUserType("user:a.b-c_d"))
+  for (const bad of ["user:", "user:../x", "user:A", "user:a/b", "clock", "user:" + "a".repeat(65)])
+    assert.ok(!M.isUserType(bad), bad)
+})
+
+test("user widgets persist by id, with their settings", () => {
+  const cat = U.catalog(scanOf(record("u.ok")))
+  let l = layoutOf([])
+  l = M.addWidget(l, 0, "user:u.ok", cat)
+  const id = l.placed.id
+  assert.deepStrictEqual([M.findItem(l, id).item.w, M.findItem(l, id).item.h], [2, 1])
+  l = M.setConfig(l, id, { count: 7, extra: "kept" }, cat)
+  const again = M.parse(M.serialize(l), cat)
+  const item = M.findItem(again, id).item
+  assert.strictEqual(item.type, "user:u.ok")
+  assert.deepStrictEqual(item.config, { text: "hi", count: 7, extra: "kept" })
+  // A value of the wrong type for a default is dropped, the default kept.
+  assert.deepStrictEqual(M.mergeUserConfig({ count: 3 }, { count: "seven" }), { count: 3 })
+})
+
+test("a user widget the scan doesn't know stays, with its size and settings", () => {
+  // Read before the first scan, or while its folder is gone or broken.
+  const raw = { grid, pages: [{ items: [{ id: "w1", kind: "widget", type: "user:u.gone", x: 0, y: 0, w: 3, h: 2, config: { a: 1 } },
+                                        { id: "w2", kind: "widget", type: "user:../bad", x: 0, y: 3, w: 1, h: 1 }] }] }
+  const l = M.normalize(raw, {})
+  const kept = M.findItem(l, "w1").item
+  assert.deepStrictEqual([kept.w, kept.h, kept.config], [3, 2, { a: 1 }])
+  assert.strictEqual(M.findItem(l, "w2"), null)                 // not a valid id: dropped
+  assert.deepStrictEqual(M.sizeLimits(kept, grid, {}), { minW: 1, minH: 1, maxW: 4, maxH: 6 })
+  // Once it is known again, its manifest's limits apply.
+  const cat = U.catalog(scanOf(record("u.gone")))
+  const clamped = M.findItem(M.normalize(raw, cat), "w1").item
+  assert.deepStrictEqual([clamped.w, clamped.h], [3, 2])
+  const tight = U.catalog(scanOf(record("u.gone", { manifest: Object.assign({}, record("u").manifest, { max: [2, 1] }) })))
+  const smaller = M.findItem(M.normalize(raw, tight), "w1").item
+  assert.deepStrictEqual([smaller.w, smaller.h], [2, 1])
+  // A just-created widget can be placed before the scan has seen it.
+  const placed = M.addWidget(layoutOf([]), 0, "user:u.new", {})
+  assert.ok(placed.placed)
+  assert.deepStrictEqual(M.findItem(placed, placed.placed.id).item.w, M.MISSING_SPEC.size[0])
+})
+
+test("resizing a user widget keeps to its manifest", () => {
+  const cat = U.catalog(scanOf(record("u.ok")))
+  let l = M.addWidget(layoutOf([]), 0, "user:u.ok", cat)
+  const id = l.placed.id
+  l = M.resizeItem(l, id, 9, 9, cat)
+  assert.deepStrictEqual([M.findItem(l, id).item.w, M.findItem(l, id).item.h], [3, 2])
+  const small = M.setGrid(l, 3, 4, cat)
+  assert.deepStrictEqual([M.findItem(small, id).item.w, M.findItem(small, id).item.h], [3, 2])
+})
+
+test("removing a user widget takes it off every page", () => {
+  const cat = U.catalog(scanOf(record("u.ok")))
+  let l = layoutOf([], [])
+  l = M.addWidget(l, 0, "user:u.ok", cat)
+  l = M.addWidget(l, 1, "user:u.ok", cat)
+  l = M.addWidget(l, 1, "clock", cat)
+  l = M.removeWidgetType(l, "user:u.ok")
+  assert.deepStrictEqual(l.pages.map((p) => p.items.map((i) => i.type)), [[], ["clock"]])
+})
+
+test("broken widgets become cards with the message", () => {
+  const scan = scanOf(record("u.ok"), record("u.bad", { status: "error", errors: ["Widget.qml:3: Syntax error", "second"] }))
+  assert.deepStrictEqual(U.cardState(scan, "u.ok"), { state: "ok", message: "" })
+  assert.deepStrictEqual(U.cardState(scan, "u.bad"), { state: "error", message: "Widget.qml:3: Syntax error\nsecond" })
+  assert.strictEqual(U.cardState(scan, "u.gone").state, "missing")
+  assert.strictEqual(U.cardState(U.emptyScan(), "u.ok").state, "waiting")
+  const undeclared = record("u.net", { status: "error", undeclared: ["network"], errors: ["uses the network, but..."] })
+  assert.ok(U.statusLine(undeclared).includes("uses the internet without declaring it"))
+  assert.ok(U.statusLine(record("u.cmd", { manifest: Object.assign({}, record("u").manifest, { capabilities: ["commands"] }) })).includes("runs commands"))
+  assert.strictEqual(U.tildePath("/home/u/.config/x", "/home/u"), "~/.config/x")
+  assert.strictEqual(U.tildePath("/home/user2/x", "/home/u"), "/home/user2/x")
+})
+
+test("new widget ids and names", () => {
+  assert.strictEqual(U.slug("Show the moon phase, please!"), "moon-phase-please")
+  assert.strictEqual(U.slug("Café ☕ timer"), "caf-timer")
+  assert.strictEqual(U.slug("!!!"), "widget")
+  assert.strictEqual(U.newId("moon phase", "Alice", []), "alice.moon-phase")
+  assert.strictEqual(U.newId("moon phase", "alice", ["alice.moon-phase", "alice.moon-phase-2"]), "alice.moon-phase-3")
+  assert.strictEqual(U.newId("x", "", []), "my.x")
+  assert.strictEqual(U.newId("sunrise and sunset", "omandroid", []), "my.sunrise-sunset")
+  assert.strictEqual(U.newId("clock", "omarchy", []), "my.clock")
+  for (const id of [U.newId("$(rm -rf ~); `x`", "a b", []), U.newId("a".repeat(200), "b".repeat(200), [])]) {
+    assert.ok(U.ID_RE.test(id) && id.length <= 64, id)
+    assert.ok(M.isUserType(U.typeFor(id)), id)
+  }
+  assert.strictEqual(U.nameFrom("  a big button that starts a timer. "), "A big button that")
+  assert.strictEqual(U.nameFrom(""), "My widget")
+  assert.strictEqual(String(U.ID_RE), String(M.USER_ID_RE))
+})
+
+test("the description reaches the agent as one argument, verbatim", () => {
+  const nasty = 'moon phase; $(touch /tmp/x) `id` "q" \'s\' & | > ~/f\nsecond line -- --inline'
+  const prompt = U.createPrompt(nasty, "/home/u/.config/omandroid/widgets/u.moon", "/usr/share/omandroid/shell/WIDGETS.md")
+  assert.ok(prompt.endsWith("The user asked for: " + nasty.trim()))
+  assert.ok(prompt.includes("/usr/share/omandroid/shell/WIDGETS.md"))
+  assert.ok(prompt.includes("work only inside this folder"))
+  assert.ok(prompt.includes("omandroid-widget check ."))
+  assert.ok(!prompt.startsWith("-"))                           // never read as an option
+  const argv = U.agentArgv("u.moon", prompt)
+  assert.deepStrictEqual(argv, ["omandroid-widget", "agent", "u.moon", prompt])
+  assert.strictEqual(argv.length, 4)
+  const edit = U.editPrompt("", "/w/u.moon", "", "Moon", ["Widget.qml:3: Syntax error"])
+  assert.ok(edit.includes("- Widget.qml:3: Syntax error") && edit.includes("Ask the user what to change."))
+  assert.ok(U.editPrompt("bigger", "/w", "", "Moon", []).endsWith("The user asked for: bigger"))
+  assert.deepStrictEqual(U.newArgv("u.moon", "Moon; rm"), ["omandroid-widget", "new", "u.moon", "Moon; rm"])
+})
+
+test("what the agent's launch means to the phone", () => {
+  assert.strictEqual(U.agentOutcome(0, "").kind, "launched")
+  const none = U.agentOutcome(3, "No coding agent is chosen in Omarchy yet. Pick one in the menu that opened, then try again.\n")
+  assert.strictEqual(none.kind, "no-agent")
+  assert.ok(none.message.includes("No coding agent"))
+  assert.strictEqual(U.agentOutcome(3, "").kind, "no-agent")
+  const missing = U.agentOutcome(4, "codex is not installed. Choose an installed agent with: omarchy default agent <name>\n")
+  assert.deepStrictEqual(missing, { kind: "failed", message: "codex is not installed. Choose an installed agent with: omarchy default agent <name>" })
+  assert.ok(U.agentOutcome(2, "").message.includes("status 2"))
+})
+
+test("user widget settings are typed by the schema", () => {
+  assert.strictEqual(U.coerceSetting({ type: "integer", min: 1, max: 9 }, "42"), 9)
+  assert.strictEqual(U.coerceSetting({ type: "integer" }, "x"), null)
+  assert.strictEqual(U.coerceSetting({ type: "number" }, "2.5"), 2.5)
+  assert.strictEqual(U.coerceSetting({ type: "boolean" }, true), true)
+  assert.strictEqual(U.coerceSetting({ type: "enum", options: ["a", "b"] }, "b"), "b")
+  assert.strictEqual(U.coerceSetting({ type: "enum", options: ["a", "b"] }, "c"), null)
+  assert.strictEqual(U.coerceSetting({ type: "string" }, 12), "12")
+  assert.strictEqual(U.coerceSetting(undefined, "x"), null)
+})
+
+test("host.run: declared, one at a time, rate-limited, with a timeout", () => {
+  assert.ok(U.runCheck(["df"], false, false, 1e9).includes('"commands"'))
+  assert.strictEqual(U.runCheck(["df"], true, false, 1e9), "")
+  assert.ok(U.runCheck(["df"], true, true, 1e9).includes("still running"))
+  assert.ok(U.runCheck(["df"], true, false, 500).includes("rate limit"))
+  assert.strictEqual(U.runCheck(["df"], true, false, 1500, 1000), "")
+  for (const bad of [[], "df -h", [{}], null]) assert.ok(U.runCheck(bad, true, false, 1e9) !== "", JSON.stringify(bad))
+  assert.strictEqual(U.runTimeout(), 10)
+  assert.strictEqual(U.runTimeout({ timeout: 300 }), 30)
+  assert.strictEqual(U.runTimeout({ timeout: 0 }), 1)
+  assert.deepStrictEqual(U.timeoutArgv(["sh", "-c", "x; y"], 5), ["timeout", "-k", "2", "5", "sh", "-c", "x; y"])
+  const r = U.runResult(124, "a".repeat(70000), null)
+  assert.ok(r.timedOut && r.stdout.length === 65536 && r.stderr === "")
+})
+
 let failed = 0
 for (const [name, fn] of tests) {
   try { fn(); console.log("ok - home model: " + name) } catch (e) { failed++; console.log("not ok - home model: " + name + "\n  " + (e.stack || e)) }

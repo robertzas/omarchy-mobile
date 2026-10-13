@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "template",
+  "name": "My widget",
+  "version": "0.1.0",
+  "author": "",
+  "description": "A home-screen widget. Describe what it shows.",
+  "kinds": ["home-widget"],
+  "entryPoints": { "homeWidget": "Widget.qml" },
+  "homeWidget": {
+    "icon": "󰕰",
+    "size": [2, 1],
+    "min": [1, 1],
+    "max": [4, 2],
+    "capabilities": [],
+    "defaults": { "text": "Hello" },
+    "schema": [
+      { "key": "text", "type": "string", "label": "Text", "defaultValue": "Hello" }
+    ]
+  }
+}

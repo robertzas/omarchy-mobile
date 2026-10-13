@@ -25,7 +25,7 @@ var LIMITS = { minColumns: 3, maxColumns: 6, minRows: 4, maxRows: 8, maxPages: 1
 // internet and stay off until the user turns them on in their settings.
 var REGISTRY = {
   clock:   { name: "Clock",          icon: "󰥔", min: [2, 1], max: [4, 3], size: [4, 2], network: false,
-             config: { timeFormat: "HH:mm", dateFormat: "dddd d MMMM" } },
+             config: { timeFormat: "", dateFormat: "dddd d MMMM" } },
   weather: { name: "Weather",        icon: "󰖐", min: [2, 1], max: [4, 2], size: [4, 1], network: true,
              config: { enabled: false, place: "", latitude: null, longitude: null, units: "celsius" } },
   battery: { name: "Battery",        icon: "󰁹", min: [1, 1], max: [4, 2], size: [2, 1], network: false, config: {} },
@@ -54,8 +54,48 @@ function copy(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value))
 }
 
-function widgetSpec(type) {
-  return Object.prototype.hasOwnProperty.call(REGISTRY, type) ? REGISTRY[type] : null
+// The home clock's time format when the user has not typed one: the system's
+// 12- or 24-hour choice, read from the bar's clockFormat in shell.json (what
+// the bar shows). Quoted literals are ignored; "h" without "H", or an AM/PM
+// marker, means 12-hour.
+function systemTimeFormat(barFormat) {
+  var f = String(barFormat || "").replace(/'[^']*'/g, "")
+  var twelve = /a/i.test(f) || (/h/.test(f) && !/H/.test(f))
+  return twelve ? "h:mm AP" : "HH:mm"
+}
+
+// The user's own widgets (WIDGETS.md) are stored as type "user:<id>". Their
+// specs are not here but in a catalog the caller passes in (UserWidgets.js
+// builds it from `omandroid-widget scan`), shaped like REGISTRY entries.
+// A user widget the catalog doesn't know (not scanned yet, folder gone,
+// manifest broken) stays on the layout with its stored size and settings:
+// the home screen shows an error card for it, and nothing is lost while
+// someone is half-way through an edit.
+var USER_PREFIX = "user:"
+var USER_ID_RE = /^[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)*$/
+var MISSING_SPEC = { name: "Missing widget", icon: "󰀦", min: [1, 1], max: [6, 8], size: [2, 2], network: false, config: {}, user: true }
+
+function isUserType(type) {
+  return typeof type === "string" && type.indexOf(USER_PREFIX) === 0
+    && USER_ID_RE.test(type.slice(USER_PREFIX.length)) && type.length <= USER_PREFIX.length + 64
+}
+
+function has(map, key) {
+  return !!map && Object.prototype.hasOwnProperty.call(map, key)
+}
+
+function widgetSpec(type, catalog) {
+  if (isUserType(type)) {
+    var id = type.slice(USER_PREFIX.length)
+    return has(catalog, id) ? catalog[id] : null
+  }
+  return has(REGISTRY, type) ? REGISTRY[type] : null
+}
+
+// The spec an item is sized by: its own, or MISSING_SPEC for a user widget
+// the catalog doesn't know.
+function specFor(type, catalog) {
+  return widgetSpec(type, catalog) || (isUserType(type) ? MISSING_SPEC : null)
 }
 
 function widgetTypes() {
@@ -66,9 +106,10 @@ function widgetTypes() {
 }
 
 // The span limits of an item on a given grid.
-function sizeLimits(item, grid) {
+function sizeLimits(item, grid, catalog) {
   if (!item || item.kind !== "widget") return { minW: 1, minH: 1, maxW: 1, maxH: 1 }
-  var spec = widgetSpec(item.type)
+  var spec = specFor(item.type, catalog)
+  if (!spec) return { minW: 1, minH: 1, maxW: 1, maxH: 1 }
   return {
     minW: Math.min(spec.min[0], grid.columns), minH: Math.min(spec.min[1], grid.rows),
     maxW: Math.min(spec.max[0], grid.columns), maxH: Math.min(spec.max[1], grid.rows)
@@ -189,7 +230,7 @@ function normalizeAppId(id) {
 // if need be). Apps that aren't installed stay: they may come back (and the
 // user sees them, dimmed, to remove them). Returns null for input that isn't
 // a layout at all, so the caller can fall back to the default.
-function normalize(raw) {
+function normalize(raw, catalog) {
   if (!raw || typeof raw !== "object" || !Array.isArray(raw.pages)) return null
   var rawGrid = raw.grid && typeof raw.grid === "object" ? raw.grid : {}
   var grid = {
@@ -208,7 +249,7 @@ function normalize(raw) {
     layout.pages.push(page)
     var items = pages[p] && Array.isArray(pages[p].items) ? pages[p].items : []
     for (var i = 0; i < items.length; i++) {
-      var item = cleanItem(items[i], grid)
+      var item = cleanItem(items[i], grid, catalog)
       if (!item) continue
       if (!item.id || seen[item.id]) item.id = takeId(layout, item.kind === "app" ? "a" : "w")
       seen[item.id] = true
@@ -231,7 +272,7 @@ function normalize(raw) {
   return layout
 }
 
-function cleanItem(raw, grid) {
+function cleanItem(raw, grid, catalog) {
   if (!raw || typeof raw !== "object") return null
   var item = { id: typeof raw.id === "string" ? raw.id : "", kind: raw.kind }
   if (raw.kind === "app") {
@@ -239,13 +280,13 @@ function cleanItem(raw, grid) {
     if (!item.app) return null
     item.w = 1; item.h = 1
   } else if (raw.kind === "widget") {
-    var spec = widgetSpec(raw.type)
+    var spec = specFor(raw.type, catalog)
     if (!spec) return null
     item.type = raw.type
-    var limits = sizeLimits(item, grid)
+    var limits = sizeLimits(item, grid, catalog)
     item.w = clampInt(raw.w, limits.minW, limits.maxW, spec.size[0])
     item.h = clampInt(raw.h, limits.minH, limits.maxH, spec.size[1])
-    item.config = mergeConfig(spec.config, raw.config)
+    item.config = spec.user ? mergeUserConfig(spec.config, raw.config) : mergeConfig(spec.config, raw.config)
   } else {
     return null
   }
@@ -270,6 +311,22 @@ function mergeConfig(defaults, stored) {
   return out
 }
 
+// A user widget's settings: its manifest's defaults, overlaid with stored
+// values (a stored value of another type than the default is dropped).
+// Unlike built-ins, stored keys the manifest doesn't name are kept: a
+// manifest being rewritten must not cost the user what they set.
+function mergeUserConfig(defaults, stored) {
+  var out = copy(defaults) || {}
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) return out
+  Object.keys(stored).forEach(function(key) {
+    var value = stored[key]
+    if (value === undefined || typeof value === "function") return
+    if (has(out, key) && out[key] !== null && value !== null && typeof value !== typeof out[key]) return
+    out[key] = copy(value)
+  })
+  return out
+}
+
 // Only the stored fields: edits leave notes such as `placed` on the
 // objects they return, and those don't belong in the file.
 function serialize(layout) {
@@ -288,10 +345,10 @@ function serialize(layout) {
 }
 
 // Parse a file's text; null when it isn't a usable layout.
-function parse(text) {
+function parse(text, catalog) {
   var raw
   try { raw = JSON.parse(String(text || "")) } catch (e) { return null }
-  return normalize(raw)
+  return normalize(raw, catalog)
 }
 
 // ---------------------------------------------------------------- lookups
@@ -348,8 +405,10 @@ function placeOn(layout, pageIndex, item) {
   return out
 }
 
-function addWidget(layout, pageIndex, type) {
-  var spec = widgetSpec(type)
+// A user widget can be added before the catalog knows it (just created,
+// not scanned yet): it gets MISSING_SPEC's size until it is.
+function addWidget(layout, pageIndex, type, catalog) {
+  var spec = specFor(type, catalog)
   if (!spec) return null
   var out = copy(layout)
   var item = { id: takeId(out, "w"), kind: "widget", type: type, x: -1, y: -1,
@@ -367,6 +426,15 @@ function addApp(layout, pageIndex, appId) {
   var item = { id: takeId(out, "a"), kind: "app", app: app, x: -1, y: -1, w: 1, h: 1 }
   out = placeOn(out, pageIndex, item)
   if (out.placed) out.placed.id = item.id
+  return out
+}
+
+// Every placed copy of a widget type, from every page (a removed user widget).
+function removeWidgetType(layout, type) {
+  var out = copy(layout)
+  out.pages.forEach(function(page) {
+    page.items = page.items.filter(function(item) { return !(item.kind === "widget" && item.type === type) })
+  })
   return out
 }
 
@@ -410,10 +478,10 @@ function moveItem(layout, id, pageIndex, x, y) {
 
 // Resize a widget to w x h cells, clamped to its limits and the grid edge.
 // A size that would overlap another item is refused (layout unchanged).
-function resizeItem(layout, id, w, h) {
+function resizeItem(layout, id, w, h, catalog) {
   var found = findItem(layout, id)
   if (!found || found.item.kind !== "widget") return layout
-  var limits = sizeLimits(found.item, layout.grid)
+  var limits = sizeLimits(found.item, layout.grid, catalog)
   var rect = { x: found.item.x, y: found.item.y,
                w: clampInt(w, limits.minW, Math.min(limits.maxW, layout.grid.columns - found.item.x), found.item.w),
                h: clampInt(h, limits.minH, Math.min(limits.maxH, layout.grid.rows - found.item.y), found.item.h) }
@@ -424,14 +492,16 @@ function resizeItem(layout, id, w, h) {
   return out
 }
 
-function setConfig(layout, id, patch) {
+function setConfig(layout, id, patch, catalog) {
   var found = findItem(layout, id)
   if (!found || found.item.kind !== "widget") return layout
   var out = copy(layout)
   var target = out.pages[found.page].items[found.index]
   var merged = copy(target.config)
   Object.keys(patch || {}).forEach(function(key) { merged[key] = patch[key] })
-  target.config = mergeConfig(REGISTRY[target.type].config, merged)
+  var spec = specFor(target.type, catalog)
+  if (!spec) return layout
+  target.config = spec.user ? mergeUserConfig(spec.config, merged) : mergeConfig(spec.config, merged)
   return out
 }
 
@@ -476,10 +546,10 @@ function setHome(layout, index) {
 }
 
 // Change the grid; everything is re-placed through normalize().
-function setGrid(layout, columns, rows) {
+function setGrid(layout, columns, rows, catalog) {
   var raw = copy(layout)
   raw.grid = { columns: columns, rows: rows }
-  return normalize(raw)
+  return normalize(raw, catalog)
 }
 
 // ---------------------------------------------------------------- widgets' pure parts
@@ -575,7 +645,9 @@ function commandText(output, maxLines) {
 if (typeof module !== "undefined") {
   module.exports = {
     VERSION: VERSION, GRID: GRID, LIMITS: LIMITS, REGISTRY: REGISTRY, DEFAULT_APPS: DEFAULT_APPS,
-    widgetSpec: widgetSpec, widgetTypes: widgetTypes, sizeLimits: sizeLimits,
+    USER_PREFIX: USER_PREFIX, USER_ID_RE: USER_ID_RE, MISSING_SPEC: MISSING_SPEC, isUserType: isUserType,
+    specFor: specFor, mergeUserConfig: mergeUserConfig, removeWidgetType: removeWidgetType,
+    widgetSpec: widgetSpec, widgetTypes: widgetTypes, systemTimeFormat: systemTimeFormat, sizeLimits: sizeLimits,
     overlaps: overlaps, fits: fits, collision: collision, isFree: isFree, freeSpot: freeSpot,
     nearestFreeSpot: nearestFreeSpot, cellForPoint: cellForPoint, pageShift: pageShift,
     emptyLayout: emptyLayout, defaultLayout: defaultLayout, normalizeAppId: normalizeAppId,

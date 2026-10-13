@@ -370,12 +370,87 @@ IPC (`omarchy-shell shell call omandroid.home <method> <arg>`):
 | `goHome ''` / `page <n>` | Show the home page / page n (from 0) |
 | `edit on` / `edit off` | Enter (returns `busy` during a fingerprint operation) or leave edit mode |
 | `addApp <desktop id>` / `addWidget <type>` | Add to the page on screen; returns the new item's id or `full` |
-| `showSheet widgets\|apps\|pages` / `settings <item id>` | Open an edit sheet / a widget's settings |
+| `showSheet widgets\|apps\|pages\|create` / `settings <item id>` | Open an edit sheet / a widget's settings |
+| `widgets ''` / `widgetStatus <id>` | JSON: the user's widgets (or one) with status, errors, warnings, capabilities, undeclared capabilities, hash, folder and how often it is placed |
+| `rescanWidgets ''` | Scan `~/.config/omandroid/widgets` now |
+| `createWidget <description>` / `editWidget <id>` | What Create / Edit with AI do: make the folder, place it, start the agent |
+| `copyExample <id>` / `removeUserWidget <id>` | Copy an installed example into your widgets and place it / move a widget folder out and take it off every page |
+| `addWidget user:<id>` | Place one of your widgets |
 
 `omarchy-shell shell summon omandroid.home '{"edit":true}'` and
 `'{"page":1}'` do the same through the host. The pure logic (grid placement,
 moves, swaps, resizes, pages, persistence, the weather and khal parsing) is
-in `HomeModel.js`, tested by `test/home-model.js`.
+in `HomeModel.js`; the user widgets' side (the scan, prompts, helper argv,
+settings, the command limits) in `UserWidgets.js`. Both are tested by
+`test/home-model.js`, and `bin/omandroid-widget` by `test/widget-tool.py`.
+
+### Your own widgets
+
+![Your own widgets, one with an error](../../../phone/screenshots/home-user-widgets.png)
+![The Widgets sheet](../../../phone/screenshots/home-user-widgets-sheet.png)
+![Create a widget with AI](../../../phone/screenshots/home-widget-create.png)
+
+Users build their own widgets the way Omarchy desktop users build their own
+bar widgets and panels: a folder with a `manifest.json` (Omarchy's plugin
+manifest, kind `home-widget`, with a `homeWidget` block shaped like
+`barWidget`: sizes in cells, capabilities, `defaults` and a settings
+`schema` in Omarchy's field format) and the QML it names, drawn with
+`qs.Commons` so theme switches restyle it. [`WIDGETS.md`](../widgets/WIDGETS.md)
+is the contract, written for people and for coding agents.
+
+* **Where.** `~/.config/omandroid/widgets/<id>/`, not
+  `~/.config/omarchy/plugins/`: a widget isn't a shell plugin (the home
+  screen hosts it, in a card, once per placement), and a save under
+  Omarchy's plugin folder reloads every plugin, quick settings included.
+  The folder is watched the way Omarchy's `PluginRegistry` watches its own
+  (`inotifywait -m -r`), so a saved file shows up in under a second.
+  Nothing loads from anywhere else: examples in
+  `/usr/share/omandroid/shell/widget-examples/` are copied in, not loaded
+  in place, and no widget code is fetched from the network.
+* **In edit mode.** **Widgets** lists them under *Yours* next to the
+  built-ins, placeable and resizable within their manifest's limits, with
+  their settings in the settings sheet. Each is stored in `home.json` as
+  type `user:<id>` with its own settings. A robot button starts the agent
+  on one (**Edit with AI**), the bin (twice) removes it: its folder moves
+  to `~/.local/share/omandroid/removed-widgets/` and every placement goes.
+  *Examples* lists the installed examples to copy.
+* **Create a widget with AI.** Asks for a description (squeekboard comes
+  up), makes `<user>.<words>` from the template, places it, and starts
+  Omarchy's default coding agent (the one chosen in Omarchy's menu,
+  `omarchy-default-agent`) through Omarchy's own `omarchy-agent-prompt`,
+  in a terminal, in the widget's folder. The prompt is the contract's path,
+  the rules (only this folder, no root, declare capabilities, run
+  `omandroid-widget check .`) and the description verbatim, passed as one
+  argv element from the sheet to the agent: no shell sees it. With no
+  default agent, Omarchy's chooser opens (`omarchy-agent --pick`) and the
+  sheet says so; a chosen agent that isn't installed shows Omarchy's own
+  message. Omarchy runs agents unattended, so the prompt and the contract
+  both keep it to the widget's folder.
+* **Checks before a new or changed widget loads** (`omandroid-widget scan`,
+  cached by a hash of the folder): the manifest is valid and sizes are
+  clamped to the grid; files stay inside the folder (no links out, at most
+  64 files, 1 MiB); capabilities the code uses (`commands`: `Process`,
+  `execDetached`, `host.run`; `network`: `XMLHttpRequest`, URLs, `curl`)
+  must be declared, or the widget is not loaded and the sheet and its card
+  say which is missing; no root tools, no QML from outside the folder or a
+  URL; `qmllint` with the shell's `qs.` imports resolved finds no syntax
+  errors, unknown types or properties. Effects, fast timers and endless
+  animations are warnings.
+* **Isolation.** Each placed widget loads in `UserWidgetCell.qml`: the
+  component is compiled first and created with its properties set; any
+  failure (the scan's errors, a compile error, a creation error) becomes an
+  error card with the message in that cell only, and a tap opens its
+  settings with Edit with AI (which passes the errors to the agent). The
+  URL carries the folder's hash and the component cache is cleared, so
+  edited code really reloads. A user widget whose folder is missing or
+  broken stays in `home.json` with its size and settings. Widgets get a
+  narrow `host` (`WidgetHost.qml`), not the home screen: colours, the
+  system clock format, settings, a cache that outlives layout edits, and
+  `run()` / `launch()`, which refuse without a declared `"commands"`, run
+  argv without a shell under `timeout` (10 s default, 30 s at most), one at
+  a time and at most one every 2 s per widget. These are guard rails, not a
+  sandbox: like any Omarchy plugin, a widget runs in the shell as the user
+  (never root).
 
 ## omandroid.fingerprint
 

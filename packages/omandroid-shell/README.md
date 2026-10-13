@@ -15,6 +15,9 @@ Omandroid's phone profile for Omarchy's own shell. It isn't a fork: these are or
 | `bin/omandroid-osk-watch` | Reports squeekboard's visibility (sm.puri.OSK0) to the fingerprint plugin |
 | `bin/omandroid-fp-enroll` | fprintd enrollment helper the fingerprint screen runs (JSON lines) |
 | `bin/omandroid-bt-agent` | BlueZ pairing agent and discovery helper the quick-settings Bluetooth panel runs while open |
+| `bin/omandroid-widget` | The user's own home-screen widgets: scan and check them, make one from the template, copy an example, remove one, start Omarchy's default agent in a widget's folder |
+| `widgets/WIDGETS.md` | The contract for user widgets, for people and coding agents (installed to `/usr/share/omandroid/shell/`) |
+| `widgets/template`, `widgets/examples` | The starter **Create a widget with AI** copies, and examples to copy (`widget-template/`, `widget-examples/`) |
 
 The package contract follows omarchy-mac's: `./install DESTDIR` stages files and enables nothing, `test/all` runs the package's own tests, and `version` holds the version.
 

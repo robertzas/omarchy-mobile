@@ -11,6 +11,12 @@ done
 while IFS= read -r -d '' file; do
   install -Dm644 "$file" "$destination/usr/share/omandroid/shell/$file"
 done < <(find plugins profile hypr branding -type f -print0)
+# Your own home-screen widgets: the contract, the template Create copies,
+# and examples to copy (never loaded from here).
+install -Dm644 widgets/WIDGETS.md "$destination/usr/share/omandroid/shell/WIDGETS.md"
+while IFS= read -r -d '' file; do
+  install -Dm644 "$file" "$destination/usr/share/omandroid/shell/widget-${file#widgets/}"
+done < <(find widgets/template widgets/examples -type f -print0)
 install -Dm644 environment.d/20-omandroid-osk.conf "$destination/usr/lib/environment.d/20-omandroid-osk.conf"
 install -Dm644 systemd/omandroid-nfc-open.service "$destination/usr/lib/systemd/system/omandroid-nfc-open.service"
 install -Dm644 polkit/49-omandroid-admin-self.rules "$destination/usr/share/polkit-1/rules.d/49-omandroid-admin-self.rules"

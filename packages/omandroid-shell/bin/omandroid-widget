@@ -1,0 +1,640 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""omandroid-widget: the user's own home-screen widgets.
+
+A user widget is a folder under ~/.config/omandroid/widgets/<id>/ with a
+manifest.json (Omarchy's plugin manifest, kind "home-widget") and the QML it
+names. The home screen (omandroid.home) runs `omandroid-widget scan` to list
+them; it shows a widget only when this tool calls it "ok". Coding agents run
+`omandroid-widget check .` in a widget's folder to see the same verdict.
+
+  omandroid-widget scan                 JSON: every user widget and example
+  omandroid-widget check [DIR]          the verdict for one folder (exit 1 on errors)
+  omandroid-widget new ID NAME          a widget folder from the template
+  omandroid-widget copy-example ID      copy an installed example into your widgets
+  omandroid-widget remove ID            move a widget folder out (recoverable)
+  omandroid-widget agent ID PROMPT      Omarchy's default agent, in a terminal, in that folder
+
+/usr/share/omandroid/shell/WIDGETS.md is the contract. Everything here runs
+as the user; nothing asks for root, and widget code is never fetched from
+the network or read from anywhere but the user's widgets folder and the
+installed examples.
+"""
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+HOME = os.path.expanduser("~")
+WIDGETS_DIR = os.environ.get("OMANDROID_WIDGETS_DIR") or os.path.join(HOME, ".config/omandroid/widgets")
+SHARE = os.environ.get("OMANDROID_SHELL_SHARE") or "/usr/share/omandroid/shell"
+EXAMPLES_DIR = os.environ.get("OMANDROID_WIDGET_EXAMPLES") or os.path.join(SHARE, "widget-examples")
+TEMPLATE_DIR = os.environ.get("OMANDROID_WIDGET_TEMPLATE") or os.path.join(SHARE, "widget-template")
+CONTRACT = os.environ.get("OMANDROID_WIDGET_CONTRACT") or os.path.join(SHARE, "WIDGETS.md")
+CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache"), "omandroid/widget-lint")
+REMOVED_DIR = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local/share"), "omandroid/removed-widgets")
+OMARCHY_PATH = os.environ.get("OMARCHY_PATH") or "/usr/share/omarchy"
+
+KIND = "home-widget"
+ENTRY_KEY = "homeWidget"
+ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)*$")
+MAX_ID = 64
+RESERVED = ("omarchy.", "omandroid.")
+CAPABILITIES = ("commands", "network")
+FIELD_TYPES = ("string", "path", "integer", "number", "boolean", "enum")
+# The largest grid the home screen allows (HomeModel.LIMITS).
+MAX_COLUMNS, MAX_ROWS = 6, 8
+MAX_FILES, MAX_BYTES, MAX_MANIFEST = 64, 1 << 20, 64 << 10
+
+# ---------------------------------------------------------------- manifest
+
+
+def _cells(value, fallback, warnings, what):
+    """[w, h] within the largest grid; anything else falls back."""
+    if (isinstance(value, list) and len(value) == 2
+            and all(isinstance(v, int) and not isinstance(v, bool) for v in value)):
+        w = min(max(value[0], 1), MAX_COLUMNS)
+        h = min(max(value[1], 1), MAX_ROWS)
+        if [w, h] != value:
+            warnings.append("%s %s clamped to %dx%d" % (what, value, w, h))
+        return [w, h]
+    if value is not None:
+        warnings.append("%s must be [columns, rows]; using %dx%d" % (what, fallback[0], fallback[1]))
+    return list(fallback)
+
+
+def _field(raw, warnings):
+    if not isinstance(raw, dict):
+        warnings.append("a settings field that isn't an object was dropped")
+        return None
+    key, kind = raw.get("key"), raw.get("type")
+    if not isinstance(key, str) or not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,39}$", key):
+        warnings.append("settings field with key %r dropped: keys are identifiers" % (key,))
+        return None
+    if kind not in FIELD_TYPES:
+        warnings.append("settings field %s dropped: type %r is not one of %s" % (key, kind, ", ".join(FIELD_TYPES)))
+        return None
+    field = {"key": key, "type": kind, "label": str(raw.get("label") or key)[:60]}
+    if isinstance(raw.get("description"), str):
+        field["description"] = raw["description"][:200]
+    if kind in ("integer", "number"):
+        for bound in ("min", "max", "step"):
+            if isinstance(raw.get(bound), (int, float)) and not isinstance(raw.get(bound), bool):
+                field[bound] = raw[bound]
+    if kind == "enum":
+        options = [str(o.get("value") if isinstance(o, dict) else o) for o in raw.get("options") or []]
+        if not options:
+            warnings.append("enum field %s dropped: it has no options" % key)
+            return None
+        field["options"] = options[:12]
+    if "defaultValue" in raw:
+        field["defaultValue"] = raw["defaultValue"]
+    return field
+
+
+def _fits(field, value):
+    kind = field["type"]
+    if kind in ("string", "path"):
+        return isinstance(value, str)
+    if kind == "boolean":
+        return isinstance(value, bool)
+    if kind == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if kind == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if kind == "enum":
+        return isinstance(value, str) and value in field["options"]
+    return False
+
+
+def _empty(field):
+    return {"string": "", "path": "", "boolean": False, "integer": 0, "number": 0}.get(
+        field["type"], field.get("options", [""])[0])
+
+
+def validate_manifest(raw, dir_name):
+    """(spec, errors, warnings). spec is None when the manifest is unusable."""
+    errors, warnings = [], []
+    if not isinstance(raw, dict):
+        return None, ["manifest.json is not a JSON object"], warnings
+    if raw.get("schemaVersion") != 1:
+        errors.append("schemaVersion must be 1")
+    for key in ("id", "name", "version", "kinds", "entryPoints"):
+        if key not in raw:
+            errors.append("missing required field %r" % key)
+    wid = raw.get("id")
+    if not isinstance(wid, str) or not ID_RE.match(wid) or len(wid) > MAX_ID:
+        errors.append("id %r must be lower-case letters, digits, '-', '_' and dots, at most %d characters" % (wid, MAX_ID))
+    elif wid.startswith(RESERVED):
+        errors.append("id %r: the omarchy. and omandroid. prefixes are reserved" % wid)
+    elif wid != dir_name:
+        errors.append("id %r must match the folder name %r" % (wid, dir_name))
+    name = raw.get("name")
+    if not isinstance(name, str) or not name.strip():
+        errors.append("name must be a non-empty string")
+        name = dir_name
+    kinds = raw.get("kinds")
+    if not isinstance(kinds, list) or KIND not in kinds:
+        errors.append('kinds must include "%s"' % KIND)
+    entry = (raw.get("entryPoints") or {}).get(ENTRY_KEY) if isinstance(raw.get("entryPoints"), dict) else None
+    if not isinstance(entry, str) or not entry or entry.startswith("/") or ".." in entry or not entry.endswith(".qml"):
+        errors.append("entryPoints.%s must be a .qml file inside the widget folder" % ENTRY_KEY)
+        entry = None
+
+    meta = raw.get(ENTRY_KEY)
+    if meta is None:
+        meta = {}
+    elif not isinstance(meta, dict):
+        errors.append("%s must be an object" % ENTRY_KEY)
+        meta = {}
+    size = _cells(meta.get("size"), [2, 1], warnings, "size")
+    low = _cells(meta.get("min"), [1, 1], warnings, "min")
+    high = _cells(meta.get("max"), [MAX_COLUMNS, MAX_ROWS], warnings, "max")
+    high = [max(high[0], low[0]), max(high[1], low[1])]
+    fixed = [min(max(size[0], low[0]), high[0]), min(max(size[1], low[1]), high[1])]
+    if fixed != size:
+        warnings.append("size %s moved inside min..max: %dx%d" % (size, fixed[0], fixed[1]))
+
+    caps = meta.get("capabilities", [])
+    if not isinstance(caps, list):
+        errors.append("capabilities must be a list")
+        caps = []
+    declared = []
+    for cap in caps:
+        if cap in CAPABILITIES:
+            if cap not in declared:
+                declared.append(cap)
+        else:
+            warnings.append("unknown capability %r (known: %s)" % (cap, ", ".join(CAPABILITIES)))
+
+    schema = []
+    raw_schema = meta.get("schema", [])
+    if not isinstance(raw_schema, list):
+        warnings.append("schema must be a list; ignored")
+        raw_schema = []
+    for raw_field in raw_schema[:24]:
+        field = _field(raw_field, warnings)
+        if field and all(f["key"] != field["key"] for f in schema):
+            schema.append(field)
+    defaults = meta.get("defaults", {})
+    if not isinstance(defaults, dict):
+        warnings.append("defaults must be an object; ignored")
+        defaults = {}
+    defaults = dict(defaults)
+    for field in schema:
+        if field["key"] in defaults and _fits(field, defaults[field["key"]]):
+            continue
+        if "defaultValue" in field and _fits(field, field["defaultValue"]):
+            defaults[field["key"]] = field["defaultValue"]
+        else:
+            defaults[field["key"]] = _empty(field)
+    icon = meta.get("icon")
+    if not isinstance(icon, str) or not icon or len(icon) > 4:
+        icon = "󰕰"
+
+    spec = {
+        "id": wid if isinstance(wid, str) else dir_name,
+        "name": name.strip()[:40],
+        "version": str(raw.get("version") or ""),
+        "author": str(raw.get("author") or "")[:60],
+        "description": str(raw.get("description") or "")[:300],
+        "icon": icon,
+        "entry": entry,
+        "size": fixed, "min": low, "max": high,
+        "capabilities": declared,
+        "defaults": defaults,
+        "schema": schema,
+    }
+    return spec, errors, warnings
+
+# ---------------------------------------------------------------- what the code does
+
+
+def strip_comments(source):
+    """QML/JS without comments, keeping string literals (so URLs in strings
+    still count and `//` inside a string is not taken for a comment)."""
+    out, i, n = [], 0, len(source)
+    while i < n:
+        c = source[i]
+        if c in "\"'`":
+            j = i + 1
+            while j < n and source[j] != c:
+                j += 2 if source[j] == "\\" else 1
+            out.append(source[i:j + 1])
+            i = j + 1
+        elif source.startswith("//", i):
+            j = source.find("\n", i)
+            i = n if j < 0 else j
+        elif source.startswith("/*", i):
+            j = source.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+USES = {
+    "commands": [r"\bProcess\s*\{", r"\bexecDetached\s*\(", r"\bexecArgv\s*\(", r"\bhost\.run\s*\(",
+                 r"\bhost\.launch\s*\(", r"\bStdioCollector\b"],
+    "network": [r"\bXMLHttpRequest\b", r"\bWebSocket\b", r"\bfetch\s*\(", r"\b(?:https?|wss?|ftp)://",
+                r"[\"'](?:curl|wget|nc|ncat|ssh|scp|rsync|ping|dig)[\"']"],
+}
+FORBIDDEN = [
+    # A command string or argv element that starts with a root helper.
+    (r"[\"']\s*(?:sudo|pkexec|doas|run0|su)\b", "asks for root (sudo, pkexec, doas, run0, su): widgets run as you only"),
+    (r"^\s*import\s+\"(?:/|\.\.|[a-z]+:)", "imports QML from outside its folder"),
+    (r"\bQt\.createQmlObject\s*\(", "builds QML from a string (Qt.createQmlObject)"),
+    (r"\bQt\.createComponent\s*\(\s*[\"'](?:/|\.\.|[a-z]+:)", "loads a component from outside its folder"),
+    (r"\bsource\s*:\s*[\"'](?:https?|file)://[^\"']*\.qml", "loads QML from a URL"),
+    (r"\bsource\s*:\s*[\"'](?:/|\.\./)[^\"']*\.qml", "loads QML from outside its folder"),
+]
+
+
+# Allowed, but costly on the phone's 120 Hz panel (WIDGETS.md, Performance).
+SLOW = [
+    (r"\blayer\.enabled\s*:\s*true", "uses layer.enabled (an offscreen copy every frame)"),
+    (r"\b(?:MultiEffect|FastBlur|GaussianBlur|DropShadow|RectangularGlow|ShaderEffect)\s*\{", "uses a blur, shadow or shader effect"),
+    (r"\binterval\s*:\s*(?:[0-9]{1,2}|[1-9][0-9]{2})\s*(?:$|[;}])", "has a timer faster than once a second"),
+    (r"\bloops\s*:\s*Animation\.Infinite", "runs an animation forever"),
+]
+
+
+def code_checks(sources):
+    """(detected capabilities, errors, warnings) from the widget's QML and JS."""
+    detected, errors, warnings = [], [], []
+    for name, text in sources:
+        code = strip_comments(text)
+        for cap, patterns in USES.items():
+            if cap not in detected and any(re.search(p, code, re.M) for p in patterns):
+                detected.append(cap)
+        for pattern, why in FORBIDDEN:
+            if re.search(pattern, code, re.M):
+                errors.append("%s %s" % (name, why))
+        for pattern, why in SLOW:
+            if re.search(pattern, code, re.M):
+                warnings.append("%s %s" % (name, why))
+    return detected, errors, warnings
+
+# ---------------------------------------------------------------- qmllint
+
+
+def qmllint_path():
+    for candidate in (os.environ.get("QMLLINT"), shutil.which("qmllint6"), shutil.which("qmllint"),
+                      "/usr/lib/qt6/bin/qmllint"):
+        if candidate and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def lint_verdict(report):
+    """qmllint --json output -> (errors, warnings). Syntax errors, unknown
+    types, unknown properties and failed imports stop a widget; the rest
+    (unqualified access, members qmllint can't see through Omarchy's
+    singletons) are shown as warnings."""
+    errors, warnings = [], []
+    files = report.get("files", []) if isinstance(report, dict) else []
+    for f in files:
+        name = os.path.basename(str(f.get("filename", "")))
+        for w in f.get("warnings", []) or []:
+            if w.get("type") == "info":
+                continue
+            wid, msg = str(w.get("id", "")), str(w.get("message", ""))
+            # Omarchy's tokens are QtObjects (Style.font.body, Color.menu.text)
+            # that qmllint can't see into: not a problem in the widget.
+            if wid == "missing-property" and re.match(r'^Member "[^"]+" not found on type "QObject"$', msg):
+                continue
+            line = "%s:%s: %s" % (name, w.get("line", "?"), msg)
+            fatal = (wid == "syntax" or w.get("type") in ("critical", "error")
+                     or (wid == "import" and ("was not found" in msg or msg.startswith("Failed to import")))
+                     or (wid == "missing-property" and msg.startswith("Could not find property")))
+            (errors if fatal else warnings).append(line)
+    return errors, warnings
+
+
+def run_qmllint(files):
+    """{"ran": bool, "tool": ..., "errors": [...], "warnings": [...]}"""
+    tool = qmllint_path()
+    if not tool:
+        return {"ran": False, "tool": "", "errors": [], "warnings": ["qmllint is not installed (qt6-declarative); not linted"]}
+    with tempfile.TemporaryDirectory(prefix="omandroid-widget-lint-") as imports:
+        # Quickshell's `qs.` imports are the shell's own folder.
+        os.symlink(os.path.join(OMARCHY_PATH, "shell"), os.path.join(imports, "qs"))
+        try:
+            proc = subprocess.run([tool, "--json", "-", "-I", imports] + files, capture_output=True,
+                                  text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            return {"ran": True, "tool": tool, "errors": ["qmllint took longer than 60 s"], "warnings": []}
+    try:
+        report = json.loads(proc.stdout or "{}")
+    except ValueError:
+        return {"ran": True, "tool": tool, "errors": ["qmllint failed: " + (proc.stderr or "").strip()[:300]], "warnings": []}
+    errors, warnings = lint_verdict(report)
+    return {"ran": True, "tool": tool, "errors": errors, "warnings": warnings}
+
+
+def cached_lint(widget_id, digest, files):
+    path = os.path.join(CACHE_DIR, widget_id + ".json")
+    try:
+        with open(path) as f:
+            cached = json.load(f)
+        if cached.get("hash") == digest:
+            return cached["lint"]
+    except (OSError, ValueError, KeyError):
+        pass
+    lint = run_qmllint(files)
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        with open(path + ".tmp", "w") as f:
+            json.dump({"hash": digest, "lint": lint}, f)
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass
+    return lint
+
+# ---------------------------------------------------------------- one folder
+
+
+def inside(path, base):
+    path, base = os.path.realpath(path), os.path.realpath(base)
+    return path == base or path.startswith(base.rstrip("/") + "/")
+
+
+def inspect(folder, base, source, lint=True):
+    """Everything the home screen needs to know about one widget folder."""
+    dir_name = os.path.basename(folder.rstrip("/"))
+    out = {"id": dir_name, "source": source, "dir": folder, "status": "error", "errors": [], "warnings": [],
+           "hash": "", "manifest": None, "detected": [], "undeclared": [], "lint": None}
+    errors, warnings = out["errors"], out["warnings"]
+    if not inside(folder, base):
+        errors.append("the folder is a link to somewhere outside %s" % base)
+        return out
+
+    files, total = [], 0
+    for root, dirs, names in os.walk(folder, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        for name in sorted(names):
+            if name.startswith("."):
+                continue
+            path = os.path.join(root, name)
+            if not inside(path, folder):
+                errors.append("%s links outside the widget folder" % os.path.relpath(path, folder))
+                continue
+            if not os.path.isfile(path):
+                continue
+            files.append(path)
+            total += os.path.getsize(path)
+    if len(files) > MAX_FILES or total > MAX_BYTES:
+        errors.append("too big: at most %d files and %d KiB" % (MAX_FILES, MAX_BYTES >> 10))
+        return out
+
+    digest = hashlib.sha256()
+    for path in files:
+        digest.update(os.path.relpath(path, folder).encode() + b"\0")
+        with open(path, "rb") as f:
+            digest.update(f.read() + b"\0")
+    out["hash"] = digest.hexdigest()[:16]
+
+    manifest_path = os.path.join(folder, "manifest.json")
+    if not os.path.isfile(manifest_path):
+        errors.append("no manifest.json")
+        return out
+    if os.path.getsize(manifest_path) > MAX_MANIFEST:
+        errors.append("manifest.json is larger than 64 KiB")
+        return out
+    try:
+        with open(manifest_path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except ValueError as e:
+        errors.append("manifest.json is not valid JSON: %s" % e)
+        return out
+    spec, m_errors, m_warnings = validate_manifest(raw, dir_name)
+    errors.extend(m_errors)
+    warnings.extend(m_warnings)
+    out["manifest"] = spec
+    if spec and spec["entry"]:
+        entry = os.path.join(folder, spec["entry"])
+        if not os.path.isfile(entry) or not inside(entry, folder):
+            errors.append("%s is missing" % spec["entry"])
+
+    sources = []
+    for path in files:
+        if path.endswith((".qml", ".js", ".mjs")):
+            with open(path, encoding="utf-8", errors="replace") as f:
+                sources.append((os.path.relpath(path, folder), f.read()))
+    detected, c_errors, c_warnings = code_checks(sources)
+    errors.extend(c_errors)
+    warnings.extend(c_warnings)
+    out["detected"] = detected
+    declared = spec["capabilities"] if spec else []
+    out["undeclared"] = [cap for cap in detected if cap not in declared]
+    for cap in out["undeclared"]:
+        errors.append({"commands": 'runs commands, but its manifest doesn\'t declare "commands"',
+                       "network": 'uses the network, but its manifest doesn\'t declare "network"'}[cap])
+
+    qml = [p for p in files if p.endswith(".qml")]
+    if lint and qml and not errors:
+        out["lint"] = cached_lint(dir_name, out["hash"], qml) if source == "user" else run_qmllint(qml)
+        errors.extend(out["lint"]["errors"])
+        warnings.extend(out["lint"]["warnings"])
+    if not errors:
+        out["status"] = "ok"
+    return out
+
+
+def list_folders(base):
+    if not os.path.isdir(base):
+        return []
+    return [os.path.join(base, n) for n in sorted(os.listdir(base))
+            if not n.startswith(".") and os.path.isdir(os.path.join(base, n))]
+
+
+def scan(lint=True):
+    return {
+        "version": 1,
+        "dir": WIDGETS_DIR,
+        "examplesDir": EXAMPLES_DIR,
+        "contract": CONTRACT,
+        "widgets": [inspect(f, WIDGETS_DIR, "user", lint) for f in list_folders(WIDGETS_DIR)],
+        # Examples are only copied, never loaded from where they are installed.
+        "examples": [inspect(f, EXAMPLES_DIR, "example", False) for f in list_folders(EXAMPLES_DIR)],
+    }
+
+# ---------------------------------------------------------------- folders
+
+
+def ensure_dir():
+    os.makedirs(WIDGETS_DIR, exist_ok=True)
+    link = os.path.join(WIDGETS_DIR, "WIDGETS.md")
+    if os.path.isfile(CONTRACT) and not os.path.lexists(link):
+        try:
+            os.symlink(CONTRACT, link)
+        except OSError:
+            pass
+
+
+def check_id(widget_id):
+    if not ID_RE.match(widget_id or "") or len(widget_id) > MAX_ID or widget_id.startswith(RESERVED):
+        fail("not a widget id: %r" % widget_id)
+
+
+def fail(message, code=2):
+    print(message, file=sys.stderr)
+    sys.exit(code)
+
+
+def write_manifest(folder, update):
+    path = os.path.join(folder, "manifest.json")
+    with open(path, encoding="utf-8") as f:
+        manifest = json.load(f)
+    manifest.update(update)
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    os.replace(path + ".tmp", path)
+
+
+def copy_tree(source, widget_id, update):
+    ensure_dir()
+    target = os.path.join(WIDGETS_DIR, widget_id)
+    if os.path.lexists(target):
+        fail("%s already exists" % target, 3)
+    staging = tempfile.mkdtemp(prefix="." + widget_id + "-", dir=WIDGETS_DIR)
+    try:
+        shutil.copytree(source, os.path.join(staging, "w"), symlinks=False)
+        write_manifest(os.path.join(staging, "w"), update)
+        # Appears whole: the home screen's watcher never sees half a widget.
+        os.rename(os.path.join(staging, "w"), target)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    print(target)
+
+
+def cmd_new(widget_id, name):
+    check_id(widget_id)
+    if not os.path.isdir(TEMPLATE_DIR):
+        fail("the widget template is missing: %s" % TEMPLATE_DIR)
+    name = " ".join(str(name).split())[:40] or widget_id
+    copy_tree(TEMPLATE_DIR, widget_id, {"id": widget_id, "name": name, "author": os.environ.get("USER", "")})
+
+
+def cmd_copy_example(widget_id):
+    check_id(widget_id)
+    source = os.path.join(EXAMPLES_DIR, widget_id)
+    if not os.path.isdir(source) or not inside(source, EXAMPLES_DIR):
+        fail("no example called %s" % widget_id)
+    copy_tree(source, widget_id, {})
+
+
+def cmd_remove(widget_id):
+    check_id(widget_id)
+    folder = os.path.join(WIDGETS_DIR, widget_id)
+    if not os.path.isdir(folder) or os.path.islink(folder):
+        fail("no widget called %s" % widget_id, 3)
+    os.makedirs(REMOVED_DIR, exist_ok=True)
+    target = os.path.join(REMOVED_DIR, "%s-%s" % (widget_id, time.strftime("%Y%m%d-%H%M%S")))
+    shutil.move(folder, target)
+    print(target)
+
+# ---------------------------------------------------------------- the agent
+
+
+def default_agent():
+    try:
+        out = subprocess.run(["omarchy-default-agent"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return out.strip().splitlines()[0].strip() if out.strip() else ""
+
+
+def cmd_agent(widget_id, prompt):
+    """Omarchy's default agent with `prompt`, in a terminal, in the widget's
+    folder. The prompt is one argv element all the way through:
+    omarchy-agent-prompt passes it to omarchy-agent as --prompt. Exit codes:
+    0 launched, 3 no default agent (Omarchy's chooser was opened), 4 the
+    agent stopped at once (its message on stderr)."""
+    check_id(widget_id)
+    folder = os.path.join(WIDGETS_DIR, widget_id)
+    if not os.path.isdir(folder) or not inside(folder, WIDGETS_DIR):
+        fail("no widget called %s" % widget_id, 2)
+    if not str(prompt).strip():
+        fail("an empty prompt", 2)
+    if not default_agent():
+        subprocess.Popen(["omarchy-agent", "--pick"], cwd=folder, start_new_session=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("No coding agent is chosen in Omarchy yet. Pick one in the menu that opened, then try again.",
+              file=sys.stderr)
+        sys.exit(3)
+    # omarchy-agent moves to ~/Work only when started in $HOME; here it starts
+    # in the widget folder and the agent works there.
+    with tempfile.TemporaryFile(mode="w+") as errors:
+        proc = subprocess.Popen(["omarchy-agent-prompt", prompt], cwd=folder, start_new_session=True,
+                                stdin=subprocess.DEVNULL, stdout=errors, stderr=errors)
+        # A missing or unsupported agent makes omarchy-agent exit at once with
+        # a message; a terminal that opened keeps running.
+        deadline = time.monotonic() + float(os.environ.get("OMANDROID_WIDGET_AGENT_WAIT", "2"))
+        while time.monotonic() < deadline and proc.poll() is None:
+            time.sleep(0.05)
+        if proc.poll() not in (None, 0):
+            errors.seek(0)
+            message = errors.read().strip() or "the agent exited with status %d" % proc.returncode
+            print(message, file=sys.stderr)
+            sys.exit(4)
+    print(folder)
+
+
+def cmd_check(folder):
+    folder = os.path.abspath(folder or ".")
+    base = WIDGETS_DIR if inside(folder, WIDGETS_DIR) else (EXAMPLES_DIR if inside(folder, EXAMPLES_DIR)
+                                                              else os.path.dirname(folder))
+    result = inspect(folder, base, "user" if base == WIDGETS_DIR else "check")
+    for e in result["errors"]:
+        print("error: " + e)
+    for w in result["warnings"]:
+        print("warning: " + w)
+    spec = result["manifest"]
+    if spec:
+        print("%s (%s): %dx%d, %d..%d x %d..%d cells, capabilities: %s" % (
+            spec["name"], spec["id"], spec["size"][0], spec["size"][1], spec["min"][0], spec["max"][0],
+            spec["min"][1], spec["max"][1], ", ".join(spec["capabilities"]) or "none"))
+    if result["lint"] and not result["lint"]["ran"]:
+        print("note: " + result["lint"]["warnings"][0])
+    print("ok: the home screen will load it" if result["status"] == "ok" else "not ok: the home screen shows the errors instead")
+    sys.exit(0 if result["status"] == "ok" else 1)
+
+
+def main(argv):
+    if len(argv) < 2 or argv[1] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0
+    cmd, args = argv[1], argv[2:]
+    if cmd == "scan" and not args:
+        ensure_dir()
+        json.dump(scan(), sys.stdout)
+        sys.stdout.write("\n")
+    elif cmd == "check" and len(args) <= 1:
+        cmd_check(args[0] if args else ".")
+    elif cmd == "new" and len(args) == 2:
+        cmd_new(*args)
+    elif cmd == "copy-example" and len(args) == 1:
+        cmd_copy_example(args[0])
+    elif cmd == "remove" and len(args) == 1:
+        cmd_remove(args[0])
+    elif cmd == "agent" and len(args) == 2:
+        cmd_agent(*args)
+    elif cmd == "init" and not args:
+        ensure_dir()
+        print(WIDGETS_DIR)
+    else:
+        fail("usage: see omandroid-widget --help")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

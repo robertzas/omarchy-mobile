@@ -117,9 +117,31 @@ if command -v node >/dev/null; then
 fi
 pass "home screen wiring"
 
+# The user's own widgets: the tool, its tests, and what ships with it.
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omandroid-widget || fail "omandroid-widget parses"
+python3 -B test/widget-tool.py || fail "omandroid-widget"
+for json in widgets/template/manifest.json widgets/examples/*/manifest.json; do
+  python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert "home-widget" in m["kinds"]' "$json" || fail "$json is a home-widget manifest"
+done
+if [[ -n $qmlformat ]]; then
+  for qml in widgets/template/*.qml widgets/examples/*/*.qml; do
+    "$qmlformat" "$qml" >/dev/null 2>&1 || fail "$qml parses"
+  done
+fi
+if grep -rnE '(^|[^.[:alnum:]_])Color\.|"#[0-9a-fA-F]{3,8}"' widgets --include=*.qml; then
+  fail "shipped widgets take colours from the theme"
+fi
+grep -c 'UserWidgetCell.qml' plugins/omandroid.home/Home.qml >/dev/null || fail "user widgets load through UserWidgetCell"
+grep -c 'omarchy-agent-prompt' bin/omandroid-widget >/dev/null || fail "widgets are made with Omarchy's default agent"
+pass "user widgets"
+
 bash -n bin/omandroid-setup-user || fail "omandroid-setup-user parses"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ./install "$tmp/root"
 [[ -x $tmp/root/usr/bin/omandroid-setup-user && -f $tmp/root/usr/share/omandroid/shell/profile/shell.json ]] \
   || fail "install stages the setup script and the profile"
+[[ -x $tmp/root/usr/bin/omandroid-widget && -f $tmp/root/usr/share/omandroid/shell/WIDGETS.md \
+   && -f $tmp/root/usr/share/omandroid/shell/widget-template/manifest.json \
+   && -f $tmp/root/usr/share/omandroid/shell/widget-examples/countdown/Widget.qml ]] \
+  || fail "install stages the widget tool, contract, template and examples"
 pass "install stages the package"

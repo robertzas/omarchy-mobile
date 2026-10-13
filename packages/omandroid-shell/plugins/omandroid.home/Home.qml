@@ -8,6 +8,7 @@ import qs.Commons as Commons
 import qs.Ui
 import qs.services as OmarchyServices
 import "HomeModel.js" as HomeModel
+import "UserWidgets.js" as UserWidgets
 
 // Home screens, after Android launchers (Omalauncher, Pixel Launcher): pages
 // of app shortcuts and widgets on the wallpaper, swiped sideways, with page
@@ -24,6 +25,14 @@ import "HomeModel.js" as HomeModel
 //
 // The layout is the user's, in ~/.config/omandroid/home.json (HomeModel.js
 // has the format). External edits are picked up live.
+//
+// Besides the built-in widgets, the user's own: folders under
+// ~/.config/omandroid/widgets/<id>/ (WIDGETS.md is the contract), listed
+// and checked by `omandroid-widget scan`, watched with inotifywait the way
+// Omarchy's shell watches ~/.config/omarchy/plugins, and loaded only when
+// the scan calls them ok. A broken one is an error card, never a broken
+// home screen. The Widgets sheet creates and changes them with Omarchy's
+// default coding agent.
 Item {
   id: root
 
@@ -56,11 +65,11 @@ Item {
   property bool loaded: false
   property bool editing: false
   property int currentPage: 0
-  // "", "widgets", "apps", "pages", "settings"
+  // "", "widgets", "apps", "pages", "settings", "create"
   property string sheet: ""
   property string settingsId: ""
   property string notice: ""
-  readonly property bool wantsKeyboard: sheet === "apps" || sheet === "settings"
+  readonly property bool wantsKeyboard: sheet === "apps" || sheet === "settings" || sheet === "create"
 
   // Bumped when desktop entries change, so app tiles look themselves up again.
   property int appsRevision: 0
@@ -101,7 +110,7 @@ Item {
     command: ["mkdir", "-p", root.configDir]
     onExited: store.path = root.layoutPath
   }
-  Component.onCompleted: mkdirProc.running = true
+  Component.onCompleted: { mkdirProc.running = true; widgetsInit.running = true }
 
   FileView {
     id: store
@@ -115,7 +124,7 @@ Item {
 
   function loadText(text) {
     if (loaded && text === lastWritten) return
-    var parsed = HomeModel.parse(text)
+    var parsed = HomeModel.parse(text, userCatalog)
     if (!parsed) {
       // Unreadable (a hand edit gone wrong): keep showing what we have (the
       // default at startup), and keep the file as home.json.bad before the
@@ -178,6 +187,245 @@ Item {
     return true
   }
 
+  // ---------------------------------------------------------------- the system's clock format
+
+  // Widgets that show a time follow the 12/24-hour choice the status bar
+  // uses (shell.json's bar.clockFormat), as the clock widget does.
+  property string barClockFormat: ""
+  readonly property string systemTimeFormat: HomeModel.systemTimeFormat(barClockFormat)
+  FileView {
+    path: Quickshell.env("HOME") + "/.config/omarchy/shell.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: {
+      try {
+        var shellConfig = JSON.parse(text())
+        root.barClockFormat = shellConfig.bar && shellConfig.bar.clockFormat ? String(shellConfig.bar.clockFormat) : ""
+      } catch (e) { root.barClockFormat = "" }
+    }
+  }
+
+  // ---------------------------------------------------------------- the user's own widgets
+
+  // The last good scan (UserWidgets.parseScan) and the specs HomeModel sizes
+  // user widgets by.
+  property var userScan: UserWidgets.emptyScan()
+  readonly property var userCatalog: UserWidgets.catalog(userScan)
+  readonly property string widgetsDir: userScan.dir || (Quickshell.env("HOME") + "/.config/omandroid/widgets")
+  // Errors widgets hit when the home screen built them (QML that loads
+  // badly), by widget id and hash: shown on their card and by widgetStatus.
+  property var runtimeErrors: ({})
+  // A widget to place once the scan has seen it (just created or copied).
+  property string pendingAdd: ""
+
+  // Omarchy's default coding agent (omarchy-default-agent's file), for the
+  // words on the Create sheet; launching goes through Omarchy's own scripts.
+  property string agentId: ""
+  FileView {
+    path: Quickshell.env("HOME") + "/.config/omarchy/defaults/agent"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.agentId = String(text() || "").trim().split("\n")[0].trim()
+    onLoadFailed: root.agentId = ""
+  }
+
+  Process {
+    id: widgetsInit
+    command: [UserWidgets.TOOL, "init"]
+    onExited: { widgetWatcher.running = true; root.scanWidgets() }
+  }
+
+  // Same watch as Omarchy's PluginRegistry on ~/.config/omarchy/plugins.
+  Process {
+    id: widgetWatcher
+    command: ["inotifywait", "-m", "-r", "-q", "-e", "close_write,create,delete,move", "--format", "%w%f", root.widgetsDir]
+    stdout: SplitParser {
+      onRead: function(path) { widgetScanTimer.restart() }
+    }
+    onExited: widgetWatcherRestart.restart()
+  }
+  Timer { id: widgetWatcherRestart; interval: 2000; onTriggered: widgetWatcher.running = true }
+  Timer { id: widgetScanTimer; interval: 400; onTriggered: root.scanWidgets() }
+
+  property bool scanPending: false
+  Process {
+    id: widgetScan
+    command: UserWidgets.SCAN_ARGV
+    stdout: StdioCollector { id: widgetScanOut; waitForEnd: true }
+    onExited: {
+      var scan = UserWidgets.parseScan(widgetScanOut.text)
+      if (scan.ok) root.applyScan(scan)
+      else console.warn("omandroid.home: " + scan.error)
+      if (root.scanPending) { root.scanPending = false; root.scanWidgets() }
+    }
+  }
+
+  function scanWidgets() {
+    if (widgetScan.running) { scanPending = true; return }
+    widgetScan.running = true
+  }
+
+  function applyScan(scan) {
+    // Changed code is loaded fresh: Qt keeps components by URL, so the
+    // URL carries the hash, and the cache is cleared for files a widget
+    // imports from its own folder. (Omarchy's plugin reload does the same.)
+    var changed = false
+    scan.widgets.forEach(function(r) {
+      var before = UserWidgets.findRecord(userScan, r.id)
+      if (before && before.hash !== r.hash) changed = true
+    })
+    if (changed && typeof Qt.clearComponentCache === "function") Qt.clearComponentCache()
+    userScan = scan
+    if (loaded) {
+      // Re-clamp placed user widgets to what their manifests now allow.
+      var next = HomeModel.normalize(layout, userCatalog)
+      if (next && HomeModel.serialize(next) !== HomeModel.serialize(layout)) commit(next)
+    }
+    if (pendingAdd) {
+      var r = UserWidgets.findRecord(scan, pendingAdd)
+      // Placed behind the Create sheet, which stays up for the agent's outcome.
+      if (r) { var id = pendingAdd; pendingAdd = ""; addWidgetHere(UserWidgets.typeFor(id), sheet === "create") }
+    }
+  }
+
+  // What a placed user widget shows: { state, message, url, record }.
+  function userCard(widgetId) {
+    var card = UserWidgets.cardState(userScan, widgetId)
+    var r = UserWidgets.findRecord(userScan, widgetId)
+    card.record = r
+    card.url = ""
+    if (card.state === "ok") {
+      var runtime = runtimeErrors[widgetId]
+      if (runtime && runtime.hash === r.hash) return { state: "error", message: runtime.message, url: "", record: r }
+      card.url = "file://" + r.dir + "/" + r.manifest.entry + "?v=" + r.hash
+    }
+    return card
+  }
+
+  function noteRuntimeError(widgetId, message) {
+    var r = UserWidgets.findRecord(userScan, widgetId)
+    var next = Object.assign({}, runtimeErrors)
+    next[widgetId] = { hash: r ? r.hash : "", message: String(message || "It failed to load") }
+    runtimeErrors = next
+    console.warn("omandroid.home: widget " + widgetId + ": " + message)
+  }
+
+  // ---------- the helper (omandroid-widget new | copy-example | remove | agent)
+
+  property var helperDone: null
+  property bool helperBusy: false
+  Process {
+    id: helper
+    stdout: StdioCollector { id: helperOut; waitForEnd: true }
+    stderr: StdioCollector { id: helperErr; waitForEnd: true }
+    onExited: function(code) {
+      var done = root.helperDone
+      root.helperDone = null
+      root.helperBusy = false
+      if (done) done(code, String(helperOut.text || ""), String(helperErr.text || ""))
+    }
+  }
+
+  function runHelper(argv, done) {
+    if (helperBusy) { flash("Still busy with the last one"); return false }
+    helperBusy = true
+    helperDone = done
+    helper.command = argv
+    helper.running = true
+    return true
+  }
+
+  // The Create sheet's state: "create" a new widget, or "edit" createTarget.
+  property string createMode: "create"
+  property string createTarget: ""
+  property string createText: ""
+  property string createError: ""
+
+  function openCreate(mode, widgetId) {
+    createMode = mode === "edit" ? "edit" : "create"
+    createTarget = createMode === "edit" ? String(widgetId || "") : ""
+    createError = ""
+    setEditing(true)
+    sheet = "create"
+  }
+
+  function userIds() {
+    return userScan.widgets.map(function(r) { return r.id })
+  }
+
+  // Create: a folder from the template, placed as soon as the scan sees it,
+  // and the agent started in it with the description.
+  function createWidgetNow(description) {
+    var text = String(description || "").trim()
+    if (!text) { createError = "Describe the widget first"; return "empty" }
+    // A second try (say, after choosing an agent) reuses the folder made by
+    // the first.
+    if (createTarget && UserWidgets.findRecord(userScan, createTarget)) {
+      startAgent(createTarget, UserWidgets.createPrompt(text, widgetsDir + "/" + createTarget, userScan.contract))
+      return createTarget
+    }
+    var id = UserWidgets.newId(text, Quickshell.env("USER"), userIds())
+    createError = ""
+    runHelper(UserWidgets.newArgv(id, UserWidgets.nameFrom(text)), function(code, out, err) {
+      if (code !== 0) { root.createError = err.trim() || "Couldn't create the widget folder"; return }
+      root.createTarget = id
+      root.pendingAdd = id
+      root.scanWidgets()
+      root.startAgent(id, UserWidgets.createPrompt(text, root.widgetsDir + "/" + id, root.userScan.contract))
+    })
+    return id
+  }
+
+  function editWidget(widgetId, description) {
+    var r = UserWidgets.findRecord(userScan, widgetId)
+    if (!r) { createError = "No widget called " + widgetId; return "unknown" }
+    var name = r.manifest ? r.manifest.name : widgetId
+    var errors = r.errors.slice()
+    var runtime = runtimeErrors[widgetId]
+    if (runtime && runtime.hash === r.hash) errors.push(runtime.message)
+    startAgent(widgetId, UserWidgets.editPrompt(description, r.dir, userScan.contract, name, errors))
+    return widgetId
+  }
+
+  function startAgent(widgetId, prompt) {
+    var started = runHelper(UserWidgets.agentArgv(widgetId, prompt), function(code, out, err) {
+      var outcome = UserWidgets.agentOutcome(code, err)
+      if (outcome.kind === "launched") {
+        if (root.createMode === "create") root.createTarget = ""
+        root.createText = ""
+        root.createError = ""
+        root.setEditing(false)
+        root.flash("Opening " + (root.agentId || "the agent") + "…")
+      } else {
+        root.createError = outcome.message
+        if (root.sheet !== "create") root.flash(outcome.message.split("\n")[0])
+      }
+    })
+    if (started) createError = ""
+  }
+
+  function removeUserWidget(widgetId) {
+    runHelper(UserWidgets.removeArgv(widgetId), function(code, out, err) {
+      if (code !== 0) { root.flash(err.trim() || "Couldn't remove it"); return }
+      root.commit(HomeModel.removeWidgetType(root.layout, UserWidgets.typeFor(widgetId)))
+      root.flash("Removed; the folder is in ~/.local/share/omandroid/removed-widgets")
+      root.scanWidgets()
+    })
+  }
+
+  // An installed example becomes the user's own copy, then goes on the page.
+  function copyExample(widgetId) {
+    if (UserWidgets.findRecord(userScan, widgetId)) return addWidgetHere(UserWidgets.typeFor(widgetId))
+    runHelper(UserWidgets.copyArgv(widgetId), function(code, out, err) {
+      if (code !== 0) { root.flash(err.trim() || "Couldn't copy it"); return }
+      root.pendingAdd = widgetId
+      root.scanWidgets()
+    })
+    return widgetId
+  }
+
   // ---------------------------------------------------------------- the fingerprint guard
 
   // No long-press while a fingerprint operation runs, or while the finger
@@ -236,13 +484,16 @@ Item {
     return true
   }
 
-  function addWidgetHere(type) {
-    var next = HomeModel.addWidget(layout, currentPage, type)
-    if (!next || !next.placed) { flash("No room for that"); return "full" }
+  function addWidgetHere(type, keepSheet) {
+    var next = HomeModel.addWidget(layout, currentPage, type, userCatalog)
+    if (!next) return "unknown"
+    if (!next.placed) { flash("No room for that"); return "full" }
     commit(next)
     goToPage(next.placed.page, true)
-    sheet = ""
-    if (HomeModel.REGISTRY[type].network) openSettings(next.placed.id)
+    if (keepSheet !== true) sheet = ""
+    var spec = HomeModel.widgetSpec(type, userCatalog)
+    // Built-in network widgets start off and ask for their settings.
+    if (spec && spec.network && !spec.user) openSettings(next.placed.id)
     return next.placed.id
   }
 
@@ -270,11 +521,11 @@ Item {
   }
 
   function resizeItem(id, w, h) {
-    commit(HomeModel.resizeItem(layout, id, w, h))
+    commit(HomeModel.resizeItem(layout, id, w, h, userCatalog))
   }
 
   function setConfig(id, patch) {
-    commit(HomeModel.setConfig(layout, id, patch))
+    commit(HomeModel.setConfig(layout, id, patch, userCatalog))
   }
 
   function openSettings(id) {
@@ -319,11 +570,36 @@ Item {
   function page(n) { goToPage(Number(n), true); return String(currentPage) }
   function edit(on) { return String(on) === "off" || String(on) === "false" ? (setEditing(false), "done") : requestEdit() }
   function addApp(appId) { return addAppHere(String(appId || "")) }
-  function addWidget(type) { return HomeModel.widgetSpec(String(type)) ? addWidgetHere(String(type)) : "unknown" }
+  function addWidget(type) {
+    var t = String(type)
+    return HomeModel.widgetSpec(t, userCatalog) || HomeModel.isUserType(t) ? addWidgetHere(t) : "unknown"
+  }
   function showSheet(name) {
-    if (["widgets", "apps", "pages", ""].indexOf(String(name)) < 0) return "unknown"
+    if (["widgets", "apps", "pages", "create", ""].indexOf(String(name)) < 0) return "unknown"
+    if (name === "create") { openCreate("create", ""); return sheet }
     setEditing(true); sheet = String(name); return sheet
   }
+  // User widgets: `widgets ''` lists them with their verdicts, `widgetStatus
+  // <id>` is one (what an agent checks after saving), `rescanWidgets ''`
+  // scans now, `createWidget <description>` and `editWidget <id>` start the
+  // agent as the sheet does, `copyExample <id>` copies and places one.
+  function widgets() {
+    return JSON.stringify(userScan.widgets.map(function(r) { return root.widgetSummary(r) }))
+  }
+  function widgetStatus(id) {
+    var r = UserWidgets.findRecord(userScan, String(id))
+    return r ? JSON.stringify(widgetSummary(r)) : "unknown"
+  }
+  function widgetSummary(r) {
+    var card = userCard(r.id)
+    var placed = 0
+    layout.pages.forEach(function(p) { p.items.forEach(function(i) { if (i.type === UserWidgets.typeFor(r.id)) placed++ }) })
+    return { id: r.id, name: r.manifest ? r.manifest.name : "", status: card.state, errors: card.state === "ok" ? [] : card.message.split("\n"),
+             warnings: r.warnings, capabilities: r.manifest ? r.manifest.capabilities : [], undeclared: r.undeclared,
+             hash: r.hash, dir: r.dir, placed: placed }
+  }
+  function rescanWidgets() { scanWidgets(); return "ok" }
+  function createWidget(description) { openCreate("create", ""); createText = String(description || ""); return createWidgetNow(createText) }
   function settings(id) { openSettings(String(id)); return sheet === "settings" ? settingsId : "none" }
   function state() {
     return JSON.stringify({
@@ -605,7 +881,8 @@ Item {
     property real growY: 0
     property bool resizing: false
 
-    readonly property var limits: HomeModel.sizeLimits(modelData, root.layout.grid)
+    readonly property var limits: HomeModel.sizeLimits(modelData, root.layout.grid, root.userCatalog)
+    readonly property bool isUser: isWidget && HomeModel.isUserType(modelData.type)
     x: modelData.x * owner.cellW + dragX
     y: modelData.y * owner.cellH + dragY
     width: Math.max(limits.minW * owner.cellW, Math.min(limits.maxW * owner.cellW, modelData.w * owner.cellW + growX))
@@ -627,7 +904,10 @@ Item {
       id: content
       anchors.fill: cell.isWidget ? card : parent
       clip: cell.isWidget
-      source: cell.isWidget ? Qt.resolvedUrl(cell.modelData.type.charAt(0).toUpperCase() + cell.modelData.type.slice(1) + "Widget.qml")
+      // A user widget goes through UserWidgetCell, which loads its code
+      // only when the scan calls it ok and shows an error card otherwise.
+      source: cell.isUser ? Qt.resolvedUrl("UserWidgetCell.qml")
+        : cell.isWidget ? Qt.resolvedUrl(cell.modelData.type.charAt(0).toUpperCase() + cell.modelData.type.slice(1) + "Widget.qml")
         : Qt.resolvedUrl("AppTile.qml")
       onLoaded: {
         item.home = root

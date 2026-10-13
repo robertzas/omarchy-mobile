@@ -6,6 +6,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "HomeModel.js" as HomeModel
+import "UserWidgets.js" as UserWidgets
 
 // Edit mode's sheets, sliding up from the bottom of the home screen: add a
 // widget, add an app, manage pages, and one widget's settings. `home` is
@@ -60,7 +61,8 @@ Item {
         text: sheets.which === "widgets" ? "Add a widget"
           : sheets.which === "apps" ? "Add an app"
           : sheets.which === "pages" ? "Pages"
-          : sheets.which === "settings" ? sheets.settingsTitle : ""
+          : sheets.which === "settings" ? sheets.settingsTitle
+          : sheets.which === "create" ? sheets.createTitle : ""
         color: sheets.fg
         font.family: Style.font.family
         font.pixelSize: Style.font.heading
@@ -91,7 +93,8 @@ Item {
       sourceComponent: sheets.which === "widgets" ? widgetsSheet
         : sheets.which === "apps" ? appsSheet
         : sheets.which === "pages" ? pagesSheet
-        : sheets.which === "settings" ? settingsSheet : null
+        : sheets.which === "settings" ? settingsSheet
+        : sheets.which === "create" ? createSheet : null
     }
   }
 
@@ -200,20 +203,232 @@ Item {
 
   // ---------------------------------------------------------------- add a widget
 
+  component SectionLabel: Text {
+    width: parent ? parent.width : 0
+    topPadding: Style.spacing.lg
+    textFormat: Text.PlainText
+    color: sheets.dim
+    font.family: Style.font.family
+    font.pixelSize: Style.font.caption
+    font.bold: true
+  }
+
+  // A user widget or example: like Row2, with a warning look and actions
+  // (Edit with AI, Remove) on the right.
+  component WidgetRow: Item {
+    id: wr
+    property string glyph: ""
+    property string title: ""
+    property string subtitle: ""
+    property bool warn: false
+    property bool actions: false
+    property bool confirming: false
+    signal clicked()
+    signal edit()
+    signal remove()
+    width: parent ? parent.width : 0
+    height: Math.max(sheets.touch + 8, 56)
+    Rectangle {
+      anchors.fill: parent
+      radius: Style.cornerRadius
+      color: wrTap.pressed ? Style.pressedFillFor(sheets.fg, Commons.Color.accent) : "transparent"
+    }
+    MouseArea { id: wrTap; anchors.fill: parent; onClicked: wr.clicked() }
+    Text {
+      id: wrIcon
+      anchors.left: parent.left
+      anchors.leftMargin: Style.spacing.md
+      anchors.verticalCenter: parent.verticalCenter
+      width: 36
+      horizontalAlignment: Text.AlignHCenter
+      textFormat: Text.PlainText
+      text: wr.glyph
+      color: wr.warn ? Commons.Color.urgent : Commons.Color.accent
+      font.family: Style.font.family
+      font.pixelSize: 26
+    }
+    Column {
+      anchors.left: wrIcon.right
+      anchors.leftMargin: Style.spacing.xl
+      anchors.right: wrActions.left
+      anchors.verticalCenter: parent.verticalCenter
+      Text {
+        width: parent.width
+        textFormat: Text.PlainText
+        text: wr.title
+        color: sheets.fg
+        font.family: Style.font.family
+        font.pixelSize: Style.font.title
+        elide: Text.ElideRight
+      }
+      Text {
+        width: parent.width
+        visible: wr.subtitle !== ""
+        textFormat: Text.PlainText
+        text: wr.subtitle
+        color: wr.warn ? Commons.Color.urgent : sheets.dim
+        font.family: Style.font.family
+        font.pixelSize: Style.font.caption
+        elide: Text.ElideRight
+      }
+    }
+    Row {
+      id: wrActions
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      visible: wr.actions
+      width: visible ? implicitWidth : 0
+      Button {
+        width: sheets.touch; height: sheets.touch
+        iconText: "󰚩"; iconSize: Style.font.iconLarge
+        foreground: sheets.fg
+        onClicked: wr.edit()
+      }
+      Button {
+        width: sheets.touch; height: sheets.touch
+        // Removing asks first: the second tap moves the folder out.
+        iconText: wr.confirming ? "󰄬" : "󰆴"; iconSize: Style.font.iconLarge
+        foreground: wr.confirming ? Commons.Color.urgent : sheets.fg
+        onClicked: { if (!wr.confirming) { wr.confirming = true; return } wr.confirming = false; wr.remove() }
+      }
+    }
+  }
+
   Component {
     id: widgetsSheet
-    ListView {
-      implicitHeight: count * 64
+    Flickable {
+      implicitHeight: widgetsColumn.implicitHeight
+      contentHeight: widgetsColumn.implicitHeight
       clip: true
       boundsBehavior: Flickable.StopAtBounds
-      model: HomeModel.widgetTypes()
-      delegate: Row2 {
-        required property var modelData
-        width: ListView.view.width
-        glyph: modelData.icon
-        title: modelData.name
-        subtitle: modelData.w + "×" + modelData.h + (modelData.network ? "  ·  uses the internet once you turn it on" : "")
-        onClicked: sheets.home.addWidgetHere(modelData.type)
+      readonly property var scan: sheets.home ? sheets.home.userScan : UserWidgets.emptyScan()
+
+      Column {
+        id: widgetsColumn
+        width: parent.width
+
+        SheetButton {
+          width: parent.width
+          label: "󰚩  Create a widget with AI"
+          primary: true
+          onClicked: sheets.home.openCreate("create", "")
+        }
+
+        SectionLabel { visible: scan.widgets.length > 0; text: "YOURS" }
+        Repeater {
+          model: scan.widgets
+          delegate: WidgetRow {
+            required property var modelData
+            width: widgetsColumn.width
+            glyph: modelData.manifest ? modelData.manifest.icon : "󰀦"
+            title: modelData.manifest ? modelData.manifest.name : modelData.id
+            subtitle: UserWidgets.statusLine(modelData)
+            warn: modelData.status !== "ok"
+            actions: true
+            // A broken widget can still be placed: its card shows what's wrong.
+            onClicked: sheets.home.addWidgetHere(UserWidgets.typeFor(modelData.id))
+            onEdit: sheets.home.openCreate("edit", modelData.id)
+            onRemove: sheets.home.removeUserWidget(modelData.id)
+          }
+        }
+
+        SectionLabel { text: "BUILT IN" }
+        Repeater {
+          model: HomeModel.widgetTypes()
+          delegate: Row2 {
+            required property var modelData
+            width: widgetsColumn.width
+            glyph: modelData.icon
+            title: modelData.name
+            subtitle: modelData.w + "×" + modelData.h + (modelData.network ? "  ·  uses the internet once you turn it on" : "")
+            onClicked: sheets.home.addWidgetHere(modelData.type)
+          }
+        }
+
+        SectionLabel { visible: scan.examples.length > 0; text: "EXAMPLES" }
+        Repeater {
+          model: scan.examples
+          delegate: WidgetRow {
+            required property var modelData
+            width: widgetsColumn.width
+            readonly property bool copied: !!UserWidgets.findRecord(scan, modelData.id)
+            glyph: modelData.manifest ? modelData.manifest.icon : "󰕰"
+            title: modelData.manifest ? modelData.manifest.name : modelData.id
+            subtitle: copied ? "Already in your widgets" : (modelData.manifest ? modelData.manifest.description : "")
+            onClicked: sheets.home.copyExample(modelData.id)
+          }
+        }
+
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- create or change a widget with AI
+
+  readonly property var createRecord: home && home.createMode === "edit" ? UserWidgets.findRecord(home.userScan, home.createTarget) : null
+  readonly property string createTitle: !home ? ""
+    : home.createMode === "edit" ? "Change " + (createRecord && createRecord.manifest ? createRecord.manifest.name : home.createTarget)
+    : "Create a widget"
+
+  Component {
+    id: createSheet
+    Flickable {
+      id: createFlick
+      implicitHeight: createColumn.implicitHeight
+      contentHeight: createColumn.implicitHeight
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      readonly property bool editMode: sheets.home.createMode === "edit"
+
+      function go() {
+        if (editMode) sheets.home.editWidget(sheets.home.createTarget, sheets.home.createText)
+        else sheets.home.createWidgetNow(sheets.home.createText)
+      }
+
+      Column {
+        id: createColumn
+        width: parent.width
+        spacing: Style.spacing.lg
+
+        Label {
+          width: parent.width
+          text: createFlick.editMode ? "Describe what to change." : "Describe the widget you want."
+        }
+        TextField {
+          id: describe
+          width: parent.width
+          height: sheets.touch
+          font.pixelSize: Style.font.title
+          foreground: sheets.fg
+          placeholderText: createFlick.editMode ? "What should change?" : "What should it show or do?"
+          text: sheets.home.createText
+          onTextEdited: sheets.home.createText = text
+          Keys.onReturnPressed: createFlick.go()
+          Component.onCompleted: Qt.callLater(function() { describe.forceActiveFocus() })
+        }
+        Text {
+          visible: sheets.home.createError !== ""
+          width: parent.width
+          textFormat: Text.PlainText
+          text: sheets.home.createError
+          color: Commons.Color.urgent
+          font.family: Style.font.family
+          font.pixelSize: Style.font.body
+          wrapMode: Text.Wrap
+        }
+        Row {
+          spacing: Style.spacing.lg
+          SheetButton {
+            label: sheets.home.helperBusy ? "Starting…" : (createFlick.editMode ? "Edit with AI" : "Create")
+            primary: true
+            enabled: !sheets.home.helperBusy && (createFlick.editMode || sheets.home.createText.trim() !== "")
+            onClicked: createFlick.go()
+          }
+          SheetButton {
+            label: "Back"
+            onClicked: sheets.home.sheet = "widgets"
+          }
+        }
       }
     }
   }
@@ -381,7 +596,7 @@ Item {
             function set(v) {
               var g = sheets.home.layout.grid
               sheets.home.commit(HomeModel.setGrid(sheets.home.layout,
-                modelData.key === "columns" ? v : g.columns, modelData.key === "rows" ? v : g.rows))
+                modelData.key === "columns" ? v : g.columns, modelData.key === "rows" ? v : g.rows, sheets.home.userCatalog))
             }
             Text {
               anchors.left: parent.left
@@ -431,7 +646,12 @@ Item {
     var found = HomeModel.findItem(home.layout, home.settingsId)
     return found ? found.item : null
   }
-  readonly property string settingsTitle: settingsItem ? HomeModel.REGISTRY[settingsItem.type].name : ""
+  readonly property var settingsSpec: settingsItem && home ? HomeModel.specFor(settingsItem.type, home.userCatalog) : null
+  readonly property string settingsTitle: settingsSpec ? settingsSpec.name : ""
+  // A user widget's id and scan record, when the settings are a user widget's.
+  readonly property string settingsUserId: settingsItem ? UserWidgets.idOf(settingsItem.type) : ""
+  readonly property var settingsRecord: settingsUserId && home ? UserWidgets.findRecord(home.userScan, settingsUserId) : null
+  readonly property var settingsCard: settingsUserId && home ? home.userCard(settingsUserId) : null
 
   Component {
     id: settingsSheet
@@ -455,6 +675,16 @@ Item {
         if (!item) return
         var p = Object.assign({}, patch)
         if (item.type === "command" && p.interval !== undefined) p.interval = Math.max(0, parseInt(p.interval, 10) || 0)
+        // A user widget's fields are typed by its manifest's schema.
+        if (sheets.settingsUserId) {
+          var schema = sheets.settingsSpec && sheets.settingsSpec.schema ? sheets.settingsSpec.schema : []
+          Object.keys(p).forEach(function(key) {
+            var field = schema.filter(function(f) { return f.key === key })[0]
+            var typed = UserWidgets.coerceSetting(field, p[key])
+            if (typed === null) delete p[key]
+            else p[key] = typed
+          })
+        }
         // The weather widget looks its place up once, when it is saved.
         if (item.type === "weather" && value("enabled") === true
             && (p.place !== undefined || typeof config.latitude !== "number")) {
@@ -491,7 +721,7 @@ Item {
         TextField {
           visible: settingsFlick.item && settingsFlick.item.type === "clock"
           width: parent.width; height: sheets.touch; font.pixelSize: Style.font.title; foreground: sheets.fg
-          placeholderText: "Time format"
+          placeholderText: "Time format (empty: follow the system)"
           text: settingsFlick.config.timeFormat || ""
           onTextEdited: settingsFlick.put("timeFormat", text)
         }
@@ -590,6 +820,90 @@ Item {
           text: "The command runs as you, through sh, with a 10 second limit; its first lines are shown."
         }
 
+        // -- a user widget: what's wrong, its manifest's settings, where it lives
+        Text {
+          visible: !!sheets.settingsCard && sheets.settingsCard.state !== "ok"
+          width: parent.width
+          textFormat: Text.PlainText
+          text: sheets.settingsCard ? sheets.settingsCard.message : ""
+          color: Commons.Color.urgent
+          font.family: Style.font.family
+          font.pixelSize: Style.font.body
+          wrapMode: Text.Wrap
+        }
+        Repeater {
+          model: sheets.settingsUserId && sheets.settingsSpec && sheets.settingsSpec.schema ? sheets.settingsSpec.schema : []
+          delegate: Column {
+            id: fieldColumn
+            required property var modelData
+            width: form.width
+            spacing: Style.spacing.xs
+            readonly property string fieldKey: modelData.key
+            readonly property var current: settingsFlick.value(modelData.key)
+
+            Item {
+              width: parent.width
+              height: modelData.type === "boolean" ? sheets.touch : fieldLabel.implicitHeight
+              Text {
+                id: fieldLabel
+                anchors.left: parent.left
+                anchors.right: modelData.type === "boolean" ? toggle.left : parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: modelData.label
+                color: sheets.fg
+                font.family: Style.font.family
+                font.pixelSize: Style.font.title
+                elide: Text.ElideRight
+              }
+              ToggleSwitch {
+                id: toggle
+                visible: modelData.type === "boolean"
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                checked: current === true
+                onToggled: settingsFlick.put(modelData.key, !checked)
+              }
+            }
+            TextField {
+              visible: ["string", "path", "integer", "number"].indexOf(modelData.type) >= 0
+              width: parent.width; height: visible ? sheets.touch : 0
+              font.pixelSize: Style.font.title; foreground: sheets.fg
+              placeholderText: modelData.description || ""
+              text: current === undefined || current === null ? "" : String(current)
+              inputMethodHints: modelData.type === "integer" || modelData.type === "number" ? Qt.ImhFormattedNumbersOnly : Qt.ImhNone
+              onTextEdited: settingsFlick.put(modelData.key, text)
+            }
+            Flow {
+              visible: modelData.type === "enum"
+              width: parent.width
+              spacing: Style.spacing.sm
+              Repeater {
+                model: modelData.type === "enum" ? modelData.options : []
+                delegate: SheetButton {
+                  required property var modelData
+                  label: modelData
+                  primary: fieldColumn.current === modelData
+                  onClicked: settingsFlick.put(fieldColumn.fieldKey, modelData)
+                }
+              }
+            }
+            Label {
+              visible: !!modelData.description && modelData.type !== "string" && modelData.type !== "path"
+              width: parent.width
+              text: modelData.description || ""
+            }
+          }
+        }
+        Label {
+          visible: !!sheets.settingsUserId
+          width: parent.width
+          text: !sheets.settingsRecord ? "" : UserWidgets.tildePath(sheets.settingsRecord.dir, Quickshell.env("HOME"))
+            + (sheets.settingsRecord.manifest && sheets.settingsRecord.manifest.capabilities.length
+               ? "\nIt " + UserWidgets.capabilityText(sheets.settingsRecord.manifest.capabilities) + " (declared)." : "\nNo commands, no network.")
+            + (sheets.settingsRecord.warnings.length ? "\n" + sheets.settingsRecord.warnings.slice(0, 4).join("\n") : "")
+        }
+
         // -- the rest
         Label {
           visible: settingsFlick.item && ["battery", "media", "agenda", "toggles"].indexOf(settingsFlick.item.type) >= 0
@@ -616,6 +930,11 @@ Item {
             primary: true
             enabled: !settingsFlick.busy
             onClicked: settingsFlick.save()
+          }
+          SheetButton {
+            visible: !!sheets.settingsUserId
+            label: "Edit with AI"
+            onClicked: sheets.home.openCreate("edit", sheets.settingsUserId)
           }
           SheetButton {
             label: "Remove"
