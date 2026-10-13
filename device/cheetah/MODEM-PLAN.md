@@ -13,14 +13,19 @@ BARs from userspace while CPIF may have the link down** (section 4: a
 read of BAR0 with the link powered down hung the SoC, M4.1h). Earlier:
 M0, M2.5, M3.1, M3.3-B, M3.4.0-M3.4.4 passed. **Every modem power-off is
 followed by one recovered UFS error-handler pass**, so the modem stays
-on once up (M2.6). Next on the phone: M4.1i (a clean repeat with the
-full probe and ten minutes of idle link cycling, counting UFS passes),
-held for the human; M4.2 needs a SIM. Section 6.3 lists what our CPIF
+on once up (M2.6). **M4.1i passed** (the full probe twice, ten minutes of
+idle link cycles, 0 UFS passes, NV unchanged). **But a reboot with the
+modem ONLINE and its link idle hung the phone** (power key needed):
+DesignWare's MSI code touches DBI while our PHY is isolated; `4b1364136`
+guards it. **Until the phone runs that kernel: no reboot after the
+modem was started unless the human is at the phone** (section 4). Next
+on the phone: M4.1j (the fixed kernel; a reboot with the modem idling,
+attended); M4.2 needs a SIM. Section 6.3 lists what our CPIF
 port still lacks for data and suspend.
 Kernel branch `omandroid-modem` in `~/android/mainline/wt-modem` (head
-`7a7af33a2`, section 6.3, M3.4.5b and M4.1b-M4.1h), build in `~/android/mainline/out-modem` (last
-full build `7.3.0-rc6-omandroid-push1-00367-g7a7af33a2ac5`, W=1 clean on
-the touched files).
+`4b1364136`, section 6.3, M3.4.5b and M4.1b-M4.1j), build in `~/android/mainline/out-modem` (last
+full build `7.3.0-rc6-omandroid-push1-00368-g6638c9b533e6`, the same tree
+before a message amend, W=1 clean on the touched files).
 Everything new is disabled by default. RADIOS-CAMERA-PLAN.md section 1 is
 the survey this follows.
 
@@ -2180,6 +2185,40 @@ tools/phone-ssh 'u0=$(dmesg | grep -c ufshcd_err_handler); d0=$(dmesg | grep -c 
 # 7. M3.5 (read-only) at the end; leave the modem up or reboot as the human prefers (a reboot: one UFS pass)
 ```
 
+**M4.1i, results (2026-10-13; logs `logs/m4.1i-*`): PASSED.** The
+probe five times "error=0" (SIM absent, radio state 3), `AT+CFUN?` "+CFUN:
+0" and OK; after ten minutes idle still ONLINE, 0 UFS handler passes, no
+I/O errors; the second probe again five times "error=0"; M3.5 before and
+after unchanged. The link power-down count came out -10: `dmesg` had
+wrapped during the ten minutes, so a difference of two `dmesg | grep -c`
+counts is no measure. Count from the kmsg stream (`dmesg -w | tee`,
+started before the modem) or from a counter that doesn't wrap: the
+interrupt counts in `/proc/interrupts` (cp2ap_wakeup counts both edges of
+each idle cycle) or CPIF's `/sys/devices/platform/cpif/modem/power_stats`.
+Then `bin/omandroid push` rebooted the phone with the modem ONLINE and
+its link idle, and it hung (section 4).
+
+```sh
+# M4.1j the guarded kernel, and the reboot it fixes (asks the human: reboots; the human at the phone for
+# step 4; risk: medium: a reboot with the modem up, the case that hung)
+# Before (laptop): the human merges omandroid-modem (4b1364136 or later) into omandroid-int, builds it.
+# 1. push it the attended way: the modem must not be running on the current boot (it isn't after a
+#    forced restart), or the push's reboot can hang as in M4.1i. Kmsg terminal into logs/m4.1j-kmsg.log
+# 2. the modem to ONLINE (M3.4.5b step 4) and the probe (M4.1i step 4): pass as M4.1i
+# 3. wait for an idle link: read-only, config space and CPIF's files only (no BAR access)
+tools/phone-ssh 'for i in $(seq 30); do grep -q "pcie_powered_on:0" /sys/devices/platform/cpif/legacy_queues && break; sleep 2; done;
+  grep -E "wakeup|powered" /sys/devices/platform/cpif/legacy_queues; dmesg | grep -c ufshcd_err_handler'
+#   pass: "pcie_powered_on:0" (the link is down, the PHY isolated): the state that hung
+# 4. the reboot, attended (announce: a reboot; if the phone hangs, Power held ~30 s, then Power)
+tools/phone-ssh 'sync; (sleep 1; reboot-to omandroid) >/dev/null 2>&1 &'
+#   pass: the phone comes back on its own within the usual time (USB, ssh); then, from the previous boot's
+#     kmsg log: "PHY isolated" before the reboot, "s51xx PCIe Remove!!!", and no hang
+#   expect: one recovered UFS handler pass after the modem's power-off (M2.6), in the new boot's count 0
+#   stop: a hang again (force restart): record the last kmsg lines; next step offline (where else the
+#     shutdown touches the controller)
+# 5. M3.5 (read-only)
+```
+
 **Before M4.2:** M4.1i passed; a SIM with its PIN lock off in the phone
 (M4.2's preconditions), the carrier's APN in
 `/etc/omandroid/modem-sit.conf` (M4.0). M4.2's own expectations above are
@@ -2194,6 +2233,20 @@ M4.1b is the last M4 step.
 
 ## 4. Risks
 
+- **A reboot with the modem ONLINE and its link idle hangs before the
+  restart** on kernels without `4b1364136` (M4.1i, 2026-10-13: `bin/omandroid
+  push`'s `reboot-to omandroid` after M4.1i; the journal stops, no
+  shutdown lines, no pstore; the power key was needed). `reboot-to` is a
+  raw reboot syscall: no unit is stopped, the kernel shuts the devices
+  down directly. The PCI devices behind the modem's link are torn down
+  then and their MSI vectors freed; DesignWare's MSI code masks vectors
+  in DBI as it does, and a DBI access with the PHY isolated hangs the SoC
+  (as the ELBI one in AGENTS 4). `4b1364136` drops DBI accesses while the
+  PHY is isolated. **Until the phone runs it: once the modem has been
+  started on a boot, reboot only with the human at the phone, ready for
+  Power held ~30 s; never with `bin/omandroid push` unattended.** Stopping
+  the unit first doesn't help (the power-off leaves the link down and
+  the PHY isolated, and the teardown still frees the vectors).
 - **Never touch the modem's BARs from userspace while CPIF may have the
   link down.** From M4.1h on the modem idles like stock: it drops
   CP2AP_WAKEUP and CPIF powers the link down (PHY isolated) until either
