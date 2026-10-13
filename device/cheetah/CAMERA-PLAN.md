@@ -13,10 +13,12 @@ PHY file), CAM-M passed M.1-M.4 (the S5KGN1 answers, its C-PHY link
 counts 30 fps), M.5's first DMA in the 2032x1536 mode stopped with
 `LASTADDR`, and so did 2016x1136 (M.5b, either start value); next
 CAM-M.5c (error bits: only `ERR_WRONG_CONFIG`; LRTE no effect; the
-overrun's last packet is a VC 1 RAW10 line), next CAM-M.5d (VC 1 on its
-own link channel) with CAM7 in parallel. Kernel branch
-`omandroid-camera` head `8c93e69cb` (`8c93e69cb` VC parameters, on top
-of `32e190c83` and `cb502b561`, which int `0470612d2` has; not merged);
+overrun's last packet is a VC 1 RAW10 line), CAM-M.5d (VC 1 is the
+phase data, 2016 x ~284, and lands cleanly alone; VC 0 still overruns
+with VC 1 on its own channel), next CAM-M.5e (measure the VC 0 frame's
+real height) with CAM7 in parallel. Kernel branch
+`omandroid-camera` head `48e1ba5e0` (`extra_lines`; `8c93e69cb` VC
+parameters is in int `fd0aeb894`);
 libcamera 0.7.2-4.6 (patches 0013-0014: the front and
 telephoto sensors, a near-size mode rule) built and checked offline, the
 phone still runs 4.4. Ultrawide quality: CAM5.3, Snapshot CAM5.4, what to
@@ -2633,6 +2635,81 @@ tools/raw10-stats logs/camm-bars.raw --width 2016 --height 1136 --stride 2560 --
   M.5b-3 (4080x3072), M.6, M.7.
 - **Rollback:** reboot; parameters per load.
 - CAM7 (front) can run in between as 7.R says.
+
+**CAM-M.5d results (2026-10-13, int `fd0aeb894` (00453) for d-0 to d-3,
+int `dd6026712` = `7.3.0-rc6-omandroid-push1-00455-gdd6026712200` (+ a
+modem fix, camera unchanged) for d-4; logs `logs/camera-20261013-14*.log`):**
+- **d-0 (link only, `PATTERN=0`):** FS/FE 143, INT0 b3 x29282 only: the
+  VC 1 stream doesn't depend on the colour bars.
+- **d-1 (link only, `ch1_vc=1`):** FS 146 FE 149, INT0 b3 x548, **INT1
+  b6 (V size mismatch) x949083** (about 6500 a frame, 190 000 a second):
+  channel 1 takes VC 1 now, but its height (set to 1136) is wrong for it.
+- **d-2 (link only, `ch0_vc=1`):** FS/FE 143, b3 x74964 (the unmatched
+  VC 0 lines now), b6 x942949.
+- **d-3 (fresh boot, DMA, `ch1_vc=1`, bars):** still `LASTADDR`: FS 151
+  FE 147, INT0 b3 x628, INT1 b6 x1344929, WDMA done 0, b15 x228, b20 x1.
+- **d-4 (fresh boot, DMA, `PATTERN=0`, `ch0_vc=1`: VC 1 alone into the
+  WDMA): clean.** FS/FE 5, WDMA done 4, errors 0 (1 dropped), INT0 b3
+  x3241, INT1 b6 x43562; 11 632 640 bytes. Frame 3 holds values near the
+  black level in **about the first 284 rows** (a quarter of 1136, the
+  value the mode's manufacturer register carries, section CAM-M.5), the
+  rest of the buffer zero: **the second stream is the phase-detection
+  data, 2016 x ~284 RAW10**, and a frame shorter than programmed lands
+  without an error.
+
+**Why, fourth pass (offline):**
+- d-4 also shows that **unmatched packets do not reach the WDMA** (the
+  unmatched VC 0 lines didn't, there): the earlier "falls through"
+  guess is wrong. So in M.5-M.5d channel 0 got only VC 0 RAW10 lines,
+  each the right length (0x6a0: 2520 bytes), and still passed the end
+  of a 1136-line buffer: **the VC 0 frame has more lines than 1136**
+  [I], or more line packets than lines (a line split in two packets).
+- The other set-up's identical register values make a sensor-side
+  difference likelier than a CSIS one: the same mode list, but perhaps
+  with extra rows (embedded or optical-black lines sent as RAW10 on VC 0)
+  that it cropped or never noticed.
+- The b6 storm in d-1/d-3 is channel 1's height (1136 against ~284); it
+  doesn't affect channel 0 (d-3 overran exactly as without it). Leave
+  channel 1 parked for now.
+- `48e1ba5e0` `media: gs201-csis: bring-up parameter for lines past the
+  frame height` (W=1 clean, default unchanged): `extra_lines=N` lets the
+  WDMA take N lines past the height into buffers that much larger. A
+  frame that ends early lands cleanly (as d-4), so the capture measures
+  the real line count.
+
+### CAM-M.5e: how many lines is the VC 0 frame? Risk: medium (DMA)
+
+```sh
+# M.5e-K kernel: int + omandroid-camera 48e1ba5e0, the same overlays (ASK FIRST)
+tools/phone-ssh 'modinfo -p gs201_csis | grep extra_lines'
+P='modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 1;'
+# M.5e-1 (this, fresh, boot) VC 0 into a double-height buffer, colour bars, VC 1 parked
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=1 FRAMES=4 CSIS_OPTS=extra_lines=1136 bash -s" --script tools/camera-cap-test
+tools/phone-ssh 'cat /tmp/cam-2016x1136.raw' > logs/camm-tall.raw
+python3 - logs/camm-tall.raw <<'PY'
+import sys
+d = open(sys.argv[1], 'rb').read(); stride, rows = 2560, 2272; fsz = stride * rows
+for f in range(len(d) // fsz):
+    fr = d[f * fsz:(f + 1) * fsz]
+    nz = [r for r in range(rows) if any(fr[r * stride:r * stride + 2520])]
+    ref = fr[600 * stride:600 * stride + 2520]          # a row in the middle of the bars
+    odd = [r for r in nz if fr[r * stride:r * stride + 2520] != ref]
+    print(f"frame {f}: rows written {len(nz)} (last {nz[-1] if nz else None}); rows unlike row 600: {odd[:12]} ... {odd[-12:]} ({len(odd)})")
+PY
+#   pass: wdma_done 4, errors 0; "rows written" gives the real frame height (expect 1136 + a
+#   few); the rows unlike the bars tell where the extra ones are (top, bottom, between)
+#   stop: LASTADDR even at double height (then the frame is far longer, or its lines arrive
+#   as more than one packet each: record, stop)
+```
+
+- Then, one change at a time: if the extra lines are at the top or
+  bottom, skip them (the WDMA channel's skip register, or the link
+  channel's height with the WDMA's) or have the sensor's mode not send
+  them; libcamera then gets 2016x1136 as now. If they're between image
+  lines, they're the sensor's phase data inline, and the next step is
+  the sensor register that moves them to VC 1 (the 0x0c02 family,
+  section CAM-M.5).
+- **Rollback:** reboot; parameters per load.
 
 ### CAM5.3: ultrawide quick wins. Risk: low to medium
 
