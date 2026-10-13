@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+#
+# The apps a phone needs that a desktop Omarchy doesn't ship. An app joins
+# `depends` once the hardware behind it works on Omandroid; until then it
+# waits in `optdepends` with the reason, so the default install never shows
+# an app that can't work yet.
+pkgname=omandroid-apps
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omandroid's default mobile apps (maps and location, NFC tags)"
+arch=(any)
+url="https://github.com/derekross/omandroid"
+license=(MIT)
+depends=(
+  gnome-maps   # location through GeoClue (omandroid-gnss feeds it the GPS)
+  geoclue
+  neard        # NFC tags; omandroid-shell's omandroid-nfc-open opens their web links
+)
+optdepends=(
+  'snapshot: camera (waits for the camera capture path, CAMERA-PLAN CAM4, and libcamera)'
+  'gnome-calls: phone calls (waits for the modem, MODEM-PLAN M4, and a client for its RIL)'
+  'chatty: SMS (waits for the modem, as gnome-calls)'
+)
