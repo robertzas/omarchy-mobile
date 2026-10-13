@@ -15,7 +15,10 @@ CLANG_DIR="${CLANG_DIR:-$(ls -d "$SRC_DIR"/prebuilts/clang/host/linux-x86/clang-
 
 usage() {
   cat <<USAGE
-Usage: omandroid <command>
+Usage: [DEVICE=<codename>] omandroid <command>
+
+  The device is $DEVICE (DEVICE, default from omandroid.conf); its values come
+  from device/<codename>/device.conf (docs/RELEASES.md).
 
   capture [name]   Save what the connected phone exposes (Android over adb, or fastboot)
                    into $REFERENCE_DIR/<name>
@@ -43,6 +46,40 @@ USAGE
 say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 
+# Load device/$DEVICE/device.conf into DEV_* variables. The descriptor is data,
+# not shell: only KEY=value and KEY="value" lines, no $, backticks or
+# backslashes, so other tools can read it too. Nothing in it is executed.
+load_device() {
+  local file="$ROOT/device/$DEVICE/device.conf" line n=0 key p
+  local quoted='^([A-Z][A-Z0-9_]*)="([^"$`\\]*)"$' bare='^([A-Z][A-Z0-9_]*)=([^"$`\\'"'"'[:space:]]*)$'
+  [[ $DEVICE =~ ^[a-z0-9]+$ ]] || die "DEVICE must be a codename, not '$DEVICE'"
+  [[ -f $file ]] || die "no device descriptor $file (see docs/RELEASES.md)"
+  while IFS= read -r line || [[ -n $line ]]; do
+    n=$((n + 1))
+    [[ $line =~ ^[[:space:]]*(#.*)?$ ]] && continue
+    if [[ $line =~ $quoted || $line =~ $bare ]]; then
+      printf -v "DEV_${BASH_REMATCH[1]}" '%s' "${BASH_REMATCH[2]}"
+    else
+      die "$file:$n: not a KEY=value line"
+    fi
+  done < "$file"
+  for key in CODENAME SOC PACKAGE DTB SOC_IDS DTBO_SOURCE DTBO_BOARD_ID DTBO_BOARD_REV VENDOR_CMDLINE \
+      VENDOR_PAGESIZE OS_VERSION OS_PATCH_LEVEL BOOT_IMAGES UFS_RW INITRAMFS_INIT PANEL_SIZE; do
+    p="DEV_$key"
+    [[ -n ${!p:-} ]] || die "$file: $key is missing"
+  done
+  [[ $DEV_CODENAME == "$DEVICE" ]] || die "$file: CODENAME=$DEV_CODENAME, expected $DEVICE"
+  # Safety: the guard's allowlist may name slot B partitions and userdata only,
+  # and every boot image we write must be on it.
+  for p in $DEV_UFS_RW; do
+    [[ $p == *_b || $p == userdata ]] || die "$file: UFS_RW may hold only *_b partitions and userdata, not $p"
+  done
+  for p in $DEV_BOOT_IMAGES; do slot_b_allowed "$p" || die "$file: ${p}_b is not in UFS_RW"; done
+}
+
+# Is <image>_b on the device's storage-guard allowlist?
+slot_b_allowed() { [[ " $DEV_UFS_RW " == *" ${1}_b "* ]]; }
+
 # Run a command in the build container with the work tree and this repo mounted.
 in_container() {
   local tty=()
@@ -56,7 +93,7 @@ in_container() {
 }
 
 cmd_capture() {
-  local name="${1:-cheetah-$(date +%Y%m%d-%H%M)}" dir
+  local name="${1:-$DEVICE-$(date +%Y%m%d-%H%M)}" dir
   dir="$REFERENCE_DIR/$name"
   mkdir -p "$dir"
   if fastboot devices | grep -q .; then
@@ -144,6 +181,11 @@ cmd_modules_push() {
 
 cmd_initramfs() {
   local dl="$WORK/downloads/alpine" stage="$KERNEL_OUT/initramfs" ver=3.24.2
+  load_device
+  local init="$ROOT/device/$DEVICE/$DEV_INITRAMFS_INIT"
+  # The init's own storage-guard allowlist must be the descriptor's
+  [[ "$(sed -n 's/^UFS_RW="\(.*\)"$/\1/p' "$init")" == "$DEV_UFS_RW" ]] \
+    || die "UFS_RW in $init differs from device/$DEVICE/device.conf"
   local tarball="alpine-minirootfs-$ver-aarch64.tar.gz"
   local sum=9bf70a7f18ea44094cbb5f70c58f9af129c8214745743db0e68e5502cc2ce773
   mkdir -p "$dl"
@@ -160,14 +202,14 @@ cmd_initramfs() {
   for apk in $(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" dropbear kexec-tools e2fsprogs); do
     tar -xzf "$apk" -C "$stage" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' 2>/dev/null || true
   done
-  install -m 755 "$ROOT/device/cheetah/initramfs/init" "$stage/init"
+  install -m 755 "$init" "$stage/init"
 
   # Boot logo, drawn by init straight onto the framebuffer until Plymouth
   # takes over: Omarchy's Plymouth screen (logo centred on #1a1b26, at scale
   # 1), rendered from the theme installed on this Omarchy machine.
   local logo=/usr/share/plymouth/themes/omarchy/logo.png
   if [[ -f $logo ]] && command -v magick >/dev/null; then
-    magick -size 1440x3120 xc:'#1a1b26' "$logo" -gravity center -composite \
+    magick -size "$DEV_PANEL_SIZE" xc:'#1a1b26' "$logo" -gravity center -composite \
       -alpha off -alpha on -depth 8 BGRA:- | gzip -9 > "$stage/splash.bgra.gz"
   else
     say "No Omarchy Plymouth logo or ImageMagick here: building without the early splash"
@@ -188,11 +230,11 @@ cmd_initramfs() {
     "$ROOT/tools/devmem.c" -L"$sysroot/usr/lib" -lc "$builtins" "$sysroot/usr/lib/crtn.o"
   "$CLANG_DIR/bin/clang" --target=aarch64-linux-musl --sysroot="$sysroot" -fuse-ld=lld -static -nostdlib -O2 \
     -o "$stage/usr/local/bin/reboot-to" "$sysroot/usr/lib/crt1.o" "$sysroot/usr/lib/crti.o" \
-    "$ROOT/packages/omandroid-device-cheetah/src/reboot-to.c" -L"$sysroot/usr/lib" -lc "$builtins" "$sysroot/usr/lib/crtn.o"
+    "$ROOT/packages/$DEV_PACKAGE/src/reboot-to.c" -L"$sysroot/usr/lib" -lc "$builtins" "$sysroot/usr/lib/crtn.o"
   # A/B slot metadata in devinfo (Apache-2.0 port of Google's boot HAL). Not called by init yet.
   "$CLANG_DIR/bin/clang" --target=aarch64-linux-musl --sysroot="$sysroot" -fuse-ld=lld -static -nostdlib -O2 \
     -o "$stage/usr/local/bin/omandroid-bootctl" "$sysroot/usr/lib/crt1.o" "$sysroot/usr/lib/crti.o" \
-    "$ROOT/packages/omandroid-device-cheetah/src/omandroid-bootctl.c" -L"$sysroot/usr/lib" -lc "$builtins" "$sysroot/usr/lib/crtn.o"
+    "$ROOT/packages/$DEV_PACKAGE/src/omandroid-bootctl.c" -L"$sysroot/usr/lib" -lc "$builtins" "$sysroot/usr/lib/crtn.o"
   mkdir -p "$stage/root/.ssh"
   cat "$HOME"/.ssh/*.pub > "$stage/root/.ssh/authorized_keys"
   chmod 700 "$stage/root/.ssh" && chmod 600 "$stage/root/.ssh/authorized_keys"
@@ -202,9 +244,10 @@ cmd_initramfs() {
 }
 
 cmd_images() {
+  load_device
   local img="$KERNEL_OUT/images" tools="$SRC_DIR/system/tools/mkbootimg"
   local dtc="$KERNEL_OUT/scripts/dtc/dtc" boot="$KERNEL_OUT/arch/arm64/boot"
-  local dtb="$boot/dts/exynos/google/gs201-cheetah.dtb"
+  local dtb="$boot/dts/$DEV_DTB"
   [[ -f "$boot/Image" && -f "$dtb" ]] || die "build the kernel first: omandroid kernel"
   [[ -f "$KERNEL_OUT/initramfs.cpio.lz4" ]] || die "build the initramfs first: omandroid initramfs"
   mkdir -p "$img" && rm -f "$img"/*
@@ -212,29 +255,46 @@ cmd_images() {
   say "Kernel: Image.lz4"
   lz4 -l -9 -f -q "$boot/Image" "$img/Image.lz4"
 
-  # ABL matches the base DTB on soc_id; ship both B0 (0x09855001) and 0x09855000 variants
-  say "DTB: two soc_id variants"
-  cp "$dtb" "$img/cheetah-b0.dtb"
-  "$dtc" -q -I dtb -O dts "$dtb" | sed 's/soc_id = <0x9855001 0x00>;/soc_id = <0x9855000 0x00>;/' \
-    | "$dtc" -q -I dts -O dtb -o "$img/cheetah-a0.dtb" -
+  # ABL matches the base DTB on soc_id: ship one copy per SOC_IDS entry. The
+  # first is the value the DTB was built with; the others are rewrites of it.
   # grep -c, not -q: with pipefail, grep -q exiting early SIGPIPEs dtc on larger trees
-  "$dtc" -q -I dtb -O dts "$img/cheetah-a0.dtb" | grep -c 'soc_id = <0x9855000' >/dev/null || die "soc_id rewrite failed"
-  cat "$img/cheetah-b0.dtb" "$img/cheetah-a0.dtb" > "$img/dtb.img"
+  local entry label id base="" out dtbs=()
+  say "DTB: one copy per soc_id ($DEV_SOC_IDS)"
+  for entry in $DEV_SOC_IDS; do
+    label=${entry%%:*} id=${entry#*:}
+    out="$img/$DEV_CODENAME-$label.dtb"
+    if [[ -z $base ]]; then
+      base=$id
+      "$dtc" -q -I dtb -O dts "$dtb" | grep -c "soc_id = <$base " >/dev/null || die "$DEV_DTB is not built with soc_id $base"
+      cp "$dtb" "$out"
+    else
+      "$dtc" -q -I dtb -O dts "$dtb" | sed "s/soc_id = <$base /soc_id = <$id /" \
+        | "$dtc" -q -I dts -O dtb -o "$out" -
+      "$dtc" -q -I dtb -O dts "$out" | grep -c "soc_id = <$id " >/dev/null || die "soc_id rewrite to $id failed"
+    fi
+    dtbs+=("$out")
+  done
+  cat "${dtbs[@]}" > "$img/dtb.img"
 
+  # ABL applies the dtbo entry matching board_id/board_rev; ours changes nothing
+  local dtbo_src="$ROOT/device/$DEVICE/$DEV_DTBO_SOURCE" dtbo
+  dtbo="$img/$(basename "$DEV_DTBO_SOURCE" .dts).dtbo"
+  grep -c "board_id = <$DEV_DTBO_BOARD_ID>;" "$dtbo_src" >/dev/null || die "$dtbo_src: board_id is not $DEV_DTBO_BOARD_ID"
+  grep -c "board_rev = <$DEV_DTBO_BOARD_REV>;" "$dtbo_src" >/dev/null || die "$dtbo_src: board_rev is not $DEV_DTBO_BOARD_REV"
   say "dtbo: empty board overlay"
-  "$dtc" -q -@ -I dts -O dtb -o "$img/cheetah-m1-overlay.dtbo" "$ROOT/device/cheetah/cheetah-m1-overlay.dts"
+  "$dtc" -q -@ -I dts -O dtb -o "$dtbo" "$dtbo_src"
   python3 -I "$SRC_DIR/system/libufdt/utils/src/mkdtboimg.py" create "$img/dtbo.img" \
-    --page_size=4096 --id=0x30306 --rev=0x10000 "$img/cheetah-m1-overlay.dtbo"
+    --page_size=4096 --id="$DEV_DTBO_BOARD_ID" --rev="$DEV_DTBO_BOARD_REV" "$dtbo"
 
   say "Boot images (header v4)"
   : | cpio -o -H newc --quiet > "$img/empty.cpio"
-  local cmdline="console=tty0 earlycon=exynos4210,0x10A00000 clk_ignore_unused pd_ignore_unused printk.devkmsg=on bootconfig"
+  local cmdline="$DEV_VENDOR_CMDLINE"
   python3 "$tools/mkbootimg.py" --header_version 4 --kernel "$img/Image.lz4" --cmdline '' --output "$img/boot.img"
   python3 "$tools/mkbootimg.py" --header_version 4 --ramdisk "$img/empty.cpio" \
-    --os_version 17.0.0 --os_patch_level 2026-07 --output "$img/init_boot.img"
-  python3 "$tools/mkbootimg.py" --header_version 4 --pagesize 0x800 --vendor_cmdline "$cmdline" \
+    --os_version "$DEV_OS_VERSION" --os_patch_level "$DEV_OS_PATCH_LEVEL" --output "$img/init_boot.img"
+  python3 "$tools/mkbootimg.py" --header_version 4 --pagesize "$DEV_VENDOR_PAGESIZE" --vendor_cmdline "$cmdline" \
     --ramdisk_type 1 --ramdisk_name '' --vendor_ramdisk_fragment "$img/empty.cpio" --vendor_boot "$img/vendor_boot.img"
-  python3 "$tools/mkbootimg.py" --header_version 4 --pagesize 0x800 --vendor_cmdline '' \
+  python3 "$tools/mkbootimg.py" --header_version 4 --pagesize "$DEV_VENDOR_PAGESIZE" --vendor_cmdline '' \
     --dtb "$img/dtb.img" --ramdisk_type 1 --ramdisk_name '' --vendor_ramdisk_fragment "$KERNEL_OUT/initramfs.cpio.lz4" \
     --vendor_boot "$img/vendor_kernel_boot.img"
   ls -lh "$img"/*.img
@@ -300,8 +360,10 @@ cmd_fastboot() {
 
 cmd_flash() {
   local img="$KERNEL_OUT/images" p
+  load_device
   in_fastboot || die "phone not in fastboot (try: omandroid fastboot)"
   for p in boot vendor_kernel_boot init_boot vendor_boot dtbo; do
+    slot_b_allowed "$p" || die "${p}_b is not on device/$DEVICE's storage-guard allowlist; refusing"
     timeout 60 fastboot flash "${p}_b" "$img/$p.img" 2>&1 | grep -E 'OKAY|FAIL' | tail -1 | sed "s/^/$p: /"
   done
   timeout 20 fastboot --set-active=b >/dev/null 2>&1
@@ -317,6 +379,7 @@ cmd_flash() {
 
 cmd_push() {
   local img="$KERNEL_OUT/images" ssh="$ROOT/tools/phone-ssh" p dev want got rel
+  load_device
   "$ssh" true || die "phone not reachable at 172.16.42.1"
   # A kernel whose modules aren't installed boots without its drivers (the GPU
   # among them): install them first. A config change can keep the release
@@ -324,7 +387,8 @@ cmd_push() {
   rel=$(kernel_release)
   want=$(sha256sum < "$KERNEL_OUT/modules-$rel.tar.zst" | cut -d' ' -f1)
   [[ "$("$ssh" "cat /usr/lib/modules/$rel/.omandroid-tarball 2>/dev/null")" == "$want" ]] || cmd_modules_push
-  for p in boot init_boot vendor_boot vendor_kernel_boot dtbo; do
+  for p in $DEV_BOOT_IMAGES; do
+    slot_b_allowed "$p" || die "${p}_b is not on device/$DEVICE's storage-guard allowlist; refusing"
     [[ -f "$img/$p.img" ]] || die "missing $img/$p.img (run: omandroid images)"
     # Find the partition by GPT name; the init guard leaves only these writable
     dev=$("$ssh" "for s in /sys/block/sda/sda*; do grep -qx 'PARTNAME=${p}_b' \$s/uevent && echo /dev/\${s##*/}; done; true")
