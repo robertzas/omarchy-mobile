@@ -8,7 +8,9 @@ during playback; next is T3b, the first exchange during a tone at the
 everyday level.** The listener finds our flat speaker path thin next to
 stock, and this is the lever that gives stock's own sound (`AOC-PLAN.md`,
 "Why the speakers sound thin"). T4 follows T3b at the everyday level
-(737/10), with omandroid-audio 0.4.0's speaker filter set flat. T5 onwards
+(737/10), with omandroid-audio 0.4.1's speaker filter set flat (`AOC-PLAN.md`
+C9h runs T3b/T4 as its optional section F; open question 8 is now answered
+by measurement in T4b, not by decoding the controller). T5 onwards
 (stock's levels) still waits for `AOC-PLAN.md` C9. The package stays
 disabled (mode `off`).
 Sources: static analysis of the stock libraries from the user's own
@@ -737,7 +739,12 @@ worst case reboot (AoC RAM only).
 
 ### T4 Waves on, throttle preset, the everyday level (risk medium; announce it)
 
-Updated 2026-10-13 for omandroid-audio 0.4.0: the amplifiers at stage media
+Updated 2026-10-13 for omandroid-audio 0.4.1: `preset waves` also turns
+off 0.4.1's bass management, bass harmonics and drive. **Our orientation
+swap must be off while Waves runs**, because Waves does its own (section
+2.5): `systemctl --user disable --now omandroid-speaker-orient` and `eq set
+swap=0` first, or the two swaps cancel. Otherwise as written for 0.4.0: the
+amplifiers at stage media
 (737 / 10, the everyday default since C9d-2, about 17 dB below stock), the
 watchdog on with `OMANDROID_SPK_TEMP_JUMP=5`, `monitor` in a second
 terminal, sink volume 40 % to start. T1 showed that `throttle` and `music`
@@ -774,6 +781,43 @@ reply, an AoC log error, an over-exc count that moves. Rollback:
 `ASP_BYPASS` (proven in T3.1) or `omandroid-speaker-protection mute`;
 tuning `off`; `eq preset default`; reboot to be sure (tuning lives in AoC
 RAM only).
+
+### T4b what Waves does, measured (open question 8; risk low-medium, announce it)
+
+Instead of decoding which modules the preset switches on, measure what the
+chain does to the speaker signal, with omandroid-audio 0.4.1's stepped
+tones (`omandroid-speaker-eq measure … --play-only`, recorded by the
+laptop's microphone at the listening position, as in `AOC-PLAN.md` C9h
+B3; the `lrec` helper there). The filter is flat during the tones; only
+Waves differs between runs. Each run is about 17 s of tones at -30 dBFS
+(or -40), far below music.
+
+1. Tuning off (`OMANDROID_SPK_TUNING=off`, or ASP Mode `ASP_BYPASS`):
+   `lrec right`, renamed to `logs/off-right.json`; the same at
+   `--level -40` (edit `lrec`'s two levels) as `off-right-40.json`.
+2. Tuning on (T4.2's state), the same two runs: `on-right.json`,
+   `on-right-40.json`. Then the left speaker the same way if time allows.
+3. Read (`python3 -I packages/omandroid-audio/lib/speaker_response.py
+   compare A B`):
+   - `compare off-right on-right`: a difference that is the same at both
+     levels is **static EQ** (the parametric and finishing EQs);
+   - `compare on-right-40 on-right` against `compare off-right-40
+     off-right`: if Waves' difference changes with level, a **dynamics**
+     stage (the multiband dynamics or MaxxVolume) is active (a pure EQ
+     gives the same difference at every level);
+   - the h2/h3 columns: harmonics of the low steps (100-300 Hz) that
+     appear or rise only with Waves on are **MaxxBass** (it synthesises
+     them on purpose); a rise at every step is distortion;
+   - left against right: whether the chain treats the earpiece and the
+     bottom speaker differently.
+   Record only the conclusions (which kinds of processing are active, in
+   our words) and the per-step differences in dB; no preset or
+   coefficient data is involved. Matching our own filter to the measured
+   stock curve is a decision for the human (a grey area), not part of this
+   step.
+
+Pass: four (or eight) analyses with a marker found, no watchdog event.
+Stop and Rollback as T4.
 
 ### T5 `SPEAKER_MUSIC` at the C9 levels (after C9 passed; risk medium-high)
 
@@ -823,5 +867,9 @@ of section 3.1 item 4 are settled with the `omandroid-audio` owner
    switch on? The upload carries coefficients for all but one. The
    controller's text interface (`ma_get_command`, with
    get-parameter commands) could list the parameters, but it takes
-   base64-coded command buffers that haven't been worked out. By ear in
-   T4 for now: Waves on against off, at the same sink volume.
+   base64-coded command buffers that haven't been worked out. **Answered by
+   measurement instead (T4b, 2026-10-13 design):** static EQ, level-
+   dependent dynamics and synthesised bass harmonics each leave a
+   different mark on stepped tones at two levels, which omandroid-audio
+   0.4.1's `measure`/`compare` record. Decoding the command interface
+   stays unnecessary unless T4b is ambiguous.

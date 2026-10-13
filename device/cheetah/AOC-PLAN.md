@@ -14,12 +14,17 @@ runbooks follow C9d-6: C9g (omandroid-audio 0.4.0's speaker filter, by ear
 and measured, risk low), C9d-7/C9d-8 (the V/I feedback stream stock runs
 and the firmware's own impedance reading, for the gain-17 runaway), and
 T3b/T4 in `AOC-TUNING-RESEARCH.md` (stock's Waves processing on the AoC).
+**omandroid-audio 0.4.1** (offline review of 0.4.0, below C9g) fixes a
+PipeWire start failure mode and adds bass management, bass harmonics,
+stereo width and orientation, a limiter per speaker and a better
+measurement; **C9h** is the one ordered listening session that installs it
+and goes through C9g, then optionally C9d-7/8 and T3b/T4.
 Kernel: `omandroid-aoc` @ `829fd316a` (`wt-aoc`, `out-aoc`) and
 `omandroid-audio-amp` @ `9fcc941b3` (hibernate, word length, RX6 knob;
 `wt-audio-amp`), both merged into `omandroid-int`. Packages:
 omandroid-device-cheetah 0.1.25 (`omandroid-aoc.service`, start script,
-sensor-rail cycle), omandroid-sensors 0.1.3, omandroid-audio 0.4.0 (not yet
-installed: 0.3.5 runs),
+sensor-rail cycle), omandroid-sensors 0.1.3, omandroid-audio 0.4.1 (not yet
+installed: 0.3.5 runs; 0.4.0 was never installed),
 omandroid-speaker-tuning 0.1.2 (off by default). The "Checkpoint" section
 below is the running log of C5-C9: its first lists are the state before C5,
 and each stage's results follow its runbook.
@@ -1696,6 +1701,155 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
       over-exc count change. Stop: over-exc count moves (lower `bass` by
       2 dB, repeat).
    Rollback: `eq reset` (the package's values), or `eq preset flat`.
+
+   **0.4.0 reviewed offline, and what 0.4.1 changes (2026-10-13; no phone).**
+   The graph was loaded and run in a private PipeWire 1.6.8 instance on the
+   laptop (its own runtime directory, no ALSA, the limiters replaced by
+   `copy` because swh-plugins isn't installed there), and
+   `omandroid-speaker-eq` was driven against it.
+   - **Bug: a filter that fails to load stopped PipeWire.** A module in
+     `context.modules` without `flags = [ nofail ]` is mandatory, so a
+     missing LADSPA plugin or an unknown label would have left the phone
+     without any audio (and without PipeWire's video). 0.4.1 marks it
+     `nofail`: the speaker then plays unfiltered.
+   - **Bug: the filter could be bypassed silently.** If the smart filter's
+     target name (`alsa_output.platform-sound-aoc.HiFi__Speaker__sink`,
+     never checked on the phone) doesn't match, WirePlumber links streams
+     past it, and `eq show` still found the node. `show` now prints where
+     the filter's output goes ("in the path" or "NOT in the path").
+   - **One stereo-linked limiter** ducked the earpiece whenever the bass
+     pushed the bottom speaker into limiting, and with the +4 dB shelf on
+     loud masters that is often. 0.4.1 has one limiter per speaker, same
+     ceiling (-3 dBFS), same zero gain.
+   - **The 2nd-order high-pass** passed the +4 dB shelf's lift down into
+     100-200 Hz, where these speakers make almost no sound: limiter work
+     and excursion for nothing. 0.4.1 uses a 4th-order Butterworth (two
+     stages, same 100 Hz corner).
+   - **Measurement:** the sink volume (applied after the filter) was not
+     recorded, so a volume change between the two sides skewed the
+     balance; a muted sink measured nothing; a failed `pw-play` wasn't
+     noticed; a clipped recording still fed `suggest`; the two sides could
+     be picked up by different microphone channels; and the balance was
+     computed from the phone's own microphone, which sits next to the
+     bottom speaker and 15 cm from the top one. 0.4.1 records the volume,
+     refuses a muted sink, checks `pw-play`, flags clipping and skips it,
+     compares only like with like, and suggests a balance trim only from a
+     microphone marked as at the listening position (`--listener`; a
+     laptop's, through `measure --play-only`). `suggest` is now per
+     speaker (`hp_top`, `bass_bottom`, …), halves treble cuts without a
+     microphone calibration (`--mic-cal`, a MEMS capsule reads high above
+     about 8 kHz), and proposes a crossover and a harmonics corner.
+     `analyze` reports the 2nd and 3rd harmonics per step; `compare`
+     prints B minus A per step.
+   - **New, all off or neutral by default** (so 0.4.1's default sound is
+     0.4.0's with the steeper high-pass and per-speaker limiters):
+     - `bassmono=1 xover=HZ`: a 4th-order Linkwitz-Riley crossover; below
+       it both channels, summed, go to the bottom speaker only. The
+       earpiece can't play that range, and the bottom one then gets all of
+       it. Measured in the laptop instance: the bottom output sums flat
+       (0.0 dB at every step, 50 Hz-12.8 kHz), the top is a clean
+       high-pass (-6 dB at the crossover).
+     - `harm=G harm_freq=HZ`: the bass below `harm_freq` is full-wave
+       rectified, high-passed at `harm_freq` and low-passed at four times
+       it: its 2nd and 4th harmonics, at a level proportional to the bass
+       itself (rectifying is linear in level, unlike a polynomial), mixed
+       in with gain G. The ear infers the missing fundamental from them. In
+       the laptop instance, -20 dBFS tones at 60/80/100 Hz gave even
+       harmonics at -11 to -18 dB relative at G=1, no 3rd. Needs
+       PipeWire's builtin `abs` (Arch Linux ARM has 1.6.9).
+     - `width=W` (portrait: both speakers play some of both channels) and
+       `swap=0|1`, with `orient` and `follow`: the input matrix follows
+       the phone's orientation as stock swaps left and right in landscape
+       (a user unit, `omandroid-speaker-orient`, not enabled). Which
+       landscape side swaps (`left-up`, the earpiece on the listener's
+       right) is checked by ear in C9h.
+     - `drive=DB` (0-6): the limiters' input gain, for loudness at full
+       volume. 0.3.3's +6 dB was heard distorted, but that was before the
+       word-length fix (C9d-6) and with a stereo-linked limiter; C9h tries
+       2-3 dB again.
+   - **PipeWire quality.** The AoC's EP6 PCM takes S16, S24, S32 and
+     FLOAT; stock's deep buffer plays 48 kHz float. PipeWire picks the
+     format itself; C9h reads `hw_params` once during playback. 44.1 kHz
+     sources are resampled at PipeWire's default quality, which is not
+     audible on these speakers; nothing to change. The sink volume is
+     applied after the filter, so the shaping is the same at every volume
+     (a volume-dependent loudness contour, as Waves' volume link laws do,
+     would need a small daemon feeding the sink volume into the filter:
+     later, if C9h's listener wants more bass at low volume only).
+   - **Not done, a grey area for the human:** measuring stock's speaker
+     response (Waves on) and matching it with our own filter. The tools
+     can do it (C9h F); whether to copy a measured stock curve is the
+     human's call.
+
+   **The gain-17 runaway: what C9d-7/8 will distinguish, and the prepared
+   next step for each outcome** (2026-10-13, offline). What we know: at
+   analog 17 the coil reading jumps by about 25 °C at the first sample
+   with vmon low 1, at any signal level (-40 dBFS), any spectrum, DRE and
+   gate on or off, media delta on or off, and DSP RX6 from VBSTMON or the
+   class-H target (that knob is read at probe, and the service's restart
+   rebinds the amplifiers, so C9d-6's test did take effect). At analog 10
+   it never runs away. A 25 °C jump is what a Z/CAL_R near 1.10 would
+   mean (copper, 0.39 %/°C). Google's amplifier driver writes no register
+   that bears on the sense path and that mainline leaves alone (compared
+   2026-10-13: its extra writes are hibernation trim caching and an
+   earpiece/speaker volume ramp); the DSP inputs match stock's except RX6
+   (tested).
+   | C9d-8 / C9d-7 reading | Meaning | Prepared next step |
+   | --- | --- | --- |
+   | Z/CAL_R near 1.10 at 817/17, near 1.00 at 737/10 | the firmware really measures a higher V/I at gain 17: the sense path's scale depends on the gain on our setup | a read-only register snapshot (the bounded `awk` of C9a step 1, stop at 0x10100) of both amplifiers during the same -30 dBFS tone at 737/10 and at 817/17; diff the two. Anything besides `AMP_GAIN_CTRL` (0x6c04) that differs is the lead. If nothing else differs, the next comparison needs the same snapshot from stock (a slot A boot: fresh NV backups afterwards, AGENTS.md) |
+   | "not measurable" at 817/17 and the reading still jumps | the sense isn't used; the open-loop estimate itself runs away | step 4 (the feedback stream) is the test; if it trips too, repeat C9d-8 at 737/17 with `mt10` (more sense signal): vmon low must go to 0 there; then `OMANDROID_SPK_CAL_ORDER=stock` (0.4.1) and one more 1 s burst |
+   | Z/CAL_R near 1.00 at 817/17 and the reading still jumps | the temperature isn't computed from that impedance; suspect CAL_AMBIENT, which we write first and stock writes last | `OMANDROID_SPK_CAL_ORDER=stock` in `/etc/omandroid/speaker.conf`, `systemctl restart omandroid-speaker-protection`, the same 1 s burst |
+   | step 4 CLEAN where step 3 tripped | the V/I stream is what the firmware needs | as written under "Reading 3 and 4" above |
+   Whatever the outcome, no step above 1 s at analog 17 until a burst
+   reads plausibly, and the default stays stage media.
+
+   **C9h: one listening session for omandroid-audio 0.4.1** (prepared
+   2026-10-13; run by the main session with the human listening). The
+   amplifiers stay at stage media (737/10) in sections A-D, so every step
+   there is inside the levels proven without protection; only the signal
+   into the protection DSP changes, and its peaks stay at or below
+   -3 dBFS. Sections E and F are optional and need the human's go
+   separately. Rules for every sound: the phone screen up on a table, the
+   listener at about 40 cm, told before each sound what it will be;
+   `omandroid-speaker-protection monitor 600 2` running in a second
+   terminal; music the listener knows, copied to the phone as `/tmp/m.flac`
+   (bass-heavy) and `/tmp/v.flac` (voice). **Stop** (any step): a
+   watchdog mute, an over-count that moves, a cs35l41 error in `dmesg`, a
+   coil reading more than 1 °C above room at 737/10, buzzing, rattling,
+   distortion or anything the listener dislikes. **Rollback** (any step):
+   `eq reset` (the package's values); for the filter as a whole
+   `tools/phone-ssh 'mv /usr/share/pipewire/pipewire.conf.d/60-omandroid-speaker-loudness.conf{,.off}'`
+   and restart the user's PipeWire (unfiltered, as before 0.3.3).
+   ```sh
+   U='U=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}"); I=$(id -u $U); as_user() { runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/$I "$@"; }'
+   eq() { tools/phone-ssh "$U; as_user omandroid-speaker-eq $*"; }
+   play() { tools/phone-ssh "$U; as_user wpctl set-volume @DEFAULT_AUDIO_SINK@ ${2:-0.6}; as_user timeout ${3:-20} pw-play $1"; }
+   R=packages/omandroid-audio/lib/speaker_response.py
+   lrec() {  # lrec left|right: the phone plays the stimulus, the laptop's microphone records it
+     pw-record --rate 48000 --channels 1 --format s16 logs/resp-$1.wav & P=$!; sleep 1
+     eq measure $1 --play-only --out /tmp/resp; sleep 1; kill -INT $P; wait $P
+     python3 -I $R analyze logs/resp-$1.wav --listener --source laptop --json logs/resp-$1.json
+   }
+   ```
+   | Step | What | Risk | Expect / Pass | Stop / note |
+   | --- | --- | --- | --- | --- |
+   | A0 | **Read-only, no sound:** `tools/phone-ssh 'uname -r; pacman -Q omandroid-audio pipewire wireplumber swh-plugins; omandroid-speaker-protection status \| head -1; systemctl is-active omandroid-speaker-watch'` | none | pipewire 1.4 or later (1.6.x expected); "ok: stage media … Top 737/10, Bottom 737/10"; `active` | pipewire older than 1.4 (no builtin `abs`: don't install 0.4.1, report); the stage not media (restore the default config first, C9d-3 step 0) |
+   | A1 | **Install 0.4.1, restart the user's PipeWire** (announce: the sound changes): `tools/phone-install-package packages/omandroid-audio`, then `tools/phone-ssh "$U"'; as_user systemctl --user restart pipewire pipewire-pulse wireplumber; sleep 3; as_user omandroid-speaker-eq show'` | low | the values (hp 100, bass +4 at 400, dip -2 at 3500, width 1, swap 0, bassmono 0, harm 0, drive 0) | "no … node": `as_user journalctl --user -u pipewire -b \| tail` (an unknown label or plugin), then the filter-wide rollback |
+   | A2 | **In the path, and the PCM format,** during a -23 dBFS 1 kHz tone (announce it): `tools/phone-ssh 'omandroid-speaker-protection signal tone /tmp/t1k23.wav --level -23 --seconds 4'; tools/phone-ssh "$U"'; (as_user timeout 5 pw-play /tmp/t1k23.wav &); sleep 2; as_user omandroid-speaker-eq show \| tail -1; cat /proc/asound/card*/pcm5p/sub0/hw_params'` | low | "in the path: plays into alsa_output…Speaker…"; `hw_params` format and rate: record (FLOAT_LE as stock, or S32_LE/S24_LE) | "NOT in the path": record `as_user wpctl status` and the speaker sink's `node.name` (`as_user pw-dump \| grep '"node.name": "alsa_output'`): the target name needs fixing, not a stop for the hardware; S16_LE: record (a later version pins float) |
+   | B1 | **A/B by ear** (C9g step 1), told which only afterwards, 15-20 s each of `/tmp/m.flac` and `/tmp/v.flac` at the listener's volume: `eq preset flat`, `eq preset default`, and 0.3.5's sound `eq set hp=150 bass=0 dip=0` | low | a clear preference; the monitor moves by tenths of a degree | as in the rules |
+   | B2 | **Measure with the phone's microphone** (announce: about 15 s of quiet stepped tones per speaker): `eq measure left --out /tmp/resp; eq measure right --out /tmp/resp; tools/phone-ssh "python3 -I /usr/lib/omandroid-audio/speaker_response.py suggest /tmp/resp/left-result.json /tmp/resp/right-result.json"` | low | two response tables (record them: frequency and level only) and per-speaker corners; the volume line equal for both | "CLIPPED" (again with `--level -40`); "no 1 kHz marker" (the default source: `as_user wpctl status`) |
+   | B3 | **Measure at the listening position with the laptop's microphone** (tell the human: the laptop records the room for about 17 s per side; the recordings stay in `logs/`, gitignored, and are deleted after): the laptop at the listener's ear, `lrec left; lrec right; python3 -I $R suggest logs/resp-left.json logs/resp-right.json; rm logs/resp-*.wav` | low | the responses as heard, a balance figure and possibly a trim; compare with B2 (`python3 -I $R compare` one against the other is meaningless across microphones; compare shapes by eye) | the marker not found (the laptop's input muted or too far: closer, or `--level -25` on both sides) |
+   | B4 | **Apply the B3 suggestion** (B2's if B3 failed) and A/B against `preset default`; fine-tune one value at a time. Record the values here | low | a preference | as in the rules |
+   | C1 | **Bass to the bottom speaker:** `eq set bassmono=1 xover=X` (X from B2/B3's note, else 500), A/B against `bassmono=0` with `/tmp/m.flac` | low | fuller bass, the earpiece cleaner; prefer by ear | rattle on the bottom speaker (`bassmono=0`) |
+   | C2 | **Bass harmonics:** `eq set harm_freq=F harm=0.5` (F from the notes, else 150), then `harm=1`, then `harm=0`, 20 s each | low | "more bass" without fuzz at 0.5 or 1 | a buzz or fuzz on bass notes (back to the lower value) |
+   | C3 | **Width in portrait:** `eq set width=0.6` against `width=1` with `/tmp/m.flac` | low | preference (both speakers carry everything at 0.6) | none |
+   | C4 | **Loudness at full volume:** `play /tmp/m.flac 1.0 30` with `drive=0`, then `eq set drive=2`, then `drive=3`; the monitor running | low (peaks stay at -3 dBFS; average power rises a little, far below the C9d-2 levels) | louder without distortion; tenths of a degree | distortion or pumping (`drive=0`; record which step) |
+   | C5 | **Full volume with the chosen values** (C9g step 4): bass-heavy music at 1.0 for 30 s | low | as C4 | an over-exc count that moves (lower `bass` or `harm`, repeat) |
+   | D1 | **Orientation:** `tools/phone-ssh "$U"'; as_user systemctl --user enable --now omandroid-speaker-orient'`, auto-rotation on; `tools/phone-ssh 'omandroid-speaker-protection signal multitone /tmp/mtL.wav --level -20 --seconds 5 --channels left'`; for each landscape side `play /tmp/mtL.wav 0.6 6` and ask the listener which side of the phone (as they see it) it comes from; `eq show \| tail -2` each time | low | from the left in both landscape orientations; `swap 1` in one of them | from the right in both: the side is the wrong way round (record it; `SWAPPED` in `omandroid-speaker-eq` becomes `right-up`); rollback `systemctl --user disable --now omandroid-speaker-orient; eq set swap=0` |
+   | D2 | **Keep it:** `eq save`; record every chosen value here (no identifiers involved) | none | "saved: …"; the next version takes them as the package defaults | |
+   | E | **Optional (medium; the human's separate go): C9d-7/C9d-8** as in their runbook above, with `eq preset flat` first so the bursts match C9d-6's signal, `eq reset` after; read the outcome with the table above | medium | | as in that runbook |
+   | F | **Optional (medium; the human's separate go): Waves on the AoC**, T3b then T4 in `AOC-TUNING-RESEARCH.md` (with `eq preset waves`), plus its open-question-8 measurement there | medium | | as there |
+   Record the results here with the date and `uname -r`.
 
    - **C9e balance** (at the last step that passed; risk medium):
      `burst /tmp/mtL.wav 1.0`, then `burst /tmp/mtR.wav 1.0`, with the
