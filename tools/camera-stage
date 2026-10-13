@@ -110,6 +110,13 @@ need_blacklist() {
     die "the camera blacklist is not installed (CAMERA-PLAN.md step K1)"
 }
 loaded() { phone "grep -c '^$1 ' /proc/modules >/dev/null"; }
+# pmic-2 (S2MPG13) binds only with sec_acpm loaded, which a bring-up
+# modprobe.d file may blacklist (the GNSS G1 one does): load it if needed.
+need_pmic2() {
+  phone 'ls -d /sys/bus/platform/drivers/sec-pmic-acpm/*pmic-2* >/dev/null 2>&1 ||
+    { modprobe sec_acpm; sleep 2; ls -d /sys/bus/platform/drivers/sec-pmic-acpm/*pmic-2* >/dev/null 2>&1; }' ||
+    die "pmic-2 (S2MPG13) did not bind: check sec_acpm and the overlay"
+}
 
 # 1. The log stream. cat (not dmesg) so nothing is buffered on the phone.
 #    It runs in its own process group (setsid) so cleanup can stop the ssh
@@ -131,8 +138,13 @@ cleanup() {
       </dev/null >/dev/null 2>&1 || true
     wd_armed=0
   fi
+  # the stream's process group: TERM, then KILL whatever is left after 3 s;
+  # never wait on it unbounded
   kill -TERM -- -"$logger" 2>/dev/null
-  wait "$logger" 2>/dev/null
+  for _ in $(seq 30); do kill -0 "$logger" 2>/dev/null || break; sleep 0.1; done
+  kill -KILL -- -"$logger" 2>/dev/null
+  pkill -KILL -P $$ 2>/dev/null
+  true
 }
 trap cleanup EXIT INT TERM
 sleep 2
@@ -179,6 +191,7 @@ case "$stage" in
     ;;
   r0)
     need_overlay
+    need_pmic2
     for m in gpio_s2mpg13 slg51002_regulator gs201_cam_power; do
       loaded $m && die "$m is already loaded: r0 is for a fresh boot"
     done
@@ -187,6 +200,7 @@ case "$stage" in
     ;;
   g1)
     need_overlay; need_blacklist
+    need_pmic2
     mark "about to load gpio_s2mpg13 (fixed camera supplies will drive their enables low)"
     phone 'modprobe gpio_s2mpg13; echo modprobe-exit=$?; sleep 2;
       cat /sys/kernel/debug/gpio 2>/dev/null | sed -n "/s2mpg13/,/^$/p"' | tee -a "$log" || result=fail
@@ -194,6 +208,7 @@ case "$stage" in
     ;;
   s1)
     need_overlay; need_blacklist
+    need_pmic2
     loaded gpio_s2mpg13 || phone 'modprobe gpio_s2mpg13'
     mark "about to load slg51002_regulator (S2MPG13 GPIO0 high, 10 ms, pattern ID)"
     phone 'modprobe slg51002_regulator; echo modprobe-exit=$?; sleep 2' | tee -a "$log" || result=fail
@@ -201,6 +216,7 @@ case "$stage" in
     ;;
   e1)
     need_overlay; need_blacklist
+    need_pmic2
     loaded gpio_s2mpg13 || phone 'modprobe gpio_s2mpg13'
     loaded slg51002_regulator || phone 'modprobe slg51002_regulator; sleep 1'
     mark "about to load gs201_cam_power (nothing powered at probe)"
@@ -211,6 +227,7 @@ case "$stage" in
     ;;
   u1)
     need_overlay; need_blacklist
+    need_pmic2
     loaded gpio_s2mpg13 || phone 'modprobe gpio_s2mpg13'
     loaded slg51002_regulator || phone 'modprobe slg51002_regulator; sleep 1'
     loaded gs201_cam_power || phone 'modprobe gs201_cam_power; sleep 1'
@@ -266,3 +283,4 @@ say "summary ($log): $result"
 sed -n "/camera-stage: start $stage/,\$p" "$log" |
   grep -E 'camera-stage|cam_probe|cam-power|slg51002|s2mpg13|sec-pmic|regulator|i2c|imx386|csis|dcphy|modprobe-exit|Unable|abort|SError' |
   sed -E 's/^([0-9:.]+) [0-9]+,[0-9]+,[0-9]+,[^;]*;/\1 /' | tail -30
+[[ "$result" == ok ]]

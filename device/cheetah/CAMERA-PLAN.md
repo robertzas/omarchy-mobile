@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Camera plan (cheetah / gs201): raw capture first, then libcamera
 
-Status (2026-10-12): **K, CAM0 (partly) and CAM1 passed on the phone; CAM2
-and CAM3a are built and waiting; the CAM3b-CAM5 capture path is built
-offline.** Kernel branch `omandroid-camera` in `~/android/mainline/wt-camera`
+Status (2026-10-12): **K, CAM0 (partly), CAM1, CAM2 and CAM3a passed on the
+phone (the ultrawide answers as a Sony IMX386); the CAM3b-CAM5 capture
+path is built offline.** Kernel branch `omandroid-camera` in `~/android/mainline/wt-camera`
 (output `~/android/mainline/out-camera`); `omandroid-int` 606b84c7a already
 has its first part (up to `6cb2be364`). On top, not merged yet (head
 `35295a9ab`): CIS clock rounding, the DC-PHY receiver, the CSIS link + CSIS
@@ -87,7 +87,7 @@ Path abbreviations (as in the other plans):
 |---|---|---|---|---|---|---|
 | Main | `sensor-nagual` | Samsung GN1, 50 MP [I] | `hsi2c_1` (`0x10900000`), `0x3d` | 16/16 | gpp2-2 | `CIS_CLK3`, gpp9-0 (`sensor_mclk4`), 26 MHz |
 | Front | `sensor-dokkaebi` | Samsung 3J1 [I] | `hsi2c_2` (`0x10910000`), `0x10` | 16/16 | gpp4-2 | `CIS_CLK1`, gpp5-0 (`sensor_mclk2`), 24 MHz |
-| Ultrawide | `sensor-sandworm` | Sony IMX386 [V: HAL model ID 0x0386] | `hsi2c_3` (`0x10920000`), `0x1a` | 16/8 | gpp6-3 | `CIS_CLK0`, gpp3-0 (`sensor_mclk1`), 24 MHz |
+| Ultrawide | `sensor-sandworm` | Sony IMX386 [V: model ID 0x0386 read on the phone, CAM3a] | `hsi2c_3` (`0x10920000`), `0x1a` | 16/8 | gpp6-3 | `CIS_CLK0`, gpp3-0 (`sensor_mclk1`), 24 MHz |
 | Tele | `sensor-kraken` | Samsung GM5 [I] | `hsi2c_4` (`0x10930000`), `0x2d` | 16/16 | gpp6-2 | `CIS_CLK2`, gpp7-0 (`sensor_mclk3`), 24 MHz |
 
 Evidence **[V]**: `GD/pantah/dts/gs201-cheetah-camera.dtsi` (nodes "REAR
@@ -958,6 +958,47 @@ tools/camera-stage --watchdog e1
 - **Rollback:** `echo 0 > /sys/kernel/debug/gs201-cam-power/*-0050/power`
   (camera-stage does it), reboot.
 
+**CAM2 results (2026-10-12, unattended with the human's permission;
+kernels 7.3.0-rc6-omandroid-push1-00345-g606b84c7a9fd for 2.0/2.1 and
+-00349-g781b9c3d8523 (int + omandroid-modem 781b9c3d8) for 2.2/2.3;
+overlays as before plus camera-pwr-test, suspend-pmic-test,
+modem-cpif-test). All passed.** `sec_acpm` is blacklisted by the GNSS
+bring-up file (`/etc/modprobe.d/omandroid-g1.conf`) and was loaded by hand
+before each run so that `pmic-2` binds; `camera-stage` now does that itself
+(and its exit was hardened again: the coordinator still saw it hang after
+a step; the stream group is now killed with TERM then KILL and never
+waited on unbounded).
+
+- **CAM2-B:** the partition checksums match the 20261012-radio backup.
+- **CAM2.0 (r0):** S2MPG13 GPIO block: interrupt masks (02/03) 0xff,
+  status (04) 0x00, every pin control register (05-0c) 0x40 = output,
+  driven low, mode bits 0, so all eight pins are plain outputs held low by
+  ABL (the camera supplies and the SLG51002 are off); monitor selects
+  (0d-14) 0. LDO12S `37:` 0x2c (off, 1.8 V). Pins: gpp3-0 (MCLK) input,
+  pull-down; gpp6-0/1 function 3 (I2C), pull-up; gpp6-2 and gpp6-3 (reset)
+  inputs, pull-down.
+- **CAM2.1 (g1):** `gpio-s2mpg13` registered 8 lines; the fixed supplies
+  took GPIO1 and GPIO3 as outputs, low; `PP3200_BB_CAM` and `PP1300_CAM`
+  probed, use count 0; no register changed (they were already outputs,
+  low).
+- **CAM2.2 (s1):** `slg51002-regulator 1-0075: pattern ID 0xb13103
+  (revision AB)`, as stock; the eight LDOs registered at the DT voltages
+  (2.85, 2.85, 2.25, 2.9, 2.85, 1.1, 1.0, 1.1 V) and the four switches, all
+  unused and off; no I2C errors on bus 8. The haptics buzz check was
+  skipped (nobody at the phone); do it next time someone is.
+- **CAM2.3 (e1):** both power-test nodes bound on `i2c-0` (bus 3 is
+  adapter 0 on our kernel): `0-001a: 5 supplies, 8 readable registers,
+  mclk, reset; not powered`, `0-0050: 1 supplies ... not powered`. LDO12S
+  on, **"eeprom: ack"**, LDO12S off; `37:` 0x2c again afterwards.
+
+**CAM3a result (same boot as CAM2.3): passed.** The full stock sequence
+ran (PP3200_BB and PP1300 use 2 while powered, gpp3-0 switched to its MCLK
+function, gpp6-3 an output driven high = reset released). Register
+**0x0016 = 0x03, 0x0017 = 0x86: model 0x0386, the Sony IMX386**, as the
+HAL said (section 4.3) and as `imx386.c` checks. Power-down in reverse
+(avdd, dvdd, dovdd, PP1300, PP3200, "powered down"), every rail back to use
+count 0. The ultrawide's rails, clock and reset are proven; next is CAM3b.
+
 ### CAM3a: the ultrawide sensor's chip ID, read-only. Risk: medium
 
 Stock's full sequence for the ultrawide (section 1.2), driven by
@@ -1026,13 +1067,14 @@ tools/phone-ssh 'modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 1; mo
 #   the camera supplies off again in the regulator summary
 # CAM3b.2 (next boot) PHY and CSIS drivers bound, nothing started
 tools/phone-ssh 'for m in gpio_s2mpg13 slg51002_regulator imx386 phy_gs201_mipi_dcphy_rx gs201_csis; do modprobe $m; sleep 1; done; dmesg | grep -iE "gs201-csis|dcphy" | tail; media-ctl -d /dev/media0 -p'
-#   expect: "link 1 -> WDMA context 1, 4 data lanes"; graph imx386 3-001a ->
+#   expect: "link 1 -> WDMA context 1, 4 data lanes"; graph imx386 0-001a ->
 #   gs201-csis link 1 -> gs201-csis-wdma1; PMU 0x3ebc still 0 (gs201_cam_probe step=pmu)
 # CAM3b.3 (next boot) colour bars on the link, no DMA, under the stage
 #   tool's kmsg stream and watchdog (tools/camera-stage --watchdog x --cmd '...')
 tools/camera-stage --watchdog x --cmd 'for m in gpio_s2mpg13 slg51002_regulator imx386 phy_gs201_mipi_dcphy_rx; do modprobe $m; done; modprobe gs201_csis allow_stream=1 link_only=1; sleep 1
-  media-ctl -d /dev/media0 -V "\"imx386 3-001a\":0[fmt:SRGGB10_1X10/2016x1508]" -V "\"gs201-csis link 1\":0[fmt:SRGGB10_1X10/2016x1508]"
-  S=$(media-ctl -d /dev/media0 -e "imx386 3-001a"); v4l2-ctl -d $S --set-ctrl test_pattern=2
+  N=$(media-ctl -d /dev/media0 -p | grep -o "imx386 [0-9]*-001a" | head -1)
+  media-ctl -d /dev/media0 -V "\"$N\":0[fmt:SRGGB10_1X10/2016x1508]" -V "\"gs201-csis link 1\":0[fmt:SRGGB10_1X10/2016x1508]"
+  S=$(media-ctl -d /dev/media0 -e "$N"); v4l2-ctl -d $S --set-ctrl test_pattern=2
   V=$(media-ctl -d /dev/media0 -e gs201-csis-wdma1); v4l2-ctl -d $V --set-fmt-video=width=2016,height=1508,pixelformat=pRAA
   timeout 5 v4l2-ctl -d $V --stream-mmap --stream-count=1; cat /sys/kernel/debug/*.csis/stats'
 ```
@@ -1091,7 +1133,8 @@ tools/phone-ssh 'cat /tmp/bars.raw' > logs/cam4-bars.raw
 tools/phone-install-package packages/libcamera
 # CAM5.1 the camera is listed
 tools/phone-ssh 'cam -l'
-#   expect: one camera, "imx386 3-001a"; soft ISP created (log: SoftwareIsp)
+#   expect: one camera, "imx386 0-001a" (bus 3 is i2c-0 on our kernel, CAM2.3);
+#   soft ISP created (log: SoftwareIsp)
 # CAM5.2 one picture
 tools/phone-ssh 'cam -c1 --capture=3 --file=/tmp/frame#.ppm --stream pixelformat=RGB888,width=2016,height=1508'
 # CAM5.3 GNOME Snapshot through PipeWire; check with a screenshot
