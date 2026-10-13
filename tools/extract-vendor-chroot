@@ -16,6 +16,11 @@
 #          init and fstab files, for reference. No binder, no system
 #          binaries. The modem firmware and NV are not in it: they are read
 #          on the phone, into RAM, at start. device/cheetah/MODEM-PLAN.md M3.
+#  waves  Waves' speaker tuning host libraries (libmahalcontroller.so and
+#          the coefficient converter libAlgFx_HiFi3z.so) with their preset
+#          and config files, for omandroid-waves-host. Libraries only: no
+#          vendor or system binaries, no binder, no device nodes.
+#          device/cheetah/AOC-TUNING-RESEARCH.md.
 #
 # These binaries are Google's and not ours to redistribute, so Omandroid
 # never ships them: this tool takes exactly what the profile needs from an
@@ -39,8 +44,10 @@ RUNTIME_APEX="system/apex/com.android.runtime.apex"
 RUNTIME_FILES=(bin/linker64 lib64/bionic/libc.so lib64/bionic/libm.so
                lib64/bionic/libdl.so lib64/bionic/libdl_android.so)
 
-# Entry points, relative to their partition root, per profile.
+# Entry points, relative to their partition root, per profile. VENDOR_LIBS
+# are libraries something of ours dlopen()s: copied with their closure.
 profile_lists() {
+  VENDOR_LIBS=()
   case $1 in
     gnss)
       VENDOR_BINS=(bin/hw/lhd bin/hw/gpsd)
@@ -62,7 +69,16 @@ profile_lists() {
       SYSTEM_FILES=(system/build.prop)
       SYSTEM_DIRS=()
       ;;
-    *) die "unknown profile '$1' (known: gnss, modem)" ;;
+    waves)
+      VENDOR_BINS=()
+      VENDOR_LIBS=(lib64/libmahalcontroller.so lib64/libAlgFx_HiFi3z.so)
+      VENDOR_FILES=(etc/waves_preset.mps etc/waves_config.ini build.prop)
+      VENDOR_DIRS=()
+      SYSTEM_BINS=()
+      SYSTEM_FILES=(system/build.prop)
+      SYSTEM_DIRS=()
+      ;;
+    *) die "unknown profile '$1' (known: gnss, modem, waves)" ;;
   esac
 }
 
@@ -85,6 +101,20 @@ profile_check() {
       grep -q 'modem_img' "$1/vendor/etc/fstab.modem" ||
         die "fstab.modem has no modem image mount"
       ;;
+    waves)
+      local f
+      for f in ma_create ma_destroy ma_initialize ma_get_version ma_set_data ma_flush \
+               ma_wait_for_flush ma_on_dsp_wakeup; do
+        grep -aq "$f" "$1/vendor/lib64/libmahalcontroller.so" ||
+          die "libmahalcontroller.so has no $f (not the Waves controller omandroid-waves-host knows)"
+      done
+      grep -q '^AlgFxPath64=/vendor/lib64/libAlgFx_HiFi3z.so' "$1/vendor/etc/waves_config.ini" ||
+        die "waves_config.ini does not load /vendor/lib64/libAlgFx_HiFi3z.so"
+      grep -q '^SPEAKER_INSTANCE *= *INSTANCE:1' "$1/vendor/etc/waves_config.ini" ||
+        die "waves_config.ini has no speaker instance 1"
+      grep -q '^\[CUSTOM_ACTION_258\]' "$1/vendor/etc/waves_config.ini" ||
+        die "waves_config.ini has no custom action 258 (preset selection)"
+      ;;
   esac
 }
 
@@ -94,7 +124,7 @@ Usage: extract-vendor-chroot -p PROFILE [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
 
   SOURCE   Google factory zip (cheetah-*-factory-*.zip) or the
            image-cheetah-*.zip inside it
-  -p NAME  profile: gnss, modem
+  -p NAME  profile: gnss, modem, waves
   -o DIR   output directory (default: ./out/vendor-chroot-PROFILE)
   -w DIR   scratch directory for vendor.img and system.img, about 2.5 GB
            (default: a temp dir in \$TMPDIR)
@@ -293,7 +323,7 @@ walk() { # $1 file on disk, $2 vendor|system
   done < <(needed "$1")
 }
 
-for b in "${VENDOR_BINS[@]}"; do
+for b in "${VENDOR_BINS[@]}" "${VENDOR_LIBS[@]}"; do
   [[ -f "$WORK/v/$b" ]] || die "/vendor/$b is missing from this image"
   walk "$WORK/v/$b" vendor
 done
@@ -311,7 +341,7 @@ put() { # $1 source on disk, $2 path in chroot
   mkdir -p "$root/$(dirname "$2")"
   if [[ -L "$1" ]]; then cp -P "$1" "$root/$2"; else cp "$1" "$root/$2"; fi
 }
-for b in "${VENDOR_BINS[@]}" "${VENDOR_FILES[@]}"; do put "$WORK/v/$b" "vendor/$b"; done
+for b in "${VENDOR_BINS[@]}" "${VENDOR_LIBS[@]}" "${VENDOR_FILES[@]}"; do put "$WORK/v/$b" "vendor/$b"; done
 for d in "${VENDOR_DIRS[@]}"; do mkdir -p "$root/vendor/$d"; cp -a "$WORK/v/$d/." "$root/vendor/$d/"; done
 for b in "${SYSTEM_BINS[@]}" "${SYSTEM_FILES[@]}"; do put "$WORK/s/$b" "$b"; done
 for d in "${SYSTEM_DIRS[@]}"; do mkdir -p "$root/$d"; cp -a "$WORK/s/$d/." "$root/$d/"; done
