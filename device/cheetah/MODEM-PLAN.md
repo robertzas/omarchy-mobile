@@ -2,10 +2,13 @@
 # Modem plan (cheetah / gs201): S5300 on PCIe GEN4A_0
 
 Status (2026-10-13): **M0, M2.5, M3.1 and M3.3-B passed** (CPIF binds,
-`/dev/umts_*` and 30 rmnet devices exist). **Every modem power-off is
+`/dev/umts_*` and 30 rmnet devices exist). **M3.4.0-M3.4.3 passed; M3.4.4
+ran clean on NV but rfsd found no TOC** (it read the raw `modem_a`, not
+`modem.bin`): fixed in `omandroid-modem` 0.1.1, M3.4.4 to be repeated
+before M3.4.5 (see "M3.4.4, first run"). **Every modem power-off is
 followed by one recovered UFS error-handler pass**, so the modem stays on
 once up (M2.6). New offline (2026-10-13): the stack that runs on the phone
-from M3.4 on is packaged (`omandroid-modem` 0.1.0, `omandroid-modem-sit`
+from M3.4 on is packaged (`omandroid-modem` 0.1.1, `omandroid-modem-sit`
 0.2.0, a port of a SIT stack that registered, called, texted and carried
 data on this phone model: section 6), with a gated runbook for M3.4 (first
 CP boot) and M4 (registration, SMS, data, voice) below. Next on the phone:
@@ -1042,8 +1045,8 @@ the bootloader put them in our DTB; the profile says so if not),
 `/sys/power/wake_lock` (a stand-in: no `CONFIG_PM_WAKELOCKS`), and the
 properties `ro.boot.cdt_hwid` / `persist.vendor.modem.cdt_hwid` (the
 board's hardware id; without them cbd falls back to the default hardware
-config). rfsd needs `/dev/umts_rfs0`, `/mnt/vendor/efs*` and
-`by-name/modem`. cbd can ask the kernel to panic
+config). rfsd needs `/dev/umts_rfs0`, `/mnt/vendor/efs*` and the
+firmware file (`vendor.modem.bin.path`, below: "What rfsd does at start"). cbd can ask the kernel to panic
 (`IOCTL_TRIGGER_KERNEL_PANIC`): the port only logs it.
 
 **UFS check, after every step from M3.4.2 on:**
@@ -1101,7 +1104,7 @@ tools/phone-ssh 'cmp /etc/udev/rules.d/60-omandroid-modem-nv-ro.rules /usr/lib/u
   rm -f /etc/udev/rules.d/60-omandroid-modem-nv-ro.rules; udevadm control --reload'
 tools/phone-ssh 'pacman -Q omandroid-modem; systemctl is-enabled omandroid-modem; cat /usr/lib/omandroid-vendor/modem/SOURCE;
   wc -l < /etc/omandroid/modem-nv.sha256; ls -l /etc/modprobe.d/'
-#   expect/pass: omandroid-modem 0.1.0; "disabled"; the CP2A source line; 5; no omandroid-*.conf
+#   expect/pass: omandroid-modem 0.1.1; "disabled"; the CP2A source line; 5; no omandroid-*.conf
 #   bring-up copies in /etc/modprobe.d (cmp may differ only in comments: the package's rule wins)
 #   stop: the package's check fails; rollback: pacman -R omandroid-modem
 
@@ -1128,13 +1131,24 @@ tools/phone-ssh 'modprobe pcie-gs201-cp allow_hw=1; modprobe shm_ipc; modprobe c
 # M3.4.4 rfsd only: the RAM copies, the NV checksums, the chroot; no modem power (risk: low)
 tools/phone-ssh 'systemd-run --unit=x-modem-rfsd -E OMANDROID_MODEM_STAGE=rfsd \
   /usr/lib/omandroid-vendor/omandroid-vendor-chroot modem start; sleep 25;
-  journalctl -u x-modem-rfsd --no-pager | tail -25; cat /sys/devices/platform/cpif/modem_state'
+  journalctl -u x-modem-rfsd --no-pager | tail -50; cat /sys/devices/platform/cpif/modem_state'
 #   expect: "<part>: RAM copy matches the backup" for modem_a, efs, efs_backup, modem_userdata, persist;
 #   "nv_normal.bin: stock checksum matches" and the same for nv_protected.bin, nv_protected.bak;
 #   "baseband version <...>" (record it); "starting rfsd"; "running"; modem_state OFFLINE; AP2CP lines low
-#   pass: all of that; no "no /chosen/..." warning (record it if there is one)
+#   pass: all of that; no "no /chosen/..." warning (record it if there is one); and from rfsd
+#     (0.1.1, "What rfsd does at start" below), in this order:
+#     "Modem Path : /mnt/vendor/modem_img/images/default/modem.bin" (not by-name/modem_a), ReadToc,
+#     CheckNvFiles, CleanupAllRfsFiles, then NO "TOC not found" and NO "Bypass radio versions"
+#     (matching versions log nothing), "[RfsService::Nv] Touch", "[RfsService::Nv] <file> : Verified" (no
+#     "Expand", no "Create"), NvProtected likewise without an error line, Init, IoChannel Open;
+#     then "Modem boot timeout" every few seconds is expected (no CP yet)
 #   stop: "differs from the backup" or "stock checksum does not match": the profile stops before rfsd.
 #     Never "fix" a checksum. Take a fresh backup and compare (the NV may have changed under stock)
+#   stop: "vendor.modem.bin.path ... is not a file" or "baseband ... differs": the profile stops before
+#     rfsd (a per-phone baseband value must go, or match the firmware)
+#   stop, never go on to M3.4.5: "Radio version changed", "Going to clear EFS", "EFS ... cleared",
+#     "File ... smaller ... Expand", "Create ... Size", "TOC record is broken", "Failed to touch":
+#     rfsd changed or would change the NV copies (RAM only; record the lines, names only)
 tools/phone-ssh 'systemctl stop x-modem-rfsd; sleep 2; losetup -l | grep -c modem-nv; grep -c modem-nv /proc/mounts'
 #   pass: 0 and 0 (the namespace took the copies with it); the CP was never powered, so no UFS event
 
@@ -1152,7 +1166,9 @@ tools/phone-ssh 'dmesg | grep -c ufshcd_err_handler; systemctl start --no-block 
 #   - cbd's boot steps ([cbd] lines in the journal), a link_down, "link up: Gen3 x2" (main firmware);
 #   - CPIF "ONLINE"; the journal: "CP ONLINE (cbd exit 0)", "omandroid-modem-cp: CP ONLINE"
 #   pass: state ONLINE; the marker file is gone; "faults: 0x0"; err_handler count unchanged
-#     (power-on and a running link were clean in M2.5); rfsd logs NV file requests (names only)
+#     (power-on and a running link were clean in M2.5); rfsd logs NV file requests (names only),
+#     its ModemStateMonitor sees the CP online, and none of M3.4.4's rfsd stop lines appears
+#     (cbd publishes vendor.modem.bin.path too: the same path, so nothing changes for rfsd)
 #   record: Gen/width of the main link, the time from POWER_ON to ONLINE, cbd's last lines,
 #     the "capability part:0 AP:0x..." line (from `907f73727` with CONFIG_CH_EXTENSION:
 #     0x00000002; 0x00000003 with modem-cpif-pktproc, the uplink processor; section 6.3)
@@ -1177,6 +1193,73 @@ tools/phone-ssh 'sleep 600; /usr/lib/omandroid-vendor/omandroid-modem-cp state; 
 #   pass: still ONLINE; 0 link faults (CPIF may cycle the link when the modem idles: record each
 #   link_down/link up pair and the UFS count around it); err_handler unchanged; no crashed file
 ```
+
+**M3.4.4, first run (2026-10-13, `7.3.0-rc6-omandroid-push1-00407`,
+`omandroid-modem` 0.1.0):** all five RAM copies matched the backup, the
+three stock NV checksums matched, baseband version
+`g5300q-260317-260505-B-15346003`, "starting rfsd", "running", modem
+OFFLINE; the copies were gone after the stop. rfsd logged, besides the
+expected lines: "Modem Path : /dev/block/by-name/modem_a", "TOC not found,
+g5300q-...", "Bypass radio versions comparing as empty", "AllocFile,
+idx=1", "[RfsService::Nv] Touch", "TOC record is broken", "Failed to
+touch normal registry file", then Init and the state monitor waiting. Also
+noise, harmless: the launcher's glibc complaining that it can't preload the
+Android shim, and the Android linker's missing `ld.config.txt`.
+
+**What rfsd does at start (from the user's own `rfsd`, read offline
+2026-10-13; behaviour only):**
+- *Which file is the "TOC" read from:* rfsd waits up to about 5 s
+  (51 polls, 100 ms) for `vendor.modem.bin.path`; if that stays empty it
+  falls back to `/dev/block/by-name/modem` plus `ro.boot.slot_suffix`. It
+  reads the first 512 bytes of that file as the firmware's table of
+  contents: 32-byte entries, entry 0 named `TOC` whose last word is the
+  index of the last entry; `NV_NORM` and `NV_PROT` give the NV file sizes
+  (both 512 KiB in this firmware), `INFO` (or `GVERSION`) the version
+  string. On stock, cbd publishes `vendor.modem.bin.path` (the
+  `modem.bin` it finds in `/mnt/vendor/modem_img/images/default/`, or a
+  gunzipped copy in `/data/vendor/radio/image/`), and rfsd, started next to
+  it, picks it up within the wait. The raw `modem_a` partition is an ext4
+  image whose first 512 bytes double as a tar header named after the
+  version: that string is what "TOC not found, %s" printed. So the M3.4.4
+  bind of `by-name/modem_a` was correct and readable; it is just not what
+  rfsd wants once the path property is missing (no cbd ran in M3.4.4). The
+  working stack (section 6.1) sets the property itself.
+- *CheckNvFiles / CleanupAllRfsFiles:* the NV list is `nv_normal.bin`
+  and `nv_protected.bin` under `vendor.ril.exynos.nvpath` (default
+  `/mnt/vendor/efs/`). If any is missing: nothing is deleted
+  (`efs.clear.action` set to `cleared`). Else by
+  `persist.vendor.modem.efs.clear.action`: empty is the factory-reset
+  case and `needed` a forced clear, **both delete the NV files**; any other
+  value (`none`) goes to the version check: with no TOC version, "Bypass
+  radio versions comparing as empty" and nothing is deleted (M3.4.4); with
+  one, it is compared with `persist.vendor.modem.baseband.version`: equal,
+  nothing is logged or deleted and the property is set to `none`;
+  different, "Radio version changed", then unless `vendor.cbd.modem_bin_type`
+  is 1, "Going to clear EFS for image changed case" and **both NV files
+  are deleted** (in our layout: from the RAM copy; the real partitions
+  are never visible). So `none` alone doesn't protect NV: the baseband
+  property must equal the TOC's string, which `omandroid-modem-cp
+  baseband-version` now reads exactly as rfsd does, and the profile stops
+  if it can't or if a per-phone value differs.
+- *Touch ("registry file"):* the "normal registry file" is
+  `nv_normal.bin`, the protected one `nv_protected.bin`. Touch needs the
+  TOC: without it, "TOC record is broken" and it returns before opening
+  anything (no write; the protected file isn't tried). With it, it checks
+  the file's stored checksum ("Verified"), creates a zero-filled file of
+  the TOC size if the file is missing, and pads it to the TOC size if it is
+  smaller ("Expand"): stock files should already be 512 KiB, so neither
+  should happen.
+- *Verdict on the first run:* no NV was changed (the bypass and the failed
+  Touch both write nothing), and the copies were discarded at the stop.
+  But booting the CP with an rfsd that has no TOC is untested and unlike
+  both stock and the working stack, and once cbd published the path in
+  M3.4.5, whether rfsd saw it would have been a race (cbd starts 2 s
+  after rfsd; rfsd stops waiting at about 5 s). `omandroid-modem` 0.1.1
+  sets `vendor.modem.bin.path=/mnt/vendor/modem_img/images/default/modem.bin`
+  in `props.conf`, so rfsd reads the real TOC from the first second, and
+  checks the baseband property against the same file before any daemon
+  runs. **Repeat M3.4.1 (install 0.1.1) and M3.4.4 with the new
+  expectations before M3.4.5.**
 
 **M3.5 (after every M3.4 or M4 run; read-only; risk: none):** repeat the
 M3.4.0 commands into `logs/m3.4-after.sha256` and diff against
@@ -1384,7 +1467,7 @@ our kernel still lacks.
 | Start order | rfsd (no arguments), 2 s, then `cbd -t s5100sit -P by-name/modem -s 2 -o r` once: cbd boots the CP and exits; rfsd stays | `rfsd -d`, 1 s, `cbd -d` supervised: **a cbd exit would have stopped the profile and killed rfsd with the CP up** | rfsd, 2 s, alive check, cbd once (`-o r`, no `-d`), bounded by a timeout; rfsd stays |
 | `efs.clear.action` | `none` | **empty: rfsd's factory-reset path, which clears NV (the RAM copy)** | `none` |
 | Other properties | `ro.bootmode=normal`, `vendor.cbd.modem_bin_type=0`, `persist.radio.multisim.config=dsds`, baseband version from the firmware TOC (INFO + 20, 31 bytes), `ro.boot.cdt_hwid` per phone | `ro.bootmode=unknown`, none of the others | as the working stack; the baseband version set at start; `cdt_hwid` in the per-phone props file |
-| Firmware path | the factory radio image's `modem.bin` as a plain file; `by-name/modem` and `modem_img/images/default/modem.bin` both point at it; `vendor.modem.bin.path` set | the `modem_a` RAM copy (ext4) as `by-name/modem_a` and `by-name/modem`, mounted at `/mnt/vendor/modem_img`, as stock | unchanged (stock's layout); the plain-file form is fallback 1 in 6.2 |
+| Firmware path | the factory radio image's `modem.bin` as a plain file; `by-name/modem` and `modem_img/images/default/modem.bin` both point at it; `vendor.modem.bin.path` set | the `modem_a` RAM copy (ext4) as `by-name/modem_a` and `by-name/modem`, mounted at `/mnt/vendor/modem_img`, as stock | stock's layout, plus `vendor.modem.bin.path` set to the image's `modem.bin` (0.1.1: without it rfsd read the raw partition and found no TOC, M3.4.4); the plain-file `by-name/modem` is fallback 1 in 6.2 |
 | Shell in the chroot | `sh`, `toybox` and its links; `/vendor/bin/tar` (cbd builds an archive with tar while booting) | none | `tools/extract-vendor-chroot -p modem` adds them (re-run before M3.4) |
 | `/chosen/plat`, `/chosen/config` | copied in (cbd reads the board ids and the IMEIs there) | bound read-only | unchanged; `model_info-system_rev` is not needed |
 | Stop | CP off (`IOCTL_POWER_OFF`) before rfsd stops; if the power-off fails rfsd is kept | the profile's stop left the CP on and rfsd went | the unit's stop powers the CP off first (`allow_poweroff` set for that one request); reboot does the same |
@@ -1402,8 +1485,10 @@ our kernel still lacks.
    `by-name/modem` and set `vendor.modem.bin.path` to it in the per-phone
    props, as the working stack does.
 2. cbd logs an image-change or NV-rebuild path: compare the
-   `baseband version` line of M3.4.4 with what cbd expects; set
-   `persist.vendor.modem.baseband.version` in the per-phone props.
+   `baseband version` line of M3.4.4 with what cbd expects. Don't set a
+   different `persist.vendor.modem.baseband.version` per phone: rfsd
+   deletes the NV files when it differs from the TOC (M3.4.4, "What rfsd
+   does at start"), and the profile now refuses to start with one.
 3. rfsd forces a CP crash right after the NV requests: the checksum check
    should have caught it; read rfsd's log for the file name.
 4. BOOTING, then nothing at the INIT handshake: the AP capability word

@@ -151,21 +151,34 @@ def watch(marker=None):
 
 def baseband_version(path):
     """The modem.bin TOC: 32-byte entries (name[12], file offset, load
-    address, size, CRC, entry id). The version is the 31-byte string 20
-    bytes into the INFO section, as the stock baseband property holds it."""
-    data = Path(path).read_bytes()
-    for offset in range(0, min(len(data), 32 * 64), 32):
-        name = data[offset:offset + 12].split(b'\0', 1)[0]
-        if not name:
-            break
-        if name == b'INFO':
-            start = struct.unpack_from('<I', data, offset + 12)[0] + 20
-            version = data[start:start + 31].split(b'\0', 1)[0]
-            text = version.decode('ascii', 'strict')
+    address, size, CRC, entry id) in the file's first 512 bytes; entry 0 is
+    named TOC and its last word is the index of the last entry. Read the
+    way rfsd reads it at start (MODEM-PLAN.md M3.4.4): from the last entry
+    down to entry 1, the first GVERSION (the string at its offset) or INFO
+    (20 bytes in) wins, at most 31 bytes. rfsd compares that string with
+    persist.vendor.modem.baseband.version, and a difference makes it delete
+    the NV files ("image changed"): this must give exactly its string."""
+    with open(path, 'rb') as f:
+        toc = f.read(512)
+        if len(toc) < 64 or toc[:4] != b'TOC\0':
+            raise ValueError('no TOC at the start of the file')
+        last = struct.unpack_from('<I', toc, 28)[0] + 1
+        if not 1 <= last <= 15:
+            raise ValueError('unexpected TOC entry count')
+        for index in range(last, 0, -1):
+            entry = toc[index * 32:index * 32 + 32]
+            name = entry[:12].split(b'\0', 1)[0]
+            if name not in (b'GVERSION', b'INFO'):
+                continue
+            offset, size = struct.unpack_from('<I', entry, 12)[0], struct.unpack_from('<I', entry, 20)[0]
+            if not offset or not size:
+                raise ValueError(f'empty {name.decode()} entry')
+            f.seek(offset + (20 if name == b'INFO' else 0))
+            text = f.read(min(size, 31)).split(b'\0', 1)[0].decode('ascii', 'strict')
             if not text or not text.isprintable():
-                raise ValueError('unexpected INFO section')
+                raise ValueError(f'unexpected {name.decode()} section')
             return text
-    raise ValueError('no INFO section in the TOC')
+    raise ValueError('no GVERSION or INFO entry in the TOC')
 
 
 def nv_check(efs, efs_backup):

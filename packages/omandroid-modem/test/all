@@ -18,20 +18,28 @@ fi
 pass "scripts parse"
 
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
-# A made-up modem.bin: TOC, BOOT, INFO entries (32 bytes each), the version
-# 20 bytes into INFO.
-python3 - "$t/modem.bin" <<'PY'
+# A made-up modem.bin: TOC, BOOT, INFO entries (32 bytes each; the TOC
+# entry's last word is the last entry's index), the version 20 bytes into
+# INFO. A 31-character version is cut at 31 bytes, as rfsd reads it.
+python3 - "$t" <<'PY'
 import struct, sys
-toc = b''
-for name, off, size in ((b'TOC', 0, 0x200), (b'BOOT', 0x200, 0x100), (b'INFO', 0x300, 0x80)):
-    toc += name.ljust(12, b'\0') + struct.pack('<5I', off, 0, size, 0, 0)
-data = bytearray(0x400); data[:len(toc)] = toc
-data[0x300 + 20:0x300 + 20 + 16] = b'test-version-001'
-open(sys.argv[1], 'wb').write(data)
+def image(path, version, entries=((b'BOOT', 0x200, 0x100), (b'INFO', 0x300, 0x80))):
+    toc = b'TOC'.ljust(12, b'\0') + struct.pack('<5I', 0, 0, 0x200, 0, len(entries) - 1)
+    for name, off, size in entries:
+        toc += name.ljust(12, b'\0') + struct.pack('<5I', off, 0, size, 0, 0)
+    data = bytearray(0x400); data[:len(toc)] = toc
+    data[0x300 + 20:0x300 + 20 + len(version)] = version
+    open(path, 'wb').write(data)
+image(sys.argv[1] + '/modem.bin', b'test-version-001')
+image(sys.argv[1] + '/long.bin', b'v' * 31 + b'XYZ')
+image(sys.argv[1] + '/noinfo.bin', b'', ((b'BOOT', 0x200, 0x100), (b'MAIN', 0x300, 0x80)))
 PY
 [[ $(python3 "$cp" baseband-version "$t/modem.bin") == test-version-001 ]] || fail "baseband version from a TOC"
-head -c 256 /dev/zero > "$t/notoc.bin"
-python3 "$cp" baseband-version "$t/notoc.bin" 2>/dev/null && fail "a file without INFO is refused"
+[[ $(python3 "$cp" baseband-version "$t/long.bin") == "$(printf 'v%.0s' {1..31})" ]] || fail "version cut at 31 bytes"
+python3 "$cp" baseband-version "$t/noinfo.bin" 2>/dev/null && fail "a TOC without INFO is refused"
+# a raw modem partition starts with a tar header, not a TOC
+{ printf 'test-version-001'; head -c 496 /dev/zero; } > "$t/notoc.bin"
+python3 "$cp" baseband-version "$t/notoc.bin" 2>/dev/null && fail "a file without a TOC is refused"
 pass "baseband version"
 
 mkdir -p "$t/efs" "$t/efs_backup"
@@ -53,6 +61,8 @@ for f in usr/lib/omandroid-vendor/omandroid-modem-start usr/lib/omandroid-vendor
 done
 grep -qx 'persist.vendor.modem.efs.clear.action=none' modem/props.conf ||
   fail "efs.clear.action is pinned to none (empty clears NV)"
+grep -qx 'vendor.modem.bin.path=/mnt/vendor/modem_img/images/default/modem.bin' modem/props.conf ||
+  fail "rfsd reads its TOC from the firmware file (vendor.modem.bin.path)"
 if command -v systemd-analyze >/dev/null; then
   systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/omandroid-modem.service" 2>&1 |
     grep -v -e 'not executable' -e 'No such file' -e 'omandroid-aoc.service' -e 'omandroid-audio.service' -e '^$' &&
