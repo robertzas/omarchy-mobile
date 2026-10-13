@@ -1446,6 +1446,26 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
         `options aoc_alsa_dev speaker_protection=1` into the package.
      Rollback for every step: `omandroid-speaker-protection mute`, then the
      default config (stage media) and a restart.
+     **C9d-3 step 1 result (2026-10-13, 7.3.0-rc6-omandroid-push1-00375-gc73a652bd07a;
+     stopped):**
+     - 657/17, delta off, DRE off: a -20 dBFS multitone burst and a
+       -13 dBFS RMS 1 kHz tone read plausibly (top +0.4 °C, bottom
+       +0.2 °C, falling back afterwards). But vmon low stayed 1 on both
+       amplifiers throughout. R_selected was CAL_R yes, with no over-counts.
+     - 737/17, -20 dBFS multitone: **stop.** The top read 25 → 65 → 85 → 93 °C
+       (maximum) within 6 s and the bottom 25 → 43 °C. vmon low was still
+       1. The watchdog muted at 08:24:21, as designed. The listener heard
+       the tones with **a lot of background static** (as at 657/17 on
+       2026-10-12).
+     - Reading: vmon low 1 at analog 17 contradicts C9d-2. The temperature
+       runs away as at 817/10, and static comes with gain 17. Sensing and
+       the analog stage at gain 17 are not configured as on stock; the
+       coils are not really hot.
+     - **Next:** offline, compare the amplifiers' configuration at gain 17
+       with stock: the boost target and peak current, VMON/IMON enables,
+       the ADC and the class-H settings. Use the stock tuning and our own
+       register captures. No more listening steps at analog 17 until that
+       difference is found. The default stays stage media 737/10.
    - **C9e balance** (at the last step that passed; risk medium):
      `burst /tmp/mtL.wav 1.0`, then `burst /tmp/mtR.wav 1.0`, with the
      phone upright in front of the listener at about 30 cm (and, if
