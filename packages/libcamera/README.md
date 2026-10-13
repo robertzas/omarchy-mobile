@@ -14,6 +14,8 @@ in the table. See `device/cheetah/CAMERA-PLAN.md`, section 5.2.
 | --- | --- |
 | `PKGBUILD` | Arch's `libcamera` PKGBUILD at tag `0.7.2-4`, trimmed for this phone (see its header) |
 | `0001-pipeline-simple-Add-the-Google-gs201-CSIS-receiver.patch` | The libcamera change, in `git format-patch` form; it also applies to upstream master |
+| `0002-libcamera-Add-the-Sony-IMX386-sensor.patch` | The IMX386 sensor helper, properties and tuning stub |
+| `0003-ipa-simple-agc-Step-faster-when-far-from-the-target-.patch` | Faster AGC steps far from the target |
 | `libcamera-fix-python3.14-macro-redefinition.patch` | Arch's patch, unchanged (sha512 `8b54cbdf…`) |
 | `.SRCINFO` | `makepkg --printsrcinfo` output |
 
@@ -50,16 +52,19 @@ belongs in CAMERA-PLAN section 5.2. In short:
 Both debayers take CSI-2 packed RAW10 and RAW12 and 8-bit RAW. The GPU path
 doesn't take unpacked 12-bit.
 
-The IMX386 gets no `CameraSensorHelper` and no sensor-properties entry yet.
-Both are optional. Without them libcamera logs warnings and uses defaults:
+`0002-libcamera-Add-the-Sony-IMX386-sensor.patch` adds the IMX386's
+`CameraSensorHelper` (black level 64 at 10 bits, measured on the phone in
+CAM4.3; the analogue gain model of the IMX258, code 0-480 for 1x-16x,
+confirmed by the CAM4.3c gain sweep), its sensor properties (1.25 um
+unit cell, the driver's CCS test pattern numbers, two-frame delays) and
+`imx386.yaml`, an uncalibrated tuning file for the simple IPA. The sweep
+showed the register is 9 bits wide (codes from 512 wrap), so 480 stays the
+top.
 
-- sensor delays exposure 2, gain 1;
-- the gain code is treated as a linear gain;
-- no unit cell size.
-
-Their values (the gain formula, the black level, the unit cell size) need a
-citable source that we don't have. Add them once the sensor driver exists
-and its gain model is measured.
+`0003-ipa-simple-agc-Step-faster-when-far-from-the-target-.patch` makes the
+simple IPA's AGC take larger steps (proportional gain 0.1, still at most 15%)
+while the exposure error is above 1.0; near the target it keeps upstream's
+0.04. Indoors the first frames otherwise stayed black for seconds.
 
 ## Status
 

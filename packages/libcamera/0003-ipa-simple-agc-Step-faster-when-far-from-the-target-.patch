@@ -1,0 +1,56 @@
+From b568e0f6ebe3f506c7218c81fa6161b8a4aa5917 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Tue, 13 Oct 2026 11:32:09 -0400
+Subject: [PATCH 3/3] ipa: simple: agc: Step faster when far from the target
+ exposure
+
+On the Google Pixel 7 Pro's ultrawide (IMX386), indoors, the picture was
+still black after 40 frames: from the sensor's starting exposure and 1x
+gain the loop climbs about 6% per step (an error of 1.5 at a
+proportional gain of 0.04), and with a two-frame sensor control delay a
+step shows only two frames later, so reaching 10x or more gain takes
+several seconds.
+
+Use a proportional gain of 0.1 while the error is above 1.0 (still
+bounded by the 15% maximum step) and keep 0.04 near the target, so the
+loop settles as before once it is close.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/agc.cpp | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index a13a755..f8c3d31 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -55,6 +55,15 @@ static constexpr float kExposureSatisfactory = 0.2;
+  */
+ static constexpr float kExpProportionalGain = 0.04;
+ 
++/*
++ * Far from the target (an error above kExpFarError, e.g. a dark first
++ * frame indoors), use a larger proportional gain so the loop reaches the
++ * right exposure in about a second rather than several: with the sensor's
++ * two-frame control delay each step only shows two frames later.
++ */
++static constexpr float kExpFarError = 1.0;
++static constexpr float kExpProportionalGainFar = 0.1;
++
+ /*
+  * Maximum multiplicative step per frame, to bound the correction when the
+  * scene changes dramatically.
+@@ -80,7 +89,9 @@ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext, dou
+ 	 * determines the direction: positive error means too dark (increase),
+ 	 * negative means too bright (decrease).
+ 	 */
+-	float step = std::clamp(static_cast<float>(error) * kExpProportionalGain,
++	float gain = std::abs(error) > kExpFarError ? kExpProportionalGainFar
++						    : kExpProportionalGain;
++	float step = std::clamp(static_cast<float>(error) * gain,
+ 				-kExpMaxStep, kExpMaxStep);
+ 	float factor = 1.0f + step;
+ 
+-- 
+2.55.0
+

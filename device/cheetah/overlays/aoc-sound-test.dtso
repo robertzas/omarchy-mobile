@@ -8,8 +8,10 @@
  * apply with audio-amps-test (SPI7 and the amplifiers) and aoc-core-test.
  *
  * TDM 0 slots (AUDIO-PLAN.md 1.1): the top amplifier plays slot 0, the
- * bottom one slot 1. The VMON/IMON feedback slots (TX) are not set yet:
- * protection is not used before stage C9.
+ * bottom one slot 1. Their VMON/IMON feedback (ASP TX1-TX4) goes out
+ * interleaved, as stock's mixer_paths.xml sets it (top 0, 2, 4, 6; bottom
+ * 1, 3, 5, 7), so the two never drive the shared SDOUT line in the same
+ * slot. Without it both used the reset slots 0-3 (AOC-PLAN C9d-6).
  *
  * The card driver sorts the DAI links into the stock order by their ids, so
  * the PCM numbers (which are the AoC entry points) do not depend on the order
@@ -19,11 +21,13 @@
 /plugin/;
 
 &amp_top {
-	google,tdm-rx-slots = <0>;
+	google,tdm-rx-slots = <0 1>;
+	google,tdm-tx-slots = <0 2 4 6>;
 };
 
 &amp_bottom {
-	google,tdm-rx-slots = <1>;
+	google,tdm-rx-slots = <1 0>;
+	google,tdm-tx-slots = <1 3 5 7>;
 };
 
 &{/} {

@@ -23,7 +23,14 @@
 #  - werror=false: GCC 16's -Warray-bounds flags libstdc++'s own std::mutex
 #    construction in camera_manager.cpp and log.cpp (a false positive in the
 #    library headers), which -Werror turned into a failed build.
-#  - pkgrel 4.2, so it sorts above Arch Linux ARM's 0.7.2-4.
+#  - 0002-libcamera-Add-the-Sony-IMX386-sensor.patch: the IMX386's sensor
+#    helper (black level, the gain model measured in CAM4.3c), properties
+#    and an uncalibrated simple-IPA tuning file (CAMERA-PLAN.md CAM5).
+#  - 0003-ipa-simple-agc-Step-faster-when-far-from-the-target-.patch: the simple
+#    IPA's AGC steps with a proportional gain of 0.1 instead of 0.04 while
+#    the exposure error is above 1, so a dark start settles in about a
+#    second (CAMERA-PLAN.md CAM5.2d).
+#  - pkgrel 4.4, so it sorts above Arch Linux ARM's 0.7.2-4.
 #
 # Maintainers of the original: David Runge, Carl Smedstad.
 
@@ -36,7 +43,7 @@ pkgname=(
   python-libcamera
 )
 pkgver=0.7.2
-pkgrel=4.2
+pkgrel=4.4
 pkgdesc="A complex camera support library for Linux, Android, and ChromeOS (Omandroid: gs201 CSIS)"
 arch=(aarch64)
 url="https://libcamera.org/"
@@ -69,13 +76,19 @@ source=(
   "git+$_url#tag=v$pkgver"
   "$pkgbase-fix-python3.14-macro-redefinition.patch"
   0001-pipeline-simple-Add-the-Google-gs201-CSIS-receiver.patch
+  0002-libcamera-Add-the-Sony-IMX386-sensor.patch
+  0003-ipa-simple-agc-Step-faster-when-far-from-the-target-.patch
 )
 sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd8847f7bec755c753c72f6b065df76de53c15f9af2e5901e83e7a144a2ddcd'
             '8b54cbdf6ed767ae8d52a14480a4653f4f3a1c2187c4ccf7ceb65eaa60c819cce514122591d6e0c2dfc39d7482739f8fdd4090dbaf63701445510eefc88fb19f'
-            'b2ce83a9124699c850f20b0b68046b4b1fab4bfad94c485c7638a1c996d075dc911be9a53b65e3bb719e77dcab97ef169f8661b4312f24a1d320fce3f37e9d61')
+            'b2ce83a9124699c850f20b0b68046b4b1fab4bfad94c485c7638a1c996d075dc911be9a53b65e3bb719e77dcab97ef169f8661b4312f24a1d320fce3f37e9d61'
+            'f411035b61e777d40b3fffe99df7961750889253f9f58c367d6aba8846021dc0765c224439e104481e5e2484ac394d40039610128ca1a49b11b519d92a9bd5ed'
+            '335a1be1abc221adc59d81c4519a4f337d81295cc977ef03f82c493d9f6969d7457cce0712f2027636097f4eb77e0df35adb8c324bd444326150b39369803c01')
 b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc58494400e69feeec99a77894252d582f0d8f183508e5d1b8220e70f3d5'
         '4a0e24feed22d32b83b0ec49c9a7616b77deb26cae82c17a38b54a81a0468e982852147bc2d5e3b611ba014ddbd7647acfe2e68591542420da73945ba1c0d6c2'
-        'cba8b638543a16bf80c2ae7dc0737f3874476fd1ff694639b459184725848e193518778d0336eef3d55ba4329d9bc63981d0aa8d8d9b5507c9ade4f17f7f407d')
+        'cba8b638543a16bf80c2ae7dc0737f3874476fd1ff694639b459184725848e193518778d0336eef3d55ba4329d9bc63981d0aa8d8d9b5507c9ade4f17f7f407d'
+        'e34fd19745efb4bc5f316e2e7d4b7c76ecf49f77b5e2b4db9344fff6f91f9eab1644bf75765c667f244ef9571d95c6bc34ea7a73712cdd4c7fac96f50c737885'
+        'ecb595dd14251d4669dcdb1c03fb0e20dfeea6132e1589a904ff8650230ab6165ef48e8b1ead2f5290864fcd3f28437085ae5e2e9e7811b17375d4033189e065')
 
 _pick() {
   local p="$1" f d; shift
@@ -91,6 +104,8 @@ prepare() {
   cd $pkgbase
   patch -Np1 < ../$pkgbase-fix-python3.14-macro-redefinition.patch
   patch -Np1 < ../0001-pipeline-simple-Add-the-Google-gs201-CSIS-receiver.patch
+  patch -Np1 < ../0002-libcamera-Add-the-Sony-IMX386-sensor.patch
+  patch -Np1 < ../0003-ipa-simple-agc-Step-faster-when-far-from-the-target-.patch
 
   # add version, so that utils/gen-version.sh may rely on it
   printf "%s\n" "$pkgver" > .tarball-version

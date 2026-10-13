@@ -1,0 +1,115 @@
+From be9dc15a61ab3f3feeed01df51e5eeabcf0a4bc6 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Tue, 13 Oct 2026 10:49:04 -0400
+Subject: [PATCH 2/3] libcamera: Add the Sony IMX386 sensor
+
+The IMX386 is the ultrawide camera of the Google Pixel 7 Pro, captured
+through the gs201 CSIS receiver and the simple pipeline handler with the
+software ISP.
+
+Add a camera sensor helper with the black level measured on the phone
+(64 at 10 bits) and the analogue gain model of the IMX258, 512 / (512 -
+code) over 0 to 480, which a gain sweep on the phone confirmed (1x,
+1.84x and 16.1x at codes 0, 240 and 480; the register holds 9 bits). Add the sensor properties: the 1.25 um unit
+cell, the CCS test pattern numbering the driver uses, and two-frame
+control delays. Add an uncalibrated tuning file for the simple IPA under
+the sensor's name.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/libipa/camera_sensor_helper.cpp         | 17 +++++++++++++++++
+ src/ipa/simple/data/imx386.yaml                 | 13 +++++++++++++
+ src/ipa/simple/data/meson.build                 |  1 +
+ .../sensor/camera_sensor_properties.cpp         | 16 ++++++++++++++++
+ 4 files changed, 47 insertions(+)
+ create mode 100644 src/ipa/simple/data/imx386.yaml
+
+diff --git a/src/ipa/libipa/camera_sensor_helper.cpp b/src/ipa/libipa/camera_sensor_helper.cpp
+index 9457d62..ac1acdc 100644
+--- a/src/ipa/libipa/camera_sensor_helper.cpp
++++ b/src/ipa/libipa/camera_sensor_helper.cpp
+@@ -617,6 +617,23 @@ public:
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("imx335", CameraSensorHelperImx335)
+ 
++class CameraSensorHelperImx386 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperImx386()
++	{
++		/* 64 at 10 bits, measured on the Pixel 7 Pro's ultrawide. */
++		blackLevel_ = 4096;
++		/*
++		 * The same analogue gain register as the IMX258: 0 to 480 for
++		 * 1x to 16x, measured on the phone (1x, 1.84x and 16.1x at
++		 * codes 0, 240 and 480).
++		 */
++		gain_ = AnalogueGainLinear{ 0, 512, -1, 512 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("imx386", CameraSensorHelperImx386)
++
+ class CameraSensorHelperImx415 : public CameraSensorHelper
+ {
+ public:
+diff --git a/src/ipa/simple/data/imx386.yaml b/src/ipa/simple/data/imx386.yaml
+new file mode 100644
+index 0000000..22a1d2a
+--- /dev/null
++++ b/src/ipa/simple/data/imx386.yaml
+@@ -0,0 +1,13 @@
++# SPDX-License-Identifier: CC0-1.0
++#
++# Sony IMX386 (the Pixel 7 Pro's ultrawide), not calibrated yet: the
++# uncalibrated set with the sensor's black level from its helper.
++%YAML 1.1
++---
++version: 1
++algorithms:
++  - BlackLevel:
++  - Awb:
++  - Adjust:
++  - Agc:
++...
+diff --git a/src/ipa/simple/data/meson.build b/src/ipa/simple/data/meson.build
+index 92795ee..d0db5b7 100644
+--- a/src/ipa/simple/data/meson.build
++++ b/src/ipa/simple/data/meson.build
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: CC0-1.0
+ 
+ conf_files = files([
++    'imx386.yaml',
+     'uncalibrated.yaml',
+ ])
+ 
+diff --git a/src/libcamera/sensor/camera_sensor_properties.cpp b/src/libcamera/sensor/camera_sensor_properties.cpp
+index 2804315..10e489b 100644
+--- a/src/libcamera/sensor/camera_sensor_properties.cpp
++++ b/src/libcamera/sensor/camera_sensor_properties.cpp
+@@ -261,6 +261,22 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
+ 			.testPatternModes = {},
+ 			.sensorDelays = { },
+ 		} },
++		{ "imx386", {
++			.unitCellSize = { 1250, 1250 },
++			.testPatternModes = {
++				{ controls::draft::TestPatternModeOff, 0 },
++				{ controls::draft::TestPatternModeSolidColor, 1 },
++				{ controls::draft::TestPatternModeColorBars, 2 },
++				{ controls::draft::TestPatternModeColorBarsFadeToGray, 3 },
++				{ controls::draft::TestPatternModePn9, 4 },
++			},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
+ 		{ "imx415", {
+ 			.unitCellSize = { 1450, 1450 },
+ 			.testPatternModes = {},
+-- 
+2.55.0
+

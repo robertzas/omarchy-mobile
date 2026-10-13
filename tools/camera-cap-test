@@ -23,13 +23,14 @@
 #   FRAMES=n     frames to capture with DMA=1 (default 4), saved to
 #                /tmp/cam-<W>x<H>.raw
 #   SECS=n       how long to stream (default 5)
+#   SENSOR_OPTS= imx386 module parameters for one run (imx386 is reloaded)
 #   CSIS_OPTS=   extra gs201_csis parameters for one experiment, e.g.
 #                "cam_khz=0" (no CAM DVFS vote: CAM3b.5a), "int_khz=0" or
 #                "sysreg_link_sel=1" (one per boot)
 set -u
 LINK=${LINK:?LINK=2, the link the overlay enabled} W=${W:-2016} H=${H:-1508} DMA=${DMA:-0} CH=${CH:-0}
 PATTERN=${PATTERN:-2} FRAMES=${FRAMES:-4} SECS=${SECS:-5} CSIS_OPTS=${CSIS_OPTS:-}
-CTRLS=${CTRLS:-}
+CTRLS=${CTRLS:-} SENSOR_OPTS=${SENSOR_OPTS:-}
 say() { echo "cap-test: $*"; echo "cap-test: $*" > /dev/kmsg; }
 
 # Modules, in order; gs201_csis gets the step's parameters on every run.
@@ -37,6 +38,12 @@ modprobe sec_acpm 2>/dev/null
 for m in gpio_s2mpg13 slg51002_regulator imx386 phy_gs201_mipi_dcphy_rx; do
 	modprobe "$m" || { say "modprobe $m failed"; exit 1; }
 done
+# imx386 again, fresh, with this run's parameters (none = the defaults)
+grep -c '^gs201_csis ' /proc/modules >/dev/null && rmmod gs201_csis
+if grep -c '^imx386 ' /proc/modules >/dev/null; then
+	rmmod imx386 || { say "rmmod imx386 failed"; exit 1; }
+fi
+modprobe imx386 $SENSOR_OPTS || { say "modprobe imx386 $SENSOR_OPTS failed"; exit 1; }
 grep -c '^gs201_csis ' /proc/modules >/dev/null && rmmod gs201_csis
 if [ "$DMA" = 1 ]; then
 	modprobe gs201_csis allow_stream=1 link_only=0 wdma_channel="$CH" $CSIS_OPTS

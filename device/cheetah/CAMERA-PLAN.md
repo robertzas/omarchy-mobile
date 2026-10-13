@@ -617,7 +617,8 @@ Nothing has run on the phone.
 - `dt-bindings: media` + `media: samsung: add the gs201 CSIS receiver and
   CSIS WDMA driver` (`gs201-csis`): one link + one WDMA context per node,
   media graph sensor -> CSIS subdev -> video node, RAW8/RAW10, frame-sync
-  events. Bring-up parameters: `allow_stream` (default off),
+  events. Bring-up parameters: `allow_stream` (default off; on since
+  `35f679a26`),
   `link_only` (run PHY, link and sensor without the WDMA: no DMA),
   `wdma_channel` (0-3, default 0). Debugfs `stats` and `regs` (registers
   only while streaming).
@@ -1541,6 +1542,104 @@ done
   sensor: look before another run).
 - **Rollback:** reboot; `PATTERN=2` and no `CTRLS` is CAM4.1 again.
 
+**CAM4.3b results (2026-10-13, int
+`7.3.0-rc6-omandroid-push1-00397-g94d7b3c9ae7f`, with `ddf414774`):**
+
+- **4.3b-1 passed: the Bayer order is RGGB** (`SRGGB10`, as the driver
+  reports). Solid colour R 256, Gr 512, B 768, Gb 1000 read back flat as
+  row 0 col 0 = 64, row 0 col 1 = 128, row 1 col 0 = 250, row 1 col 1 =
+  192, so R Gr / Gb B. Every value arrives divided by 4: the test data
+  registers take the sensor's internal 12-bit scale (`49a0a54f4` widens
+  the controls to 4095).
+- **4.3b-2 passed:** the readback after mode_select matches the controls:
+  `frame_length 1799, exposure 1549, analogue gain 0, digital gain 0x100,
+  test pattern 1` with the defaults, and each sweep step's gain.
+- **4.3b-3 invalid:** the phone fell over during the sweep, so the scene
+  changed between steps. The gain-480 run had **`wdma_errors` 33,
+  `last_wdma_err` 0x4000 (`LASTDATA`)**; all other DMA runs so far 0.
+- **Retake, phone held facing the room:** exposure 1789, analogue gain
+  360, `PATTERN=0`: `wdma_errors` 0; debayered as RGGB the frame is a
+  sharp, correctly coloured, in-focus picture of the room, rotated (the DT
+  now says `rotation = <90>`, `905599c28`). **Still very dark:** green p50
+  2 codes above black (64), p99.5 19 above black with the lamps left out;
+  it needed about 13x stretch.
+
+**Why dark (offline).** The register writes are proven by the readback,
+so what is left is how much gain and exposure they mean:
+- At 16 ms (the binned modes' own 60 fps frame) and code 360, the
+  sensor ran at about 1.5x (1024 model) or 3.4x (512 model) analogue
+  gain. Stock indoors runs about 33 ms and roughly 8-16x (the ISO a
+  phone uses indoors). So a dark frame is partly just exposure: 2x from
+  the frame time, 3-10x from gain.
+- **The gain model decides the rest.** If it is 1024 / (1024 - code),
+  our control stops at 480 = 1.9x and the sensor's upper 8x of gain is
+  unreachable. Another bring-up on this phone model runs this sensor with
+  codes up to 960 (0x380 for "8x") and gets bright frames, which points
+  that way [I]. `49a0a54f4` adds `imx386 again_max=` to open the range
+  for the sweep, and defaults VBLANK to a 30 fps frame (exposure up to
+  33 ms), since libcamera's simple pipeline never raises VBLANK itself.
+- Nothing in the init or mode lists points at a shortened integration:
+  they set 0x0202 = 1779 of 1799 lines, no HDR or short-exposure
+  registers (0x0220-0x0225 aren't written), and the extra writes of the
+  phase-detection init variant (73, all 0x3108-0x3165) are only
+  phase-detection windows.
+
+**The LASTDATA errors (offline).** The WDMA's last-data check compares
+how much data a frame brought with what the context expects; with RAW10
+and a fixed size, the amount doesn't depend on the picture or the gain.
+What did differ in that run: the phone fell over (screen and rotation
+activity on the same bus), and every DMA run so far used `int_khz=0`, the
+bus (INT) domain at its boot level, where the WDMA is known to miss frame
+ends under load (section 4.4). Most likely a bus-bandwidth stall, not
+the gain. The next runs use the INT vote (CAM4.2, never run yet) and
+repeat high gain to check; the per-frame `ERR_WRONG_CONFIG` on the link
+(likely the sensor's embedded-data lines arriving with a data type the
+link isn't set up for) is recorded alongside in case the two coincide.
+
+**Autofocus:** the ultrawide has an AF actuator (an AK737x-type VCM at
+0x0f on the same bus, stock `act-slenderman-sandworm`, on LDO12S plus
+SLG51002 LDO4 2.9 V). Not needed now (the lens rests at a usable
+focus); a later stage for macro.
+
+### CAM4.3c: INT vote, the gain model and 30 fps, phone secured. Risk: medium (DMA)
+
+Kernel `omandroid-camera` `49a0a54f4` merged into int (the human), same
+overlay. **The phone fixed in a stand or taped, facing the same lit room,
+screen off or untouched, room lights constant for the whole step.**
+CAM4.3b's stop for DMA runs is lifted only for 4.3c-1 below.
+
+```sh
+# 4.3c-1 (next boot) CAM4.2: the INT vote (default), colour bars, 3 runs
+for i in 1 2 3; do
+  tools/camera-stage --watchdog x --cmd 'LINK=2 DMA=1 CH=0 FRAMES=8 SECS=6 bash -s' --script tools/camera-cap-test
+done
+#   pass: wdma_errors 0 in all three; dmesg "link 2 on: ... INT 400000000 Hz"
+# 4.3c-2 the frame rate default: no CTRLS, PATTERN=0
+tools/camera-stage --watchdog x --cmd 'LINK=2 DMA=1 CH=0 FRAMES=4 PATTERN=0 bash -s' --script tools/camera-cap-test
+#   expect: vblank 2091 in the control list, frame_length 3599 in the readback,
+#   FS rising at about 30/s
+# 4.3c-3 the gain sweep at a fixed exposure: 30 fps, exposure 3000, range open
+for g in 0 240 480 720 960; do
+  tools/camera-stage --watchdog x --cmd "LINK=2 DMA=1 CH=0 FRAMES=4 PATTERN=0 SENSOR_OPTS=again_max=960 CTRLS=exposure=3000,analogue_gain=$g bash -s" --script tools/camera-cap-test
+  tools/phone-ssh 'cat /tmp/cam-2016x1508.raw' > logs/cam4c-gain$g.raw
+  tools/raw10-stats logs/cam4c-gain$g.raw
+done
+# 4.3c-4 exposure linearity at code 0: exposure 750, 1500, 3000
+```
+
+- **Reading 4.3c-3** (green mean minus 64, against code 0): 1024 / (1024 -
+  code) gives 1.31x at 240, 1.88x at 480, 3.37x at 720, 16x at 960; 512 /
+  (512 - code) gives 1.88x at 240 and 16x at 480, with 720 and 960 outside
+  its range (expect them clamped, saturated or ignored). If the 1024 model
+  fits, the data file's range becomes 960 (`tools/extract-camera-data`,
+  regenerate and copy the file) and the libcamera helper uses it.
+- **Pass:** 4.3c-1 clean three times; the sweep fits one model; at the top
+  of the confirmed range and 33 ms the room is well above black.
+- **Stop:** any `wdma_errors` with the INT vote on (record `stats` and the
+  `scan`, compare `last_link_err`), a torn frame, a hang. With the 512
+  model, don't run codes above 480 again.
+- **Rollback:** reboot; no `SENSOR_OPTS` restores the 0-480 range.
+
 ### CAM5: libcamera. Risk: low (userspace)
 
 ```sh
@@ -1581,6 +1680,214 @@ software ISP need, and where it stands:
 - `packages/libcamera` is still unbuilt (CAM5.0).
 So CAM5.0-5.2 can run after CAM4.3b-1; CAM5.3 and an indoor-usable
 picture wait for the gain model and the 30 fps default.
+
+**CAM5.1/5.2 results (2026-10-13, int
+`7.3.0-rc6-omandroid-push1-00405-g3bc8d8565645` with `49a0a54f4` and the
+rotation; `packages/libcamera` 0.7.2-4.2):**
+- **CAM5.1 passed:** `cam -l` lists "1: Internal back camera
+  (/base/soc@0/usi@109200c0/i2c@10920000/camera-sensor@1a)". Warnings: no
+  `imx386.yaml` (falls back to `uncalibrated.yaml`), "Unable to get
+  rectangle 0 on pad 0/0" (no `get_selection` in the driver), "Failed to
+  create camera sensor helper for imx386".
+- **CAM5.2 failed:** `DmaBufAllocator: Unable to create buffer`, "Can't
+  allocate buffers"; kernel `cma: ... reserved: alloc failed, req-size:
+  3016 pages, ret: -16`. The software ISP takes its output buffers from
+  the first heap of `linux,cma`, `reserved`, `system`; on our kernel
+  `reserved` is the **default CMA area** (arm64 defconfig's 32 MiB, from
+  `CONFIG_CMA_SIZE_MBYTES`; exported twice, as `reserved` and
+  `default_cma_region`), too small for four 12 MiB RGB888 buffers next to
+  its other users. (`camera-pool` and `display-pool` are the DT pools;
+  this kernel has no `linux,cma` alias option.)
+
+**Fixes (2026-10-13):**
+- `kernel/configs/omandroid.config` (repo, uncommitted):
+  `CONFIG_CMA_SIZE_MBYTES=192` (reusable; movable pages use it while the
+  camera doesn't).
+- `70da6c5a5` `media: i2c: imx386: report the pixel array and each mode's
+  analogue crop`: `get_selection` with `CROP` (the mode's analogue crop,
+  from its address registers), `NATIVE_SIZE`/`CROP_BOUNDS`/`CROP_DEFAULT`
+  (4032x3016). Build `7.3.0-rc6-omandroid-push1-00357-g70da6c5a5b2f` in
+  `out-camera` (with the config change).
+- `packages/libcamera` 0.7.2-4.3 (repo, uncommitted):
+  `0002-libcamera-Add-the-Sony-IMX386-sensor.patch`: the sensor helper
+  (black level 4096 at 16 bits; the IMX258's gain model 512 / (512 -
+  code) as a provisional choice until CAM4.3c), properties (1.25 um cell,
+  test pattern numbers, two-frame delays) and an `imx386.yaml` tuning
+  stub. Applies on 0.7.2 after the other two patches; not compiled yet.
+
+### CAM5.2b: libcamera with the CMA area and the helper. Risk: low (userspace; kernel push)
+
+```sh
+# 5.2b-K kernel: omandroid-camera 70da6c5a5 merged into int, built with the
+#   repo's config fragment (CMA 192 MiB) (ASK FIRST: flashes and reboots)
+tools/phone-ssh 'grep -E "CmaTotal|CmaFree" /proc/meminfo; ls /dev/dma_heap'
+#   expect: CmaTotal about 348 MiB (192 + 64 + 92; 188 before); heaps as before
+# 5.2b-0 libcamera 0.7.2-4.3 (sensor helper, tuning stub)
+tools/phone-install-package packages/libcamera
+# 5.2b-1 the camera, without warnings about the helper, tuning or crop
+tools/phone-ssh 'cam -l 2>&1 | grep -iE "warn|error|camera"'
+# 5.2b-2 one picture (as CAM5.2)
+tools/phone-ssh 'cam -c1 --capture=6 --file=/tmp/frame#.ppm --stream pixelformat=RGB888,width=2016,height=1508 2>&1 | tail -20'
+tools/phone-ssh 'cat /tmp/frame000005.ppm' > logs/cam5-frame.ppm
+```
+
+- **Pass:** six frames written, no `cma` failure in dmesg; the last frame
+  a recognisable, right-coloured picture (AGC settled: brighter than the
+  raw captures, still noisy indoors).
+- **If only the kernel changed:** CAM5.2 must already pass on 4.2 (the
+  helper isn't needed to allocate); install 4.3 after.
+- **Stop:** a `cma` failure again (read `CmaFree` and dmesg: someone else
+  holds the area), any WDMA error, a hang.
+- **Rollback:** `pacman -U` the 4.2 package; the old kernel images.
+
+**CAM5.2b results (2026-10-13, int
+`7.3.0-rc6-omandroid-push1-00407-g618475741fa7` with `70da6c5a5` and CMA
+192 MiB: CmaTotal 356352 kB; libcamera 0.7.2-4.2, the helper package not
+built yet):**
+- **Allocation fixed:** no CMA failure.
+- **Stream-on refused** with `gs201_csis` loaded by hand without
+  `allow_stream=1` (QBUF/stream-on `EPERM`, "streaming disabled").
+- With `allow_stream=1 link_only=0 wdma_channel=0`, `cam -c1 --capture=10
+  ... width=2016,height=1508`: "Camera configuration adjusted", and the
+  sensor and link ran **4032x3016** ("link 2 on: 4032x3016 DT 0x2b"); FS
+  1795 / FE 1794, link errors 1794 (0x8, `ERR_WRONG_CONFIG`, as in every
+  run), **WDMA done 0, errors 39, last 0x8000 (`LASTADDR`)**, no frame
+  saved; vb2 "driver bug: stop_streaming operation is leaving buffer 0 in
+  active state". No oops; rebooted per the runbook.
+
+**Why (offline, 2026-10-13):**
+- **4032x3016 was libcamera's choice, not a bug:** the software ISP's
+  debayer keeps a border, so its largest output from a W x H Bayer input
+  is (W - 2 x 4) x H for packed RAW10 (`DebayerCpu::sizes()`: pattern
+  width 4, no top/bottom border for a 2-line pattern). From the binned
+  2016x1508 mode that is 2008x1508, so a 2016x1508 request only fits the
+  full mode. Ask for **2008x1508** (or less) to get the 60/30 fps binned
+  mode; 1920x1080 picks 2016x1136.
+- **The buffer leak** was ours: at a frame start the driver made the next
+  buffer active and dropped the previous one when its frame end hadn't
+  come. `35f679a26` completes such a buffer with an error (`missed_fe`).
+- **LASTADDR at 4032x3016** is open. Our only full-resolution DMA so far
+  (CAM4 ran 2016x1508 only). Differences that grow with the mode: the
+  line stride 5056 bytes (64-aligned; 2560 at 2016 pixels is a multiple of
+  512, 5056 is not), and stock's channel start value 0xf83 whose bits
+  11:7 (= 31) are not understood, against 0x3 that another bring-up uses
+  at this resolution. `35f679a26` logs the WDMA channel registers and the
+  format at a stream's first WDMA error, and adds `stride_align=` and
+  `wdma_ctrl=` to try one change per run.
+- **`allow_stream`:** the gate has done its job (raw frames and libcamera
+  both ran); `35f679a26` makes streaming the default. The bring-up gate is
+  the camera modules' blacklist (`omandroid-camera.conf`), which stays
+  until the package loads the camera at boot (a later, separate step).
+  Until the kernel has `35f679a26`:
+  `echo 'options gs201_csis allow_stream=1' > /etc/modprobe.d/omandroid-camera-stream-bringup.conf`.
+- **`ERR_WRONG_CONFIG`** once per frame persists on both modes; harmless
+  so far (likely the sensor's embedded-data lines, which channel 0 isn't
+  set up for). Not chased yet.
+
+### CAM5.2c: the binned mode through libcamera, then the full-resolution DMA. Risk: medium (DMA)
+
+Kernel `omandroid-camera` `35f679a26` merged into int (with `70da6c5a5`
+and the CMA fragment) (ASK FIRST: flashes and reboots). libcamera 4.2 is
+enough; 4.3 (the helper) only when the coordinator says.
+
+```sh
+# 5.2c-1 libcamera, binned mode: 2008x1508 RGB888, default module options
+tools/phone-ssh 'modprobe gs201_csis; cam -c1 --capture=10 --file=/tmp/frame#.ppm --stream pixelformat=RGB888,width=2008,height=1508 2>&1 | tail -15; dmesg | grep -E "gs201-csis|imx386" | tail -6'
+#   expect: no "adjusted"; "link 2 on: 2016x1508"; "stopped: ... WDMA done ~10
+#   errors 0 ... missed frame ends 0"; ten PPMs; no vb2 "driver bug"
+tools/phone-ssh 'cat /tmp/frame000009.ppm' > logs/cam5c-frame.ppm
+# 5.2c-2 full resolution, raw path with colour bars (no libcamera), as-is
+tools/camera-stage --watchdog x --cmd 'LINK=2 DMA=1 CH=0 W=4032 H=3016 FRAMES=2 bash -s' --script tools/camera-cap-test
+#   if LASTADDR again: the "WDMA error 0x...: CTRL ... STRIDE ..." line
+# 5.2c-3 (only after 5.2c-2 failed) one change: stride 5120 (512-aligned)
+tools/camera-stage --watchdog x --cmd 'LINK=2 DMA=1 CH=0 W=4032 H=3016 FRAMES=2 CSIS_OPTS=stride_align=512 bash -s' --script tools/camera-cap-test
+# 5.2c-4 (only if 5.2c-3 failed too) the other change: channel start 0x3
+tools/camera-stage --watchdog x --cmd 'LINK=2 DMA=1 CH=0 W=4032 H=3016 FRAMES=2 CSIS_OPTS=wdma_ctrl=3 bash -s' --script tools/camera-cap-test
+```
+
+- **Pass (5.2c-1):** ten frames, 0 WDMA errors, a right-coloured picture
+  (dark indoors without the helper).
+- **Pass (5.2c-2/3/4):** `wdma_done` 2, errors 0, the file 2 x stride x
+  3016 bytes (5056 or 5120 a line), bars in it (`tools/raw10-stats
+  --width 4032 --height 3016 --stride 5056 --bars 8`). Whichever variant
+  passes becomes the default.
+- **Stop:** an error other than `LASTADDR`, a torn or shifted frame, an
+  oops, a hang; any WDMA error in 5.2c-1 (binned mode was clean in CAM4).
+- **Rollback:** reboot; the parameters are per load.
+
+**CAM4.3c results (2026-10-13, int
+`7.3.0-rc6-omandroid-push1-00407`, phone propped, room lit; INT vote on;
+libcamera 0.7.2-4.3 with the IMX386 helper):** every run 0 WDMA errors
+(also with the INT vote; the gain-480 LASTDATA of CAM4.3b didn't recur),
+the readback matched, and the 30 fps default works (frame length 3599).
+- **Gain sweep** (exposure 3000, `again_max=960`; Gr p50/mean, black 64):
+  code 0 66/66.5; 240 67/68.6; 480 93/104.2; 720 read back as 208, 68/68.3;
+  960 read back as 448, 81/85.6. **The register is 9 bits** (codes wrap at
+  512), and the signal ratio (mean - 64) 1 : 1.84 : 16.1 at 0/240/480 is
+  **gain = 512 / (512 - code), 1x-16x over 0-480** (the IMX258's model).
+- **Exposure** at code 480: 750, 1500, 3000, 3580 lines give 8.8, 16.8,
+  33.5 (and 72.4, light probably changed) above black: linear. At the top
+  settings this dim room reaches about 7% of full scale: **the sensor is
+  fine**; the earlier dark frames were short exposure and low gain.
+- **libcamera (4.3, no warnings now):** `cam -c1 --capture=40 --stream
+  pixelformat=RGB888,width=2008,height=1508` still gave an essentially
+  black last frame (mean red 0.9/255).
+
+**Why libcamera stays black (offline, libcamera 0.7.2 source):** the
+simple IPA's AGC (`src/ipa/simple/algorithms/agc.cpp`) steps by `1 + 0.04
+x error` per frame (error = 2.5 - MSV, at most 1.5 for a black frame:
+6%), exposure first up to the control's maximum (3589 lines at the 30
+fps default, taken from the control range at configure), then gain in
+steps of at least (16 - 1) / 100 or 6%. Each step builds on the values
+the sensor applied two frames earlier (DelayedControls, our two-frame
+delays), so from our old start (exposure 1549, 1x gain, about 1 code
+above black here) it needs well over 100 frames to reach the 10x+ gain
+this room needs: 40 frames is far too few. The black level (4096 / 256 =
+16 at 8 bits) and the gain model (16x at 480) are right; the AGC limits
+are right; it's the start point and the step size.
+
+**Fixes (2026-10-13):**
+- `9af41f2e3` `media: i2c: imx386: 16x analogue gain at code 480, start at
+  the longest exposure`: range capped at 480 (the 9-bit register),
+  `again_max` gone; each mode starts at the longest exposure its default
+  frame allows (3589 at 2016x1508).
+- `packages/libcamera` 0.7.2-4.4 (repo, uncommitted): `0003-ipa-simple-
+  agc-Step-faster-when-far-from-the-target-.patch` (proportional gain 0.1
+  instead of 0.04 while the error is above 1, still at most 15% a step;
+  unchanged near the target); `0002` now says the gain model is measured.
+  Patches apply on 0.7.2; not compiled yet.
+
+### CAM5.2d: libcamera's picture brightens. Risk: low (userspace; kernel push)
+
+```sh
+# 5.2d-0 (current kernel and 4.3, no rebuild) confirm the cause: a long run,
+#   the AGC's own log
+tools/phone-ssh 'LIBCAMERA_LOG_LEVELS=IPASoftExposure:0,IPASoft:1 cam -c1 --capture=300 --file=/tmp/frame#.ppm --stream pixelformat=RGB888,width=2008,height=1508 2>&1 | grep -E "IPASoft.*(Exposure [0-9]|exp )" | sed -n "1p;50p;100p;200p;\$p"'
+#   expect: "Exposure 1-3589, gain 1-16 (0.15)", then exp climbing to 3589 and
+#   again climbing over hundreds of frames; frame 299 visibly brighter than 39
+# 5.2d-1 kernel with 9af41f2e3 (ASK FIRST) and libcamera 0.7.2-4.4
+#   (tools/phone-install-package packages/libcamera, when the phone is free)
+tools/phone-ssh 'rm -f /tmp/frame*.ppm; cam -c1 --capture=60 --file=/tmp/frame#.ppm --stream pixelformat=RGB888,width=2008,height=1508 2>&1 | tail -3'
+tools/phone-ssh 'cat /tmp/frame000059.ppm' > logs/cam5d-frame.ppm   # then the PPM renderer
+```
+
+- **Pass:** frame 59 (2 s) shows the room at a normal brightness (mean
+  over all channels well above 60/255 in this room), no WDMA errors.
+- **If still dark at 60 but brighter by 300 in 5.2d-0:** the AGC step is
+  the limit; the 4.4 patch is the fix, check it's installed (`pacman -Q
+  libcamera`).
+- **Stop:** WDMA errors, flicker between frames (AGC oscillating: the
+  far-error gain too high; back to 4.3).
+- **Rollback:** the 4.3 package; the old kernel.
+
+Update after CAM4.3b: the Bayer order is confirmed (RGGB), the 30 fps
+default is in `49a0a54f4`, and the frame needs a 90 degree turn
+(`rotation = <90>`, which libcamera reads). **CAM5.0-5.2 can start now**
+(on a kernel with `49a0a54f4`; on the older one expect dark 60 fps
+pictures). Expect dark indoor pictures until the gain model is known
+(CAM4.3c-3): without a helper, libcamera's AGC treats the code as a
+linear gain and stops at the control's 480. The helper patch follows the
+sweep.
 - **Rollback:** `pacman -S libcamera` (Arch Linux ARM's build).
 
 ---
@@ -1602,7 +1909,7 @@ picture wait for the gain model and the 30 fps default.
    Not needed now; the IMX386 driver uses the extracted lists.
 9. The IMX386's analogue gain formula and pixel size, for a libcamera
    sensor helper and properties entry: the formula is measured by
-   CAM4.3b-3; black level 64 (CAM4.3). Bayer order: CAM4.3b-1.
+   CAM4.3c-3; black level 64 (CAM4.3). Bayer order RGGB (CAM4.3b-1).
 6. ~~Is the SLG51002 revision AA?~~ No: revision AB (`0xb13103`, stock
    dmesg), no trim needed (section 1.2). CAM2.2 confirms it on our kernel.
 7. For the main and tele: if they are C-PHY, can the sensor run a D-PHY
