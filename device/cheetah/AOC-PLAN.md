@@ -1484,6 +1484,34 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
        VMON/IMON ranges.
      - Also lower the watchdog's limit so that it acts on a jump, not only
        on 80 °C.
+     **C9d-5 and the bottom speaker's static (2026-10-13, same kernel):**
+     - **Channel check at 737/10:** a left-only multitone (top earpiece)
+       sounded clean; a right-only multitone (bottom loudspeaker) had static.
+       The static is on the bottom path at the everyday level too.
+     - **The bottom amplifier with its DSP bypassed** (`PCM Source` ASP,
+       watchdog paused, 737/10, the top muted) still had "a tiny bit of
+       static", less than through the DSP. With the watchdog running, the
+       first attempt muted both amplifiers at once ("PCM Source is ASP, not
+       DSP"), as designed.
+     - **DRE on and the hardware noise gate at 63**, as stock, through the
+       DSP at 737/10: clearly cleaner by ear. Both are now the default
+       (omandroid-audio 0.3.2).
+     - **817/17 with DRE and the gate on:** a -40 dBFS multitone tripped a
+       1 s tripwire (more than 5 °C above the start) within a second: top 25
+       → 56 °C. A -40 dBFS 1 kHz tone did the same (top 25 → 55.5 °C). So
+       the runaway at stock's level doesn't depend on the signal's
+       spectrum, and DRE and the gate don't affect it. Both tunings are the
+       stock files: top "EVT1p1 top tune", bottom "DVT bot tune", the same
+       as the factory image's `cs35l41-dsp1-spk-prot.bin` and
+       `R-cs35l41-dsp1-spk-prot.bin`. Routing (EP6 → TDM_0, left in slot 0
+       = top, right in slot 1 = bottom) and DSP RX1/RX2 = ASPRX1 match
+       stock.
+     - **Open:** why the protection's reading runs away at gain 17 on our
+       setup. Next suspects are the VMON/IMON scaling the DSP sees and the
+       amplifiers held awake.
+     - **Meanwhile:** omandroid-audio 0.3.3 adds a PipeWire loudness filter
+       ahead of the DSP: a 150 Hz high-pass and a limiter with +6 dB and a
+       -1 dBFS ceiling. The amplifiers stay at 737/10.
    - **C9e balance** (at the last step that passed; risk medium):
      `burst /tmp/mtL.wav 1.0`, then `burst /tmp/mtR.wav 1.0`, with the
      phone upright in front of the listener at about 30 cm (and, if
