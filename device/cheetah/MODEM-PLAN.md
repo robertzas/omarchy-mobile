@@ -1,24 +1,18 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Modem plan (cheetah / gs201): S5300 on PCIe GEN4A_0
 
-Status (2026-10-13): **M0, M2.5, M3.1 and M3.3-B passed** (CPIF binds,
-`/dev/umts_*` and 30 rmnet devices exist). **M3.4.0-M3.4.3 passed; M3.4.4
-ran clean on NV but rfsd found no TOC** (it read the raw `modem_a`, not
-`modem.bin`): fixed in `omandroid-modem` 0.1.1, repeated clean. **M3.4.5,
-the first CP power-on, failed** (2026-10-13): the BOOT image went out but
-the s51xx probe found no memory window for the doorbell, cbd retried 15
-times in 80 s, 9 recovered UFS handler passes; NV unchanged (M3.5). Fixed
-offline on `omandroid-modem` (`1fc15c4a6`..`7d9c1c3a4`) and in
-`omandroid-modem` 0.1.2 (cbd stops after one failed attempt): see "M3.4.5,
-first run" and the M3.4.5b retry runbook. **Every modem power-off is
-followed by one recovered UFS error-handler pass**, so the modem stays on
-once up (M2.6). New offline (2026-10-13): the stack that runs on the phone
-from M3.4 on is packaged (`omandroid-modem` 0.1.1, `omandroid-modem-sit`
-0.2.0, a port of a SIT stack that registered, called, texted and carried
-data on this phone model: section 6), with a gated runbook for M3.4 (first
-CP boot) and M4 (registration, SMS, data, voice) below. Next on the phone:
-M3.4, held for the human. Section 6.3 lists what our CPIF port still lacks
-for data and suspend.
+Status (2026-10-13): **the modem boots to ONLINE (M3.4.5b passed, M3.4.6
+passed)** on int `a0a2d81c1` (7.3.0-rc6-omandroid-push1-00419-ga0a2d81c16c6)
+with `omandroid-modem` 0.1.2/0.1.3: one power-on, the doorbell found in the
+assigned BAR0, CP ONLINE about 8 s after POWER_ON, ten minutes ONLINE with
+no link faults and no UFS handler pass, NV unchanged (M3.5). The main link
+trains at Gen1 x2, not Gen3 x2 (open item, section 6.2). Earlier: M0, M2.5,
+M3.1, M3.3-B, M3.4.0-M3.4.4 passed; the first M3.4.5 run failed on the
+s51xx probe (no memory window; see "M3.4.5, first run"). **Every modem
+power-off is followed by one recovered UFS error-handler pass**, so the
+modem stays on once up (M2.6). Next on the phone: M4 (registration, SMS,
+data, voice), held for the human. Section 6.3 lists what our CPIF port
+still lacks for data and suspend.
 Kernel branch `omandroid-modem` in `~/android/mainline/wt-modem` (head
 `7d9c1c3a4`, section 6.3 and M3.4.5b), build in `~/android/mainline/out-modem` (last
 full build `7.3.0-rc6-omandroid-push1-00363-g7d9c1c3a4465`, W=1 clean on
@@ -1375,6 +1369,31 @@ tools/phone-ssh 'systemctl stop x-modem-deadman.timer'     # only once ONLINE wa
 #   without modem-cpif-test
 # 5. M3.5 (read-only), then M3.4.6 if ONLINE
 ```
+
+**M3.4.5b result (2026-10-13, int `a0a2d81c1`, 7.3.0-rc6-omandroid-push1-00419-ga0a2d81c16c6,
+`omandroid-modem` 0.1.2): passed.**
+
+- Step 0: the six partitions matched the backup; all ro=1, unmounted.
+- Step 3: "state: cp -, phy 0/0, link 0, atu 0", preconditions met.
+- Step 4: one IOCTL_POWER_ON. "link up: Gen1 x1 (target Gen1), try 1";
+  root port class 0x060400, modem 144d:a5a5 class 0xff0000; BAR0 assigned
+  (CPU 0x40000000, bus 0x14e00000, reads 0x14e00004); doorbell "+ 0x60000;
+  pci_db_addr 0x14e60000". cbd: "Complete normal bootup", "Boot up process
+  done"; rfsd's ModemStateMonitor saw ONLINE; journal "CP ONLINE (cbd exit
+  0)" about 8 s after the unit started. Marker gone, faults 0x0, ctrl irq
+  on, "capability part:0 AP:0x00000002". UFS handler passes: 0.
+- Not as expected, recorded: the PCI core still printed "removing 2.5GT/s
+  downstream link speed restriction" once at the first scan (harmless this
+  time), and the main link trained at **Gen1 x2 (target Gen3), try 3**
+  rather than Gen3 x2.
+- M3.5: no change. M3.4.6 (10 min): ONLINE, 0 link down or completion
+  timeouts, 0 UFS handler passes, no crash file, faults 0x0.
+- Side effect found: the chroot's loop devices (RAM copies of efs,
+  efs_backup, modem_userdata, modem_a) were seen by udisks, and the user
+  session's automounter (udiskie) asked polkit to mount each one, which
+  showed administrator password prompts on the screen. `omandroid-modem`
+  0.1.3 marks loop devices backed by `/run/omandroid-vendor/*`
+  UDISKS_IGNORE; the mounts all failed, so nothing touched the copies.
 
 **M3.5 (after every M3.4 or M4 run; read-only; risk: none):** repeat the
 M3.4.0 commands into `logs/m3.4-after.sha256` and diff against
