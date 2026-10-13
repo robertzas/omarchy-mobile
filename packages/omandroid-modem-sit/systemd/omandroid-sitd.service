@@ -1,29 +1,34 @@
 # SPDX-License-Identifier: MIT
-# The SIT modem client. Not enabled by the package: the modem has to be
-# ONLINE first (MODEM-PLAN M3.4, the vendor-chroot "modem" profile), and the
-# first runs follow the M4 runbook in device/cheetah/MODEM-CLIENT.md.
+# The SIT RIL: registers a freshly booted CP (SIM, attach APN, LTE, internet
+# bearer, IMS) and then serves calls and SMS on /run/omandroid-sit/socket.
+# Not enabled by the package: MODEM-PLAN.md M4 enables it after the gated
+# first runs. It needs the modem unit's CP ONLINE and never restarts on its
+# own: a second start-up on the same CP is not supported (reboot instead).
 [Unit]
-Description=Omandroid SIT modem client (S5300)
+Description=Omandroid SIT RIL (S5300 calls, SMS, registration)
+Requires=omandroid-modem.service
+After=omandroid-modem.service omandroid-audio.service
 ConditionPathExists=/dev/umts_ipc0
 
 [Service]
-Type=simple
-ExecStart=/usr/bin/omandroid-sitd
-Restart=on-failure
-RestartSec=5
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/omandroid-sitd --bringup
+Restart=no
+# SIM, registration and IMS can take minutes on a fresh CP.
+TimeoutStartSec=15min
+# Time to hang up a call and restore the audio routes.
+TimeoutStopSec=60
 RuntimeDirectory=omandroid-sit
-RuntimeDirectoryMode=0755
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 StateDirectory=omandroid-sit
 StateDirectoryMode=0700
-CapabilityBoundingSet=CAP_NET_ADMIN
-AmbientCapabilities=CAP_NET_ADMIN
-ProtectSystem=strict
+ProtectSystem=full
 ProtectHome=yes
 PrivateTmp=yes
-DevicePolicy=closed
-DeviceAllow=/dev/umts_ipc0 rw
 NoNewPrivileges=yes
-RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
 SystemCallArchitectures=native
 
 [Install]

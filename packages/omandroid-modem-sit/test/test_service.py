@@ -1,0 +1,121 @@
+# SPDX-License-Identifier: MIT
+import env  # noqa: F401  (paths and sys.path first)
+import json
+from pathlib import Path
+import struct
+import tempfile
+import unittest
+from unittest.mock import Mock, MagicMock, patch
+import paths
+import service as app_service
+
+class ServiceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(); self.root=Path(self.temp.name)
+        self.paths=patch.object(paths,'RUN',self.root); self.paths.start()
+        self.db=app_service.database(self.root/'db')
+        self.client=Mock(); self.client.next_indication.return_value=None
+        self.service=app_service.Service(self.client,self.db)
+        self.service.ready=Mock()
+    def tearDown(self):
+        self.db.close(); self.paths.stop(); self.temp.cleanup()
+    def test_send_idempotency_after_success_and_unknown_response(self):
+        for i,reply in enumerate((bytes(253),TimeoutError())):
+            self.client.request.side_effect=[bytes([1])+bytes(12),reply]
+            req=dict(request_id=str(i)*32,number='+12025550123',text='Hello €')
+            result=self.service.send_sms(req)
+            self.assertEqual(result['state'],'sent' if i==0 else 'unknown')
+            before=self.client.request.call_count
+            repeated=self.service.send_sms(req)
+            self.assertEqual(repeated['state'],result['state'])
+            self.assertEqual(self.client.request.call_count,before)
+    def test_wap_push_parts_join_into_data(self):
+        inbox=self.root/'inbox'; inbox.mkdir()
+        pieces=[bytes(range(0,100)),bytes(range(100,160))]
+        for seq,piece in enumerate(pieces,1):
+            ud=bytes.fromhex('0b05040b8423f000030902')+bytes([seq])+piece
+            tpdu=bytes.fromhex('440b912120550521f3000462909221436500')+bytes([len(ud)])+ud
+            data=bytes.fromhex('07912120550521f3')+tpdu
+            path=inbox/f'{seq}.sit'
+            path.write_bytes(bytes(2)+struct.pack('<H',0x0d1e)+bytes(5)+bytes([len(data)])+data)
+            self.service.ingest(path)
+        listed=self.service.dispatch(dict(action='sms-list'))
+        self.assertEqual(len(listed),1)
+        self.assertEqual((listed[0]['number'],listed[0]['text'],listed[0]['data']),('+12025550123','',b''.join(pieces).hex()))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM parts').fetchone()[0],0)
+    def test_restart_does_not_retry_pending_sms(self):
+        self.db.execute('INSERT INTO outgoing VALUES (?,?,?,?,?)',('a'*32,'digest','sending','',0)); self.db.commit()
+        other=app_service.database(self.root/'db')
+        self.assertEqual(other.execute('SELECT state FROM outgoing').fetchone()[0],'unknown'); other.close()
+    def test_ring_does_not_autoanswer_and_release_restores_audio(self):
+        n=b'+12025550123'; body=struct.pack('<HBH',1,7,len(n))+n
+        packet=struct.pack('<BBHHH',2,0,0x0d01,8+len(body),0)+body
+        self.service.event(packet)
+        self.client.request.assert_not_called()
+        call=self.service.live()[0]
+        self.assertEqual(call['state'],'ringing-in')
+        audio=MagicMock(); self.service.audio=audio
+        body=struct.pack('<HBBBBBBB',1,7,6,0,0,0,16,0)+bytes(2)
+        self.service.event(struct.pack('<BBHHH',2,0,0x0d04,8+len(body),0)+body)
+        audio.__exit__.assert_called_once()
+        self.assertFalse(self.service.live())
+
+    def test_keypad_only_targets_an_active_owned_call(self):
+        call=self.service.new_call('+12025550123','outgoing','active',7)
+        self.service.dispatch(dict(action='dtmf',id=call['id'],keys='5#'))
+        self.assertEqual([c.args for c in self.client.request.call_args_list],[(0x0d0a,bytes([7,0,53])),(0x0d0a,bytes([7,0,35]))])
+        call['state']='terminated'
+        with self.assertRaises(RuntimeError): self.service.dispatch(dict(action='dtmf',id=call['id'],keys='5'))
+
+    def test_screen_state_blocks_sleep_during_calls_and_only_caches_success(self):
+        self.client.request.side_effect=TimeoutError()
+        with self.assertRaises(TimeoutError):
+            self.service.dispatch(dict(action='screen-state',on=False))
+        self.assertIsNone(self.service.screen_on)
+        self.client.request.side_effect=None
+        self.service.dispatch(dict(action='screen-state',on=False))
+        self.assertEqual([c.args for c in self.client.request.call_args_list[-2:]],
+                         [(0x0902,bytes(4)),(0x0928,bytes(4))])
+        count=self.client.request.call_count
+        self.service.dispatch(dict(action='screen-state',on=False))
+        self.assertEqual(count,self.client.request.call_count)
+        self.service.new_call('+12025550123','incoming','ringing-in',7)
+        with self.assertRaises(RuntimeError):
+            self.service.dispatch(dict(action='screen-state',on=False))
+        self.service.dispatch(dict(action='screen-state',on=True))
+        self.assertEqual([c.args for c in self.client.request.call_args_list[-2:]],
+                         [(0x0902,b'\x01\0\0\0'),(0x0928,b'\xff'*4)])
+        with self.assertRaises(ValueError):
+            self.service.dispatch(dict(action='screen-state',on=2))
+
+    def test_failed_filter_does_not_hide_partial_screen_change(self):
+        self.service.screen_on=True
+        self.client.request.side_effect=[b'',TimeoutError()]
+        with self.assertRaises(TimeoutError):
+            self.service.dispatch(dict(action='screen-state',on=False))
+        self.assertIsNone(self.service.screen_on)
+        self.client.request.side_effect=None
+        self.service.dispatch(dict(action='screen-state',on=True))
+        self.assertTrue(self.service.screen_on)
+        self.client.request.assert_called_with(0x0928,b'\xff'*4,timeout=5)
+
+    def test_public_state_has_no_numbers(self):
+        self.service.new_call('+12025550123','incoming','ringing-in',7)
+        state=json.loads((self.root/'state.json').read_text())
+        self.assertNotIn('2025550123',json.dumps(state))
+        self.assertEqual(state['calls'],[dict(state='ringing-in',direction='incoming')])
+        self.assertEqual((self.root/'state.json').stat().st_mode&0o777,0o644)
+
+    def test_operator_name_is_display_only_and_defensive(self):
+        payload=bytearray(0x77-12); payload[:6]=b'00101#'; payload[6:10]=b'Test'
+        self.assertEqual(app_service.operator_name(bytes(payload)),dict(plmn='00101',name='Test'))
+        self.assertEqual(app_service.operator_name(bytes(8)),dict(plmn='',name=''))
+
+    def test_unconfirmed_release_stops_the_modem(self):
+        call=self.service.new_call('+12025550123','outgoing','active',7)
+        with patch.object(app_service.cp,'stop_modem') as stop:
+            self.service.dispatch(dict(action='hangup',id=call['id']))
+            stop.assert_not_called()
+            self.service.hangup_deadline=0.001
+            with self.assertRaises(RuntimeError): self.service.pump()
+            stop.assert_called_once()

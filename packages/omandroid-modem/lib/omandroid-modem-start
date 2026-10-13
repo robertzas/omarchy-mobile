@@ -1,0 +1,48 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omandroid-modem-start: load the modem's kernel modules, then run the modem
+# vendor-chroot profile (rfsd, then a one-shot cbd) in the foreground for
+# omandroid-modem.service. device/cheetah/MODEM-PLAN.md M3.4.
+#
+# Hang marker, as omandroid-gnss-start: written and synced before the modules
+# load, removed by the profile's watcher once the CP is ONLINE. If the phone
+# hung or reset in between, the next boot finds the marker and skips the
+# modem until someone runs this with --retry (or removes the marker). An end
+# after ONLINE (a CP crash, about one warm start in twenty on this phone
+# while registering) leaves no marker: the next boot starts it again.
+set -euo pipefail
+
+MARK=/var/lib/omandroid/modem-bringup-started
+LIB=/usr/lib/omandroid-vendor
+say() { printf 'omandroid-modem: %s\n' "$*" >&2; }
+
+if [[ ${1:-} == --retry ]]; then
+  rm -f "$MARK"
+elif [[ -e $MARK ]]; then
+  say "the last bring-up ($(cat "$MARK")) never reached ONLINE; skipping the modem (omandroid-modem-start --retry)"
+  exit 1
+fi
+
+# The link driver must allow hardware access, or cbd's power-on is refused
+# (-EPERM). allow_hw is fixed at load time: a copy loaded without it (by
+# hand, M3.3-B) needs a reboot.
+if [[ -d /sys/module/pcie_gs201_cp ]]; then
+  [[ $(cat /sys/module/pcie_gs201_cp/parameters/allow_hw) == Y ]] ||
+    { say "pcie_gs201_cp is loaded without allow_hw=1: reboot first"; exit 1; }
+fi
+# CPIF and the regions are blacklisted (omandroid-device-cheetah): only this
+# loads them. Never unload cpif (it is permanent by design).
+modprobe pcie-gs201-cp allow_hw=1
+modprobe shm_ipc
+modprobe cpif
+# The link to the modem with ASPM off, as every link test so far ran
+# (M3.1); the endpoint's own L1 substates are never enabled (the link API's
+# l1ss control is a no-op).
+echo performance > /sys/module/pcie_aspm/parameters/policy 2>/dev/null ||
+  say "cannot set the ASPM policy (continuing)"
+
+"$LIB/omandroid-vendor-chroot" modem check
+mkdir -p "$(dirname "$MARK")"
+printf '%s boot %s\n' "$(date -Is)" "$(cat /proc/sys/kernel/random/boot_id)" > "$MARK"
+sync
+OMANDROID_MODEM_MARK=$MARK exec "$LIB/omandroid-vendor-chroot" modem start

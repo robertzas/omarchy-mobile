@@ -1,126 +1,148 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""omandroid-sit: talk to omandroid-sitd over its control socket.
+"""omandroid-sit: calls, SMS and status through omandroid-sitd's socket.
 
-  omandroid-sit status [--json]      the modem's state (no identifiers)
-  omandroid-sit watch                state as JSON lines, one per change
-  omandroid-sit data on|off          the mobile data switch
-  omandroid-sit radio on|off
-  omandroid-sit sms send NUMBER TEXT send one SMS (only ever on this request)
-  omandroid-sit sms list | sms delete ID
-  omandroid-sit pin                  read a SIM PIN from the terminal (needs
-                                     omandroid-sitd --allow-pin; refused with
-                                     one try left)
+  omandroid-sit status [--json]        registration, IMS voice/SMS, data, calls
+  omandroid-sit watch                  the public status, one JSON line per change
+  omandroid-sit dial NUMBER            an IMS voice call (international form)
+  omandroid-sit answer [ID]            the ringing call (or call ID)
+  omandroid-sit hangup [ID]            the current call (or call ID)
+  omandroid-sit dtmf KEYS [ID]         touch tones in the active call
+  omandroid-sit mute on|off            the microphone during a call
+  omandroid-sit sms send NUMBER TEXT   one SMS (several parts if needed)
+  omandroid-sit sms list [--json]      received, not yet deleted
+  omandroid-sit sms delete ID
+  omandroid-sit data on|off            the cellular fallback route (rmnet0)
+  omandroid-sit radio on|off           AT+CFUN 1/0 (registration and bearers go
+                                       with "off"; a restart needs a reboot)
+
+Root and members of the [control] group (/etc/omandroid/modem-sit.conf,
+default wheel) may use it; "watch" and "status --json" fall back to the
+world-readable /run/omandroid-sit/state.json.
 """
-import getpass
 import json
 import os
 import socket
+import subprocess
 import sys
+import time
+import uuid
 
-RUN = os.environ.get("OMANDROID_SIT_RUN", "/run/omandroid-sit")
+RUN = os.environ.get('OMANDROID_SIT_RUN', '/run/omandroid-sit')
 
 
-def connect():
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+def request(action, timeout=25, **args):
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(timeout)
+        client.connect(os.path.join(RUN, 'socket'))
+        client.sendall(json.dumps(dict(action=action, **args)).encode() + b'\n')
+        data = b''
+        while b'\n' not in data:
+            chunk = client.recv(65536)
+            if not chunk:
+                raise RuntimeError('omandroid-sitd disconnected')
+            data += chunk
+    reply = json.loads(data)
+    if not reply.get('ok'):
+        raise RuntimeError(reply.get('error') or 'request failed')
+    return reply['result']
+
+
+def public_state():
     try:
-        s.connect(os.path.join(RUN, "control"))
-    except OSError:
+        with open(os.path.join(RUN, 'state.json')) as f:
+            return json.load(f)
+    except (OSError, ValueError):
         return None
-    return s
 
 
-def call(req, timeout=60):
-    s = connect()
-    if s is None:
-        return {"ok": False, "error": "omandroid-sitd is not running"}
-    s.settimeout(timeout)
-    s.sendall((json.dumps(req) + "\n").encode())
-    buf = b""
-    while not buf.endswith(b"\n"):
-        chunk = s.recv(65536)
-        if not chunk:
-            break
-        buf += chunk
-    s.close()
-    return json.loads(buf) if buf else {"ok": False, "error": "no reply"}
+def live_call(state, wanted=('ringing-in', 'waiting', 'active', 'dialing', 'ringing-out', 'held')):
+    for call in state['calls']:
+        if call['state'] in wanted:
+            return call['id']
+    raise RuntimeError('no such call')
 
 
-def summary(st):
-    if not st:
-        return "No modem"
-    data, reg = st.get("data", {}), st.get("data_reg", {})
-    op = st.get("operator", {})
-    lines = [
-        "daemon: %s, CP: %s, radio: %s" % (st.get("daemon"), st.get("cp"), st.get("radio")),
-        "SIM: %s%s" % (st["sim"].get("state"), " (PIN1 tries left: %s)" % st["sim"]["pin1_retries"]
-                       if "pin1_retries" in st["sim"] else ""),
-        "voice: %s %s; data: %s %s" % (st["voice"].get("reg"), st["voice"].get("rat"),
-                                         reg.get("reg"), reg.get("rat")),
-        "operator: %s" % ((op.get("long") or op.get("short") or "-") + (" (%s)" % op["plmn"] if op.get("plmn") else "")),
-        "mobile data: %s, %s%s" % ("on" if data.get("enabled") else "off", data.get("state"),
-                                   " on %s" % data["iface"] if data.get("iface") else "")
-        + (" (%s)" % data["error"] if data.get("error") else ""),
-        "SMS received: %s" % st.get("sms", {}).get("received", 0),
-    ]
-    return "\n".join(lines)
+def show(status):
+    m = status['modem']
+    print(f"stage: {m.get('stage')}")
+    print(f"network: {m.get('registration')} {m.get('tech')} {m.get('operator')}".rstrip())
+    print(f"IMS voice: {'yes' if m.get('voice') else 'no'}, SMS: {'yes' if m.get('sms') else 'no'}, "
+          f"data bearer: {'up' if m.get('data') else 'down'}")
+    for call in status.get('calls', []):
+        print(f"call {call.get('id', '')}: {call['direction']} {call['state']}")
 
 
 def main(argv):
-    if not argv or argv[0] in ("-h", "--help"):
-        print(__doc__.strip())
+    if not argv or argv[0] in ('-h', '--help'):
+        print(__doc__)
         return 0
     cmd, rest = argv[0], argv[1:]
-    if cmd == "status":
-        r = call({"cmd": "status"}, timeout=5)
-        st = r.get("state") if r.get("ok") else None
-        if st is None:
-            # the daemon is down: fall back to the last published state
+    try:
+        if cmd == 'status':
             try:
-                with open(os.path.join(RUN, "state.json")) as f:
-                    st = json.load(f)
-                if st.get("daemon") != "stopped":
-                    st["daemon"] = "not responding"
-            except (OSError, ValueError):
-                st = None
-        if "--json" in rest:
-            print(json.dumps(st or {"daemon": "absent"}))
-        else:
-            print(summary(st))
-        return 0 if st else 1
-    if cmd == "watch":
-        s = connect()
-        if s is None:
-            print("omandroid-sitd is not running", file=sys.stderr)
-            return 1
-        s.sendall(b'{"cmd": "watch"}\n')
-        f = s.makefile("r")
-        for line in f:
-            print(line, end="", flush=True)
-        return 0
-    if cmd in ("data", "radio") and rest and rest[0] in ("on", "off"):
-        on = rest[0] == "on"
-        r = call({"cmd": "data", "enable": on} if cmd == "data" else {"cmd": "radio", "on": on})
-    elif cmd == "sms" and rest[:1] == ["send"] and len(rest) == 3:
-        r = call({"cmd": "sms-send", "to": rest[1], "text": rest[2]})
-    elif cmd == "sms" and rest[:1] == ["list"]:
-        r = call({"cmd": "sms-list"})
-        if r.get("ok"):
-            for m in r["messages"]:
-                print("%s  %s  %s\n  %s" % (m["id"], m.get("sent") or m.get("received"), m["from"], m["text"]))
+                status = request('status')
+            except (OSError, RuntimeError):
+                status = public_state()
+                if status is None:
+                    print(json.dumps({'daemon': 'absent'}) if '--json' in rest else 'omandroid-sitd is not running')
+                    return 1
+            if '--json' in rest:
+                print(json.dumps(status))
+            else:
+                show(status)
             return 0
-    elif cmd == "sms" and rest[:1] == ["delete"] and len(rest) == 2:
-        r = call({"cmd": "sms-delete", "id": rest[1]})
-    elif cmd == "pin":
-        r = call({"cmd": "pin", "pin": getpass.getpass("SIM PIN: ")})
-    else:
-        print(__doc__.strip(), file=sys.stderr)
-        return 2
-    if not r.get("ok"):
-        print("omandroid-sit: %s" % r.get("error"), file=sys.stderr)
+        if cmd == 'watch':
+            last = None
+            while True:
+                state = public_state() or {'daemon': 'absent'}
+                compare = {k: v for k, v in state.items() if k != 'updated'}
+                if compare != last:
+                    print(json.dumps(state), flush=True)
+                    last = compare
+                time.sleep(1)
+        if cmd == 'dial' and len(rest) == 1:
+            print(request('dial', number=rest[0])['call'])
+            return 0
+        if cmd in ('answer', 'hangup') and len(rest) <= 1:
+            ident = rest[0] if rest else live_call(request('status'), ('ringing-in', 'waiting') if cmd == 'answer'
+                                                     else ('ringing-in', 'waiting', 'active', 'dialing', 'ringing-out', 'held'))
+            request('accept' if cmd == 'answer' else 'hangup', id=ident)
+            return 0
+        if cmd == 'dtmf' and 1 <= len(rest) <= 2:
+            ident = rest[1] if len(rest) == 2 else live_call(request('status'), ('active',))
+            request('dtmf', id=ident, keys=rest[0])
+            return 0
+        if cmd == 'mute' and rest in (['on'], ['off']):
+            request('audio', what='mute', value=rest[0])
+            return 0
+        if cmd == 'sms' and rest[:1] == ['send'] and len(rest) == 3:
+            key = uuid.uuid4().hex
+            result = request('sms-send', timeout=300, request_id=key, number=rest[1], text=rest[2])
+            print(result['state'] + (': ' + result['error'] if result.get('error') else ''))
+            return 0 if result['state'] == 'sent' else 1
+        if cmd == 'sms' and rest[:1] == ['list']:
+            messages = request('sms-list')
+            if '--json' in rest:
+                print(json.dumps(messages))
+            for m in messages if '--json' not in rest else []:
+                print(f"{m['id']}  {m['timestamp']}  {m['number']}\n  {m['text']}")
+            return 0
+        if cmd == 'sms' and rest[:1] == ['delete'] and len(rest) == 2:
+            request('sms-delete', id=rest[1])
+            return 0
+        if cmd == 'radio' and rest in (['on'], ['off']):
+            print(request('radio', timeout=60, on=rest[0] == 'on')['radio'])
+            return 0
+        if cmd == 'data' and rest in (['on'], ['off']):
+            verb = 'start' if rest[0] == 'on' else 'stop'
+            return subprocess.run(['systemctl', verb, 'omandroid-sit-data.service']).returncode
+    except (OSError, RuntimeError, ValueError) as error:
+        print('omandroid-sit:', error, file=sys.stderr)
         return 1
-    return 0
+    print(__doc__, file=sys.stderr)
+    return 2
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     sys.exit(main(sys.argv[1:]))

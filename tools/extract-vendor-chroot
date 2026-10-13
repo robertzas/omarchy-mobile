@@ -13,9 +13,11 @@
 #          configuration, servicemanager (gpsd links libbinder_ndk) and the
 #          system CA store (SUPL over TLS). device/cheetah/GNSS-PLAN.md.
 #   modem  Samsung's cbd (modem boot) and rfsd (NV file service) with their
-#          init and fstab files, for reference. No binder, no system
-#          binaries. The modem firmware and NV are not in it: they are read
-#          on the phone, into RAM, at start. device/cheetah/MODEM-PLAN.md M3.
+#          init and fstab files, for reference, plus the shell and toybox
+#          (cbd runs tar and a few file commands through the shell while it
+#          boots the modem). No binder. The modem firmware and NV are not in
+#          it: they are read on the phone, into RAM, at start.
+#          device/cheetah/MODEM-PLAN.md M3.
 #  waves  Waves' speaker tuning host libraries (libmahalcontroller.so and
 #          the coefficient converter libAlgFx_HiFi3z.so) with their preset
 #          and config files, for omandroid-waves-host. Libraries only: no
@@ -65,7 +67,7 @@ profile_lists() {
       VENDOR_BINS=(bin/cbd bin/rfsd)
       VENDOR_FILES=(etc/init/cbd.rc etc/init/rfsd.rc etc/fstab.modem build.prop)
       VENDOR_DIRS=()
-      SYSTEM_BINS=()
+      SYSTEM_BINS=(system/bin/sh system/bin/toybox)
       SYSTEM_FILES=(system/build.prop)
       SYSTEM_DIRS=()
       ;;
@@ -354,6 +356,20 @@ ln -sfn /apex/com.android.runtime/bin/linker64 "$root/system/bin/linker64"
 # the same linker as everything else, and with it the same bionic.
 mkdir -p "$root/system/bin/bootstrap"
 ln -sfn /apex/com.android.runtime/bin/linker64 "$root/system/bin/bootstrap/linker64"
+# The modem profile: the toybox commands cbd runs, as Android links them,
+# and tar under /vendor/bin too. A shell that is itself a symlink (to mksh)
+# brings its target.
+if [[ $PROFILE == modem ]]; then
+  if [[ -L "$root/system/bin/sh" ]]; then
+    t=$(readlink "$root/system/bin/sh")
+    [[ $t == */* ]] || put "$WORK/s/system/bin/$t" "system/bin/$t"
+  fi
+  for n in tar timeout gunzip mkdir chmod rm cp mv; do
+    [[ -e "$root/system/bin/$n" ]] || ln -s toybox "$root/system/bin/$n"
+  done
+  mkdir -p "$root/vendor/bin"
+  ln -sfn /system/bin/toybox "$root/vendor/bin/tar"
+fi
 for key in "${!PICKED[@]}"; do
   dst=${PICKED[$key]}
   [[ $dst == stub ]] && continue

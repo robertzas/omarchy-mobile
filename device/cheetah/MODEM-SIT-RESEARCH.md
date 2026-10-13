@@ -10,9 +10,15 @@ the stock CP2A vendor libraries from the human's own factory image. No
 decompiled code or disassembly is reproduced here: layouts are given as field
 tables in our own words, with the function that shows them.
 
-The client built from this spec is `packages/omandroid-modem-sit`
-(`omandroid-sitd`, tested against `tools/sit-sim`); its design, the
-front-end choice and the M4 runbook are in [MODEM-CLIENT.md](MODEM-CLIENT.md).
+**2026-10-13:** the client we ship is no longer the one built from this
+spec: `packages/omandroid-modem-sit` 0.2.0 is a port of a SIT stack that
+registered, called, texted and carried data on this phone model, and its
+hardware-tested layouts win where they differ from the tables below (the
+data call is the 983-byte version-2 request, SET_INITIAL_ATTACH_APN is
+essential, the start-up order needs IMS for SMS and voice).
+[MODEM-CLIENT.md](MODEM-CLIENT.md) describes it; the M4 runbook is in
+[MODEM-PLAN.md](MODEM-PLAN.md). The message names, the transport facts and
+the do-not-send list here are still used.
 
 Inputs (never committed; outside the repo):
 
@@ -375,12 +381,11 @@ place for a new binary protocol without either a new port type in its core
 or a shim daemon that speaks one of those three: 3-4 weeks. That keeps
 MODEM-PLAN's estimate (3-6 weeks to data and SMS, then the front end).
 
-**Built offline (2026-10-12):** steps 1-11 above, with the do-not-send list
-enforced behind an allow-list, are `omandroid-sitd` in
-`packages/omandroid-modem-sit`, tested against the scripted modem
-`tools/sit-sim`. The v11 data call item and the signal layout (open
-questions 2 and 3) are refused rather than guessed. See
-[MODEM-CLIENT.md](MODEM-CLIENT.md).
+**Built offline (2026-10-12), replaced 2026-10-13:** steps 1-11 above
+were `omandroid-sitd` 0.1. Version 0.2.0 replaces it with the
+hardware-tested sequence (MODEM-CLIENT.md 1.1); the do-not-send list is
+still enforced behind its allow-list, and `tools/sit-sim` now speaks the
+0.2 layouts.
 
 ---
 

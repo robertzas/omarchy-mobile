@@ -3,11 +3,11 @@
 pkgname=omandroid-modem-sit
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omandroid SIT modem client for the Pixel 7 Pro's S5300: registration, mobile data on rmnet, SMS"
+pkgdesc="Omandroid SIT RIL for the Pixel 7 Pro's S5300: LTE registration, IMS calls and SMS, cellular data on rmnet0"
 arch=(aarch64)
 url="https://github.com/derekross/omandroid"
 license=(MIT)
-depends=(python iproute2 systemd)
+depends=(python iproute2 iputils systemd alsa-lib alsa-utils omandroid-modem)
 backup=(etc/omandroid/modem-sit.conf)
 install=omandroid-modem-sit.install
 

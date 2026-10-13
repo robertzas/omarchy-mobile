@@ -1,0 +1,658 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""omandroid-sitd: the single owner of the S5300's SIT channel (umts_ipc0).
+
+Starts on a CP that the modem unit (omandroid-modem.service) has brought
+ONLINE; --bringup registers it first (bringup.py). Then it serves calls, SMS
+and status on a Unix socket, /run/omandroid-sit/socket: one JSON request per
+line, one JSON reply per line. Root and members of [control] group may use
+it. No radio, NV, SIM or raw-request command is exposed.
+
+  {"action": "status"}                      modem, calls, audio
+  {"action": "dial", "number": "+1..."}     an IMS voice call
+  {"action": "accept"|"hangup"|"delete-call", "id": "..."}
+  {"action": "dtmf", "id": "...", "keys": "12#"}
+  {"action": "audio", "what": "mute", "value": "on"|"off"}
+  {"action": "sms-send", "request_id": <32 hex>, "number": "...", "text": "..."}
+  {"action": "sms-status", "request_id": ...} | {"action": "sms-list"}
+  {"action": "sms-delete", "id": "..."}
+  {"action": "screen-state", "on": true|false}
+  {"action": "radio", "on": true|false}      AT+CFUN, the rollback short of a reboot
+
+/run/omandroid-sit/state.json (0644) is the same status without numbers,
+for pollers such as the shell's quick settings.
+"""
+import argparse
+import grp
+import hashlib
+import json
+import os
+import re
+import signal
+import socket
+import sqlite3
+import struct
+import time
+
+import cp
+import paths
+from at import radio
+from calls import call_status, dial_payload, ring
+from data_call import paths as bearer_paths
+from ims import REGISTRATION, record_registration
+from inbox import persist_sms
+from sit import Sit, ModemError
+from sms_codec import submit, received_pdu, number
+from voice_audio import VoiceAudio, aoc_card
+
+STATES = {0: 'active', 1: 'held', 2: 'dialing', 3: 'ringing-out', 4: 'ringing-in', 5: 'waiting',
+          6: 'terminated', 7: 'held', 8: 'active'}
+RATS = {0: '', 1: 'GPRS', 2: 'EDGE', 3: 'UMTS', 9: 'HSDPA', 10: 'HSUPA', 11: 'HSPA',
+        14: 'LTE', 15: 'HSPA+', 16: 'GSM', 20: 'LTE-CA', 21: 'NR', 22: 'NR'}
+SOCKET = paths.RUN / 'socket'
+
+
+def database(path):
+    db = sqlite3.connect(path)
+    db.row_factory = sqlite3.Row
+    db.execute('PRAGMA journal_mode=WAL')
+    db.execute('PRAGMA synchronous=FULL')
+    db.executescript('''
+      CREATE TABLE IF NOT EXISTS received (id TEXT PRIMARY KEY, number TEXT, text TEXT, timestamp TEXT, consumed INTEGER DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS imported (id TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS parts (id TEXT PRIMARY KEY, sender TEXT, reference INTEGER, total INTEGER, seq INTEGER, text TEXT, timestamp TEXT, received REAL);
+      CREATE TABLE IF NOT EXISTS outgoing (id TEXT PRIMARY KEY, digest TEXT, state TEXT, error TEXT, completed INTEGER DEFAULT 0);
+    ''')
+    # WAP pushes (MMS notifications) keep their bytes, as hex.
+    for table in ('received', 'parts'):
+        if 'data' not in {c[1] for c in db.execute(f'PRAGMA table_info({table})')}:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN data TEXT NOT NULL DEFAULT ''")
+    # A request interrupted by a process restart must never be retried blindly.
+    db.execute("UPDATE outgoing SET state='unknown', error='Delivery uncertain after service restart; check with the recipient' WHERE state='sending'")
+    db.commit()
+    return db
+
+
+def operator_name(payload):
+    """GET_OPERATOR, best effort for display only (layout from the research
+    note, not yet seen on hardware): PLMN digits, then short and long names."""
+    plmn = payload[0:6].decode('ascii', 'replace').replace('#', '').strip('\0')
+    names = [payload[a:b].split(b'\0', 1)[0].decode('utf-8', 'replace').strip()
+             for a, b in ((6, 38), (38, 102))]
+    good = [n for n in names if n and n.isprintable()]
+    return dict(plmn=plmn if plmn.isdigit() else '', name=good[0] if good else '')
+
+
+class Service:
+    def __init__(self, client, db, settings=None):
+        self.client = client
+        self.db = db
+        self.settings = settings or paths.config()
+        self.calls = {}
+        self.audio = None
+        self.muted = False
+        self.pending = None
+        self.hangup_deadline = None
+        self.screen_on = None
+        self.indication_counts = {}
+        self.net = dict(reg='unknown', rat='', operator='', plmn='')
+        self.current_stage = 'starting'
+        self.next_poll = 0
+        self.published = None
+
+    def stage(self, name):
+        self.current_stage = name
+        self.publish()
+
+    def registration(self):
+        try:
+            return json.loads(REGISTRATION.read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def ready(self, feature):
+        reg = self.registration()
+        if reg.get('state') != 2 or not reg.get('features', 0) & feature:
+            raise RuntimeError('Cellular service is not registered yet')
+
+    def audio_start(self):
+        if self.audio is None:
+            audio = self.settings['audio']
+            card = aoc_card(audio.get('card', 'auto'))
+            if card is None:
+                print('Call audio routing is off ([audio] card = none)', flush=True)
+                return
+            self.audio = VoiceAudio(mic_boost_db=audio.getint('mic_boost_db', 6), card=card)
+            try:
+                self.audio.__enter__()
+            except BaseException:
+                self.audio = None
+                raise
+            self.muted = False
+
+    def audio_stop(self):
+        if self.audio is not None:
+            audio, self.audio = self.audio, None
+            audio.__exit__(None, None, None)
+        self.muted = False
+
+    def live(self):
+        return [c for c in self.calls.values() if c['state'] != 'terminated']
+
+    def save_calls(self):
+        # A restart must not silently abandon a possibly connected call.
+        path = paths.RUN / 'active.json'
+        tmp = path.with_suffix('.tmp')
+        tmp.write_text(json.dumps(self.live()))
+        tmp.replace(path)
+        self.publish()
+
+    def new_call(self, number, direction, state, modem_id=None):
+        call = dict(id=str(time.time_ns()), number=number, direction=direction, state=state,
+                    reason='', multiparty=False, modem_id=modem_id, since=time.time())
+        self.calls[call['id']] = call
+        self.save_calls()
+        return call
+
+    def ingest(self, path):
+        key = path.stem
+        if self.db.execute('SELECT 1 FROM imported WHERE id=?', (key,)).fetchone():
+            return
+        packet = path.read_bytes()
+        ident = struct.unpack_from('<H', packet, 2)[0]
+        if ident in (0x010c, 0x0d1e):
+            try:
+                sms = received_pdu(packet[10:10+packet[9]])
+            except (ValueError, IndexError, UnicodeError):
+                print('Stored SMS could not be decoded; original retained privately', flush=True)
+                return
+            concat = sms.pop('concat')
+            data = sms.pop('data').hex()
+            sms.pop('port')
+            if concat:
+                ref, total, seq = concat
+                self.db.execute('INSERT OR IGNORE INTO parts(id,sender,reference,total,seq,text,timestamp,received,data) VALUES (?,?,?,?,?,?,?,?,?)',
+                                (key, sms['number'], ref, total, seq, sms['text'], sms['timestamp'], time.time(), data))
+                parts = self.db.execute('SELECT * FROM parts WHERE sender=? AND reference=? AND total=? AND received>? ORDER BY received',
+                                        (sms['number'], ref, total, time.time()-86400)).fetchall()
+                by_seq = {p['seq']: p for p in parts}
+                if len(by_seq) == total:
+                    sms['text'] = ''.join(by_seq[i]['text'] for i in range(1, total+1))
+                    data = ''.join(by_seq[i]['data'] for i in range(1, total+1))
+                    sms['timestamp'] = by_seq[1]['timestamp']
+                    self.db.execute('INSERT OR IGNORE INTO received(id,number,text,timestamp,data) VALUES (?,?,?,?,?)',
+                                    (key, sms['number'], sms['text'], sms['timestamp'], data))
+                    self.db.execute('DELETE FROM parts WHERE sender=? AND reference=? AND total=?', (sms['number'], ref, total))
+            else:
+                self.db.execute('INSERT OR IGNORE INTO received(id,number,text,timestamp,data) VALUES (?,?,?,?,?)',
+                                (key, sms['number'], sms['text'], sms['timestamp'], data))
+        self.db.execute('INSERT OR IGNORE INTO imported VALUES (?)', (key,))
+        self.db.commit()
+
+    def event(self, packet):
+        ident = struct.unpack_from('<H', packet, 2)[0]
+        key = f'{ident:04x}'
+        self.indication_counts[key] = self.indication_counts.get(key, 0) + 1
+        if ident in (0x010c, 0x010d, 0x0d1e, 0x0d20):
+            reference = persist_sms(packet)
+            self.client.request(0x0d1d if ident >= 0x0d00 else 0x0102, struct.pack('<IBI', 1, reference, 0))
+            print('SMS stored and acknowledged', flush=True)
+            for path in paths.INBOX.glob('*.sit'):
+                self.ingest(path)
+            self.publish()
+        elif ident == 0x0d05:
+            record_registration(packet)
+            self.publish()
+        elif ident == 0x0d01:
+            if len(packet) < 13:
+                raise ValueError('Truncated incoming call')
+            found = ring(packet)
+            if found is None or found[0] != 1:
+                return
+            _, mid, caller = found
+            if any(c['modem_id'] == mid for c in self.live()):
+                return
+            # No auto-answer: a client presents the call and the user answers.
+            self.new_call(caller, 'incoming', 'ringing-in', mid)
+            print('Incoming call ringing', flush=True)
+        elif ident == 0x0d04:
+            kind, mid, state, cause = call_status(packet)
+            if kind != 1:
+                return
+            call = next((c for c in self.live() if c['modem_id'] == mid), None)
+            if call is None and self.pending:
+                call = self.calls[self.pending]
+                call['modem_id'] = mid
+                self.pending = None
+            if call is None:
+                return
+            call['state'] = STATES[state]
+            call['since'] = time.time()
+            if state == 6:
+                call['reason'] = 'terminated' if cause == 16 else 'error'
+                if not self.live():
+                    self.audio_stop()
+                    self.hangup_deadline = None
+            self.save_calls()
+
+    def poll(self):
+        """Read-only network status every 30 s (and at once after a change)."""
+        if time.monotonic() < self.next_poll:
+            return
+        self.next_poll = time.monotonic() + 30
+        try:
+            ps = self.client.request(0x0701, timeout=5)
+            if len(ps) >= 4:
+                self.net['reg'] = {0: 'not-registered', 1: 'home', 2: 'searching', 3: 'denied',
+                                   5: 'roaming'}.get(ps[0], 'unknown')
+                self.net['rat'] = RATS.get(ps[3], str(ps[3]))
+            if ps and ps[0] in (1, 5):
+                self.net.update(operator_name(self.client.request(0x0702, timeout=5)))
+        except (ModemError, TimeoutError, ValueError) as error:
+            print('Status poll failed:', type(error).__name__, flush=True)
+        self.publish()
+
+    def pump(self):
+        for _ in range(256):
+            packet = self.client.next_indication(0)
+            if packet is None:
+                break
+            self.event(packet)
+        if self.hangup_deadline and time.monotonic() > self.hangup_deadline:
+            cp.stop_modem('a call release was not confirmed')
+            raise RuntimeError('Call release was not confirmed; modem stopped')
+
+    def send_sms(self, request):
+        key = request.get('request_id', '')
+        if not isinstance(key, str) or len(key) != 32 or any(c not in '0123456789abcdef' for c in key):
+            raise ValueError('Invalid send request identifier')
+        destination = number(request['number'])
+        text = request['text']
+        pdus = submit(destination, text)
+        digest = hashlib.sha256(json.dumps([destination, text]).encode()).hexdigest()
+        prior = self.db.execute('SELECT * FROM outgoing WHERE id=?', (key,)).fetchone()
+        if prior:
+            if prior['digest'] != digest:
+                raise ValueError('Send request identifier was reused')
+            return dict(prior)
+        self.ready(2)
+        smsc = self.client.request(0x0108)
+        if len(smsc) != 13 or not 1 <= smsc[0] <= 12:
+            raise RuntimeError('Carrier SMS configuration is unavailable')
+        self.db.execute('INSERT INTO outgoing VALUES (?,?,?,?,?)', (key, digest, 'sending', '', 0))
+        self.db.commit()
+        completed = 0
+        state = 'sent'
+        error = ''
+        try:
+            for pdu in pdus:
+                payload = bytearray(260)
+                payload[:13] = smsc
+                payload[13] = len(pdu)
+                payload[14:14+len(pdu)] = pdu
+                result = self.client.request(0x0d1b, bytes(payload), timeout=90)
+                if len(result) < 253:
+                    raise TimeoutError('Unknown SMS response')
+                cause = struct.unpack_from('<I', result, 249)[0]
+                if cause:
+                    raise ModemError(cause, b'')
+                completed += 1
+                self.db.execute('UPDATE outgoing SET completed=? WHERE id=?', (completed, key))
+                self.db.commit()
+                self.pump()
+        except ModemError:
+            state = 'unknown' if completed else 'failed'
+            error = ('Some message parts were sent; check with the recipient before sending again'
+                     if completed else 'The carrier rejected this message')
+        except (OSError, RuntimeError, TimeoutError):
+            state = 'unknown'
+            error = 'Delivery uncertain; check with the recipient before sending again'
+        self.db.execute('UPDATE outgoing SET state=?,error=? WHERE id=?', (state, error, key))
+        self.db.commit()
+        return dict(state=state, error=error, completed=completed)
+
+    def status(self, *, public=False):
+        reg = self.registration()
+        voice = reg.get('state') == 2 and reg.get('features', 0) & 1 != 0
+        sms = reg.get('state') == 2 and reg.get('features', 0) & 2 != 0
+        data = bearer_paths(1)[0].exists()
+        modem = dict(present=True, stage=self.current_stage, ready=voice,
+                     state='registered' if self.net['reg'] in ('home', 'roaming') else 'searching',
+                     registration=self.net['reg'], tech=self.net['rat'],
+                     operator=self.net['operator'] or self.net['plmn'],
+                     voice=voice, sms=sms, data=data, signal=0, audio=True)
+        calls = [{k: v for k, v in c.items() if k != 'modem_id'} for c in self.calls.values()]
+        if public:
+            # No numbers in the world-readable copy.
+            calls = [dict(state=c['state'], direction=c['direction']) for c in calls]
+            unread = self.db.execute('SELECT COUNT(*) FROM received WHERE consumed=0').fetchone()[0]
+            return dict(modem=modem, calls=calls, sms=dict(unread=unread), updated=int(time.time()))
+        return dict(modem=modem, calls=calls,
+                    audio=dict(available=True, running=self.audio is not None, mute=self.muted,
+                               speaker=False, speaker_available=False, error=''))
+
+    def publish(self):
+        state = self.status(public=True)
+        compare = {k: v for k, v in state.items() if k != 'updated'}
+        if compare == self.published:
+            return
+        self.published = compare
+        path = paths.RUN / 'state.json'
+        tmp = path.with_suffix('.tmp')
+        tmp.write_text(json.dumps(state))
+        tmp.chmod(0o644)
+        tmp.replace(path)
+
+    def dispatch(self, request):
+        action = request.get('action')
+        if action == 'screen-state':
+            on = request.get('on')
+            if type(on) is not bool:
+                raise ValueError('Screen state must be boolean')
+            if not on and self.live():
+                raise RuntimeError('Call in progress')
+            if on != self.screen_on:
+                # Stock SetScreenState: SIT 0902, uint32 (off=0, on=1).
+                self.screen_on = None
+                self.client.request(0x0902, struct.pack('<I', int(on)), timeout=5)
+                # Stock unsolicited-response filter: the AOSP IndicationFilter
+                # mask in SIT 0928 (uint32). NONE suppresses optional
+                # signal/dormancy reports, not calls, SMS or significant
+                # registration/data changes. ALL restores foreground
+                # reporting. Cache only after both replies succeed.
+                self.client.request(0x0928, struct.pack('<I', 0xffffffff if on else 0), timeout=5)
+                self.screen_on = on
+            return dict(screen_on=self.screen_on)
+        if action == 'radio':
+            # The rollback for a running registration short of a reboot:
+            # AT+CFUN, as the start-up uses. Bearers and IMS go with it.
+            on = request.get('on')
+            if type(on) is not bool:
+                raise ValueError('Radio state must be boolean')
+            if not on and self.live():
+                raise RuntimeError('Call in progress')
+            radio(on)
+            self.next_poll = 0
+            return dict(radio='on' if on else 'off')
+        if action == 'power-status':
+            return dict(screen_on=self.screen_on, indications=dict(self.indication_counts))
+        if action == 'status':
+            return self.status()
+        if action == 'sms-list':
+            return [dict(id='sit:'+r['id'], number=r['number'], text=r['text'], timestamp=r['timestamp'],
+                         data=r['data'], state='received')
+                    for r in self.db.execute('SELECT * FROM received WHERE consumed=0')]
+        if action == 'sms-delete':
+            self.db.execute('UPDATE received SET consumed=1 WHERE id=?', (request['id'].removeprefix('sit:'),))
+            self.db.commit()
+            self.publish()
+            return {}
+        if action == 'sms-send':
+            return self.send_sms(request)
+        if action == 'sms-status':
+            row = self.db.execute('SELECT state,error,completed FROM outgoing WHERE id=?',
+                                  (request.get('request_id'),)).fetchone()
+            return dict(row) if row else dict(state='unknown', error='Send outcome has not been confirmed')
+        if action == 'dial':
+            self.ready(1)
+            if self.live():
+                raise RuntimeError('End the current call before placing another')
+            destination = number(request['number'], voice=True)
+            calls = self.client.request(0x0000)
+            if calls != bytes(4):
+                raise RuntimeError('The modem already has a call')
+            self.audio_start()
+            call = self.new_call(destination, 'outgoing', 'dialing')
+            self.pending = call['id']
+            try:
+                self.client.request(0x0d00, dial_payload(destination), timeout=8)
+            except ModemError:
+                call['state'] = 'terminated'
+                call['reason'] = 'error'
+                self.pending = None
+                self.audio_stop()
+                self.save_calls()
+                raise RuntimeError('The carrier rejected the call')
+            except (TimeoutError, OSError):
+                # Keep ownership and resolve queued status before any repeat.
+                self.hangup_deadline = time.monotonic() + 12
+                raise RuntimeError('Call setup is uncertain; checking the modem')
+            self.pump()
+            return dict(call=call['id'], number=destination)
+        if action in ('accept', 'hangup', 'delete-call'):
+            call = self.calls.get(str(request.get('id')))
+            if call is None:
+                raise ValueError('This call is no longer available')
+            if action == 'delete-call':
+                if call['state'] != 'terminated':
+                    raise RuntimeError('Call has not ended')
+                del self.calls[call['id']]
+                self.publish()
+                return {}
+            if call['state'] == 'terminated':
+                return {}
+            if call['modem_id'] is None:
+                raise RuntimeError('Call setup is still pending')
+            if action == 'accept':
+                if call['state'] not in ('ringing-in', 'waiting'):
+                    raise RuntimeError('Call is not ringing')
+                if len(self.live()) != 1:
+                    raise RuntimeError('Call waiting is not supported yet')
+                self.audio_start()
+                try:
+                    # Ordinary voice, audio send/receive, no video.
+                    self.client.request(0x0d02, struct.pack('<HHH', 1, 1, 0))
+                except BaseException:
+                    self.hangup_deadline = time.monotonic() + 12
+                    raise
+            else:
+                self.hangup_deadline = time.monotonic() + 12
+                self.client.request(0x0d03, bytes([call['modem_id'], 1, 0]))
+            self.pump()
+            return {}
+        if action == 'audio':
+            if self.audio is None:
+                raise RuntimeError('No call audio is running')
+            if request.get('what') == 'speaker':
+                raise RuntimeError('Speakerphone routing is not configured yet')
+            if request.get('what') != 'mute' or request.get('value') not in ('on', 'off'):
+                raise ValueError('Invalid audio command')
+            self.muted = request['value'] == 'on'
+            self.audio.mixer('cset', 'Incall Mic Mute', '1' if self.muted else '0')
+            return self.status()['audio']
+        if action == 'dtmf':
+            call = self.calls.get(str(request.get('id')))
+            keys = request.get('keys', '')
+            if call is None or call['state'] != 'active' or call['modem_id'] is None:
+                raise RuntimeError('Touch tones require an active call')
+            if not isinstance(keys, str) or not re.fullmatch(r'[0-9*#]{1,32}', keys):
+                raise ValueError('Invalid touch tones')
+            # Stock SendDtmf: call ID, one-shot type=0, ASCII digit.
+            for key in keys:
+                self.client.request(0x0d0a, bytes([call['modem_id'], 0, ord(key)]))
+            return {}
+        raise ValueError('Unsupported phone action')
+
+
+def allowed_uids(group):
+    """Root and the members of the control group (by membership or as their
+    primary group)."""
+    uids = {0, os.getuid()}
+    try:
+        entry = grp.getgrnam(group)
+    except KeyError:
+        return uids, None
+    import pwd
+    for account in pwd.getpwall():
+        if account.pw_gid == entry.gr_gid or account.pw_name in entry.gr_mem:
+            uids.add(account.pw_uid)
+    return uids, entry.gr_gid
+
+
+def notify(message):
+    """sd_notify without libsystemd."""
+    target = os.environ.get('NOTIFY_SOCKET')
+    if not target:
+        return
+    if target.startswith('@'):
+        target = '\0' + target[1:]
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+        sock.connect(target)
+        sock.sendall(message.encode())
+
+
+def serve_one(service, connection, clients):
+    connection.settimeout(2)
+    try:
+        _, uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+        if uid not in clients:
+            raise PermissionError('Phone service access denied')
+        body = b''
+        while b'\n' not in body:
+            chunk = connection.recv(4096)
+            if not chunk:
+                raise ValueError('Incomplete phone request')
+            body += chunk
+            if len(body) > 32768:
+                raise ValueError('Phone request too large')
+        result = service.dispatch(json.loads(body.split(b'\n', 1)[0]))
+        response = dict(ok=True, result=result)
+    except (ValueError, KeyError, TypeError, RuntimeError, OSError) as error:
+        # Errors from wire data must never expose raw values.
+        response = dict(ok=False, error=str(error) if isinstance(error, RuntimeError)
+                        else 'Invalid or unavailable phone request')
+    try:
+        connection.sendall(json.dumps(response).encode() + b'\n')
+    except OSError:
+        pass  # Durable send IDs prevent uncertain retries.
+
+
+def probe():
+    """Read-only first contact (MODEM-PLAN M4.1): SIM card and application
+    states, radio state, packet registration, NR mode, whether an SMSC is
+    set. No identifiers are printed; nothing is changed."""
+    client = Sit()
+    try:
+        sim = client.request(0x0200)
+        if len(sim) >= 3 and sim[2] <= 8 and len(sim) >= 3 + sim[2] * 63:
+            print('SIM card state', sim[0], 'applications',
+                  [(sim[i], sim[i + 1]) for i in range(3, 3 + sim[2] * 63, 63)], flush=True)
+        else:
+            print('SIM status layout unexpected, length', len(sim), flush=True)
+        for ident, label in ((0x0801, 'radio state'), (0x0701, 'packet registration'),
+                             (0x0749, 'NR mode'), (0x0711, 'PS service')):
+            try:
+                value = client.request(ident)
+                if ident == 0x0801 and len(value) == 4:
+                    print(label, struct.unpack('<I', value)[0], flush=True)
+                elif ident == 0x0701 and len(value) >= 4:
+                    print(label, 'state', value[0], 'reject', value[1], 'RAT', value[3], flush=True)
+                else:
+                    print(label, list(value[:4]), flush=True)
+            except (ModemError, TimeoutError) as error:
+                print(label, 'unavailable:', error, flush=True)
+        try:
+            smsc = client.request(0x0108)
+            print('SMSC present', bool(smsc and smsc[0]), flush=True)
+        except (ModemError, TimeoutError) as error:
+            print('SMSC unavailable:', error, flush=True)
+    finally:
+        client.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Omandroid SIT RIL: calls, SMS and data registration')
+    parser.add_argument('--bringup', action='store_true', help='register a freshly booted CP first')
+    parser.add_argument('--probe', action='store_true', help='read-only status queries, then exit')
+    args = parser.parse_args()
+    os.umask(0o077)
+    settings = paths.config()
+    paths.private_dir(paths.RUN)
+    paths.private_dir(paths.STATE)
+    if not cp.online():
+        raise SystemExit('CP is not ONLINE: start omandroid-modem.service first')
+    if args.probe:
+        return probe()
+    client = Sit(allow_sms=True, allow_calls=True)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    service = None
+    stopping = False
+
+    def stop(*_):
+        nonlocal stopping
+        stopping = True
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    try:
+        marker = paths.RUN / 'active.json'
+        if marker.exists() and json.loads(marker.read_text()):
+            cp.stop_modem('a call from the previous service run was never released')
+            raise RuntimeError('Previous call ownership unresolved; modem stopped')
+        service = Service(client, database(paths.STATE / 'apps.db'), settings)
+        service.publish()
+        for sms in paths.INBOX.glob('*.sit'):
+            service.ingest(sms)
+        if args.bringup:
+            from bringup import start
+            start(service, settings, lambda: stopping)
+        service.stage('running')
+        SOCKET.unlink(missing_ok=True)
+        server.bind(str(SOCKET))
+        server.listen(16)
+        server.settimeout(.1)
+        # The control group reaches the socket through the directory's group
+        # bit; the rest of /run/omandroid-sit stays root's (0600 files).
+        clients, gid = allowed_uids(settings['control'].get('group', 'wheel'))
+        if gid is not None and os.getuid() == 0:
+            os.chown(paths.RUN, 0, gid)
+            paths.RUN.chmod(0o710)
+            os.chown(SOCKET, 0, gid)
+            SOCKET.chmod(0o660)
+        notify('READY=1\nSTATUS=registered')
+        print('Calls and SMS service ready', flush=True)
+        next_cp_check = 0
+        while not stopping:
+            service.pump()
+            service.poll()
+            if time.monotonic() >= next_cp_check:
+                if not cp.online():
+                    raise RuntimeError('CP left ONLINE; the modem unit keeps its crash record')
+                next_cp_check = time.monotonic() + 2
+            # next_indication(0) drains queued packets, but a positive timeout
+            # is needed to read newly arrived device bytes.
+            packet = client.next_indication(.05)
+            if packet:
+                service.event(packet)
+            try:
+                connection, _ = server.accept()
+            except socket.timeout:
+                continue
+            with connection:
+                serve_one(service, connection, clients)
+    finally:
+        try:
+            if service and service.live():
+                for call in service.live():
+                    if call['modem_id'] is not None:
+                        try:
+                            client.request(0x0d03, bytes([call['modem_id'], 1, 0]))
+                        except (OSError, RuntimeError):
+                            pass
+                end = time.monotonic() + 8
+                while service.live() and time.monotonic() < end:
+                    packet = client.next_indication(.25)
+                    if packet:
+                        service.event(packet)
+                if service.live():
+                    cp.stop_modem('a call release was not confirmed at service stop')
+            if service:
+                service.audio_stop()
+        finally:
+            client.close()
+            server.close()
+            SOCKET.unlink(missing_ok=True)
+            (paths.RUN / 'state.json').unlink(missing_ok=True)
+
+
+if __name__ == '__main__':
+    main()

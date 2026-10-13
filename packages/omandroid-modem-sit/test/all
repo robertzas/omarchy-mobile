@@ -1,10 +1,11 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Tests for omandroid-modem-sit: the codec and guards (unit), then the daemon
-# against tools/sit-sim (first registration, a data call, SMS both ways, the
-# PIN gate, the do-not-send list). The simulator lives in the repository's
-# tools/; from a copy of this directory alone (a build on the phone) the
-# simulator tests are skipped unless SIT_SIM points at it.
+# Tests for omandroid-modem-sit: the unit tests (transport and send guards,
+# data call and IMS layouts, bearer lifecycle, SMS codec, call handling,
+# audio route cleanup, the route watch), then the whole RIL against
+# tools/sit-sim (start-up to IMS, SMS both ways, a call). The simulator lives
+# in the repository's tools/; from a copy of this directory alone (a build on
+# the phone) the simulator tests are skipped unless SIT_SIM points at it.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -12,39 +13,36 @@ pass() { printf 'ok - %s\n' "$1"; }
 export PYTHONDONTWRITEBYTECODE=1
 
 bash -n install || fail "install parses"
-for f in bin/omandroid-sitd bin/omandroid-sit lib/*.py test/*.py; do
+for f in bin/* lib/*.py test/*.py; do
   python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$f" || fail "$f parses"
 done
 pass "scripts parse"
 
-python3 -m unittest -q test/test_sit.py 2>&1 | tail -1 | grep -c '^OK' >/dev/null || {
-  python3 -m unittest test/test_sit.py; fail "unit tests"; }
-pass "codec, send guard, SMS PDUs, redaction"
-
 sim=${SIT_SIM:-../../tools/sit-sim}
-if [[ -f $sim ]]; then
-  SIT_SIM=$(realpath "$sim") python3 -W ignore::ResourceWarning -m unittest -q test/test_sim.py 2>&1 |
-    tail -1 | grep -c '^OK' >/dev/null || {
-    SIT_SIM=$(realpath "$sim") python3 -m unittest test/test_sim.py; fail "simulator tests"; }
-  pass "daemon against sit-sim: registration, data call, SMS, PIN gate"
-else
-  printf 'ok - # SKIP simulator tests: no tools/sit-sim (set SIT_SIM)\n'
-fi
+[[ -f $sim ]] && export SIT_SIM=$(realpath "$sim")
+out=$(cd test && python3 -W ignore::ResourceWarning -m unittest discover -p 'test_*.py' 2>&1) || {
+  printf '%s\n' "$out" | tail -40; fail "unit and simulator tests"; }
+pass "unit tests$([[ -n ${SIT_SIM:-} ]] && echo ', RIL against sit-sim' || echo ' (# SKIP simulator: set SIT_SIM)')"
 
 stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
 ./install "$stage"
-for f in usr/bin/omandroid-sitd usr/bin/omandroid-sit usr/lib/omandroid-sit/sit.py \
-         usr/lib/omandroid-sit/sitd.py usr/lib/omandroid-sit/sit_names.py \
-         usr/lib/systemd/system/omandroid-sitd.service etc/omandroid/modem-sit.conf \
+for f in usr/bin/omandroid-sitd usr/bin/omandroid-sit usr/bin/omandroid-sit-data \
+         usr/lib/omandroid-sit/service.py usr/lib/omandroid-sit/sit.py usr/lib/omandroid-sit/sit_names.py \
+         usr/lib/systemd/system/omandroid-sitd.service usr/lib/systemd/system/omandroid-sit-data.service \
+         usr/lib/NetworkManager/conf.d/90-omandroid-rmnet.conf etc/omandroid/modem-sit.conf \
          usr/share/licenses/omandroid-modem-sit/LICENSE; do
   [[ -e $stage/$f ]] || fail "staged $f"
 done
-# the installed launcher finds the installed library
+# the installed launchers find the installed library
 python3 "$stage/usr/bin/omandroid-sitd" --help >/dev/null || fail "the staged daemon imports its library"
+python3 "$stage/usr/bin/omandroid-sit" --help >/dev/null || fail "the staged CLI runs"
 python3 -c 'import configparser,sys; configparser.ConfigParser(interpolation=None).read(sys.argv[1])' \
   etc/omandroid/modem-sit.conf || fail "the config parses"
 if command -v systemd-analyze >/dev/null; then
-  systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/omandroid-sitd.service" 2>&1 |
-    grep -v -e 'omandroid-sitd.*not executable' -e 'No such file' -e '^$' && fail "unit verify" || true
+  for u in omandroid-sitd omandroid-sit-data; do
+    systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/$u.service" 2>&1 |
+      grep -v -e 'not executable' -e 'No such file' -e 'omandroid-modem.service' -e 'omandroid-audio.service' \
+        -e 'omandroid-sitd.service' -e '^$' && fail "$u verify" || true
+  done
 fi
-pass "staged layout, config and unit"
+pass "staged layout, config and units"

@@ -1,289 +1,186 @@
 # SPDX-License-Identifier: MIT
-"""omandroid-sitd against tools/sit-sim: first registration, a data call,
-SMS both ways, the PIN gate, and the do-not-send list. ip(8) and
-resolvectl are stand-ins that log their arguments; nothing touches the
-host's network. SIT_SIM names the simulator (test/all finds it)."""
+"""The whole RIL against tools/sit-sim: the start-up sequence to IMS, then
+SMS both ways and a call through the socket and the CLI. Needs SIT_SIM (the
+simulator's path); skipped without it."""
+import env  # noqa: F401  (paths and sys.path first)
 import json
 import os
-import socket
+from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-PKG = os.path.dirname(HERE)
-SIM = os.environ.get("SIT_SIM") or os.path.join(PKG, "..", "..", "tools", "sit-sim")
-
-TEST_IMSI = "001010000000001"
-TEST_SENDER = "15550100"
-
-FAKE = """#!/bin/sh
-echo "$*" >> "$FAKE_LOG_DIR/{name}.log"
-"""
+HERE = Path(__file__).resolve().parent
+BIN = HERE.parent / 'bin'
+SIM = os.environ.get('SIT_SIM')
+KEEP = os.environ.get('KEEP')
 
 
-@unittest.skipUnless(os.path.exists(SIM), "tools/sit-sim not found (set SIT_SIM)")
-class SimTest(unittest.TestCase):
-    sim_args = []
-    daemon_args = []
-    config = ""
-
+@unittest.skipUnless(SIM and Path(SIM).exists(), 'no simulator (set SIT_SIM)')
+class SimulatorTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="sitd-test.")
-        self.run_dir = os.path.join(self.tmp, "run")
-        self.state_dir = os.path.join(self.tmp, "state")
-        fake = os.path.join(self.tmp, "bin")
-        os.makedirs(fake)
-        for name in ("ip", "resolvectl"):
-            p = os.path.join(fake, name)
-            with open(p, "w") as f:
-                f.write(FAKE.format(name=name))
-            os.chmod(p, 0o755)
-        cfg = os.path.join(self.tmp, "modem-sit.conf")
-        with open(cfg, "w") as f:
-            f.write("[modem]\nradio_ready_timeout = 1\npoll_searching = 0.3\npoll_registered = 2\n"
-                    "request_timeout = 3\n[data]\nretry = 1\ndns = auto\n" + self.config)
-        self.sock = os.path.join(self.tmp, "sit.sock")
-        self.transcript = os.path.join(self.tmp, "transcript.jsonl")
-        self.env = dict(os.environ, PATH=fake + os.pathsep + os.environ["PATH"], FAKE_LOG_DIR=self.tmp,
-                        OMANDROID_SIT_RUN=self.run_dir, OMANDROID_SIT_STATE=self.state_dir)
-        self.sim = subprocess.Popen([sys.executable, SIM, "--listen", self.sock,
-                                     "--transcript", self.transcript, *self.sim_args])
-        for _ in range(100):
-            if os.path.exists(self.sock):
-                break
-            time.sleep(0.05)
-        self.log = open(os.path.join(self.tmp, "sitd.log"), "w")
-        self.daemon = subprocess.Popen([sys.executable, os.path.join(PKG, "bin", "omandroid-sitd"),
-                                        "--config", cfg, "--device", "unix:" + self.sock, "-v",
-                                        *self.daemon_args],
-                                       env=self.env, stderr=self.log, stdout=self.log)
+        self.dir = Path(tempfile.mkdtemp(prefix='sit-sim-'))
+        (self.dir / 'run').mkdir(mode=0o700)
+        self.env = dict(os.environ,
+                        OMANDROID_SIT_RUN=str(self.dir / 'run'),
+                        OMANDROID_SIT_STATE=str(self.dir / 'state'),
+                        OMANDROID_SIT_CONFIG=str(self.dir / 'modem-sit.conf'),
+                        OMANDROID_SIT_DEVICE='unix:' + str(self.dir / 'ipc0'),
+                        OMANDROID_SIT_ROUTER='unix:' + str(self.dir / 'router'),
+                        OMANDROID_SIT_BOOT='none', PYTHONDONTWRITEBYTECODE='1')
+        (self.dir / 'modem-sit.conf').write_text(
+            '[network]\napn = internet.example\nsim_timeout = 20\nregister_timeout = 30\n'
+            '[audio]\ncard = none\n')
+        self.transcript = self.dir / 'transcript.jsonl'
+        self.procs = []
 
     def tearDown(self):
-        self.daemon.terminate()
-        self.daemon.wait(10)
-        self.sim.terminate()
-        self.sim.wait(10)
-        self.log.close()
-        # Nothing identifying reaches the log, whatever happened above.
-        log = self.daemon_log()
-        for secret in (TEST_IMSI, TEST_SENDER, "hello from sim", "1234"):
-            self.assertNotIn(secret, log, "the daemon logged an identifier or a message")
-        violations = [e for e in self.events() if "violation" in e]
-        self.assertEqual(violations, [], "the simulator saw a request it should not")
-        if os.environ.get("KEEP"):
-            print("kept", self.tmp, file=sys.stderr)
+        for proc in reversed(self.procs):
+            if proc.poll() is None:
+                proc.send_signal(signal.SIGTERM)
+                try:
+                    proc.wait(10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+        for f in self.files:
+            f.close()
+        if KEEP:
+            print('kept', self.dir, file=sys.stderr)
         else:
-            subprocess.run(["rm", "-rf", self.tmp])
+            subprocess.run(['rm', '-rf', str(self.dir)])
 
-    # ---- helpers ---------------------------------------------------------
+    files = []
 
-    def daemon_log(self):
-        with open(os.path.join(self.tmp, "sitd.log")) as f:
-            return f.read()
+    def start(self, *sim_args, daemon=True):
+        sim_log = open(self.dir / 'sim.log', 'w')
+        daemon_log = open(self.dir / 'daemon.log', 'w')
+        self.files = [sim_log, daemon_log]
+        self.procs.append(subprocess.Popen(
+            [sys.executable, SIM, '--ipc', str(self.dir / 'ipc0'), '--router', str(self.dir / 'router'),
+             '--transcript', str(self.transcript), *sim_args], stdout=sim_log, stderr=sim_log))
+        deadline = time.monotonic() + 5
+        while not (self.dir / 'router').exists() and time.monotonic() < deadline:
+            time.sleep(.05)
+        if not daemon:
+            return
+        self.daemon = subprocess.Popen([sys.executable, str(BIN / 'omandroid-sitd'), '--bringup'],
+                                       env=self.env, stdout=daemon_log, stderr=subprocess.STDOUT)
+        self.procs.append(self.daemon)
 
-    def events(self):
-        try:
-            with open(self.transcript) as f:
-                return [json.loads(line) for line in f]
-        except FileNotFoundError:
-            return []
+    def wait_ready(self, seconds=40):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if (self.dir / 'run' / 'socket').exists():
+                return
+            if self.daemon.poll() is not None:
+                self.fail('daemon exited: ' + (self.dir / 'daemon.log').read_text())
+            time.sleep(.1)
+        self.fail('daemon not ready: ' + (self.dir / 'daemon.log').read_text())
 
-    def requests(self):
-        return [e["name"] for e in self.events() if e.get("dir") == "in"]
+    def cli(self, *args, check=True):
+        result = subprocess.run([sys.executable, str(BIN / 'omandroid-sit'), *args], env=self.env,
+                                capture_output=True, text=True, timeout=60)
+        if check and result.returncode:
+            self.fail(f'omandroid-sit {args}: {result.stdout}{result.stderr}')
+        return result.stdout
 
-    def fake_log(self, name):
-        try:
-            with open(os.path.join(self.tmp, name + ".log")) as f:
-                return f.read()
-        except FileNotFoundError:
-            return ""
+    def transcript_entries(self):
+        return [json.loads(line) for line in self.transcript.read_text().splitlines()]
 
-    def call(self, req):
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-            s.settimeout(20)
-            s.connect(os.path.join(self.run_dir, "control"))
-            s.sendall((json.dumps(req) + "\n").encode())
-            with s.makefile("r") as f:
-                return json.loads(f.readline())
+    def test_bringup_sms_and_call(self):
+        self.start('--incoming-sms')
+        self.wait_ready()
+        status = json.loads(self.cli('status', '--json'))
+        modem = status['modem']
+        self.assertEqual((modem['stage'], modem['voice'], modem['sms'], modem['data']),
+                         ('running', True, True, True))
+        # The incoming SMS arrives just after the IMS registration.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and 'hello' not in self.cli('sms', 'list'):
+            time.sleep(.2)
+        listed = json.loads(self.cli('sms', 'list', '--json'))
+        self.assertEqual([m['text'] for m in listed], ['hello'])
+        self.assertEqual(self.cli('sms', 'send', '+12025550199', 'omandroid test').strip(), 'sent')
+        self.cli('sms', 'delete', listed[0]['id'])
+        self.assertEqual(json.loads(self.cli('sms', 'list', '--json')), [])
+        call = self.cli('dial', '+12025550199').strip()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            calls = json.loads(self.cli('status', '--json'))['calls']
+            if calls and calls[0]['state'] == 'active':
+                break
+            time.sleep(.1)
+        self.assertEqual(calls[0]['id'], call)
+        self.cli('hangup')
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            calls = json.loads(self.cli('status', '--json'))['calls']
+            if calls[0]['state'] == 'terminated':
+                break
+            time.sleep(.1)
+        self.assertEqual(calls[0]['state'], 'terminated')
+        public = (self.dir / 'run' / 'state.json').read_text()
+        self.assertNotIn('2025550', public)
 
-    def cli(self, *a):
-        return subprocess.run([sys.executable, os.path.join(PKG, "bin", "omandroid-sit"), *a],
-                              env=self.env, capture_output=True, text=True, timeout=30)
+        entries = self.transcript_entries()
+        self.assertFalse([e for e in entries if 'violation' in e])
+        ids = [e['id'] for e in entries if e.get('type') == 'req']
+        # The verified order: SIM, attach APN and profile, registration, NR
+        # off, internet bearer, IMS stack, IMS bearer, ADD_PDN.
+        order = [0x0200, 0x0603, 0x0613, 0x0701, 0x0748, 0x0600, 0x0d39, 0x0600, 0x0d08]
+        positions = []
+        start = 0
+        for ident in order:
+            start = ids.index(ident, start)
+            positions.append(start)
+        self.assertEqual(positions, sorted(positions))
+        at = [e['cmd'] for e in entries if e.get('type') == 'at']
+        self.assertEqual(at, ['AT+CFUN=0', 'AT+CFUN=1'])
+        setups = [e for e in entries if e.get('event') == 'setup_data_call']
+        self.assertEqual([(s['cid'], s['apn'], s['ip']) for s in setups],
+                         [(1, 'internet.example', 3), (2, 'ims', 2)])
+        log = (self.dir / 'daemon.log').read_text()
+        for secret in ('2025550123', '2025550199', 'hello', 'omandroid test'):
+            self.assertNotIn(secret, log)
 
-    def wait(self, pred, what, timeout=15):
-        end = time.time() + timeout
-        st = None
-        while time.time() < end:
-            try:
-                st = self.call({"cmd": "status"})["state"]
-                if pred(st):
-                    return st
-            except (OSError, ValueError, KeyError):
-                pass
-            time.sleep(0.1)
-        self.fail("timed out waiting for %s; last state %s\n%s" % (what, st, self.daemon_log()))
+        self.assertEqual(self.cli('radio', 'off').strip(), 'off')
+        at = [e['cmd'] for e in self.transcript_entries() if e.get('type') == 'at']
+        self.assertEqual(at[-1], 'AT+CFUN=0')
 
+        self.daemon.send_signal(signal.SIGTERM)
+        self.assertEqual(self.daemon.wait(15), 0)
+        self.assertFalse((self.dir / 'run' / 'socket').exists())
 
-class FirstRegistration(SimTest):
-    sim_args = ["--incoming-sms"]
-    config = "enabled = yes\napn = test.apn\n"
+    def test_probe_is_read_only(self):
+        self.start(daemon=False)
+        probe = subprocess.run([sys.executable, str(BIN / 'omandroid-sitd'), '--probe'], env=self.env,
+                               capture_output=True, text=True, timeout=30)
+        self.assertEqual(probe.returncode, 0, probe.stdout + probe.stderr)
+        self.assertIn('SIM card state 1 applications [(2, 5)]', probe.stdout)
+        entries = self.transcript_entries()
+        self.assertFalse([e for e in entries if 'violation' in e or e.get('type') == 'at'])
+        self.assertEqual(sorted({e['id'] for e in entries if e.get('type') == 'req'}),
+                         [0x0108, 0x0200, 0x0701, 0x0711, 0x0749, 0x0801])
 
-    def test_registration_data_sms(self):
-        st = self.wait(lambda s: s["data_reg"]["reg"] == "home" and s["voice"]["reg"] == "home",
-                       "first registration")
-        self.assertEqual(st["sim"]["state"], "ready")
-        self.assertTrue(st["sim"]["imsi_read"])
-        self.assertNotIn(TEST_IMSI, json.dumps(st))
-        st = self.wait(lambda s: s["data"]["state"] == "connected", "the data call")
-        self.assertEqual((st["data"]["iface"], st["data"]["ipv4"], st["data"]["ipv6"]),
-                         ("rmnet0", "192.0.2.2", "2001:db8::2"))
-        self.assertEqual(st["operator"], {"plmn": "00101", "short": "Test", "long": "Test Network"})
-        self.assertEqual(st["data_reg"]["rat"], "LTE")
+    def test_rejected_bearer_ends_startup_without_ims(self):
+        self.start('--reject-setup', '36')
+        self.assertNotEqual(self.daemon.wait(40), 0)
+        ids = [e['id'] for e in self.transcript_entries() if e.get('type') == 'req']
+        self.assertIn(0x0600, ids)
+        self.assertNotIn(0x0d39, ids)
+        self.assertNotIn(0x0d08, ids)
+        self.assertFalse([e for e in self.transcript_entries() if 'violation' in e])
 
-        # the order of the start-up sequence (spec section 5)
-        req = self.requests()
-        order = ["SET_RADIO_POWER", "GET_SIM_STATUS", "GET_IMSI", "SET_INITIAL_ATTACH_APN",
-                 "SET_NTW_MODE_AUTO", "SET_PS_SERVICE", "GET_PS_REG_STATE", "SETUP_DATA_CALL"]
-        idx = [req.index(n) for n in order]
-        self.assertEqual(idx, sorted(idx), req)
-        for never in ("GET_IMEI", "GET_IMEISV", "VERIFY_SIM_PIN", "SET_MODEM_CONFIG",
-                      "SET_LOGICAL_TO_PHYSICAL_SLOT_MAPPING", "SEND_SMS"):
-            self.assertNotIn(never, req)
-        setup = [e for e in self.events() if e.get("event") == "setup_data_call"][0]
-        self.assertEqual((setup["cid"], setup["apn"], setup["pdp"], setup["auth"]), (1, "test.apn", 3, 0))
-
-        ip = self.fake_log("ip")
-        for line in ("addr flush dev rmnet0", "link set dev rmnet0 up", "addr add 192.0.2.2/32 dev rmnet0",
-                     "route replace default dev rmnet0 metric 700",
-                     "-6 addr add 2001:db8::2/64 dev rmnet0 nodad"):
-            self.assertIn(line, ip)
-        self.assertIn("dns rmnet0 192.0.2.53 2001:db8::53", self.fake_log("resolvectl"))
-
-        # incoming SMS: acked, stored, readable, not logged
-        self.wait(lambda s: s["sms"]["received"] == 1, "the incoming SMS")
-        self.assertIn("SEND_SMS_ACK", self.requests())
-        ack = [e for e in self.events() if e.get("name") == "SEND_SMS_ACK" and e.get("dir") == "in"][0]
-        self.assertEqual(bytes.fromhex(ack["hex"])[12:16], b"\x01\0\0\0")
-        r = self.call({"cmd": "sms-list"})
-        self.assertEqual([(m["from"], m["text"]) for m in r["messages"]], [("+" + TEST_SENDER, "hello from sim")])
-
-        # outgoing SMS, only on request
-        out = self.cli("sms", "send", "+15550101", "hi from omandroid")
-        self.assertEqual(out.returncode, 0, out.stderr)
-        sent = [e for e in self.events() if e.get("event") == "send_sms"]
-        self.assertEqual(len(sent), 1)
-        tpdu = bytes.fromhex(sent[0]["tpdu"])
-        self.assertEqual(tpdu[:8], bytes([0x11, 0, 8, 0x91]) + bytes.fromhex("51551010"))
-        self.assertEqual(sent[0]["smsc_len"], 1)
-
-        # the status CLI and the tile's JSON
-        out = self.cli("status")
-        self.assertIn("mobile data: on, connected on rmnet0", out.stdout)
-        js = json.loads(self.cli("status", "--json").stdout)
-        self.assertEqual(js["data"]["state"], "connected")
-
-        # mobile data off: the call goes, rmnet0 goes down, the switch is saved
-        self.assertEqual(self.cli("data", "off").returncode, 0)
-        st = self.wait(lambda s: s["data"]["state"] == "off", "data off")
-        self.assertIn("DEACT_DATA_CALL", self.requests())
-        self.assertIn("link set dev rmnet0 down", self.fake_log("ip"))
-        self.assertIn("revert rmnet0", self.fake_log("resolvectl"))
-        with open(os.path.join(self.state_dir, "mobile-data")) as f:
-            self.assertEqual(f.read().strip(), "off")
-        # and on again
-        self.assertEqual(self.cli("data", "on").returncode, 0)
-        self.wait(lambda s: s["data"]["state"] == "connected", "data on again")
-
-
-class RadioOff(SimTest):
-    daemon_args = ["--radio-off"]
-    config = "enabled = yes\napn = test.apn\n"
-
-    def test_radio_stays_off(self):
-        self.wait(lambda s: s["sim"]["state"] == "ready", "the SIM read")
-        time.sleep(1)
-        req = self.requests()
-        self.assertNotIn("SET_RADIO_POWER", req)
-        self.assertNotIn("SETUP_DATA_CALL", req)
+    def test_no_apn_never_switches_the_radio(self):
+        (self.dir / 'modem-sit.conf').write_text('[audio]\ncard = none\n')
+        self.start()
+        self.assertNotEqual(self.daemon.wait(30), 0)
+        self.assertFalse([e for e in self.transcript_entries() if e.get('type') == 'at'])
 
 
-class DataOffByDefault(SimTest):
-    config = "apn = test.apn\n"
-
-    def test_no_data_call(self):
-        self.wait(lambda s: s["data_reg"]["reg"] == "home", "registration")
-        time.sleep(1)
-        self.assertNotIn("SETUP_DATA_CALL", self.requests())
-        self.assertEqual(self.call({"cmd": "status"})["state"]["data"]["state"], "off")
-
-
-class PinWithoutFlag(SimTest):
-    sim_args = ["--pin-locked"]
-
-    def test_stops_at_pin(self):
-        self.wait(lambda s: s["sim"]["state"] == "pin-required", "the PIN stop")
-        r = self.call({"cmd": "pin", "pin": "1234"})
-        self.assertFalse(r["ok"])
-        self.assertIn("--allow-pin", r["error"])
-        time.sleep(0.5)
-        req = self.requests()
-        self.assertNotIn("VERIFY_SIM_PIN", req)
-        self.assertNotIn("GET_IMSI", req)
-
-
-class PinWithFlag(SimTest):
-    sim_args = ["--pin-locked", "--pin", "1234"]
-    daemon_args = ["--allow-pin"]
-
-    def test_pin(self):
-        self.wait(lambda s: s["sim"]["state"] == "pin-required" and s["sim"]["pin1_retries"] == 3, "the PIN stop")
-        r = self.call({"cmd": "pin", "pin": "0000"})
-        self.assertFalse(r["ok"])
-        self.assertIn("2 tries left", r["error"])
-        r = self.call({"cmd": "pin", "pin": "1234"})
-        self.assertTrue(r["ok"], r)
-        self.wait(lambda s: s["data_reg"]["reg"] == "home", "registration after the PIN")
-        self.assertEqual(self.requests().count("VERIFY_SIM_PIN"), 2)
-
-
-class PinLastTry(SimTest):
-    sim_args = ["--pin-locked", "--pin-retries", "1"]
-    daemon_args = ["--allow-pin"]
-
-    def test_last_try_refused(self):
-        self.wait(lambda s: s["sim"]["state"] == "pin-required", "the PIN stop")
-        r = self.call({"cmd": "pin", "pin": "1234"})
-        self.assertFalse(r["ok"])
-        self.assertIn("last one", r["error"])
-        self.assertNotIn("VERIFY_SIM_PIN", self.requests())
-
-
-class LongDataCall(SimTest):
-    sim_args = ["--long-datacall"]
-    config = "enabled = yes\napn = test.apn\n"
-
-    def test_unsupported(self):
-        st = self.wait(lambda s: s["data"]["state"] == "unsupported", "the v11 refusal")
-        self.assertIn("v11", st["data"]["error"])
-        self.assertNotIn("addr add", self.fake_log("ip"))
-
-
-class SimGone(SimTest):
-    config = "enabled = yes\napn = test.apn\n"
-
-    def test_reconnect(self):
-        self.wait(lambda s: s["data"]["state"] == "connected", "the data call")
-        self.sim.terminate()
-        self.sim.wait(5)
-        self.wait(lambda s: s["daemon"] == "waiting" and s["data"]["state"] == "waiting", "the link loss")
-        self.assertIn("link set dev rmnet0 down", self.fake_log("ip"))
-        self.sim = subprocess.Popen([sys.executable, SIM, "--listen", self.sock,
-                                     "--transcript", self.transcript])
-        self.wait(lambda s: s["data"]["state"] == "connected", "the data call after a reconnect", 30)
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

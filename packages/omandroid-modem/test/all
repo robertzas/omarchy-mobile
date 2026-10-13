@@ -1,0 +1,61 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Offline tests for omandroid-modem: syntax, the CP helper's file parsers on
+# made-up inputs (a TOC, NV files), the staged layout and the unit. Nothing
+# here touches a modem, a partition or /dev.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+export PYTHONDONTWRITEBYTECODE=1
+cp=lib/omandroid-modem-cp
+
+bash -n install && bash -n lib/omandroid-modem-start && bash -n profiles/modem.conf || fail "shell syntax"
+python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$cp" || fail "$cp parses"
+if command -v shellcheck >/dev/null; then
+  shellcheck -S warning lib/omandroid-modem-start install || fail "shellcheck"
+fi
+pass "scripts parse"
+
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+# A made-up modem.bin: TOC, BOOT, INFO entries (32 bytes each), the version
+# 20 bytes into INFO.
+python3 - "$t/modem.bin" <<'PY'
+import struct, sys
+toc = b''
+for name, off, size in ((b'TOC', 0, 0x200), (b'BOOT', 0x200, 0x100), (b'INFO', 0x300, 0x80)):
+    toc += name.ljust(12, b'\0') + struct.pack('<5I', off, 0, size, 0, 0)
+data = bytearray(0x400); data[:len(toc)] = toc
+data[0x300 + 20:0x300 + 20 + 16] = b'test-version-001'
+open(sys.argv[1], 'wb').write(data)
+PY
+[[ $(python3 "$cp" baseband-version "$t/modem.bin") == test-version-001 ]] || fail "baseband version from a TOC"
+head -c 256 /dev/zero > "$t/notoc.bin"
+python3 "$cp" baseband-version "$t/notoc.bin" 2>/dev/null && fail "a file without INFO is refused"
+pass "baseband version"
+
+mkdir -p "$t/efs" "$t/efs_backup"
+for f in efs/nv_normal.bin efs/nv_protected.bin efs_backup/nv_protected.bak; do
+  printf 'made-up %s' "$f" > "$t/$f"
+  python3 -c 'import hashlib,sys; d=open(sys.argv[1],"rb").read(); open(sys.argv[1]+".md5","wb").write(hashlib.md5(d+b"Samsung_SIT_RIL").hexdigest().encode())' "$t/$f"
+done
+python3 "$cp" nv-check "$t/efs" "$t/efs_backup" 2>/dev/null || fail "matching NV checksums pass"
+printf 'x' >> "$t/efs/nv_normal.bin"
+python3 "$cp" nv-check "$t/efs" "$t/efs_backup" 2>/dev/null && fail "a changed NV file is refused"
+pass "NV checksums"
+
+stage=$t/stage
+./install "$stage"
+for f in usr/lib/omandroid-vendor/omandroid-modem-start usr/lib/omandroid-vendor/omandroid-modem-cp \
+         usr/lib/omandroid-vendor/profiles/modem.conf usr/lib/omandroid-vendor/modem/props.conf \
+         usr/lib/systemd/system/omandroid-modem.service usr/lib/udev/rules.d/60-omandroid-modem-nv-ro.rules; do
+  [[ -e $stage/$f ]] || fail "staged $f"
+done
+grep -qx 'persist.vendor.modem.efs.clear.action=none' modem/props.conf ||
+  fail "efs.clear.action is pinned to none (empty clears NV)"
+if command -v systemd-analyze >/dev/null; then
+  systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/omandroid-modem.service" 2>&1 |
+    grep -v -e 'not executable' -e 'No such file' -e 'omandroid-aoc.service' -e 'omandroid-audio.service' -e '^$' &&
+    fail "unit verify" || true
+fi
+pass "staged layout, props and unit"
