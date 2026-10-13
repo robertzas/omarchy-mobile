@@ -8,6 +8,20 @@ commits on top of the published `omamobile` (`7b0f8b5d1`, 58 commits on
 v7.3-rc6). Nothing here has run on the phone as this exact tree; see
 section 5 before publishing.
 
+**Kernel branches renamed (2026-10-13).** With the project's rename to
+Omarchy Mobile, every local kernel branch moved from `omandroid*` to
+`omamobile*` (`omandroid` -> `omamobile`, `omandroid-int` -> `omamobile-int`,
+`omandroid-<subsystem>` -> `omamobile-<subsystem>`, `publish/omandroid*` ->
+`publish/omamobile*`); the `wt-*` worktree directories and the
+`omandroid-final` tag keep their names, and old merge subjects keep the old
+branch names. The in-tree strings followed: `omamobile` gained the
+`omamobile.ufs-probe` bootargs commit, and `omamobile-camera` the
+`omamobile/camera` firmware paths and comments; both are merged into
+`omamobile-int`. So `omamobile-next` no longer sits directly on `omamobile`:
+rebase it (`git rebase omamobile omamobile-next`) before 5.4's
+`merge --ff-only`; the `omamobile-next` hashes below are from before that
+rebase.
+
 `omamobile-int` (what the phone runs) had 194 commits beyond `omamobile`.
 Each was classified as ready, bring-up only, superseded or not yet verified on
 the phone, from the plans' recorded results and NOTES.md. The ready ones
