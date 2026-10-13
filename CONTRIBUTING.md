@@ -134,6 +134,7 @@ bin/omandroid modules-push     # modules only, no reboot
 tools/phone-ssh <command>      # root@172.16.42.1 over USB
 ```
 
+- **The device** comes from `DEVICE` (default `cheetah`, in [`omandroid.conf`](omandroid.conf)) and its descriptor `device/<codename>/device.conf`: `DEVICE=<codename> bin/omandroid images`. How builds and releases work for several devices: [docs/RELEASES.md](docs/RELEASES.md).
 - **One worktree per subsystem branch.** Each branch gets its own output directory (`KERNEL_DIR=~/android/mainline/wt-gnss KERNEL_OUT=~/android/mainline/out-gnss bin/omandroid kernel`), so builds don't step on each other.
 - **The kernel command line goes in the DTB** (`/chosen/bootargs`), not in `vendor_boot`: the Pixel bootloader (ABL) ignores the vendor_boot cmdline.
 - **Building a DTB with a bring-up overlay** (the helper the runbooks use):
@@ -197,7 +198,8 @@ The same SoC does **not** mean the same board. The panel, touch controller, PMIC
   - It injects `/memory` and the framebuffer carve-out itself.
   - It leaves the cluster watchdogs running, which resets the phone after about 60 s unless a watchdog driver takes them over.
 - **Check every stock `reserved-memory` node against `/proc/iomem`.** Firmware that writes into RAM the kernel thinks is free corrupts data silently. Mind the cell sizes: on gs201 each `reg` entry is 12 bytes, and a wrong length makes the kernel ignore the property without a word.
-- `bin/omandroid images` and the initramfs `init` still carry cheetah specifics: the DTB name, the `soc_id` values, the dtbo board ID, the display trigger register write and the partition guard list. Make them per-device as part of your port. **Never run cheetah's `devmem` writes on another phone.**
+- **Write the device descriptor**, `device/<codename>/device.conf`, starting from [cheetah's](device/cheetah/device.conf): the DTB name, the `soc_id` values (from the live DT and `fastboot getvar all`), the board dtbo source and its `board_id`/`board_rev`, the boot images the phone has (`fastboot getvar all` lists the partitions; older Pixels lack `init_boot` and `vendor_kernel_boot`), the storage-guard allowlist and the panel size. Then every `bin/omandroid` command takes the device from the environment: `DEVICE=<codename> bin/omandroid images`. [docs/RELEASES.md](docs/RELEASES.md) §3 describes each key and what `bin/omandroid` checks. The allowlist may only name `*_b` partitions and `userdata`.
+- The initramfs `init` is still cheetah's ([`device/cheetah/initramfs/init`](device/cheetah/initramfs/init)): copy it to `device/<codename>/initramfs/init`, keep its `UFS_RW` identical to the descriptor's (the build checks), and **remove cheetah's display trigger `devmem` write and its `probe()` register reads**: they are gs201 DECON and watchdog addresses. **Never run cheetah's `devmem` writes on another phone.** A shared init with these quirks generated from the descriptor is step 2 of the release track ([ROADMAP](docs/ROADMAP.md) §3.8).
 
 ### 5.4 Bring-up order that worked
 
@@ -247,7 +249,7 @@ Findings that matter beyond one subsystem go into `device/<codename>/NOTES.md`, 
 | Change | Repository | Branch or path |
 | --- | --- | --- |
 | Kernel: drivers, bindings, DTS | [derekross/linux-omandroid](https://github.com/derekross/linux-omandroid) | a topic branch off `omandroid`, one subsystem per branch (`omandroid-<subsystem>`) |
-| Device notes, plans, bring-up overlays | this repository | `device/<codename>/`, overlays in `device/<codename>/overlays/` |
+| Device notes, plans, descriptor, bring-up overlays | this repository | `device/<codename>/` (descriptor `device.conf`), overlays in `device/<codename>/overlays/` |
 | Device support package | this repository | `packages/omandroid-device-<codename>/` |
 | Shell, sensors, GNSS, Mesa, Hyprland | this repository | `packages/<name>/` |
 | Omarchy changes | upstream [Omarchy](https://github.com/omacom/omarchy) first | `patches/omarchy/` while they wait |

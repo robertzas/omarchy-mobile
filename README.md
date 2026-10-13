@@ -16,11 +16,12 @@ Plan: https://claude.ai/code/artifact/060038bc-beff-497e-9643-4f322318b2be
 | `patches/omarchy/` | Changes to Omarchy for touch devices, to send upstream (`bridge-*` ones are stopgaps for the phone's older Omarchy) |
 | `bin/lineage-ref` | Builds LineageOS for the phone. Used as a rooted reference Android (M0) and, later, for Waydroid images |
 | `kernel/configs/` | Our kernel config fragment, merged on top of arm64 `defconfig` |
-| `device/cheetah/` | Pixel 7 Pro bring-up notes, one plan per subsystem, overlays and the initramfs |
+| `device/cheetah/` | Pixel 7 Pro bring-up notes, one plan per subsystem, overlays, the initramfs and the device descriptor (`device.conf`) |
 | `omandroid.conf` | Shared settings (source dir, jobs, container image). Override in `omandroid.local.conf` |
 | `docker/` | Ubuntu 24.04 build environment |
 | `docs/DEVICES.md` | Supported-devices matrix |
 | `docs/ROADMAP.md` | Where things stand and the plan to a working phone |
+| `docs/RELEASES.md` | How builds and releases work for several devices: device descriptors, the kernel package, release bundles |
 
 Large trees live outside the repo, under `~/android/`:
 

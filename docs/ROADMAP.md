@@ -34,7 +34,7 @@ Statuses: **works** (on by default, verified on the phone), **partial** (works, 
 | Cameras | partial | The ultrawide (Sony IMX386, CSIS link 2) works end to end through libcamera's simple pipeline and software ISP (CAM5). The main camera (Samsung S5KGN1, C-PHY) is built and waits for its runbook (CAM-M); image quality (CAM5.3), Snapshot (CAM5.4), the front camera (CAM7) and the telephoto follow | [CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md) |
 | Phone shell | partial | Status bar, swipeable home screens with apps and widgets and an edit mode, quick settings with 19 tiles and a tile editor, launcher, switcher, the lock screen with PIN pad and fingerprint, squeekboard on demand. User-built widgets (made with Omarchy's default agent) in progress; desktop-shaped system dialogs | [`packages/omandroid-shell`](../packages/omandroid-shell), [NOTES](../device/cheetah/NOTES.md) "Phone UX to-dos" |
 | Android apps (Waydroid) | in progress | Planned and packaged offline: the kernel options are found and checked, `omandroid-waydroid` is drafted with the container kept away from debugfs, the camera nodes and every block device. Nothing run on the phone yet | [WAYDROID-PLAN](../device/cheetah/WAYDROID-PLAN.md) |
-| Installer | not started | Putting Arch onto `userdata` is done by hand today ([CONTRIBUTING](../CONTRIBUTING.md) §4) | |
+| Installer | not started | Putting Arch onto `userdata` is done by hand today ([CONTRIBUTING](../CONTRIBUTING.md) §4); designed with the release bundles (3.8) | [RELEASES](RELEASES.md) |
 | Updates | partial | Packages ship through a signed `[omandroid]` pacman repository and `omarchy update`, but the repository is copied to the phone over USB (`tools/repo-push`), not yet hosted; kernel updates go through `bin/omandroid push` | [CONTRIBUTING](../CONTRIBUTING.md) §4 |
 | Upstream kernel | in progress | Ready commits are prepared as `omandroid-next` for the published kernel, not yet pushed | [KERNEL-PUBLISH](../device/cheetah/KERNEL-PUBLISH.md) |
 
@@ -140,6 +140,22 @@ The phone's own software, all offline-heavy and parallel to the hardware tracks.
 - **App store**: a touch front end for installing and updating apps (pacman packages, Flathub, web apps), probably GNOME Software with a phone-shaped layout or a small plugin of ours; updates and the OTA notice in one place.
 - **An installer** that sets up slot B and `userdata` with the safety model built in ([CONTRIBUTING](../CONTRIBUTING.md) §3). Not started.
 - **Publish the kernel**: review, test and push `omandroid-next` ([KERNEL-PUBLISH](../device/cheetah/KERNEL-PUBLISH.md)), then send ready series upstream, with the Mesa G710 row and the Omarchy patches.
+
+The kernel package, the update path for slot B and the installer are designed together in 3.8.
+
+### 3.8 Multi-device builds and releases
+
+[RELEASES.md](RELEASES.md): one kernel `Image` and module set for every Pixel with each board's DTB beside it, a descriptor per device (`device/<codename>/device.conf`), the kernel as a package, slot B written by a pacman hook instead of `bin/omandroid push`, and per-device bundles with a one-command installer that only touches slot B and `userdata`. Google's firmware stays extracted on the user's side. In order:
+
+1. **Device descriptor and `DEVICE=`** (done 2026-10-13): `device/cheetah/device.conf`; `bin/omandroid` reads the DTB, `soc_id`s, dtbo, boot image values and storage-guard allowlist from it, and checks the allowlist against the initramfs. Cheetah's images came out byte-identical.
+2. **Shared initramfs**: one `init` with the per-device quirks (the guard list, cheetah's display trigger write, the USB name) generated from the descriptor, release builds without developer keys or bring-up probes, packed reproducibly; `bin/omandroid overlay` replaces the hand-written `ov` helper. Changes what boots: its own runbook and a test boot on cheetah.
+3. **Kernel package**: `linux-omandroid` (`Image`, modules, every DTB) from a tagged `omandroid-int` snapshot, release `LOCALVERSION`, in `[omandroid]`; `omandroid-device` as the virtual package the device packages provide.
+4. **Device package hook**: `omandroid-boot-update` in `omandroid-device-cheetah` builds the images on the phone and writes slot B through the same guarded, verified path as `push`, keeps the previous set for rollback, never reboots, and is opt-in so development phones keep `bin/omandroid push`. Firmware maps move from the extraction scripts into per-device files.
+5. **Release bundles and the installer**: per-device slot-B images, a shared Arch root image, signed checksums, and an `install` script that checks the phone and the factory image, adds the user's own firmware and SSH key to a local copy of the root image, and flashes only `<image>_b` and `userdata`. Replaces the "Installer: not started" row in §1.
+6. **CI**: lint and package tests on every push; kernel, DTB validation and twice-built images per device on kernel tags; unsigned bundles on release. Pinned container and toolchain, so the maintainer can rebuild and compare before signing.
+7. **Second device bring-up as the proof**: a second Pixel (a gs201 sibling first, or a gs101 phone to test the smaller boot image set) built, packaged and installed by the same tools with nothing but its descriptor, DTS, firmware map and device package added.
+
+Alongside every release, **keep linux-omandroid's branches honest**: publish `omandroid-int` as a tagged snapshot for builders, and run a curation pass that moves what has passed on the phone into the upstream-ready `omandroid` branch (the `omandroid-next` process) and publishes it, so the gap between the two shrinks release by release.
 
 ## 4. How to help
 
