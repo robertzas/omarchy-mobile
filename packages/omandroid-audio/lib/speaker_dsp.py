@@ -651,6 +651,11 @@ def cmd_watch(args):
     strict_hb = os.environ.get('OMANDROID_SPK_STAGE', 'c8') == 'c9' or \
         os.environ.get('OMANDROID_SPK_HEARTBEAT', '1') != '0'
     temp_max = float(os.environ.get('OMANDROID_SPK_TEMP_MAX', '80'))
+    # A real coil warms by tenths of a degree in a few seconds at these
+    # levels (C9d step 2). A reading more than this many degrees above the
+    # stream's first one is the false runaway of C9d-3..5 (25 -> 56 C within
+    # 1 s): mute on it at once, without waiting for temp_max.
+    temp_jump = float(os.environ.get('OMANDROID_SPK_TEMP_JUMP', '5'))
     amps = Amps(args.card)
     devs = amp_devices()
     try:
@@ -668,6 +673,7 @@ def cmd_watch(args):
         f'heartbeat {"enforced" if strict_hb else "logged"}')
     since = None
     beat = {}
+    start_temp = {}
     warned = False
     # Stock's media delta: on when asked (1), off when asked (0), and by
     # default on when both files are installed.
@@ -704,6 +710,7 @@ def cmd_watch(args):
             if since is None:
                 since = now
                 beat = {}
+                start_temp = {}
                 applied = False
                 problems_delta = []
             strict = now - since >= args.grace
@@ -717,6 +724,13 @@ def cmd_watch(args):
                         log(f'watchdog: {amp}: stock media delta applied')
             v = amps.read()
             problems = check(v, digital_ceil, analog_ceil, temp_max, strict=strict) + problems_delta
+            for amp in AMPS:
+                t = q(v.get((amp, 'CSPL_TEMPERATURE')), 14)
+                if t is not None:
+                    t0 = start_temp.setdefault(amp, t)
+                    if t - t0 > temp_jump:
+                        problems.append(f'{amp}: coil temperature jumped {t - t0:.1f} C '
+                                        f'({t0:.1f} -> {t:.1f}) in this stream, above {temp_jump} C')
             for amp in AMPS:
                 hb = v.get((amp, 'HALO_HEARTBEAT'))
                 last = beat.get(amp)

@@ -1512,6 +1512,23 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      - **Meanwhile:** omandroid-audio 0.3.3 adds a PipeWire loudness filter
        ahead of the DSP: a 150 Hz high-pass and a limiter with +6 dB and a
        -1 dBFS ceiling. The amplifiers stay at 737/10.
+     **C9d-6 (2026-10-13, 7.3.0-rc6-omandroid-push1-00405-g3bc8d8565645):**
+     - **The bottom speaker's static is fixed.** The cause was `SP_RX_WL`
+       (0x4840) read back 32, but that field takes 12-24 bits. Mainline
+       wrote `params_width()`, while Google's driver caps it at 24.
+       omandroid-audio-amp `cb1ae8c7d` programs the slot width from the
+       physical width and caps the word length at 24. A right-only multitone
+       at 737/10 "sounded much better" to the listener.
+     - **The runaway at 817/17 remains.** A -40 dBFS 1 kHz tone with a
+       0.5 s tripwire tripped at once: top 25 → about 50 °C at the first
+       sample, bottom 25 → 36 °C, vmon low 1. With `dsp_rx6_classh=Y`
+       (`9fcc941b3`, the class-H target into DSP RX6 as stock) and a
+       service restart it tripped the same way. It isn't known whether the
+       parameter took effect without a firmware reload.
+     - The first sample already reads about 20 % high, so a scaling
+       mismatch is the lead. The default stays 737/10.
+     - omandroid-audio 0.3.5: the watchdog also mutes on a rise of more
+       than 5 °C within a stream (`OMANDROID_SPK_TEMP_JUMP`).
    - **C9e balance** (at the last step that passed; risk medium):
      `burst /tmp/mtL.wav 1.0`, then `burst /tmp/mtR.wav 1.0`, with the
      phone upright in front of the listener at about 30 cm (and, if
