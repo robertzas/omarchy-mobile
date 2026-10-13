@@ -20,7 +20,10 @@
 #    forces the CPU path.
 #  - No documentation (no libcamera-docs split, no Doxygen, Sphinx or
 #    TeX Live in the build) and no test suite (test=false, no check()).
-#  - pkgrel 4.1, so it sorts above Arch Linux ARM's 0.7.2-4.
+#  - werror=false: GCC 16's -Warray-bounds flags libstdc++'s own std::mutex
+#    construction in camera_manager.cpp and log.cpp (a false positive in the
+#    library headers), which -Werror turned into a failed build.
+#  - pkgrel 4.2, so it sorts above Arch Linux ARM's 0.7.2-4.
 #
 # Maintainers of the original: David Runge, Carl Smedstad.
 
@@ -33,7 +36,7 @@ pkgname=(
   python-libcamera
 )
 pkgver=0.7.2
-pkgrel=4.1
+pkgrel=4.2
 pkgdesc="A complex camera support library for Linux, Android, and ChromeOS (Omandroid: gs201 CSIS)"
 arch=(aarch64)
 url="https://libcamera.org/"
@@ -102,6 +105,7 @@ build() {
     -D v4l2=enabled
     -D tracing=disabled
     -D test=false
+    -D werror=false
   )
 
   arch-meson $pkgbase build "${meson_options[@]}"

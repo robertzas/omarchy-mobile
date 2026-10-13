@@ -22,7 +22,7 @@ arch=(aarch64)
 url="https://fprint.freedesktop.org/"
 license=(LGPL-2.1-or-later)
 depends=(gcc-libs glib2 glibc libgudev libgusb openssl pixman)
-makedepends=(git gobject-introspection meson)
+makedepends=(git glib2-devel gobject-introspection meson)
 provides=(libfprint-2.so)
 source=("git+https://gitlab.freedesktop.org/libfprint/libfprint.git#tag=$_tag"
         0001-add-the-omandroid_udfps-driver.patch
