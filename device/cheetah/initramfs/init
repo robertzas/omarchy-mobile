@@ -211,6 +211,8 @@ say "ready"
     echo "omamobile: no USB host, crashing in 20 s so ABL falls back to slot A"
   } > $SCREEN
   sleep 20
+  # Never in the middle of growing the root file system (boot_arch)
+  while [ -e /run/omamobile-resizing ]; do sleep 1; done
   sync
   # reboot-to bootloader is unreliable; a panic (panic=10) reboots, and once
   # slot B is out of retries ABL boots stock Android, which adb can reach
@@ -220,6 +222,34 @@ say "ready"
 
 
 
+
+# First boot of a flashed root image (tools/install-phone): the image is a
+# few GB, so grow its file system to the whole userdata partition before
+# mounting it. Only an Omarchy Mobile root (label omamobile-root) that is
+# more than 64 MiB smaller than its partition, so it happens once; a root
+# installed any other way is left alone. omamobile.noresize skips it.
+grow_root() {
+  local dev=$1 info part_bytes fs_bytes blocks bsize
+  grep -q omamobile.noresize /proc/cmdline && return 0
+  info=$(dumpe2fs -h "$dev" 2>/dev/null)
+  [ "$(echo "$info" | sed -n 's/^Filesystem volume name: *//p')" = omamobile-root ] || return 0
+  blocks=$(echo "$info" | sed -n 's/^Block count: *//p')
+  bsize=$(echo "$info" | sed -n 's/^Block size: *//p')
+  part_bytes=$(blockdev --getsize64 "$dev" 2>/dev/null)
+  [ -n "$blocks" ] && [ -n "$bsize" ] && [ -n "$part_bytes" ] || return 0
+  fs_bytes=$((blocks * bsize))
+  [ $((part_bytes - fs_bytes)) -gt 67108864 ] || return 0
+  say "arch: growing the root file system to fill $dev ($((fs_bytes >> 20)) MiB to $((part_bytes >> 20)) MiB)"
+  : > /run/omamobile-resizing
+  e2fsck -f -p "$dev" >/dev/null 2>&1   # resize2fs wants a freshly checked file system
+  if resize2fs "$dev" > /run/resize2fs.log 2>&1; then
+    say "arch: root file system grown"
+  else
+    say "arch: resize2fs failed; booting at the old size"
+    while read -r line; do echo "omamobile: resize2fs: $line" > /dev/kmsg; done < /run/resize2fs.log
+  fi
+  rm -f /run/omamobile-resizing
+}
 
 # Keep a shell on the screen too
 # Hand over to Arch on userdata, unless omamobile.initramfs is on the command
@@ -235,6 +265,7 @@ boot_arch() {
   [ "$(cat /sys/block/sda/${dev#/dev/}/ro)" = 0 ] || { say "arch: userdata is read-only"; return 1; }
   mkdir -p /newroot
   e2fsck -p "$dev" >/dev/null 2>&1
+  grow_root "$dev"
   mount -t ext4 -o rw,relatime "$dev" /newroot || { say "arch: cannot mount $dev"; return 1; }
   if [ ! -x /newroot/usr/lib/systemd/systemd ]; then
     say "arch: no systemd on $dev"; umount /newroot; return 1

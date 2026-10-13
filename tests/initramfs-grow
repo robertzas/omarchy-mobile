@@ -1,0 +1,61 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests the initramfs's first-boot growth of the root file system
+# (grow_root in device/<codename>/initramfs/init), run with this machine's
+# e2fsprogs on image files, with blockdev faked to report the "partition"
+# size: an omamobile-root smaller than its partition grows to fill it, once;
+# a root with another label, one already full size, or omamobile.noresize on
+# the command line is left alone.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+for tool in mkfs.ext4 dumpe2fs resize2fs e2fsck; do command -v $tool >/dev/null || { echo "skip: no $tool"; exit 0; }; done
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+
+init=device/${DEVICE:-cheetah}/initramfs/init
+grep -q '^  grow_root "\$dev"$' "$init" || fail "boot_arch grows the root before mounting it"
+awk '/^  grow_root "\$dev"$/ {g = NR} /^  mount -t ext4/ {m = NR} END {exit !(g && m && g < m)}' "$init" || fail "grow_root runs before mount"
+grep -q 'e2fsprogs-extra' bin/omamobile || fail "bin/omamobile initramfs includes resize2fs (e2fsprogs-extra)"
+sed -n '/^grow_root() {$/,/^}$/p' "$init" > "$t/grow.sh"
+[[ -s $t/grow.sh ]] || fail "grow_root found in $init"
+
+mkdir -p "$t/bin"
+cat > "$t/bin/blockdev" <<'EOF'
+#!/bin/sh
+[ "$1" = --getsize64 ] && stat -c %s "$2"
+EOF
+chmod +x "$t/bin/blockdev"
+echo 'console=null' > "$t/cmdline"
+run() {
+  # The function as init has it, with /proc/cmdline and say() pointed at the test
+  mkdir -p "$t/run"
+  sed -e "s|/proc/cmdline|$t/cmdline|" -e "s|/run/|$t/run/|g" "$t/grow.sh" > "$t/grow-test.sh"
+  PATH="$t/bin:$PATH" sh -c ". '$t/grow-test.sh'; say() { echo \"\$*\"; }; grow_root '$1'" 2>&1
+}
+blocks() { dumpe2fs -h "$1" 2>/dev/null | sed -n 's/^Block count: *//p'; }
+bytes() { echo $(( $(blocks "$1") * $(dumpe2fs -h "$1" 2>/dev/null | sed -n 's/^Block size: *//p') )); }
+
+truncate -s 256M "$t/part.img"
+mkfs.ext4 -q -L omamobile-root "$t/part.img" 64M
+before=$(blocks "$t/part.img")
+out=$(run "$t/part.img")
+grep -q 'growing the root file system' <<<"$out" || fail "announces the growth: $out"
+grep -q 'root file system grown' <<<"$out" || fail "grows: $out"
+after=$(blocks "$t/part.img")
+(( $(bytes "$t/part.img") == 256 * 1024 * 1024 )) || fail "fills the partition ($before -> $after blocks)"
+e2fsck -fn "$t/part.img" >/dev/null 2>&1 || fail "checks clean after growing"
+[[ -z $(run "$t/part.img") ]] || fail "a second boot does nothing"
+pass "an omamobile-root smaller than its partition grows to fill it, once"
+
+truncate -s 256M "$t/other.img"
+mkfs.ext4 -q -L something-else "$t/other.img" 64M
+[[ -z $(run "$t/other.img") && $(bytes "$t/other.img") == $((64 * 1024 * 1024)) ]] || fail "another label is left alone"
+truncate -s 256M "$t/skip.img"
+mkfs.ext4 -q -L omamobile-root "$t/skip.img" 64M
+echo 'console=null omamobile.noresize' > "$t/cmdline"
+[[ -z $(run "$t/skip.img") && $(bytes "$t/skip.img") == $((64 * 1024 * 1024)) ]] || fail "omamobile.noresize skips it"
+pass "another label, or omamobile.noresize, is left alone"
+
+grep -q 'while \[ -e /run/omamobile-resizing \]' "$init" || fail "the no-USB crash waits for a resize to finish"
+pass "the no-USB self-recovery never crashes the phone in the middle of a resize"

@@ -199,8 +199,13 @@ cmd_initramfs() {
   rm -rf "$stage" && mkdir -p "$stage"
   tar -xzf "$dl/$tarball" -C "$stage"
   local apk
-  for apk in $(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" dropbear kexec-tools e2fsprogs); do
+  # e2fsprogs-extra: resize2fs and dumpe2fs, to grow a freshly flashed root
+  # to the whole userdata partition on its first boot (init, boot_arch)
+  for apk in $(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" dropbear kexec-tools e2fsprogs e2fsprogs-extra); do
     tar -xzf "$apk" -C "$stage" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' 2>/dev/null || true
+  done
+  for f in sbin/e2fsck usr/sbin/resize2fs usr/sbin/dumpe2fs; do
+    [[ -x $stage/$f ]] || die "the initramfs has no /$f"
   done
   install -m 755 "$init" "$stage/init"
 
