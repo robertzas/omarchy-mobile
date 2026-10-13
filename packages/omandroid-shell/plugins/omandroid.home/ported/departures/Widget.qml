@@ -14,6 +14,22 @@ import qs.Commons as Commons
 Item {
   id: widget
 
+  // A tap anywhere on the card goes to the next view (tile, details, back to
+  // the tile); links and buttons keep their own taps. Not in edit mode.
+  function cycle() {
+    if (widget.editing) return
+    if (widget.detail) { widget.detail = false; return }
+    // No stop named yet: the settings, where it is typed.
+    if (widget.query.length < 2) { if (widget.host) widget.host.openSettings(); return }
+    widget.detail = true
+    widget.refresh(false)
+  }
+  MouseArea {
+    anchors.fill: parent
+    enabled: !widget.editing
+    onClicked: widget.cycle()
+  }
+
   property var host: null
   property var settings: ({})
   property bool editing: false
@@ -212,16 +228,6 @@ Item {
     }
   }
 
-  MouseArea {
-    anchors.fill: parent
-    visible: !widget.detail
-    enabled: !widget.editing
-    onClicked: {
-      if (widget.query.length < 2) { if (widget.host) widget.host.openSettings(); return }
-      widget.detail = true
-      widget.refresh(false)
-    }
-  }
 
   // ---------- the board, or the stops to pick from
   Item {
@@ -243,7 +249,7 @@ Item {
       MouseArea {
         anchors.fill: parent
         enabled: !widget.editing
-        onClicked: widget.detail = false
+        onClicked: widget.cycle()
       }
     }
 
@@ -253,7 +259,9 @@ Item {
       anchors.bottom: footerView.top
       width: parent.width
       clip: true
-      interactive: !widget.editing
+      // Scrolls only when it overflows, so a tap below a short list reaches
+      // the card and goes to the next view.
+      interactive: !widget.editing && contentHeight > height
       boundsBehavior: Flickable.StopAtBounds
       spacing: Style.spacing.sm
       model: widget.choosing ? (widget.found && widget.found.query === widget.query ? widget.found.stops : []) : widget.upcoming
@@ -269,6 +277,14 @@ Item {
         required property var modelData
         width: ListView.view.width
         sourceComponent: widget.choosing ? stopRow : departureRow
+        // A departure has no action of its own: a tap on it goes to the next
+        // view. A stop to pick keeps its own tap, above this one.
+        MouseArea {
+          anchors.fill: parent
+          z: -1
+          enabled: !widget.editing
+          onClicked: widget.cycle()
+        }
         Component {
           id: stopRow
           Item {

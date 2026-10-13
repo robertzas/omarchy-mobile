@@ -9,6 +9,7 @@ import Quickshell
 import qs.Commons
 import qs.Commons as Commons
 import "Wttr.js" as Wttr
+import "../.." as Home
 
 Item {
   id: widget
@@ -19,7 +20,15 @@ Item {
   property int cellsWide: 1
   property int cellsHigh: 1
 
-  readonly property string city: String(settings.city || "").trim()
+  // The place for wttr.in: the phone's position ("Use my location": GeoClue at
+  // city accuracy, rounded to about 1 km; Omandroid's GeoLocation.qml) when
+  // there is one, else the typed city, else wttr.in's guess from the address.
+  // Nothing is fetched while the position is still being looked up.
+  readonly property bool useLocation: settings.useLocation !== false
+  Home.GeoLocation { id: geo; active: widget.useLocation }
+  readonly property bool waiting: useLocation && !geo.fix && geo.failure === ""
+  readonly property string city: useLocation && geo.fix ? geo.fix.lat + "," + geo.fix.lon : String(settings.city || "").trim()
+  onWaitingChanged: if (!waiting) refresh(false)
   readonly property color fg: host ? host.foreground : Commons.Color.menu.text
   readonly property color dim: host ? host.dimForeground : Commons.Color.menu.text
   readonly property string timeFormat: host ? host.timeFormat : "HH:mm"
@@ -31,6 +40,7 @@ Item {
   property bool failed: false
 
   function refresh(force) {
+    if (widget.waiting) return
     if (!force && reading && reading.city === city && Date.now() - reading.at < 60 * 60000) return
     var wanted = city
     var xhr = new XMLHttpRequest()

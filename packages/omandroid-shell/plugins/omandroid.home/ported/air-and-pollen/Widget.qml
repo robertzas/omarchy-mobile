@@ -10,9 +10,22 @@ import Quickshell
 import qs.Commons
 import qs.Commons as Commons
 import "Wttr.js" as Wttr
+import "../.." as Home
 
 Item {
   id: widget
+
+  // A tap anywhere on the card goes to the next view (tile, details, back to
+  // the tile); links and buttons keep their own taps. Not in edit mode.
+  function cycle() {
+    if (widget.editing) return
+    widget.detail = !widget.detail
+  }
+  MouseArea {
+    anchors.fill: parent
+    enabled: !widget.editing
+    onClicked: widget.cycle()
+  }
 
   property var host: null
   property var settings: ({})
@@ -20,7 +33,15 @@ Item {
   property int cellsWide: 1
   property int cellsHigh: 1
 
-  readonly property string city: String(settings.city || "").trim()
+  // The place for wttr.in: the phone's position ("Use my location": GeoClue at
+  // city accuracy, rounded to about 1 km; Omandroid's GeoLocation.qml) when
+  // there is one, else the typed city, else wttr.in's guess from the address.
+  // Nothing is fetched while the position is still being looked up.
+  readonly property bool useLocation: settings.useLocation !== false
+  Home.GeoLocation { id: geo; active: widget.useLocation }
+  readonly property bool waiting: useLocation && !geo.fix && geo.failure === ""
+  readonly property string city: useLocation && geo.fix ? geo.fix.lat + "," + geo.fix.lon : String(settings.city || "").trim()
+  onWaitingChanged: if (!waiting) refresh(false)
   readonly property color fg: host ? host.foreground : Commons.Color.menu.text
   readonly property color dim: host ? host.dimForeground : Commons.Color.menu.text
   readonly property string timeFormat: host ? host.timeFormat : "HH:mm"
@@ -45,6 +66,7 @@ Item {
   }
 
   function refresh(force) {
+    if (widget.waiting) return
     if (!force && reading && reading.city === city && Date.now() - reading.at < 30 * 60000) return
     var wanted = city
     // Where you are first (the same request as the today widget), then the air there.
@@ -263,12 +285,6 @@ Item {
     }
   }
 
-  MouseArea {
-    anchors.fill: parent
-    visible: !widget.detail
-    enabled: !widget.editing
-    onClicked: widget.detail = true
-  }
 
   // ---------- the details
   Item {
@@ -284,11 +300,12 @@ Item {
       MouseArea {
         anchors.fill: parent
         enabled: !widget.editing
-        onClicked: widget.detail = false
+        onClicked: widget.cycle()
       }
     }
 
     Flickable {
+      id: detailFlick
       anchors.top: detailHeader.bottom
       anchors.bottom: parent.bottom
       width: parent.width
@@ -296,6 +313,14 @@ Item {
       interactive: !widget.editing
       boundsBehavior: Flickable.StopAtBounds
       contentHeight: details.implicitHeight
+
+      // Taps on the details' empty space and plain rows go to the next view too.
+      MouseArea {
+        width: detailFlick.width
+        height: Math.max(detailFlick.height, detailFlick.contentHeight)
+        enabled: !widget.editing
+        onClicked: widget.cycle()
+      }
 
       Column {
         id: details

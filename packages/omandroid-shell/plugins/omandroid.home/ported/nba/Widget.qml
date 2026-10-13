@@ -91,16 +91,36 @@ Item {
     })
   }
 
+  // A tap anywhere on the card steps through the views: this week's games,
+  // the table, every game, the full table, and back.
+  function cycle() {
+    if (widget.view === "games") {
+      widget.view = "table"
+    } else {
+      widget.view = "games"
+      widget.expanded = !widget.expanded
+    }
+    list.positionViewAtBeginning()
+  }
+
   Component.onCompleted: { fetchGames(false); fetchTable(false) }
   Timer { interval: 5 * 60000; repeat: true; running: true; onTriggered: widget.fetchGames(true) }
   Timer { interval: 30 * 60000; repeat: true; running: true; onTriggered: widget.fetchTable(true) }
+
+  // The whole card is the switch (the list's own background below covers the
+  // part the list takes).
+  MouseArea {
+    anchors.fill: parent
+    enabled: !widget.editing
+    onClicked: widget.cycle()
+  }
 
   Column {
     anchors.fill: parent
     anchors.margins: Style.spacing.xl
     spacing: Style.spacing.md
 
-    // The title; a tap shows every game and the full table, or goes back.
+    // The title; "‹" marks the full view.
     Item {
       id: headerPart
       width: parent.width
@@ -127,12 +147,6 @@ Item {
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
         font.bold: widget.liveCount > 0
-      }
-      MouseArea {
-        anchors.fill: parent
-        anchors.margins: -Style.spacing.md
-        enabled: !widget.editing
-        onClicked: widget.expanded = !widget.expanded
       }
     }
 
@@ -162,11 +176,6 @@ Item {
             visible: widget.view === tabView.modelData.v
             color: Commons.Color.accent
           }
-          MouseArea {
-            anchors.fill: parent
-            enabled: !widget.editing
-            onClicked: widget.view = tabView.modelData.v
-          }
         }
       }
     }
@@ -192,6 +201,17 @@ Item {
       boundsBehavior: Flickable.StopAtBounds
       spacing: Style.spacing.sm
       model: widget.rowsModel
+
+      // Under the rows, as tall as the list: a Flickable keeps taps from the
+      // card behind it, so taps on rows and empty space land here.
+      MouseArea {
+        y: list.originY
+        z: -1
+        width: list.width
+        height: Math.max(list.contentHeight, list.height)
+        enabled: !widget.editing
+        onClicked: widget.cycle()
+      }
 
       delegate: Item {
         id: line

@@ -686,11 +686,18 @@ Item {
             else p[key] = typed
           })
         }
-        // The weather widget looks its place up once, when it is saved.
+        // The weather widget looks its place up once, when it is saved. With
+        // "Use my location" on, the place is only the fallback, and may be empty.
         if (item.type === "weather" && value("enabled") === true
-            && (p.place !== undefined || typeof config.latitude !== "number")) {
+            && (p.place !== undefined || (typeof config.latitude !== "number" && value("useLocation") === false))) {
           var place = String(value("place") || "").trim()
-          if (!place) { failure = "Name a place first"; return }
+          if (!place && value("useLocation") !== false) {
+            p.place = ""; p.latitude = null; p.longitude = null
+            sheets.home.setConfig(item.id, p)
+            sheets.close()
+            return
+          }
+          if (!place) { failure = "Name a place, or use your location"; return }
           busy = true
           var xhr = new XMLHttpRequest()
           var id = item.id
@@ -749,14 +756,28 @@ Item {
             onToggled: settingsFlick.put("enabled", !checked)
           }
         }
+        Item {
+          visible: settingsFlick.item && settingsFlick.item.type === "weather"
+          width: parent.width; height: sheets.touch
+          Text {
+            anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText; text: "Use my location"
+            color: sheets.fg; font.family: Style.font.family; font.pixelSize: Style.font.title
+          }
+          ToggleSwitch {
+            anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+            checked: settingsFlick.value("useLocation") !== false
+            onToggled: settingsFlick.put("useLocation", !checked)
+          }
+        }
         Label {
           visible: settingsFlick.item && settingsFlick.item.type === "weather"; width: parent.width
-          text: "Turned on, the phone asks open-meteo.com for this place's coordinates once, then for its forecast every 30 minutes, sending the coordinates rounded to about 1 km. No account, no key, nothing else is sent."
+          text: "Turned on, the phone asks open-meteo.com for the forecast every 30 minutes, sending only coordinates rounded to about 1 km: the phone's position (from Location, at city accuracy) when \"Use my location\" is on and one is known, otherwise the place below, which open-meteo.com looks up once. No account, no key, nothing else is sent."
         }
         TextField {
           visible: settingsFlick.item && settingsFlick.item.type === "weather"
           width: parent.width; height: sheets.touch; font.pixelSize: Style.font.title; foreground: sheets.fg
-          placeholderText: "City or place"
+          placeholderText: settingsFlick.value("useLocation") !== false ? "Place when there is no location" : "City or place"
           text: settingsFlick.config.place || ""
           onTextEdited: settingsFlick.put("place", text)
         }

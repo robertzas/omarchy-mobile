@@ -3,7 +3,8 @@
 # from Android and from Arch, from /proc, /sys, os-release, pacman and
 # Hyprland. Read-only. Prints one JSON object.
 # Ported from simonschubert/fetch in Simon Schubert's omarchy-widgets
-# (MIT, Copyright (c) 2026 Simon Schubert and contributors; see README.md).
+# (MIT, Copyright (c) 2026 Simon Schubert and contributors; see
+# ../../LICENSE-omarchy-widgets).
 import glob
 import json
 import os
@@ -103,34 +104,63 @@ def battery():
     return None
 
 
-def main():
-    rel = os_release()
-    disk = shutil.disk_usage("/")
-    pkgs = run(["pacman", "-Qq"]).count("\n")
-    explicit = run(["pacman", "-Qqe"]).count("\n")
-    upgraded = ""
+def safe(fn, fallback=None):
+    """One fact that can't be read must not cost the others."""
     try:
-        with open("/var/log/pacman.log", errors="replace") as f:
-            for line in f:
-                if "starting full system upgrade" in line:
-                    upgraded = line[1:11]
+        return fn()
+    except Exception:  # noqa: BLE001
+        return fallback
+
+
+def packages():
+    """(all, explicit) from pacman's local database, as fastfetch counts
+    them: no pacman run, so it is quick on a phone."""
+    total = explicit = 0
+    for desc in glob.glob("/var/lib/pacman/local/*/desc"):
+        total += 1
+        text = read(desc)
+        if "%REASON%\n1" not in text:
+            explicit += 1
+    return total, explicit
+
+
+def last_upgrade():
+    """The last full upgrade's date, from the end of pacman's log."""
+    try:
+        with open("/var/log/pacman.log", "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - (2 << 20)))
+            tail = f.read().decode(errors="replace")
     except OSError:
-        pass
+        return ""
+    found = re.findall(r"^\[(\d{4}-\d\d-\d\d)[^\n]*starting full system upgrade", tail, re.M)
+    return found[-1] if found else ""
+
+
+def shell():
     sh = os.path.basename(os.environ.get("SHELL") or pwd.getpwuid(os.getuid()).pw_shell)
-    version = run([sh, "--version"]).splitlines()
+    version = run([sh, "--version"], timeout=3).splitlines()
     m = re.search(r"\d+(\.\d+)+", version[0]) if version else None
+    return sh + (" " + m.group(0) if m else "")
+
+
+def main():
+    rel = safe(os_release, {})
+    disk = safe(lambda: shutil.disk_usage("/"))
+    pkgs, explicit = safe(packages, (0, 0))
     print(json.dumps({
-        "user": pwd.getpwuid(os.getuid()).pw_name,
+        "user": safe(lambda: pwd.getpwuid(os.getuid()).pw_name, os.environ.get("USER", "")),
         "host": platform.node(),
         "model": read("/sys/firmware/devicetree/base/model"),
-        "os": rel.get("PRETTY_NAME", ""),
+        "os": rel.get("PRETTY_NAME", "") or rel.get("NAME", ""),
         "kernel": platform.release(),
-        "uptime": float((read("/proc/uptime") or "0").split()[0]),
-        "pkgs": pkgs, "explicit": explicit, "upgraded": upgraded,
-        "shell": sh + (" " + m.group(0) if m else ""),
-        "cpu": cpu(), "memory": memory(),
-        "storage": {"total": disk.total, "used": disk.total - disk.free},
-        "display": display(), "battery": battery(), "theme": theme(),
+        "uptime": safe(lambda: float((read("/proc/uptime") or "0").split()[0]), 0),
+        "pkgs": pkgs, "explicit": explicit, "upgraded": safe(last_upgrade, ""),
+        "shell": safe(shell, ""),
+        "cpu": safe(cpu, {"model": "", "soc": "", "cores": os.cpu_count() or 0, "arch": platform.machine(), "maxMhz": 0}),
+        "memory": safe(memory, {"total": 0, "used": 0}),
+        "storage": {"total": disk.total, "used": disk.total - disk.free} if disk else {"total": 0, "used": 0},
+        "display": safe(display), "battery": safe(battery), "theme": safe(theme, ""),
         "locale": os.environ.get("LANG", ""), "timezone": time.strftime("%Z"),
     }))
 

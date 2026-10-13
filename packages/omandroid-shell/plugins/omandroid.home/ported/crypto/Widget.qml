@@ -13,6 +13,18 @@ import qs.Commons as Commons
 Item {
   id: widget
 
+  // A tap anywhere on the card goes to the next view (tile, details, back to
+  // the tile); links and buttons keep their own taps. Not in edit mode.
+  function cycle() {
+    if (widget.editing) return
+    widget.detail = !widget.detail
+  }
+  MouseArea {
+    anchors.fill: parent
+    enabled: !widget.editing
+    onClicked: widget.cycle()
+  }
+
   property var host: null
   property var settings: ({})
   property bool editing: false
@@ -211,12 +223,6 @@ Item {
     }
   }
 
-  MouseArea {
-    anchors.fill: parent
-    visible: !widget.detail
-    enabled: !widget.editing
-    onClicked: widget.detail = true
-  }
 
   // ---------- the details
   Item {
@@ -232,10 +238,11 @@ Item {
       MouseArea {
         anchors.fill: parent
         enabled: !widget.editing
-        onClicked: widget.detail = false
+        onClicked: widget.cycle()
       }
     }
     Flickable {
+      id: detailFlick
       anchors.top: detailHeader.bottom
       anchors.bottom: parent.bottom
       width: parent.width
@@ -243,6 +250,14 @@ Item {
       interactive: !widget.editing
       boundsBehavior: Flickable.StopAtBounds
       contentHeight: details.implicitHeight
+
+      // Taps on the details' empty space and plain rows go to the next view too.
+      MouseArea {
+        width: detailFlick.width
+        height: Math.max(detailFlick.height, detailFlick.contentHeight)
+        enabled: !widget.editing
+        onClicked: widget.cycle()
+      }
 
       Column {
         id: details

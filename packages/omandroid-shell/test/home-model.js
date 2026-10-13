@@ -107,7 +107,7 @@ test("normalize repairs what it can", () => {
 
 test("widget config keeps known keys of the right type", () => {
   const c = M.mergeConfig(M.REGISTRY.weather.config, { enabled: "yes", place: "Oslo", latitude: 59.9, extra: 1 })
-  assert.deepStrictEqual(c, { enabled: false, place: "Oslo", latitude: 59.9, longitude: null, units: "celsius" })
+  assert.deepStrictEqual(c, { enabled: false, useLocation: true, place: "Oslo", latitude: 59.9, longitude: null, units: "celsius" })
 })
 
 test("missing apps stay on the layout and are reported", () => {
@@ -182,7 +182,7 @@ test("remove and config", () => {
   let l = layoutOf([widget("w1", "weather", 0, 0, 4, 1)])
   l = M.setConfig(l, "w1", { enabled: true, place: "Paris", latitude: 48.85, bogus: 1 })
   assert.deepStrictEqual(M.findItem(l, "w1").item.config,
-    { enabled: true, place: "Paris", latitude: 48.85, longitude: null, units: "celsius" })
+    { enabled: true, useLocation: true, place: "Paris", latitude: 48.85, longitude: null, units: "celsius" })
   l = M.removeItem(l, "w1")
   assert.deepStrictEqual(l.pages[0].items, [])
 })

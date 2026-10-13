@@ -31,9 +31,18 @@ Item {
   readonly property var spec: entry ? HomeModel.widgetSpec(entry.type) : null
   // Network ports (the registry's `network`) are opt-in, as the weather widget is.
   readonly property bool usesNetwork: !!spec && spec.network === true
-  readonly property bool on: !usesNetwork || config.enabled === true
+  // Built only once the cell has handed over home and entry: a port created
+  // earlier would start with no settings, no cache and no instance id.
+  readonly property bool on: !!home && !!entry && (!usesNetwork || config.enabled === true)
   readonly property string url: folder ? Qt.resolvedUrl(folder + "/Widget.qml") : ""
-  readonly property string dir: folder ? decodeURIComponent(String(Qt.resolvedUrl(folder)).replace(/^file:\/\//, "")) : ""
+  // The port's folder on disk, for the scripts it runs. Omarchy loads plugins
+  // from file:// URLs; anything else falls back to where the package puts it.
+  readonly property string dir: {
+    if (!folder) return ""
+    var u = String(Qt.resolvedUrl(folder))
+    return u.indexOf("file://") === 0 ? decodeURIComponent(u.slice(7))
+      : "/usr/share/omandroid/shell/plugins/omandroid.home/" + folder
+  }
 
   readonly property color fg: home ? home.foreground : Commons.Color.menu.text
   readonly property color dim: home ? home.dimForeground : Commons.Color.menu.text
@@ -82,7 +91,7 @@ Item {
   Column {
     anchors.centerIn: parent
     width: frame.width - Style.spacing.xxl * 2
-    visible: !frame.on
+    visible: !frame.on && !!frame.entry
     spacing: Style.spacing.xs
 
     Text {
@@ -110,7 +119,7 @@ Item {
 
   MouseArea {
     anchors.fill: parent
-    visible: !frame.on
+    visible: !frame.on && !!frame.entry
     enabled: !frame.editing
     onClicked: if (frame.home && frame.entry) frame.home.openSettings(frame.entry.id)
   }

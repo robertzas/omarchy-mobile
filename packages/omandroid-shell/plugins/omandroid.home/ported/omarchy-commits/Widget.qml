@@ -92,6 +92,20 @@ Item {
     onTriggered: widget.refresh(true)
   }
 
+  // A tap anywhere on the card switches between the card and the full feed.
+  // In the feed a commit opens on GitHub, and refresh and github ↗ keep
+  // their own taps; anywhere else goes back.
+  function cycle() {
+    widget.expanded = !widget.expanded
+    list.positionViewAtBeginning()
+  }
+
+  MouseArea {
+    anchors.fill: parent
+    enabled: !widget.editing
+    onClicked: widget.cycle()
+  }
+
   Column {
     anchors.fill: parent
     anchors.margins: Style.spacing.xl
@@ -180,6 +194,17 @@ Item {
       spacing: Style.spacing.lg
       model: widget.commits
 
+      // Under the rows, as tall as the list: a Flickable keeps taps from the
+      // card behind it, so taps on the card's rows and empty space land here.
+      MouseArea {
+        y: list.originY
+        z: -1
+        width: list.width
+        height: Math.max(list.contentHeight, list.height)
+        enabled: !widget.editing
+        onClicked: widget.cycle()
+      }
+
       delegate: Item {
         id: commit
         required property var modelData
@@ -266,21 +291,5 @@ Item {
         }
       }
     }
-  }
-
-  // In the card a tap anywhere opens the full feed; in the feed the header
-  // goes back.
-  MouseArea {
-    anchors.fill: parent
-    enabled: !widget.editing && !widget.expanded
-    onClicked: widget.expanded = true
-  }
-  MouseArea {
-    x: 0
-    y: 0
-    width: parent.width
-    height: headerPart.height + Style.spacing.xl * 2
-    enabled: !widget.editing && widget.expanded
-    onClicked: widget.expanded = false
   }
 }

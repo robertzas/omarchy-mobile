@@ -145,7 +145,7 @@ home = "plugins/omandroid.home"
 if not tool.qmllint_path() or not os.path.isdir(os.path.join(tool.OMARCHY_PATH, "shell")):
     print("ok - ported built-ins lint # SKIP no qmllint or Omarchy shell")
     sys.exit(0)
-files = [os.path.join(home, "PortedWidget.qml")] + [os.path.join(home, f) for f in sys.argv[1].split()]
+files = [os.path.join(home, f) for f in ("PortedWidget.qml", "GeoLocation.qml", "WeatherWidget.qml")] + [os.path.join(home, f) for f in sys.argv[1].split()]
 files += sorted(glob.glob(os.path.join(home, "ported/*/*.qml")))
 lint = tool.run_qmllint([os.path.abspath(f) for f in files])
 for line in lint["errors"] + lint["warnings"]:
@@ -154,6 +154,23 @@ sys.exit(1 if lint["errors"] or lint["warnings"] else 0)
 PY
 fi
 pass "ported built-ins"
+
+# The weather widgets' position: locate.sh against a fake where-am-i.
+bash -n plugins/omandroid.home/locate.sh || fail "locate.sh parses"
+loc=$(mktemp -d)
+printf '#!/bin/sh\nprintf "New location:\\nLatitude:    52.520008\\302\\260\\nLongitude:   -13.404954\\302\\260\\nAccuracy:    25000.000000 meters\\n"\n' >"$loc/wai"
+printf '#!/bin/sh\necho "Failed to connect to GeoClue service"\n' >"$loc/none"
+chmod +x "$loc/wai" "$loc/none"
+[[ $(XDG_CACHE_HOME=$loc/c OMANDROID_WHERE_AM_I=$loc/wai bash plugins/omandroid.home/locate.sh) == '{"lat":52.52,"lon":-13.40,"accuracy":25000,"at":'* ]] \
+  || fail "locate.sh rounds GeoClue's position to 0.01 degree"
+[[ $(XDG_CACHE_HOME=$loc/c OMANDROID_WHERE_AM_I=$loc/none bash plugins/omandroid.home/locate.sh) == '{"lat":52.52,'* ]] \
+  || fail "locate.sh answers from its cache"
+rc=0; XDG_CACHE_HOME=$loc/d OMANDROID_WHERE_AM_I=$loc/none bash plugins/omandroid.home/locate.sh >/dev/null 2>&1 || rc=$?; [[ $rc == 3 ]] \
+  || fail "locate.sh reports no position"
+rc=0; XDG_CACHE_HOME=$loc/d OMANDROID_WHERE_AM_I=$loc/missing bash plugins/omandroid.home/locate.sh >/dev/null 2>&1 || rc=$?; [[ $rc == 2 ]] \
+  || fail "locate.sh reports GeoClue missing"
+rm -rf "$loc"
+pass "weather location helper"
 
 # The user's own widgets: the tool, its tests, and what ships with it.
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omandroid-widget || fail "omandroid-widget parses"

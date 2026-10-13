@@ -15,6 +15,19 @@ import qs.Commons as Commons
 Item {
   id: widget
 
+  // A tap anywhere on the card goes to the next view (tile, details, back to
+  // the tile); links and buttons keep their own taps. Not in edit mode.
+  function cycle() {
+    if (widget.editing) return
+    widget.details = !widget.details
+    if (widget.details) widget.refresh(true)
+  }
+  MouseArea {
+    anchors.fill: parent
+    enabled: !widget.editing
+    onClicked: widget.cycle()
+  }
+
   property var host: null
   property var settings: ({})
   property bool editing: false
@@ -54,21 +67,35 @@ Item {
     return (c.soc !== "" ? c.soc : c.model !== "" ? c.model : c.arch) + " (" + c.cores + ")"
   }
 
+  // Why the last run gave nothing, in words; "" when it worked.
+  property string failure: ""
+
   function refresh(force) {
-    if (!host || host.busy) return
+    if (!host) return
+    // One command at a time per widget: try again in a moment.
+    if (host.busy) { retry.restart(); return }
     if (!force && f && Date.now() - f.at < 60000) return
-    host.run(["python3", host.dir + "/fetch.py"], function(result) {
+    var started = host.run(["python3", host.dir + "/fetch.py"], function(result) {
       var d = null
       try { d = JSON.parse(result.stdout.trim()) } catch (e) { d = null }
-      if (!d) return
+      if (!d) {
+        let err = String(result.stderr || "").trim().split("\n").pop()
+        widget.failure = result.timedOut ? "fetch.py took too long"
+          : result.code === 127 ? "python3 is not installed"
+          : "fetch.py failed" + (err ? ": " + err : " (exit " + result.code + ")")
+        return
+      }
+      widget.failure = ""
       d.at = Date.now()
       widget.f = d
       widget.host.setCached(d)
-    }, { timeout: 15 })
+    }, { timeout: 20 })
+    if (!started) retry.restart()
   }
 
   Component.onCompleted: refresh(false)
   Timer { interval: 300000; repeat: true; running: true; onTriggered: widget.refresh(true) }
+  Timer { id: retry; interval: 3000; onTriggered: widget.refresh(true) }
 
   // Arch's A with its rounded cut, in the accent colour.
   component Logo: Canvas {
@@ -200,6 +227,18 @@ Item {
         Swatches { }
       }
     }
+    Text {
+      width: parent.width
+      visible: widget.failure !== ""
+      textFormat: Text.PlainText
+      text: widget.failure
+      color: Commons.Color.urgent
+      font.family: Style.font.family
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+      maximumLineCount: 3
+      elide: Text.ElideRight
+    }
     Line { key: "os"; value: widget.f ? widget.f.os : "…" }
     Line { key: "host"; value: widget.f ? (widget.f.model || widget.f.host) : "…" }
     Line { key: "kernel"; value: widget.f ? widget.f.kernel.split("-")[0] : "…" }
@@ -213,12 +252,6 @@ Item {
     Line { key: "battery"; value: widget.hasBattery ? widget.level + "% · " + widget.batState : "none" }
   }
 
-  MouseArea {
-    anchors.fill: parent
-    visible: !widget.details
-    enabled: !widget.editing
-    onClicked: { widget.details = true; widget.refresh(true) }
-  }
 
   // ---------- details (the original's full screen)
   Flickable {
@@ -230,6 +263,14 @@ Item {
     interactive: !widget.editing
     boundsBehavior: Flickable.StopAtBounds
     contentHeight: more.height
+
+    // Taps on the details' empty space and plain rows go to the next view too.
+    MouseArea {
+      width: sheet.width
+      height: Math.max(sheet.height, sheet.contentHeight)
+      enabled: !widget.editing
+      onClicked: widget.cycle()
+    }
 
     Column {
       id: more
@@ -276,7 +317,7 @@ Item {
             anchors.fill: parent
             anchors.margins: -Style.spacing.xl
             enabled: !widget.editing
-            onClicked: widget.details = false
+            onClicked: widget.cycle()
           }
         }
       }

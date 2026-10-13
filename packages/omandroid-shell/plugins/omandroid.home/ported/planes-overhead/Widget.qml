@@ -11,9 +11,22 @@ import Quickshell
 import qs.Commons
 import qs.Commons as Commons
 import "Wttr.js" as Wttr
+import "../.." as Home
 
 Item {
   id: widget
+
+  // A tap anywhere on the card goes to the next view (tile, details, back to
+  // the tile); links and buttons keep their own taps. Not in edit mode.
+  function cycle() {
+    if (widget.editing) return
+    widget.detail = !widget.detail
+  }
+  MouseArea {
+    anchors.fill: parent
+    enabled: !widget.editing
+    onClicked: widget.cycle()
+  }
 
   property var host: null
   property var settings: ({})
@@ -21,7 +34,15 @@ Item {
   property int cellsWide: 1
   property int cellsHigh: 1
 
-  readonly property string city: String(settings.city || "").trim()
+  // The place for wttr.in: the phone's position ("Use my location": GeoClue at
+  // city accuracy, rounded to about 1 km; Omandroid's GeoLocation.qml) when
+  // there is one, else the typed city, else wttr.in's guess from the address.
+  // Nothing is fetched while the position is still being looked up.
+  readonly property bool useLocation: settings.useLocation !== false
+  Home.GeoLocation { id: geo; active: widget.useLocation }
+  readonly property bool waiting: useLocation && !geo.fix && geo.failure === ""
+  readonly property string city: useLocation && geo.fix ? geo.fix.lat + "," + geo.fix.lon : String(settings.city || "").trim()
+  onWaitingChanged: if (!waiting) locate(false)
   readonly property color fg: host ? host.foreground : Commons.Color.menu.text
   readonly property color dim: host ? host.dimForeground : Commons.Color.menu.text
 
@@ -46,6 +67,7 @@ Item {
   function remember() { if (host) host.setCached({ place: place, sky: sky }) }
 
   function locate(force) {
+    if (widget.waiting) return
     if (!force && place && place.city === city && Date.now() - place.at < 30 * 60000) { listen(false); return }
     var wanted = city
     problem = ""
@@ -223,12 +245,6 @@ Item {
     }
   }
 
-  MouseArea {
-    anchors.fill: parent
-    visible: !widget.detail
-    enabled: !widget.editing
-    onClicked: widget.detail = true
-  }
 
   // ---------- every flight
   Item {
@@ -244,7 +260,7 @@ Item {
       MouseArea {
         anchors.fill: parent
         enabled: !widget.editing
-        onClicked: widget.detail = false
+        onClicked: widget.cycle()
       }
     }
     Label {
@@ -263,7 +279,9 @@ Item {
       anchors.bottom: footerView.top
       width: parent.width
       clip: true
-      interactive: !widget.editing
+      // Scrolls only when it overflows, so a tap below a short list reaches
+      // the card and goes to the next view.
+      interactive: !widget.editing && contentHeight > height
       boundsBehavior: Flickable.StopAtBounds
       spacing: Style.spacing.sm
       model: widget.listed

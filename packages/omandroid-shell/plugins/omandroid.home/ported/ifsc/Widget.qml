@@ -90,6 +90,25 @@ Item {
     }, { timeout: 30 })
   }
 
+  // A tap anywhere on the card steps through the views: the summary,
+  // results, standings, the calendar, and back. The category chips and
+  // the links keep their own taps.
+  function cycle() {
+    if (!widget.expanded) {
+      widget.expanded = true
+      widget.tab = "results"
+    } else if (widget.tab === "results") {
+      widget.tab = "cup"
+      widget.pick = 0
+    } else if (widget.tab === "cup") {
+      widget.tab = "calendar"
+    } else {
+      widget.expanded = false
+      widget.tab = "results"
+    }
+    list.positionViewAtBeginning()
+  }
+
   Component.onCompleted: refresh(false)
   Timer { interval: 10 * 60000; repeat: true; running: true; onTriggered: widget.refresh(false) }
 
@@ -116,6 +135,15 @@ Item {
   }
 
   // ---------- the tile
+
+  // The whole card is the switch (the list's own background covers the part
+  // the list takes).
+  MouseArea {
+    anchors.fill: parent
+    enabled: !widget.editing
+    onClicked: widget.cycle()
+  }
+
   Column {
     anchors.fill: parent
     anchors.margins: Style.spacing.xl
@@ -146,12 +174,6 @@ Item {
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
         font.bold: widget.live
-      }
-      MouseArea {
-        anchors.fill: parent
-        anchors.margins: -Style.spacing.md
-        enabled: !widget.editing
-        onClicked: widget.expanded = !widget.expanded
       }
     }
 
@@ -273,11 +295,6 @@ Item {
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
           }
-          MouseArea {
-            anchors.fill: parent
-            enabled: !widget.editing
-            onClicked: { widget.tab = tabItem.modelData.v; widget.pick = 0 }
-          }
         }
       }
     }
@@ -319,6 +336,17 @@ Item {
       boundsBehavior: Flickable.StopAtBounds
       spacing: Style.spacing.sm
       model: widget.expanded ? widget.detailRows : []
+
+      // Under the rows, as tall as the list: a Flickable keeps taps from the
+      // card behind it, so taps on rows and empty space land here.
+      MouseArea {
+        y: list.originY
+        z: -1
+        width: list.width
+        height: Math.max(list.contentHeight, list.height)
+        enabled: !widget.editing
+        onClicked: widget.cycle()
+      }
 
       delegate: Item {
         id: line

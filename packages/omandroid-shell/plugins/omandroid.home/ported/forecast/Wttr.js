@@ -7,7 +7,7 @@
 // A city for wttr.in's path: "/", "?", "&" or "#" can't break the URL.
 // Empty means located by IP.
 function encodeCity(city) {
-  return encodeURIComponent(String(city || "").trim()).replace(/%20/g, "+")
+  return encodeURIComponent(String(city || "").trim()).replace(/%20/g, "+").replace(/%2C/g, ",")
 }
 
 function url(city) {

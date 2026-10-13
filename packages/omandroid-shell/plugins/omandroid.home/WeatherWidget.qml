@@ -6,10 +6,12 @@ import qs.Commons as Commons
 import "HomeModel.js" as HomeModel
 
 // Current weather from Open-Meteo (open-meteo.com: free, no key, no
-// account). Off until the user turns it on in the widget's settings and
-// names a place; then it asks for that place's forecast every 30 minutes,
-// sending only coordinates rounded to about 1 km. Nothing else leaves the
-// phone, and with the widget off it makes no request at all.
+// account). Off until the user turns it on in the widget's settings; then it
+// asks for the forecast every 30 minutes, for the phone's own position
+// (GeoClue through GeoLocation.qml, "Use my location", on by default) or the
+// place the user named, sending only coordinates rounded to about 1 km.
+// Nothing else leaves the phone, and with the widget off it makes no request
+// at all and doesn't ask for the position either.
 Item {
   id: widget
 
@@ -17,7 +19,16 @@ Item {
   property var entry: null
   property bool editing: false
   readonly property var config: entry && entry.config ? entry.config : ({})
-  readonly property bool configured: config.enabled === true && typeof config.latitude === "number" && typeof config.longitude === "number"
+  readonly property bool hasPlace: typeof config.latitude === "number" && typeof config.longitude === "number"
+  readonly property bool useLocation: config.useLocation !== false
+  readonly property bool configured: config.enabled === true && (useLocation || hasPlace)
+
+  GeoLocation { id: geo; active: widget.configured && widget.useLocation }
+  // Where the forecast is for: here, when the position is known; else the
+  // named place; else nowhere yet.
+  readonly property bool here: useLocation && !!geo.fix
+  readonly property var coords: here ? { latitude: geo.fix.lat, longitude: geo.fix.lon }
+    : hasPlace ? { latitude: config.latitude, longitude: config.longitude } : null
 
   readonly property color fg: home ? home.foreground : "white"
   readonly property color dim: home ? home.dimForeground : "white"
@@ -27,10 +38,10 @@ Item {
   readonly property var cached: home && entry ? home.widgetCache(entry.id) : null
   property var forecast: cached && cached.key === requestKey ? cached.data : null
   property string failure: ""
-  readonly property string requestKey: configured ? [config.latitude, config.longitude, config.units].join(",") : ""
+  readonly property string requestKey: configured && coords ? [coords.latitude, coords.longitude, config.units].join(",") : ""
 
   function refresh(force) {
-    if (!configured) return
+    if (!configured || !coords) return
     var c = home ? home.widgetCache(entry.id) : null
     if (!force && c && c.key === requestKey && Date.now() - c.at < 30 * 60 * 1000) { forecast = c.data; return }
     var xhr = new XMLHttpRequest()
@@ -42,7 +53,7 @@ Item {
       widget.forecast = parsed
       if (widget.home) widget.home.setWidgetCache(widget.entry.id, { key: widget.requestKey, at: Date.now(), data: parsed })
     }
-    xhr.open("GET", HomeModel.forecastUrl(config.latitude, config.longitude, config.units))
+    xhr.open("GET", HomeModel.forecastUrl(coords.latitude, coords.longitude, config.units))
     xhr.send()
   }
 
@@ -80,7 +91,7 @@ Item {
       visible: widget.height > 90
       horizontalAlignment: Text.AlignHCenter
       textFormat: Text.PlainText
-      text: "Tap to choose a place. Uses open-meteo.com."
+      text: "Tap to turn it on. Uses open-meteo.com."
       color: widget.dim
       font.family: Style.font.family
       font.pixelSize: Style.font.body
@@ -108,7 +119,9 @@ Item {
 
       Text {
         textFormat: Text.PlainText
-        text: widget.forecast ? widget.forecast.temperature + widget.unit : (widget.failure || "…")
+        text: widget.forecast ? widget.forecast.temperature + widget.unit
+          : widget.failure || (!widget.coords && geo.failure ? geo.failure + ". Tap to name a place."
+            : !widget.coords ? "Finding your location…" : "…")
         color: widget.fg
         font.family: Style.font.family
         font.pixelSize: widget.forecast ? Style.font.displayLarge : Style.font.body
@@ -116,7 +129,7 @@ Item {
       Text {
         textFormat: Text.PlainText
         visible: !!widget.forecast
-        text: widget.forecast ? [widget.config.place, widget.look.text,
+        text: widget.forecast ? [widget.here ? "Here" : widget.config.place, widget.look.text,
           widget.forecast.high !== null ? "↑" + widget.forecast.high + "° ↓" + widget.forecast.low + "°" : ""]
           .filter(function(s) { return !!s }).join(" · ") : ""
         color: widget.dim
@@ -132,7 +145,7 @@ Item {
     anchors.fill: parent
     enabled: !widget.editing
     onClicked: {
-      if (!widget.configured && widget.home) widget.home.openSettings(widget.entry.id)
+      if ((!widget.configured || !widget.coords) && widget.home) widget.home.openSettings(widget.entry.id)
       else widget.refresh(true)
     }
   }

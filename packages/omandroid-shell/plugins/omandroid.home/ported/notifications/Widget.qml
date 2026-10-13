@@ -99,6 +99,14 @@ Item {
     host.saveSettings({ hidden: hidden.filter(function(k) { return keep.indexOf(k) >= 0 }).concat([key]) })
   }
 
+  // A tap anywhere on the card switches between the newest first and all of
+  // them by app. A notification's own tap (its action) and its × keep theirs.
+  function cycle() {
+    widget.expanded = !widget.expanded
+    widget.refresh()
+    noteList.positionViewAtBeginning()
+  }
+
   Component.onCompleted: refresh()
   Timer { interval: 120000; repeat: true; running: true; onTriggered: widget.refresh() }
 
@@ -117,6 +125,14 @@ Item {
       font.pixelSize: Style.font.caption
       font.bold: true
     }
+  }
+
+  // The whole card is the switch (the list's own background covers the part
+  // the list takes).
+  MouseArea {
+    anchors.fill: parent
+    enabled: !widget.editing
+    onClicked: widget.cycle()
   }
 
   Column {
@@ -154,12 +170,6 @@ Item {
           font.pixelSize: Style.font.caption
           font.bold: true
         }
-      }
-      MouseArea {
-        anchors.fill: parent
-        anchors.margins: -Style.spacing.md
-        enabled: !widget.editing
-        onClicked: { widget.expanded = !widget.expanded; widget.refresh() }
       }
     }
 
@@ -220,6 +230,7 @@ Item {
     }
 
     ListView {
+      id: noteList
       width: parent.width
       height: parent.height - headerPart.height - chips.height - parent.spacing * 2
       clip: true
@@ -228,6 +239,17 @@ Item {
       spacing: Style.spacing.lg
       // Expanded: everything, grouped by app under a heading each.
       model: widget.expanded ? widget.grouped : widget.items
+
+      // Under the rows, as tall as the list: a Flickable keeps taps from the
+      // card behind it, so taps on headings and empty space land here.
+      MouseArea {
+        y: noteList.originY
+        z: -1
+        width: noteList.width
+        height: Math.max(noteList.contentHeight, noteList.height)
+        enabled: !widget.editing
+        onClicked: widget.cycle()
+      }
 
       delegate: Item {
         id: rowView
