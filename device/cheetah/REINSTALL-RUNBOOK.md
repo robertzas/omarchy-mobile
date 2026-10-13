@@ -93,24 +93,28 @@ is what hung the last shutdown), then run P2 again.
 
 ## 2. Build (laptop only; no phone)
 
-### B1. Packages (risk none; hours for the slow ones)
+### B1. Packages (risk none on the laptop; the old phone only compiles)
 
 ```sh
 tools/build-packages --list
-tools/build-packages                                   # everything but Mesa, Hyprland, libcamera (~30 min)
-tools/build-packages packages/hyprland packages/libcamera packages/mesa   # hours under qemu; once per version
+tools/build-packages                                   # everything but Mesa, Hyprland, libcamera (~20 min)
+tools/repo-build packages/hyprland packages/libcamera packages/mesa   # on the old phone, natively
 tools/build-packages --list                            # nothing "to build" or "missing"
 ```
 
-`tools/build-packages` replaces `tools/repo-build` for this: it builds in an
-Arch Linux ARM container (the official tarball, signature-checked), so the
-old phone isn't needed. It signs with `keys/` and indexes `out/repo/aarch64`.
-Each package's `test/all` runs natively first (its `check()` times out under qemu). **Stop** on a failed test; fix the package, don't `--nocheck` past it.
-Fallback for the slow three if time is short: copy their packages off the
-old phone first (read-only: `tools/phone-ssh 'ls ~<account>/build/*/*.pkg.tar.*'`,
-then `ssh 'cat FILE' > FILE` into a directory) and `tools/build-packages --import DIR`.
-Mesa's old build carries the old project name in its version string, so
-rebuild it later.
+`tools/build-packages` builds in an Arch Linux ARM container (the official
+tarball, signature-checked) under qemu, signs with `keys/` and indexes
+`out/repo/aarch64`. Each package's `test/all` runs natively first (its
+`check()` times out under qemu). **Stop** on a failed test; fix the package,
+don't `--nocheck` past it. Mesa, Hyprland and libcamera take many hours under
+qemu, so they're built natively on the old phone with `tools/repo-build`
+(makepkg as the logged-in user, nothing installed; makedepends must already
+be on the phone), which signs them and re-indexes the same `out/repo`. Before
+that, make sure the phone's `~/build/mesa` holds no older Mesa packages:
+`repo-build` also collects whatever is there. `out/repo` must end with one
+version of each package, all signed, and Mesa, `vulkan-panfrost`, Hyprland
+and the libcamera packages from these builds (`tools/build-rootfs` refuses
+them from any other repository).
 
 ### B2. Kernel, modules, initramfs, images (risk none)
 

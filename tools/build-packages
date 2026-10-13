@@ -16,7 +16,7 @@
 #                    run the PKGBUILDs' check() under emulation instead of the
 #                    package's test/all natively on this laptop (the default:
 #                    the tests are the same, and some time out under qemu)
-#     --import DIR   copy prebuilt *.pkg.tar.zst from DIR into the repository
+#     --import DIR   copy prebuilt *.pkg.tar.{zst,xz} from DIR into the repository
 #                    (for example Mesa from an earlier build), then sign it
 #     --list         print what would be built and what is up to date
 #
@@ -86,7 +86,7 @@ up_to_date() {
   local dir=$1 want name f
   want=$(pkg_version "$dir")
   for name in $(pkg_names "$dir"); do
-    f=$(ls "$repo/$name-$want"-*.pkg.tar.zst 2>/dev/null | head -1)
+    f=$(ls "$repo/$name-$want"-*.pkg.tar.* 2>/dev/null | grep -v '\.sig$' | head -1)
     [[ -n $f ]] || return 1
   done
 }
@@ -109,8 +109,8 @@ add_to_repo() {
     base=${file##*/}
     name=$(bsdtar -xOf "$file" .PKGINFO | sed -n 's/^pkgname = //p')
     [[ -n $name ]] || alarm_die "$base: no .PKGINFO"
-    for old in "$repo/$name"-*.pkg.tar.zst; do
-      [[ -e $old ]] || continue
+    for old in "$repo/$name"-*.pkg.tar.*; do
+      [[ -e $old && $old != *.sig ]] || continue
       [[ $(bsdtar -xOf "$old" .PKGINFO | sed -n 's/^pkgname = //p') == "$name" ]] || continue
       [[ ${old##*/} == "$base" ]] || rm -f "$old" "$old.sig"
     done
@@ -122,8 +122,9 @@ add_to_repo() {
 
 for dir in "${imports[@]}"; do
   alarm_say "Importing prebuilt packages from $dir"
-  files=("$dir"/*.pkg.tar.zst)
-  [[ -e ${files[0]} ]] || alarm_die "no *.pkg.tar.zst in $dir"
+  files=()
+  for f in "$dir"/*.pkg.tar.*; do [[ $f == *.sig ]] || files+=("$f"); done
+  ((${#files[@]})) || alarm_die "no packages in $dir"
   for f in "${files[@]}"; do
     [[ $(bsdtar -xOf "$f" .PKGINFO | sed -n 's/^arch = //p') =~ ^(aarch64|any)$ ]] || alarm_die "$f is not an aarch64 package"
   done
@@ -146,12 +147,12 @@ fi
 
 sign_and_index() {
   local package
-  for package in "$repo"/*.pkg.tar.zst; do
-    [[ -e $package ]] || continue
+  for package in "$repo"/*.pkg.tar.*; do
+    [[ -e $package && $package != *.sig ]] || continue
     [[ -f $package.sig ]] || gpg --batch --yes --local-user "$key" --detach-sign "$package"
   done
   rm -f "$repo"/omamobile.db* "$repo"/omamobile.files*
-  repo-add --quiet --sign --key "$key" "$repo/omamobile.db.tar.gz" "$repo"/*.pkg.tar.zst
+  repo-add --quiet --sign --key "$key" "$repo/omamobile.db.tar.gz" $(ls "$repo"/*.pkg.tar.* | grep -v '\.sig$')
 }
 
 for dir in "${build[@]}"; do
