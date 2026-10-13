@@ -26,12 +26,12 @@ Statuses: **works** (on by default, verified on the phone), **partial** (works, 
 | Sensors | works | Accelerometer, light, proximity and compass at every boot; auto-rotate | [AOC-PLAN](../device/cheetah/AOC-PLAN.md) C6, [USF-PROTOCOL](../device/cheetah/USF-PROTOCOL.md) |
 | Speakers, microphones | partial | Both speakers in stereo under Google's speaker protection, mics at stock gain. `omandroid-audio` 0.3.0 plays at stage `media` (digital 737, analog 10), inside the no-protection limits and about 17 dB below stock; stock's gains wait for verified protection (C9), and stock's loudness comes from the Waves processing on the AoC, researched but not run | [AOC-PLAN](../device/cheetah/AOC-PLAN.md) C8-C10, [AOC-TUNING-RESEARCH](../device/cheetah/AOC-TUNING-RESEARCH.md) |
 | CPU idle, power | partial | C2 idle on all cores is in the default DTB; battery-drain numbers off the cable not yet measured | [POWER-PLAN](../device/cheetah/POWER-PLAN.md) |
-| Suspend | in progress | s2idle freezes and wakes cleanly by hand (S1, S2, S3a); not on by default. Deep sleep (SYS_SLEEP), which stock's standby drain needs, not started | [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md) |
+| Suspend | in progress | s2idle freezes and wakes cleanly: by key, and 20 of 20 unattended RTC-alarm cycles with the AoC and sensors running (S1-S4). Not on by default: Wi-Fi across sleep (S5) and battery numbers first. Deep sleep (SYS_SLEEP), which stock's standby drain needs, not started | [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md) |
 | GNSS | in progress | Google's GNSS stack in a chroot behind GeoClue streams NMEA; no fix yet (only a windowsill test). Package 0.2.0's assistance, time injection and clean stop passed indoors (G4b step 1); the outdoor fix (step 2) is next | [GNSS-PLAN](../device/cheetah/GNSS-PLAN.md) |
 | NFC | in progress | With our plain-NCI fix to st-nci (upstream framed it in NDLC), the ST54J powers up, polls and cycles power (N2.4b-N2.6). Reading a tag (N3) is next; the driver is still blacklisted | [RADIOS-CAMERA-PLAN](../device/cheetah/RADIOS-CAMERA-PLAN.md) §3 |
 | Fingerprint | in progress | Trusty runs at every boot; the kernel side passed F1, and the sensor's rail reads off at the right voltage (FB2). The HAL bridge and libfprint driver are built; the first secure-storage write (F4) is irreversible and waits for the human's go | [FINGERPRINT-PLAN](../device/cheetah/FINGERPRINT-PLAN.md) |
-| Modem | in progress | The PCIe link comes up at stock timing and the S5300 enumerates on the bus (M2.5, M3.1). Google's modem interface driver (CPIF) builds as a module; the SIT protocol is documented and a SIT client daemon (`omandroid-modem-sit`) is built and tested against a simulator. No firmware sent yet. Each modem power-off triggers one recovered UFS error-handler pass, so the stack must avoid power cycles | [MODEM-PLAN](../device/cheetah/MODEM-PLAN.md), [MODEM-SIT-RESEARCH](../device/cheetah/MODEM-SIT-RESEARCH.md), [MODEM-CLIENT](../device/cheetah/MODEM-CLIENT.md) |
-| Cameras | in progress (early) | The read-only probe passed (CAM1: camera power domains on, the CSIS link answers, DMA-BUF heaps present); the ultrawide's power path is built. No frame yet | [CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md) |
+| Modem | in progress | The PCIe link comes up at stock timing, the S5300 enumerates on the bus, and Google's modem interface driver (CPIF) binds with its 52 I/O devices, the modem unpowered (M2.5-M3.3-B); the SIT protocol is documented and a SIT client daemon (`omandroid-modem-sit`) is built and tested against a simulator. No firmware sent yet. Each modem power-off triggers one recovered UFS error-handler pass, so the stack now keeps the modem on once it is up | [MODEM-PLAN](../device/cheetah/MODEM-PLAN.md), [MODEM-SIT-RESEARCH](../device/cheetah/MODEM-SIT-RESEARCH.md), [MODEM-CLIENT](../device/cheetah/MODEM-CLIENT.md) |
+| Cameras | in progress | The ultrawide powers up in stock's order and identifies as a Sony IMX386 (CAM1-CAM3a). Its capture path (DC-PHY receiver, CSIS and write-DMA driver, IMX386 driver, libcamera's simple pipeline) is built; no frame yet | [CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md) |
 | Android apps (Waydroid) | not started | A goal of the project; no work yet | |
 | Installer | not started | Putting Arch onto `userdata` is done by hand today ([CONTRIBUTING](../CONTRIBUTING.md) §4) | |
 | Updates | partial | Packages ship through a signed `[omandroid]` pacman repository and `omarchy update`, but the repository is copied to the phone over USB (`tools/repo-push`), not yet hosted; kernel updates go through `bin/omandroid push` | [CONTRIBUTING](../CONTRIBUTING.md) §4 |
@@ -46,7 +46,7 @@ Statuses: **works** (on by default, verified on the phone), **partial** (works, 
 | **Mobile data** | no | Modem M3 and M4 (one data call, `rmnet0`), the front end, then suspend with the modem online (M6) |
 | **Cameras** | no | Raw capture through the CSIS, then libcamera's software ISP; four sensors, focus |
 | **Fingerprint unlock** | no | F2-F10: secure storage, the TA, sensor power, the panel's local high-brightness mode, enrolment, fprintd and Omarchy's lock |
-| **Suspend on screen-off** | no | s2idle on by default (S3b-S8), then deep sleep for real standby |
+| **Suspend on screen-off** | no | s2idle on by default (S5-S8), then deep sleep for real standby |
 | **Battery life** | unmeasured | s2idle alone won't reach Android's standby: the plan quotes about 274-286 mA in s2idle against about 32-50 mA in deep sleep on this phone. Deep sleep is the fix; the first job is to measure (S7, `power-ab`) |
 | **Loud speakers** | about 17 dB below stock | C9 (protection verified at stock gains), then the AoC's Waves speaker processing ([AOC-TUNING-RESEARCH](../device/cheetah/AOC-TUNING-RESEARCH.md), T0-T6) or a PipeWire loudness filter |
 | **NFC** | powers up | N3 (read a tag), then neard on by default; payments are out of scope |
@@ -66,7 +66,7 @@ Milestones in rough priority order. Most tracks are independent and run in paral
 The highest-value track and the longest. [MODEM-PLAN](../device/cheetah/MODEM-PLAN.md) and [RADIOS-CAMERA-PLAN](../device/cheetah/RADIOS-CAMERA-PLAN.md) §1:
 
 ```
-M2.5, M3.1 (passed) ─> M3.3-B CPIF bind ─> M3.4 firmware boot, CP ONLINE ─> M3.6 SysMMU
+M2.5, M3.1, M3.3-B (passed) ─> M2.6 ─> M3.4 firmware boot, CP ONLINE ─> M3.6 SysMMU
                                                               │
                                                               └─> M4 SIT client: attach, data, SMS ─> oFono / ModemManager
                                                                         │
@@ -77,8 +77,9 @@ M2.5, M3.1 (passed) ─> M3.3-B CPIF bind ─> M3.4 firmware boot, CP ONLINE ─
 | Milestone | Effort (from the plans) | Next concrete step |
 | --- | --- | --- |
 | M2.5, M3.1: UFS around modem power changes, enumerate the bus | passed 2026-10-12 | Done; modem power-offs disturb UFS once each, so later stages keep power cycles to a minimum |
-| M3.3-B: bind CPIF without firmware | an hour (MODEM-PLAN) | A boot with the `modem-cpif-test` overlay |
-| M3.4: Google's boot loader for the modem in the RAM-only NV chroot, firmware over PCIe, CP ONLINE | 1-2 weeks of debugging (MODEM-PLAN) | After M3.3-B; the partition checksums (M3.5) after every run |
+| M3.3-B: bind CPIF without firmware | passed 2026-10-12 (52 iodevs, no modem power) | Done |
+| M2.6: one slow power-off, to find which line edge disturbs UFS | an hour | The M2.6 runbook; the kernel now runs stock's exact power-off and keeps the modem on once up |
+| M3.4: Google's boot loader for the modem in the RAM-only NV chroot, firmware over PCIe, CP ONLINE | 1-2 weeks of debugging (MODEM-PLAN) | The M3.4 runbook (rfsd alone first, then cbd); the partition checksums (M3.5) after every run |
 | M3.6: the HSI1 SysMMU confines the modem's DMA | 1 week (MODEM-PLAN) | Offline, after M3.4 |
 | M4: SIT client to registration, a data call and SMS | 3-6 weeks (MODEM-PLAN; MODEM-SIT-RESEARCH breaks it down: daemon 3-5 days, data 1 week, SMS 2-3 days). The daemon, `omandroid-sitd`, is now written and passes against a simulator | The gated M4 runbook in MODEM-CLIENT, once M3.4 reaches ONLINE; the long data-call form and the signal layout are still open |
 | Front end | oFono driver about 2-3 weeks, ModemManager plugin 2-4 weeks (MODEM-PLAN) or 3-4 weeks (MODEM-SIT-RESEARCH, MODEM-CLIENT) | MODEM-CLIENT §3 leans to oFono (its atoms match SIT's families); decide once `omandroid-sitd` has run on the phone |
@@ -90,7 +91,7 @@ M2.5, M3.1 (passed) ─> M3.3-B CPIF bind ─> M3.4 firmware boot, CP ONLINE ─
 
 [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md), [POWER-PLAN](../device/cheetah/POWER-PLAN.md), [USB-C-PLAN](../device/cheetah/USB-C-PLAN.md):
 
-1. **S3b** (the PMIC overlay and RTC wake), **S4** (C2 in s2idle, a 20-cycle loop), **S5** (Wi-Fi across sleep with the D3 branch), **S6** (AoC and sensors across sleep), **S7** (battery numbers), **S8** (screen-off sleep on by default, with the sleep hook already in `omandroid-device-cheetah`). Next: S3b.
+1. **S3b** (the RTC) and **S4**'s 20-cycle loop passed. Then **S5** (Wi-Fi across sleep with the D3 branch), **S6** (AoC and sensors across sleep), **S7** (battery numbers), **S8** (screen-off sleep on by default, with the sleep hook already in `omandroid-device-cheetah`). Next: S5. The RTC also needs `sec_acpm` loaded at every boot (S3b).
 2. **Measure drain** off the cable: POWER-PLAN's B0 baseline and `power-ab c2`.
 3. **Deep sleep (SYS_SLEEP)**: the gs201 SoC sleep sequence through the PMU and ACPM, as stock does. Researched in SUSPEND-PLAN §5, no estimate yet. This is what gets standby near Android's.
 4. **Safe charging by default**: the temperature guard (B3g), then Type-C with role switching (B4a, B4b). WIFI-BATTERY-PLAN puts B3-B4 at 2-4 days. Next: the B3g runbook.
@@ -115,7 +116,7 @@ M2.5, M3.1 (passed) ─> M3.3-B CPIF bind ─> M3.4 firmware boot, CP ONLINE ─
 
 ### 3.6 Cameras
 
-[CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md): raw Bayer capture through the CSIS write DMA, then libcamera's software ISP. Its timeline: a first raw frame from the ultrawide in 6-9 weeks, a photo in `cam` and a PipeWire app in 8-12 weeks, video 2-3 weeks later, all four cameras with focus in 4-6 months. The main and tele cameras carry most of the risk. K and CAM1 passed; next, CAM2 (the rails, one per boot) from the `camera-pwr-test` runbook.
+[CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md): raw Bayer capture through the CSIS write DMA, then libcamera's software ISP. Its timeline: a first raw frame from the ultrawide in 6-9 weeks, a photo in `cam` and a PipeWire app in 8-12 weeks, video 2-3 weeks later, all four cameras with focus in 4-6 months. The main and tele cameras carry most of the risk. K through CAM3a passed (the ultrawide is a Sony IMX386), and the capture path for CAM3b-CAM5 is built; next, CAM3b: the sensor streams a test pattern and the receiver counts frames, with no DMA yet.
 
 ### 3.7 Distribution: updates, installer, upstream
 
