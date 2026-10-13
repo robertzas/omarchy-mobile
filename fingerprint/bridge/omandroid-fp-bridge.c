@@ -39,6 +39,20 @@
  *    finger reverses that. The HAL reports halHandlesDisplayTouches and
  *    halControlsIllumination false, so both are the client's job.
  *
+ * For the desktop, the bridge also publishes its state in a small JSON file
+ * (--ui-state; the runner puts it at /run/omandroid-fp-ui/state.json on the
+ * host, world-readable): which operation captures, whether a finger is on
+ * the sensor, and the sensor circle. omandroid-shell's omandroid.fingerprint
+ * plugin draws the target from it and keeps shell gestures off the circle:
+ *
+ *   {"op":"idle|enroll|auth","finger":false,"x":717,"y":2360,"r":121,
+ *    "w":1440,"h":3120,"seq":7,"acquired":1,"remaining":24,"error":0,
+ *    "last":"none|enrolled|match|nomatch|lockout|error"}
+ *
+ * acquired, remaining and error are the last ACQUIRED code, PROGRESS
+ * remaining (-1: none yet) and ERROR code of the current or last ENROLL or
+ * AUTH; seq counts those events.
+ *
  * Plain C on libbinder_ndk, without generated code: parcels are written as
  * the NDK backend writes them (a parcelable is a non-null marker, its size,
  * then its fields) and transaction numbers are the methods' order in the
@@ -205,6 +219,7 @@ static const char *socket_path = "/dev/socket/omandroid-fp/bridge.sock";
 static const char *state_dir = "/data/vendor/omandroid-fp";
 static const char *touch_path = "/dev/input/touchscreen";
 static const char *lhbm_path = "/sys/class/backlight/panel0-backlight/local_hbm_mode";
+static const char *ui_state_path;	/* --ui-state: off unless given */
 /* The panel takes the circle at its next frame; a frame and a half at 60 Hz
  * would do, an idle panel may run at 10 Hz. Tuned in FINGERPRINT-PLAN F8. */
 static int lhbm_settle_ms = 120;
@@ -748,9 +763,16 @@ static bool gk_enroll(const struct bytes *secret, struct bytes *handle)
 	int64_t sid = 0;
 	AParcel *in = begin(gk), *out;
 
+	static const int8_t none[1];
+
+	/*
+	 * IGatekeeper's arrays are not @nullable: "no current handle or
+	 * password" is an empty array. A null one (length -1) fails the call
+	 * with UNEXPECTED_NULL before it reaches Trusty.
+	 */
 	AParcel_writeInt32(in, 0);			/* uid */
-	AParcel_writeByteArray(in, NULL, -1);		/* no current handle */
-	AParcel_writeByteArray(in, NULL, -1);		/* no current password */
+	AParcel_writeByteArray(in, none, 0);		/* no current handle */
+	AParcel_writeByteArray(in, none, 0);		/* no current password */
 	AParcel_writeByteArray(in, secret->data, secret->length);
 	out = call(gk, GK_ENROLL, in, "gatekeeper enroll");
 	if (!out)
@@ -814,6 +836,46 @@ static int listen_fd = -1, client_fd = -1;
 static char client_buf[256];
 static size_t client_used;
 
+/*
+ * What the desktop is told beyond the operation (publish()): the last
+ * acquired hint, the enrollment steps left and how the last operation ended,
+ * with a counter that moves on every such event, so a repeated hint still
+ * reads as new. Taken from the lines the client gets, so both always agree.
+ */
+static unsigned int ui_seq;
+static int32_t ui_acquired, ui_remaining = -1, ui_error;
+static char ui_last[16] = "none";
+
+static void ui_note(const char *line)
+{
+	int32_t a, b;
+
+	if (!strcmp(line, "FINGER NEEDED")) {	/* an ENROLL or AUTH started */
+		ui_acquired = 0;
+		ui_remaining = -1;
+		ui_error = 0;
+		strcpy(ui_last, "none");
+	} else if (sscanf(line, "ACQUIRED %d %d", &a, &b) == 2) {
+		ui_acquired = a;
+	} else if (sscanf(line, "PROGRESS %d %d", &a, &b) == 2) {
+		ui_remaining = b;
+	} else if (!strncmp(line, "ENROLLED ", 9)) {
+		strcpy(ui_last, "enrolled");
+	} else if (!strncmp(line, "MATCH ", 6)) {
+		strcpy(ui_last, "match");
+	} else if (!strcmp(line, "NOMATCH")) {
+		strcpy(ui_last, "nomatch");
+	} else if (!strncmp(line, "LOCKOUT ", 8)) {
+		strcpy(ui_last, "lockout");
+	} else if (sscanf(line, "ERROR %d", &a) == 1) {
+		ui_error = a;
+		strcpy(ui_last, "error");
+	} else {
+		return;
+	}
+	ui_seq++;
+}
+
 static void reply(const char *format, ...)
 {
 	char line[256];
@@ -828,6 +890,8 @@ static void reply(const char *format, ...)
 	if (n > (int)sizeof(line) - 2)
 		n = sizeof(line) - 2;
 	say("-> %.*s", n, line);
+	line[n] = '\0';
+	ui_note(line);
 	line[n++] = '\n';
 	if (client_fd >= 0 && send(client_fd, line, n, MSG_NOSIGNAL) != n) {
 		close(client_fd);
@@ -937,6 +1001,46 @@ static char pending[64];	/* a command that waits for op_ending */
 static bool capturing(void)
 {
 	return (op == OP_ENROLL || op == OP_AUTH) && !op_ending;
+}
+
+/*
+ * The desktop's view of the bridge (--ui-state): written whenever it
+ * changes, as a whole new file renamed over the old one, so a reader never
+ * sees half of it. World-readable: it holds nothing but the sensor's place
+ * and whether a capture runs.
+ */
+static void publish(void)
+{
+	static char last[300];
+	char line[300], tmp[300];
+	const char *what = !capturing() ? "idle" : op == OP_ENROLL ? "enroll" : "auth";
+	int fd, n;
+	bool ok;
+
+	if (!ui_state_path)
+		return;
+	n = snprintf(line, sizeof(line),
+		     "{\"op\":\"%s\",\"finger\":%s,\"x\":%d,\"y\":%d,\"r\":%d,"
+		     "\"w\":%d,\"h\":%d,\"seq\":%u,\"acquired\":%d,\"remaining\":%d,"
+		     "\"error\":%d,\"last\":\"%s\"}\n",
+		     what, finger && capturing() ? "true" : "false",
+		     sensor_x, sensor_y, sensor_r, PANEL_W, PANEL_H,
+		     ui_seq, ui_acquired, ui_remaining, ui_error, ui_last);
+	if (n < 0 || n >= (int)sizeof(line) || !strcmp(line, last))
+		return;
+	snprintf(tmp, sizeof(tmp), "%s.new", ui_state_path);
+	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	if (fd < 0) {
+		say("ui state: %s: %s", tmp, strerror(errno));
+		ui_state_path = NULL;	/* say it once */
+		return;
+	}
+	ok = !fchmod(fd, 0644) && write(fd, line, n) == n;
+	ok = !close(fd) && ok;
+	if (ok && !rename(tmp, ui_state_path))
+		strcpy(last, line);
+	else
+		unlink(tmp);
 }
 
 static void op_done(void)
@@ -1250,7 +1354,7 @@ static int open_listener(void)
 static void usage(void)
 {
 	say("usage: omandroid-fp-bridge [--socket PATH] [--state DIR] [--touch EVDEV]\n"
-	    "                           [--lhbm PATH] [--settle MS]");
+	    "                           [--lhbm PATH] [--settle MS] [--ui-state PATH]");
 	exit(2);
 }
 
@@ -1272,6 +1376,8 @@ int main(int argc, char **argv, char **envp)
 			lhbm_path = v;
 		else if (!strcmp(argv[i], "--settle"))
 			lhbm_settle_ms = atoi(v);
+		else if (!strcmp(argv[i], "--ui-state"))
+			ui_state_path = v;
 		else
 			usage();
 	}
@@ -1307,6 +1413,7 @@ int main(int argc, char **argv, char **envp)
 		return 1;
 	}
 	say("ready on %s", socket_path);
+	publish();
 
 	for (;;) {
 		struct pollfd fds[4] = {
@@ -1343,5 +1450,6 @@ int main(int argc, char **argv, char **envp)
 			pending[0] = '\0';
 			command(line);
 		}
+		publish();
 	}
 }

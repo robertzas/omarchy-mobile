@@ -41,6 +41,8 @@
 #define FP_COMPONENT "omandroid_udfps"
 
 #include "drivers_api.h"
+/* FpMatchData and FpDevicePrivate, for identify_is_duplicate_check() */
+#include "fp-device-private.h"
 
 #include <gio/gunixsocketaddress.h>
 
@@ -498,8 +500,44 @@ dev_enroll (FpDevice *dev)
 }
 
 static void
-dev_verify_identify (FpDevice *dev)
+dev_verify (FpDevice *dev)
 {
+  start_action (FPI_DEVICE_OMANDROID_UDFPS (dev), "AUTH");
+}
+
+/*
+ * fprintd runs an identify before every enrollment, to refuse a finger that
+ * is already enrolled. Here that is one more touch and, for a new finger, a
+ * failed authentication, which the secure world counts toward its lockout
+ * (five give a timed lockout, more a permanent one): enrolling a few fingers
+ * locked the sensor out. Android does no such check. fprintd's check is the
+ * only identify it starts without a match callback (VerifyStart passes one),
+ * so that one is answered "no match" at once, without asking the HAL.
+ *
+ * libfprint has no driver API for the callback, so this reads the task data
+ * the way fpi-device.c does (libfprint 1.94.x; the driver test covers it).
+ */
+static gboolean
+identify_is_duplicate_check (FpDevice *dev)
+{
+  FpDeviceClass *dev_class = g_type_class_peek_static (FP_TYPE_DEVICE);
+  FpDevicePrivate *priv = G_STRUCT_MEMBER_P (dev,
+                                             g_type_class_get_instance_private_offset (dev_class));
+  FpMatchData *data = priv->current_task ? g_task_get_task_data (priv->current_task) : NULL;
+
+  return data && data->match_cb == NULL;
+}
+
+static void
+dev_identify (FpDevice *dev)
+{
+  if (identify_is_duplicate_check (dev))
+    {
+      fp_dbg ("identify without a match callback (fprintd's duplicate check): no match");
+      fpi_device_identify_report (dev, NULL, NULL, NULL);
+      fpi_device_identify_complete (dev, NULL);
+      return;
+    }
   start_action (FPI_DEVICE_OMANDROID_UDFPS (dev), "AUTH");
 }
 
@@ -580,8 +618,8 @@ fpi_device_omandroid_udfps_class_init (FpiDeviceOmandroidUdfpsClass *klass)
   dev_class->open = dev_open;
   dev_class->close = dev_close;
   dev_class->enroll = dev_enroll;
-  dev_class->verify = dev_verify_identify;
-  dev_class->identify = dev_verify_identify;
+  dev_class->verify = dev_verify;
+  dev_class->identify = dev_identify;
   dev_class->list = dev_list;
   dev_class->delete = dev_delete;
   dev_class->cancel = dev_cancel;

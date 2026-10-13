@@ -44,6 +44,10 @@ TOUCH_NAME="Synaptics TouchComm Touchscreen"
 # The bridge's socket directory on the host (root only); in the chroot it
 # is /dev/socket/omandroid-fp.
 SOCKDIR=$RUN/sock
+# The bridge's state for the desktop (omandroid-shell's fingerprint target):
+# world-readable, unlike everything else here. In the chroot it is
+# /dev/socket/omandroid-fp-ui.
+UIDIR=/run/omandroid-fp-ui
 
 say() { printf 'omandroid-fp: %s\n' "$*" >&2; }
 die() { say "error: $*"; exit 1; }
@@ -62,6 +66,8 @@ stop() {
   STOPPING=1
   trap '' TERM INT
   say "stopping"
+  # no capture runs any more: the desktop drops its target
+  rm -f "$UIDIR/state.json" "$UIDIR/state.json.new"
   kill -TERM 0 2>/dev/null || true
   exit "$code"
 }
@@ -173,6 +179,9 @@ setup_dev() {
   # the bridge's socket, reachable from the host (fprintd)
   install -d -m 0700 "$SOCKDIR"
   bind "$SOCKDIR" "$dev/socket/omandroid-fp"
+  install -d -m 0755 "$UIDIR"
+  rm -f "$UIDIR/state.json" "$UIDIR/state.json.new"
+  bind "$UIDIR" "$dev/socket/omandroid-fp-ui"
   # A private binder instance: binder, hwbinder and vndbinder are created at
   # mount (CONFIG_ANDROID_BINDER_DEVICES).
   mount -t binder binder "$dev/binderfs"
@@ -180,8 +189,15 @@ setup_dev() {
     [[ -e $dev/binderfs/$n ]] || die "binderfs has no $n (CONFIG_ANDROID_BINDER_DEVICES)"
     ln -s "binderfs/$n" "$dev/$n"
   done
-  # Factory calibration: a read-only copy, never the partition itself.
-  [[ -f $STATE/mfg_data.img ]] && bind "$STATE/mfg_data.img" "$dev/block/by-name/mfg_data" ro
+  # Factory calibration: never the partition itself. The HAL opens it
+  # read-write (EROFS on a read-only bind, and it then runs without its
+  # calibration), so it gets a scratch copy per run in /run: whatever it
+  # writes is lost at stop, and the saved copy stays as F3 made it.
+  if [[ -f $STATE/mfg_data.img ]]; then
+    install -d -m 0700 /run/omandroid-fp
+    install -m 0600 "$STATE/mfg_data.img" /run/omandroid-fp/mfg_data.img
+    bind /run/omandroid-fp/mfg_data.img "$dev/block/by-name/mfg_data"
+  fi
   # the target lives in the tmpfs just mounted on dev: create it first
   mkdir -p "$dev/__omandroid_props__"
   mount -t tmpfs -o mode=0755,nosuid,nodev,noexec props "$dev/__omandroid_props__"
@@ -327,6 +343,7 @@ start() {
   if [[ $stage == bridge ]]; then
     spawn bridge vendor /omandroid/omandroid-fp-bridge \
       --socket /dev/socket/omandroid-fp/bridge.sock --touch /dev/input/touchscreen \
+      --ui-state /dev/socket/omandroid-fp-ui/state.json \
       ${OMANDROID_FP_LHBM_SETTLE_MS:+--settle "$OMANDROID_FP_LHBM_SETTLE_MS"}
   fi
 

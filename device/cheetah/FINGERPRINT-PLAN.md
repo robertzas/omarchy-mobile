@@ -531,12 +531,248 @@ falls back to the PIN. Rollback: `rm /etc/pam.d/omarchy-lock-fingerprint`,
 
 ### F11: later
 
-- Lock UI: draw the target from `READY x y r`, keep the PIN pad clear of
-  the sensor, "wake then touch" hint; an LHBM-friendly brightness.
+- Lock UI: done in F12/F13 (the target over the sensor, the PIN pad clear
+  of it, the hint). Left: an LHBM-friendly brightness.
 - `RESETLOCKOUT` after a successful password unlock (a PAM session hook).
 - sudo and polkit (`pam_fprintd` as in Omarchy's setup, with the password
   fallback).
 - Boot ordering: `omandroid-fp.service` after `omandroid-aoc.service`.
+
+### F12: the sensor in the shell (omandroid-fingerprint 0.1.3, omandroid-shell 0.1.32; risk low)
+
+Built offline (2026-10-13): the bridge publishes `/run/omandroid-fp-ui/state.json`
+(`--ui-state`, world-readable; the runner binds the directory in and removes
+the file at stop, the unit too); `omandroid-shell`'s `omandroid.fingerprint`
+draws the target over the sensor during verification, blocks the desktop's
+long-press while any operation runs, and has an on-screen enrollment flow
+through fprintd (`omandroid-fp-enroll`, polkit first), opened from the
+Fingerprint tile in quick settings or Setup > Security > Fingerprint. Design
+and the state file's fields: `packages/omandroid-shell/plugins/README.md`.
+Checked in the desktop harness with a fake bridge (screenshots), not on the
+phone. `omandroid-fp-ctl --timeout` now waits for the bridge's answer to
+CANCEL and exits 1 (2 if none comes) instead of raising.
+
+Announce first: the overlay and the enrollment screen change what the screen
+shows; enrollment lights the LHBM circle.
+
+```sh
+tools/phone-install-package packages/omandroid-fingerprint      # restart the stack:
+tools/phone-ssh 'systemctl restart omandroid-fp; sleep 20; cat /run/omandroid-fp-ui/state.json; ls -l /run/omandroid-fp-ui'
+tools/phone-install-package packages/omandroid-shell
+tools/phone-ssh 'su - <user> -c "omandroid-setup-user"; su - <user> -c omarchy-restart-shell'
+```
+
+Expect `{"op":"idle",...,"x":717,"y":2360,"r":121,...}`, the directory 0755
+and the file 0644. **Stop** if the file is missing (the bridge logs "ui
+state: ..."), or the bridge no longer answers `omandroid-fp-ctl status`.
+
+1. Verify: `fprintd-verify <user>` over SSH. Expect a faint fingerprint
+   exactly over the sensor, gone when a finger lands (the LHBM circle takes
+   over), back on NOMATCH, gone about a second after the end. Hold a finger
+   on the sensor over the empty desktop: no long-press menu; anywhere on the
+   wallpaper while verify runs: no menu either; apps and the dock still
+   work. **Stop** if the glyph is off the sensor (record `omarchy-shell shell
+   call omandroid.fingerprint state ''`) or touches outside the circle stop
+   reaching apps.
+2. Lock (`omarchy-system-lock`), wake: the glyph shows above the lock; the
+   PIN pad still works (with F13 the pad sits clear of the sensor).
+3. Enroll from quick settings > Fingerprint: polkit asks for the password,
+   then "Touch the sensor", the ring fills with each touch, hints for bad
+   touches, "Now place the edges of your finger" past half, "Fingerprint
+   added". Then `fprintd-list <user>` shows the new finger, and the lock
+   unlocks with it. Cancel midway: the screen closes and `fprintd-list`
+   is unchanged. **Stop** on a screen that stays up after the helper exits
+   (`pgrep -a omandroid-fp-enroll`).
+4. Rotation: with rotation unlocked, turn the phone during `fprintd-verify`:
+   the glyph follows the sensor (transforms 1 and 3 are the ones to check;
+   if they are swapped, `SensorModel.place` swaps them).
+
+Rollback: `omarchy-shell shell call omandroid.fingerprint closeScreen ''`;
+remove `{"id": "omandroid.fingerprint"}` from `~/.config/omarchy/shell.json`;
+the previous packages.
+
+### F13: the lock's PIN pad clear of the sensor (Omarchy patch 0003; omandroid-shell 0.1.33; risk low)
+
+Omarchy's number pad (`patches/omarchy/0003`) sat with its 8 key on the
+sensor (about 240, 806 logical against 239, 787): a finger on the sensor
+typed an 8. 0003 now keeps the lower third of the screen clear when the pad
+is on and fingerprints are set up (pad bottom at 34% of the height: 686 of
+1040 logical, the sensor circle starts at 747), shrinks the keys if a short
+screen needs it, says "Touch the fingerprint sensor or enter your PIN" above
+the field, and puts "Fingerprint reader unavailable" in the same place
+(under the field is the pad). Without fingerprints the layout is unchanged.
+Checked in the desktop harness on Omarchy b83d3df + 0003 + 0004 + 0009, with
+a real session lock and the `above_lock` rule:
+screenshots show the hint, the pad above the glyph, digits typed from the
+keyboard reaching the field, and the unavailable state keeping the layout.
+omandroid-shell 0.1.33 only fixes the target's screen choice (a fallback
+output) and updates comments.
+
+Versions. The phone runs Omarchy **4.0.4** (package 4.0.4-2;
+`/usr/share/omarchy/version` reads `4.0.0.alpha`) with the patch series
+applied by hand. The repo's 0003 now targets upstream **b83d3df084** (main
+after v4.0.4, the Qt 6.12 `Commons.Color` fix) for `LockView.qml` and
+`Keypad.qml`, a newer `LockView.qml` (reader-unavailable notice, video
+backgrounds) than the phone's; its `Service.qml` part is still the one made
+on the phone's 4.0.4. So the series (0003, then 0004, then 0009) applies to
+b83d3df; check 0003 against 4.0.4 too before applying it to a fresh phone, or
+rebase it when the phone moves to an Omarchy with b83d3df. 4.0.4 has no
+"reader unavailable" state, so the phone's version of the change has no
+notice to move.
+
+Deploy (do it unlocked; the shell restarts). The phone takes a delta made
+against its own files, `0003-delta-for-phone-4.0.4.patch` (the phone's
+`LockView.qml` and `Keypad.qml` as the old 0003 left them, to the same
+behaviour as the new 0003). Checked with `patch --dry-run` against the
+phone's copies and in the desktop harness on the laptop's Omarchy 4.0.4 with
+a real lock (hint, pad above the glyph, digits reach the field). Check the
+files first:
+
+```sh
+tools/phone-ssh 'cd /usr/share/omarchy/shell/plugins/lock && sha256sum LockView.qml Keypad.qml'
+# expect 6fd9c06b877cee601f0c05a986f42084e2c19c887099701b42628178df136fba  LockView.qml
+#        c3686101eef63107a3e18a9de069ee187ae1de3d7fdbdc3813a88dd79c084d44  Keypad.qml
+tools/phone-ssh 'cd /usr/share/omarchy/shell/plugins/lock && cp LockView.qml /root/LockView.qml.pre-f13 && cp Keypad.qml /root/Keypad.qml.pre-f13'
+tools/phone-ssh 'cd /usr/share/omarchy && patch -p1 --dry-run && patch -p1' < 0003-delta-for-phone-4.0.4.patch
+tools/phone-ssh 'cd /usr/share/omarchy/shell/plugins/lock && sha256sum LockView.qml Keypad.qml'
+# expect aa91c000b448bdccf5ac0be96f2ee932f819865cc837f727bcdb26cdbae30e63  LockView.qml
+#        61126b254baebfaac713ae16980af5975de16f50e5835f26bf9a9295572af80f  Keypad.qml
+tools/phone-ssh 'su - <user> -c omarchy-restart-shell'
+```
+
+**Stop** if the hashes before differ. Then lock: the hint, the pad above the
+sensor glyph, a PIN unlocks, the finger unlocks. Rollback: copy the
+`.pre-f13` files back and restart the shell.
+
+### F14: password prompts usable with the on-screen keyboard (Omarchy patch 0010; omandroid-shell 0.1.35; risk low)
+
+Fingerprint setup asks polkit first, and Omarchy's polkit prompt was unusable
+on the phone: its full-screen scrim on the overlay layer covered squeekboard
+(a top-layer surface that maps when a text field takes focus), and its
+`Exclusive` keyboard focus makes Hyprland send every touch to it
+(InputManager's exclusive layer list), so the keyboard could not be typed on
+even where visible. That breaks any polkit password prompt on the phone.
+`patches/omarchy/0010` makes the prompt `OnDemand` (Hyprland still focuses
+an on-demand layer when it maps) and `ExclusionMode.Normal` (it stays out of
+the keyboard's exclusive zone). It applies to b83d3df and to Omarchy 4.0.4
+(the laptop's; offset 1). Not testable in the harness: the laptop's own
+polkit agent holds the registration.
+
+omandroid-shell 0.1.35: `omandroid-fp-enroll` claims asynchronously, so a
+cancel on stdin, SIGTERM or SIGINT ends it at once, also while polkit is
+asking (0.1.34 blocked in Claim; SIGTERM did nothing until it returned); it
+reports `claimed` when polkit is answered. The enrollment screen stays
+unmapped until then (0.1.34 already did; the phone showed "Getting ready" under
+the prompt, which means the old plugin was still loaded: restart the shell
+after installing, and check `omarchy-shell shell call omandroid.fingerprint
+state ''` shows `"authPending":true,"enrollWindow":false` while the prompt is
+up). Cancel stops a helper that does not answer within 2 s.
+
+```sh
+tools/phone-ssh 'cp /usr/share/omarchy/shell/plugins/polkit/PolkitAgent.qml /root/PolkitAgent.qml.pre-f14'
+tools/phone-ssh 'cd /usr/share/omarchy && patch -p1 --dry-run && patch -p1' < patches/omarchy/0010-polkit-leave-the-on-screen-keyboard-usable.patch
+tools/phone-install-package packages/omandroid-shell
+tools/phone-ssh 'su - <user> -c omarchy-restart-shell'
+```
+
+**Stop** if the dry run fails (send the phone's file for a delta). Then
+Quick settings > Fingerprint > Start: the prompt sits above the keyboard, the
+keys type into the field, the password lets enrollment start; the prompt's
+Cancel (or Escape) ends on "needs your permission". Rollback: copy the
+`.pre-f14` file back and restart the shell.
+
+### F15: enrollment through fprintd without lockouts; the prompt's keyboard after a wrong password (libfprint 1.94.100-1.2, Omarchy 0010; risk low)
+
+Found on the phone (2026-10-13): fprintd 1.94.5 runs an identify over every
+stored print before each enrollment, to refuse duplicates. On this sensor
+that is an AUTH: one more touch and, for a new finger, a failed
+authentication that the TA counts toward its lockout. A few enrollments
+gave timed lockouts, ERROR 7s and a permanent one (`LOCKOUT -1`, cleared with
+`omandroid-fp-ctl resetlockout`). Android does no such check. The driver now
+answers that identify "no match" at once without a capture: it is the only
+identify fprintd starts without a match callback (VerifyStart passes one),
+read from libfprint's task data as fpi-device.c does (pinned to libfprint
+1.94.x). `test/run`: 20/20, including "identify without a match callback: no
+match, no AUTH". The first "enroll failed (2)" (UNABLE_TO_PROCESS, the
+bridge's answer when generateChallenge, Gatekeeper or enroll fails) came
+after those failed AUTHs; if it recurs without them, the bridge's journal
+lines just before it (`generateChallenge`, `gatekeeper`) say which.
+
+Omarchy's polkit prompt (`patches/omarchy/0010`, now also on the top layer
+as tested on the phone): after a wrong password the field is read-only for
+1.2 s, the input method hides the keyboard, and a field that keeps focus
+never asks for it again. `refocus()` now moves focus off and back, and runs
+when the field is writable again.
+
+```sh
+tools/phone-install-package packages/libfprint            # builds on the phone
+tools/phone-ssh 'systemctl restart fprintd 2>/dev/null; pacman -Q libfprint'   # 1.94.100-1.2
+tools/phone-ssh 'cp /usr/share/omarchy/shell/plugins/polkit/PolkitAgent.qml /root/PolkitAgent.qml.pre-f15'
+tools/phone-ssh 'cd /usr/share/omarchy && patch -p1 --dry-run && patch -p1' < 0010-delta-for-phone-4.0.4.patch
+tools/phone-ssh 'su - <user> -c omarchy-restart-shell'
+```
+
+The delta takes the phone's prompt (0010 as first sent, plus the top layer
+set by hand) to the new 0010. Then: a wrong password brings the keyboard
+back after "Wrong"; enrollment from quick settings starts on the first touch
+(the journal shows ENROLL and no AUTH before it); `fprintd-list` shows the
+finger; the lock unlocks with it.
+
+### F16: PIN or password, the user's choice (Omarchy patch 0011; omandroid-shell 0.1.37; risk low)
+
+Like Android, the phone unlocks with a PIN or a password, and every prompt
+starts on the matching input with a switch to the other:
+
+- `omandroid-set-pin` (System > PIN, and onboarding) asks "PIN (numbers
+  only)" or "Password", then runs `passwd` as before (the secret is the
+  account password, checked through PAM). It records the type in
+  `~/.config/omandroid/credential` (`pin` or `password`, never the secret)
+  and mirrors it to Omarchy's toggles: `lock-keypad` (a touch phone) always,
+  `credential-password` for a password. The lock and the polkit prompt run
+  in the user's session, so a per-user file is enough. Phones set up before
+  this are recorded as PIN once (`omandroid-setup-user`).
+- Lock screen (`patches/omarchy/0011` on 0003): a PIN opens the number pad
+  (raised clear of the sensor, as F13); a password opens the text field high
+  on the screen with the on-screen keyboard. "ABC" / "123" inside the
+  field's left edge swaps them for this lock. The field is placed with `y`
+  now: anchors switched while the lock was up left it squashed.
+  `hypr/phone.lua` lets squeekboard (namespace `osk`, top layer) draw and
+  take touches above the session lock (`above_lock = 2`); without it no
+  keyboard can show over a lock. A failed attempt or a tap refocuses the
+  field, so the keyboard comes back.
+- Polkit prompt (0011 on 0010): the field asks for squeekboard's digit
+  layout for a PIN (`Qt.ImhDigitsOnly`, which Qt sends as text-input-v3
+  purpose `digits`; squeekboard maps that to its `number` layout) and the
+  full layout for a password, "Enter PIN" or "Enter password", and an
+  ABC/123 switch beside it (a refocus sends the new content type).
+- The fingerprint target hides while the `osk` layer is up (Hyprland's
+  `openlayer`/`closelayer` events): it would sit on the keyboard.
+
+Checked in the desktop harness on Omarchy 4.0.4 with the phone's files plus
+the delta (screenshots: lock as PIN, as password, and back while locked;
+the prompt as PIN and as password). Not checked there: squeekboard (not
+installed on the laptop), its digit layout, and the keyboard above the lock.
+
+Deploy (unlocked; the shell restarts):
+
+```sh
+tools/phone-ssh 'cd /usr/share/omarchy/shell/plugins && cp lock/LockView.qml /root/LockView.qml.pre-f16 && cp polkit/PolkitAgent.qml /root/PolkitAgent.qml.pre-f16'
+tools/phone-ssh 'cd /usr/share/omarchy && patch -p1 --dry-run && patch -p1' < 0011-delta-for-phone-4.0.4.patch
+tools/phone-install-package packages/omandroid-shell
+tools/phone-ssh 'su - <user> -c omandroid-setup-user; su - <user> -c omarchy-restart-shell'
+tools/phone-ssh 'su - <user> -c "HYPRLAND_INSTANCE_SIGNATURE=\$(ls /run/user/\$(id -u <user>)/hypr | head -1) hyprctl reload"'   # the osk layer rule
+```
+
+The delta takes the phone's `LockView.qml` as F13 left it (`aa91c000…`) and
+its `PolkitAgent.qml` as F15 left it (dry run is the check: the phone's copy
+qualifies `Commons.Color`). Then: lock (PIN): pad, ABC shows the field and
+the keyboard above the lock, 123 back; System > PIN, choose Password, lock:
+field and keyboard first; a polkit prompt (`pkexec true`) shows the digit
+layout for a PIN, the full one for a password, and the switch. **Stop** if
+no keyboard shows above the lock in password mode (the `osk` layer rule:
+`hyprctl layers` while it shows); the pad (123) still unlocks. Rollback: the
+`.pre-f16` files, the previous omandroid-shell; `rm
+~/.local/state/omarchy/toggles/credential-password` returns to the pad.
 
 ## 7. Results
 

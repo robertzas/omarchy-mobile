@@ -21,5 +21,6 @@ install -Dm755 prebuilt/omandroid-fp-bridge "$l/omandroid-fp-bridge"
 install -Dm644 vendor/systemd/system/omandroid-fp.service "$d/usr/lib/systemd/system/omandroid-fp.service"
 install -Dm644 vendor/systemd/system/fprintd.service.d/omandroid-udfps.conf \
   "$d/usr/lib/systemd/system/fprintd.service.d/omandroid-udfps.conf"
+install -Dm644 vendor/modprobe.d/omandroid-fingerprint-lhbm.conf "$d/usr/lib/modprobe.d/omandroid-fingerprint-lhbm.conf"
 install -Dm644 LICENSE "$d/usr/share/licenses/omandroid-fingerprint/LICENSE"
 install -Dm644 version "$d/usr/share/omandroid/fingerprint/version"

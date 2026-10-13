@@ -161,9 +161,23 @@ def main():
     match, _ = dev.verify_sync(enrolled)
     check("verify: NOMATCH fails", not match)
 
+    matched = []
+
+    def on_match(device, match, print_, user_data, error):
+        matched.append(match)
+
+    bridge.auth_answers = [f"MATCH {ENROLL_ID}"]
+    found, _ = dev.identify_sync([enrolled], None, on_match, None)
+    check("identify: finds the enrolled print", found is not None and found.equal(enrolled))
+
+    # fprintd's duplicate check before an enrollment: no match callback;
+    # answered at once, without an AUTH (which would count toward lockout)
+    auths = bridge.commands.count("AUTH")
     bridge.auth_answers = [f"MATCH {ENROLL_ID}"]
     found, _ = dev.identify_sync([enrolled])
-    check("identify: finds the enrolled print", found is not None and found.equal(enrolled))
+    check("identify without a match callback: no match, no AUTH",
+          found is None and bridge.commands.count("AUTH") == auths)
+    bridge.auth_answers = []
 
     bridge.auth_answers = ["LOCKOUT 30000"]
     try:

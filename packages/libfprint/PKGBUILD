@@ -15,7 +15,7 @@
 
 pkgname=libfprint
 pkgver=1.94.100
-pkgrel=1.1
+pkgrel=1.2
 _tag=v$pkgver
 pkgdesc="Library for fingerprint readers (Omandroid: Pixel 7 Pro under-display sensor)"
 arch=(aarch64)
@@ -29,7 +29,7 @@ source=("git+https://gitlab.freedesktop.org/libfprint/libfprint.git#tag=$_tag"
         omandroid-udfps.c)
 sha256sums=('SKIP'
             'c1d09244cfbf5dff437cc930e504fa2b69704da1f07fa9579db5f11a5e740b3e'
-            'fde2508fc8797d15cf864a9942167d36ecfd09eb8880f5f7462b97450dd12e67')
+            '408ef39a6e12d39966a85050a46eb74e1d1dad37218208c2b4128e9af0096064')
 
 prepare() {
   cd libfprint
