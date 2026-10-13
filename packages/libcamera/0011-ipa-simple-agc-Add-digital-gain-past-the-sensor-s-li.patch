@@ -1,0 +1,179 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Tue, 13 Oct 2026 12:11:08 -0400
+Subject: [PATCH 11/12] ipa: simple: agc: Add digital gain past the sensor's
+ limits in low light
+
+In a dim room the Pixel 7 Pro's ultrawide (IMX386) reaches its longest
+exposure and its 16x analogue gain and the picture stays dark.
+
+Once the exposure and the analogue gain are both at their limits, let
+the exposure loop go on with up to 4x digital gain, which the image
+processor applies together with the white balance gains, and judge the
+exposure on the histogram as the digital gain will show it. Too bright,
+take the digital gain off first, as gain always comes off before
+exposure. Digital gain takes effect without the sensor's control delay,
+so the loop does not overshoot with it. Report it as DigitalGain.
+
+Without Awb in the tuning file nothing applies the digital gain; the
+loop then only reports it.
+
+The idea and the 4x limit follow a change by cube oakley for the same
+phone, which applied the gain in the debayer shaders together with a
+highlight headroom; this keeps the shaders as they are.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/agc.cpp | 43 +++++++++++++++++++++++++++----
+ src/ipa/simple/algorithms/agc.h   |  1 +
+ src/ipa/simple/algorithms/awb.cpp |  8 +++++-
+ src/ipa/simple/ipa_context.h      |  2 ++
+ 4 files changed, 48 insertions(+), 6 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index df7894e..0ad36d5 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -70,10 +70,27 @@ static constexpr float kExpProportionalGainFar = 0.1;
+  */
+ static constexpr float kExpMaxStep = 0.15;
+ 
++/*
++ * Low light. Once the exposure and the sensor's analogue gain are both at
++ * their limits, the loop goes on with digital gain, up to this factor, which
++ * the image processor applies with the white balance gains. Small sensors
++ * behind slow lenses, such as an ultra-wide, otherwise stay dark in a dim
++ * room. Too bright, the digital gain comes off first. Awb applies it.
++ */
++static constexpr double kMaxDigitalGain = 4.0;
++
+ Agc::Agc()
+ {
+ }
+ 
++int Agc::configure(IPAContext &context,
++		   [[maybe_unused]] const IPAConfigInfo &configInfo)
++{
++	context.activeState.agc.digitalGain = 1.0;
++
++	return 0;
++}
++
+ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 			 double exposureMSV)
+ {
+@@ -86,6 +103,8 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	 */
+ 	const int32_t oldExposure = context.activeState.agc.exposure;
+ 	const double oldAgain = context.activeState.agc.again;
++	double &dgain = context.activeState.agc.digitalGain;
++	const double oldDgain = dgain;
+ 
+ 	double error = kExposureOptimal - exposureMSV;
+ 
+@@ -108,16 +127,20 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 		if (exposure < context.configuration.agc.exposureMax) {
+ 			int32_t next = static_cast<int32_t>(exposure * factor);
+ 			exposure = std::max(next, exposure + 1);
+-		} else {
++		} else if (again < context.configuration.agc.againMax) {
+ 			double next = again * factor;
+ 			if (next - again < context.configuration.agc.againMinStep)
+ 				again += context.configuration.agc.againMinStep;
+ 			else
+ 				again = next;
++		} else {
++			dgain = std::min(dgain * factor, kMaxDigitalGain);
+ 		}
+ 	} else {
+ 		/* Scene too bright: decrease gain first, then exposure. */
+-		if (again > context.configuration.agc.again10) {
++		if (dgain > 1.0) {
++			dgain = std::max(dgain * factor, 1.0);
++		} else if (again > context.configuration.agc.again10) {
+ 			double next = again * factor;
+ 			if (again - next < context.configuration.agc.againMinStep)
+ 				again -= context.configuration.agc.againMinStep;
+@@ -140,9 +163,10 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	LOG(IPASoftExposure, Debug)
+ 		<< "exposureMSV " << exposureMSV
+ 		<< " error " << error << " factor " << factor
+-		<< " exp " << exposure << " again " << again;
++		<< " exp " << exposure << " again " << again
++		<< " dgain " << dgain;
+ 
+-	return exposure != oldExposure || again != oldAgain;
++	return exposure != oldExposure || again != oldAgain || dgain != oldDgain;
+ }
+ 
+ void Agc::process(IPAContext &context,
+@@ -155,6 +179,8 @@ void Agc::process(IPAContext &context,
+ 		context.configuration.agc.lineDuration * frameContext.sensor.exposure;
+ 	metadata.set(controls::ExposureTime, exposureTime.get<std::micro>());
+ 	metadata.set(controls::AnalogueGain, frameContext.sensor.gain);
++	metadata.set(controls::DigitalGain,
++		     static_cast<float>(context.activeState.agc.digitalGain));
+ 
+ 	if (!context.activeState.agc.valid) {
+ 		/*
+@@ -199,8 +225,15 @@ void Agc::process(IPAContext &context,
+ 		return;
+ 	}
+ 
++	/*
++	 * Judge the exposure as the image will show it, after the digital
++	 * gain, which takes effect without the sensor's delay.
++	 */
++	const double dgain = context.activeState.agc.digitalGain;
+ 	for (unsigned int i = 0; i < histogramSize; i++) {
+-		unsigned int idx = (i - (i / yHistValsPerBinMod)) / yHistValsPerBin;
++		const unsigned int gained = std::min<unsigned int>(
++			histogramSize - 1, static_cast<unsigned int>(std::lround(i * dgain)));
++		unsigned int idx = (gained - (gained / yHistValsPerBinMod)) / yHistValsPerBin;
+ 		exposureBins[idx] += histogram[blackLevelHistIdx + i];
+ 	}
+ 
+diff --git a/src/ipa/simple/algorithms/agc.h b/src/ipa/simple/algorithms/agc.h
+index c72f158..ed3ea9d 100644
+--- a/src/ipa/simple/algorithms/agc.h
++++ b/src/ipa/simple/algorithms/agc.h
+@@ -19,6 +19,7 @@ public:
+ 	Agc();
+ 	~Agc() = default;
+ 
++	int configure(IPAContext &context, const IPAConfigInfo &configInfo) override;
+ 	void process(IPAContext &context, const uint32_t frame,
+ 		     IPAFrameContext &frameContext,
+ 		     const SwIspStats *stats,
+diff --git a/src/ipa/simple/algorithms/awb.cpp b/src/ipa/simple/algorithms/awb.cpp
+index 05155c8..de740c8 100644
+--- a/src/ipa/simple/algorithms/awb.cpp
++++ b/src/ipa/simple/algorithms/awb.cpp
+@@ -40,7 +40,13 @@ void Awb::prepare(IPAContext &context,
+ 	auto &gains = context.activeState.awb.gains;
+ 
+ 	frameContext.gains = gains;
+-	params->gains = gains;
++
++	/*
++	 * The image processor applies the exposure algorithm's digital gain,
++	 * if any, with the white balance gains.
++	 */
++	const double digitalGain = context.activeState.agc.digitalGain;
++	params->gains = digitalGain > 1.0 ? gains * static_cast<float>(digitalGain) : gains;
+ }
+ 
+ void Awb::process(IPAContext &context,
+diff --git a/src/ipa/simple/ipa_context.h b/src/ipa/simple/ipa_context.h
+index f768ab9..b60c994 100644
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -46,6 +46,8 @@ struct IPAActiveState {
+ 	struct {
+ 		int32_t exposure;
+ 		double again;
++		/* Applied by the image processor, past the sensor's limits. */
++		double digitalGain;
+ 		unsigned int stableSamples;
+ 		bool valid;
+ 	} agc;

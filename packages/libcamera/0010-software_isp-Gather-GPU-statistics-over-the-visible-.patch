@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cube oakley <cube-oakley@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 12:09:36 -0400
+Subject: [PATCH 10/12] software_isp: Gather GPU statistics over the visible
+ input
+
+The GPU debayer scales the whole input to the output size, cropping only
+what the aspect ratio does not fit, but it set the statistics window to
+an output-sized rectangle at the origin, which suits only the CPU
+debayer's crop. At 1280x960 or 1920x1080 from a 4000x3000 frame, AGC,
+AWB and autofocus saw only the top-left corner: the autofocus sharpness
+curve was flat (about 5% across the lens range) while the same scene at
+full resolution peaked fivefold. Use the visible part of the input.
+
+[Derek Ross: the projection anchors the scaled input at the origin, so
+ the visible part starts at the origin rather than being centred.]
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/libcamera/software_isp/debayer_egl.cpp | 17 ++++++++++++++---
+ 1 file changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/src/libcamera/software_isp/debayer_egl.cpp b/src/libcamera/software_isp/debayer_egl.cpp
+index 1f26901..5a8a490 100644
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -340,10 +340,21 @@ int DebayerEGL::configure(const StreamConfiguration &inputCfg,
+ 	window_.height = outputCfg.size.height;
+ 
+ 	/*
+-	 * Don't pass x,y from window_ since process() already adjusts for it.
+-	 * But crop the window to 2/3 of its width and height for speedup.
++	 * The shader scales the whole input to the output size and crops only
++	 * what the aspect ratio does not fit, so gather statistics over that
++	 * visible part of the input. An output-sized window, as the CPU
++	 * debayer's crop uses, would cover only the top-left corner of a
++	 * downscaled frame and starve AGC, AWB and autofocus. The projection in
++	 * setShaderVariableValues() anchors the scaled input at the origin, so
++	 * the crop falls on the right and bottom of the input.
+ 	 */
+-	stats_->setWindow(Rectangle(window_.size()));
++	const float scale = std::max(static_cast<float>(outputCfg.size.width) / nativeOutputSize_.width,
++				     static_cast<float>(outputCfg.size.height) / nativeOutputSize_.height);
++	const Size visible(std::min(inputCfg.size.width,
++				    static_cast<unsigned int>(outputCfg.size.width / scale)),
++			   std::min(inputCfg.size.height,
++				    static_cast<unsigned int>(outputCfg.size.height / scale)));
++	stats_->setWindow(Rectangle(visible));
+ 
+ 	inputBufferCount_ = inputCfg.bufferCount;
+ 	outputBufferCount_ = outputCfg.bufferCount;

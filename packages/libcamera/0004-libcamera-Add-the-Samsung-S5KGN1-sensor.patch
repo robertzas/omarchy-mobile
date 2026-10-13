@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Tue, 13 Oct 2026 12:03:27 -0400
+Subject: [PATCH 04/12] libcamera: Add the Samsung S5KGN1 sensor
+
+The S5KGN1 is the main camera of the Google Pixel 7 Pro, captured
+through the gs201 CSIS receiver and the simple pipeline handler with the
+software ISP.
+
+Add a camera sensor helper with a black level of 64 at 10 bits and the
+sensor's linear analogue gain, code / 32 (0x20 is 1x, 0x200 is 16x).
+Add the sensor properties: the 1.2 um unit cell from Samsung's public
+specification and two-frame control delays. The test pattern numbering
+is not known, so no test pattern modes are listed. Add an uncalibrated
+tuning file for the simple IPA under the sensor's name.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/libipa/camera_sensor_helper.cpp           | 13 +++++++++++++
+ src/ipa/simple/data/meson.build                   |  1 +
+ src/ipa/simple/data/s5kgn1.yaml                   | 13 +++++++++++++
+ src/libcamera/sensor/camera_sensor_properties.cpp | 10 ++++++++++
+ 4 files changed, 37 insertions(+)
+ create mode 100644 src/ipa/simple/data/s5kgn1.yaml
+
+diff --git a/src/ipa/libipa/camera_sensor_helper.cpp b/src/ipa/libipa/camera_sensor_helper.cpp
+index ac1acdc..734be09 100644
+--- a/src/ipa/libipa/camera_sensor_helper.cpp
++++ b/src/ipa/libipa/camera_sensor_helper.cpp
+@@ -844,6 +844,19 @@ public:
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("ov13858", CameraSensorHelperOv13858)
+ 
++class CameraSensorHelperS5kgn1 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperS5kgn1()
++	{
++		/* 64 at 10 bits. */
++		blackLevel_ = 4096;
++		/* Code / 32: 0x20 is 1x, 0x200 is 16x. */
++		gain_ = AnalogueGainLinear{ 1, 0, 0, 32 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("s5kgn1", CameraSensorHelperS5kgn1)
++
+ class CameraSensorHelperVd55g1 : public CameraSensorHelper
+ {
+ public:
+diff --git a/src/ipa/simple/data/meson.build b/src/ipa/simple/data/meson.build
+index d0db5b7..f76f402 100644
+--- a/src/ipa/simple/data/meson.build
++++ b/src/ipa/simple/data/meson.build
+@@ -2,6 +2,7 @@
+ 
+ conf_files = files([
+     'imx386.yaml',
++    's5kgn1.yaml',
+     'uncalibrated.yaml',
+ ])
+ 
+diff --git a/src/ipa/simple/data/s5kgn1.yaml b/src/ipa/simple/data/s5kgn1.yaml
+new file mode 100644
+index 0000000..b447360
+--- /dev/null
++++ b/src/ipa/simple/data/s5kgn1.yaml
+@@ -0,0 +1,13 @@
++# SPDX-License-Identifier: CC0-1.0
++#
++# Samsung S5KGN1 (the Pixel 7 Pro's main camera), not calibrated yet: the
++# uncalibrated set with the sensor's black level from its helper.
++%YAML 1.1
++---
++version: 1
++algorithms:
++  - BlackLevel:
++  - Awb:
++  - Adjust:
++  - Agc:
++...
+diff --git a/src/libcamera/sensor/camera_sensor_properties.cpp b/src/libcamera/sensor/camera_sensor_properties.cpp
+index 10e489b..f690019 100644
+--- a/src/libcamera/sensor/camera_sensor_properties.cpp
++++ b/src/libcamera/sensor/camera_sensor_properties.cpp
+@@ -519,6 +519,16 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
+ 			},
+ 			.sensorDelays = { },
+ 		} },
++		{ "s5kgn1", {
++			.unitCellSize = { 1200, 1200 },
++			.testPatternModes = {},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
+ 		{ "vd55g1", {
+ 			.unitCellSize = { 2160, 2160 },
+ 			.testPatternModes = {

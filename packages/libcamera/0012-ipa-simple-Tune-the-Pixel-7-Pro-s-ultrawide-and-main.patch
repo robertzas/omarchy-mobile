@@ -1,0 +1,131 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Tue, 13 Oct 2026 12:11:52 -0400
+Subject: [PATCH 12/12] ipa: simple: Tune the Pixel 7 Pro's ultrawide and main
+ cameras
+
+Both cameras have an AK7375 focus lens: enable the contrast autofocus,
+with fewer and coarser steps for the ultrawide, whose depth of field is
+deep, than for the main camera.
+
+Give the IMX386 a stand-in colour matrix: the IMX519 matrices from the
+Raspberry Pi tuning in src/ipa/rpi/vc4/data/imx519.json (BSD-2-Clause),
+another Sony mobile-class sensor with a similar pixel. Without a matrix
+the software ISP shows the sensor's own, washed-out colours. The S5KGN1
+gets the identity until it is calibrated, so its saturation default
+applies.
+
+Set a contrast default of 1.2 on both, and a saturation default of 1.1
+on the main camera, for applications that do not set the controls.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/data/imx386.yaml | 50 +++++++++++++++++++++++++++++++--
+ src/ipa/simple/data/s5kgn1.yaml | 24 ++++++++++++++--
+ 2 files changed, 69 insertions(+), 5 deletions(-)
+
+diff --git a/src/ipa/simple/data/imx386.yaml b/src/ipa/simple/data/imx386.yaml
+index 22a1d2a..768e63d 100644
+--- a/src/ipa/simple/data/imx386.yaml
++++ b/src/ipa/simple/data/imx386.yaml
+@@ -1,13 +1,57 @@
+-# SPDX-License-Identifier: CC0-1.0
++# SPDX-License-Identifier: CC0-1.0 AND BSD-2-Clause
+ #
+-# Sony IMX386 (the Pixel 7 Pro's ultrawide), not calibrated yet: the
+-# uncalibrated set with the sensor's black level from its helper.
++# Sony IMX386 (the Pixel 7 Pro's ultrawide), not calibrated yet. The black
++# level comes from the sensor's helper.
++#
++# The colour matrices are a stand-in: the IMX519 matrices from libcamera's
++# src/ipa/rpi/vc4/data/imx519.json (rpi.ccm), Copyright 2019-2020
++# Raspberry Pi Ltd, BSD-2-Clause (see REUSE.toml and
++# LICENSES/BSD-2-Clause.txt). The IMX519 is another Sony mobile-class
++# Bayer sensor with a similar pixel (1.22 um against 1.25 um), and any
++# such matrix is closer to the truth than none: without one the software
++# ISP shows the sensor's own, washed-out colours. Replace them with a
++# calibration of this sensor.
++#
++# Autofocus scans the AK7375 lens's range in 4 coarse steps, then around
++# the sharpest one in steps of 1/12 of the range: an ultrawide's depth of
++# field is deep.
+ %YAML 1.1
+ ---
+ version: 1
+ algorithms:
+   - BlackLevel:
+   - Awb:
++  - Ccm:
++      ccms:
++        - ct: 2890
++          ccm: [ 1.36754, -0.18448, -0.18306,
++                -0.32356,  1.44826, -0.12471,
++                -0.00412, -0.69936,  1.70348 ]
++        - ct: 2920
++          ccm: [ 1.26704,  0.01624, -0.28328,
++                -0.28516,  1.38934, -0.10419,
++                -0.04854, -0.82211,  1.87066 ]
++        - ct: 3550
++          ccm: [ 1.42836, -0.27235, -0.15601,
++                -0.28751,  1.41075, -0.12325,
++                -0.01812, -0.54849,  1.56661 ]
++        - ct: 4500
++          ccm: [ 1.36328, -0.19569, -0.16759,
++                -0.25254,  1.52248, -0.26994,
++                -0.01575, -0.53155,  1.54729 ]
++        - ct: 5700
++          ccm: [ 1.49207, -0.37245, -0.11963,
++                -0.21493,  1.40005, -0.18512,
++                -0.03781, -0.38779,  1.42561 ]
++        - ct: 7900
++          ccm: [ 1.34849, -0.05425, -0.29424,
++                -0.22182,  1.77684, -0.55502,
++                -0.07403, -0.55336,  1.62739 ]
++  # Defaults for applications that do not set the controls.
+   - Adjust:
++      contrast: 1.2
+   - Agc:
++  - Af:
++      coarseSteps: 4
++      fineSteps: 12
+ ...
+diff --git a/src/ipa/simple/data/s5kgn1.yaml b/src/ipa/simple/data/s5kgn1.yaml
+index b447360..508c1e0 100644
+--- a/src/ipa/simple/data/s5kgn1.yaml
++++ b/src/ipa/simple/data/s5kgn1.yaml
+@@ -1,13 +1,33 @@
+ # SPDX-License-Identifier: CC0-1.0
+ #
+-# Samsung S5KGN1 (the Pixel 7 Pro's main camera), not calibrated yet: the
+-# uncalibrated set with the sensor's black level from its helper.
++# Samsung S5KGN1 (the Pixel 7 Pro's main camera), not calibrated yet. The
++# black level comes from the sensor's helper.
++#
++# The colour matrix is the identity until a calibration: a matrix from
++# another manufacturer's sensor would be a guess. Having one lets the
++# saturation default apply.
++#
++# Autofocus scans the AK7375 lens's range in 8 coarse steps, then around
++# the sharpest one in steps of 1/32 of the range: the main camera's large
++# sensor and fast lens give a shallow depth of field.
+ %YAML 1.1
+ ---
+ version: 1
+ algorithms:
+   - BlackLevel:
+   - Awb:
++  - Ccm:
++      ccms:
++        - ct: 5000
++          ccm: [ 1, 0, 0,
++                 0, 1, 0,
++                 0, 0, 1 ]
++  # Defaults for applications that do not set the controls.
+   - Adjust:
++      contrast: 1.2
++      saturation: 1.1
+   - Agc:
++  - Af:
++      coarseSteps: 8
++      fineSteps: 32
+ ...

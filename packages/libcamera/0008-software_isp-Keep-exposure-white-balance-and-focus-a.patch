@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cube oakley <cube-oakley@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 12:08:25 -0400
+Subject: [PATCH 08/12] software_isp: Keep exposure, white balance and focus
+ across configurations
+
+Every configure() cleared the IPA state, so a new configuration of the
+same sensor mode, such as a full-resolution still taken from a preview,
+started exposure from wherever the sensor was, white balance at unity
+gains and autofocus at the lens default with a new scan. The first
+frames came out green (a still 3 frames in had mean RGB 104/138/74,
+87/92/74 with this change) and a still taken from a focused preview was
+shot mid-scan.
+
+Keep the exposure and white balance state when the exposure limits and
+the line duration are unchanged, and the autofocus state while the focus
+range is the same.
+
+[Derek Ross: two changes squashed into one.]
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/soft_simple.cpp | 34 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 34 insertions(+)
+
+diff --git a/src/ipa/simple/soft_simple.cpp b/src/ipa/simple/soft_simple.cpp
+index 4b14bfe..fabb7bc 100644
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -212,6 +212,20 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
+ 	const ControlInfo &exposureInfo = sensorInfoMap_.find(V4L2_CID_EXPOSURE)->second;
+ 	const ControlInfo &gainInfo = sensorInfoMap_.find(V4L2_CID_ANALOGUE_GAIN)->second;
+ 
++	/*
++	 * Keep the converged exposure and white balance for a new configuration
++	 * of the same sensor mode, such as a full-resolution still after a
++	 * preview. Starting them over left its first frames green and exposed from
++	 * wherever the sensor happened to be.
++	 */
++	const auto previousAgc = context_.activeState.agc;
++	const auto previousAwb = context_.activeState.awb;
++	const auto previousAf = context_.activeState.af;
++	const auto previousFocus = context_.configuration.focus;
++	const auto previousLineDuration = context_.configuration.agc.lineDuration;
++	const auto previousExposureMin = context_.configuration.agc.exposureMin;
++	const auto previousExposureMax = context_.configuration.agc.exposureMax;
++
+ 	/* Clear the IPA context before the streaming session. */
+ 	context_.configuration = {};
+ 	context_.activeState = {};
+@@ -261,6 +275,26 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
+ 			return ret;
+ 	}
+ 
++	if (previousAgc.valid &&
++	    previousLineDuration == context_.configuration.agc.lineDuration &&
++	    previousExposureMin == context_.configuration.agc.exposureMin &&
++	    previousExposureMax == context_.configuration.agc.exposureMax) {
++		context_.activeState.agc = previousAgc;
++		context_.activeState.awb = previousAwb;
++		LOG(IPASoft, Debug) << "Keeping exposure and white balance";
++	}
++
++	/*
++	 * Keep the focus too while the lens is the same, so a still starts where
++	 * the preview focused instead of at the lens default with a new scan.
++	 */
++	if (previousFocus.available && context_.configuration.focus.available &&
++	    previousFocus.min == context_.configuration.focus.min &&
++	    previousFocus.max == context_.configuration.focus.max) {
++		context_.activeState.af = previousAf;
++		LOG(IPASoft, Debug) << "Keeping focus at " << previousAf.position;
++	}
++
+ 	LOG(IPASoft, Info)
+ 		<< "Exposure " << context_.configuration.agc.exposureMin << "-"
+ 		<< context_.configuration.agc.exposureMax

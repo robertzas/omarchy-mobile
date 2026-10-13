@@ -1,0 +1,287 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cube oakley <cube-oakley@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 12:07:59 -0400
+Subject: [PATCH 07/12] software_isp: Steadier contrast autofocus
+
+Four refinements of the contrast autofocus, measured on another phone
+with the same software ISP:
+
+- Let the lens settle before sampling. Up to four requests are queued at
+  the device, so the frames after a lens move were exposed at the old
+  position: after a run that left the lens at 400, the first coarse
+  sample at 0 read sharper (1.65M) than any real position (under 1.4M)
+  and the scan settled at 100 instead of 400. Wait four samples after
+  each step and six after the jumps to the start of a coarse or a fine
+  scan.
+- Fit a parabola through the best fine sample and its neighbours and
+  move to its vertex, within half a step; the fine step alone left close
+  subjects visibly soft.
+- In continuous mode, follow the sharpness smoothed over about eight
+  frames, take the reference from it once the lens has settled after a
+  lock (15 samples), and scan again only once it has stayed below 60% of
+  the reference for 15 frames. Hand shake blurs a few frames at a time,
+  and a rescan whenever three frames read below 65% of the scan's best
+  (noise-lifted) sample started a new scan every few seconds.
+- Start a scan only once exposure has held for three frames, or after 20
+  frames at most: the sharpness grows with exposure, so a scan run while
+  exposure still rose preferred the positions it sampled last.
+
+When manual focus hands back to continuous at the position the last
+scan found, as around a still, resume watching instead of scanning
+again.
+
+[Derek Ross: combined into one change on top of the centre-window
+ statistics; the 15-sample monitor delay after a lock is Robin Snyders'.]
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/af.cpp | 118 +++++++++++++++++++++++++++----
+ src/ipa/simple/algorithms/af.h   |   5 ++
+ src/ipa/simple/ipa_context.h     |   2 +
+ 3 files changed, 112 insertions(+), 13 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/af.cpp b/src/ipa/simple/algorithms/af.cpp
+index d32dab4..f731d74 100644
+--- a/src/ipa/simple/algorithms/af.cpp
++++ b/src/ipa/simple/algorithms/af.cpp
+@@ -7,6 +7,7 @@
+ 
+ #include <algorithm>
+ #include <cmath>
++#include <iterator>
+ #include <stdint.h>
+ #include <vector>
+ 
+@@ -22,7 +23,32 @@ LOG_DEFINE_CATEGORY(IPASoftAf)
+ 
+ namespace ipa::soft::algorithms {
+ 
++/*
++ * The sharpness statistic grows with exposure (squared edges over a green sum
++ * that includes the black level), so a scan run while exposure still changes
++ * favours the positions it samples last. A scan waits for exposure to hold
++ * for a few frames, but no longer than about two thirds of a second.
++ */
+ static constexpr unsigned int kAeStableSamples = 3;
++static constexpr unsigned int kScanDelayMaxSamples = 20;
++/* After a lock, continuous focus lets the lens settle before it watches. */
++static constexpr unsigned int kContinuousMonitorDelaySamples = 15;
++/*
++ * Continuous focus follows the sharpness smoothed over about eight frames, and
++ * scans again only once that has stayed below this share of its value at the
++ * lock for half a second: hand shake blurs a few frames at a time, which on a
++ * long lens used to start a new scan every few seconds.
++ */
++static constexpr unsigned int kSharpnessSmoothing = 8;
++static constexpr uint64_t kRescanPercent = 60;
++static constexpr unsigned int kRescanSamples = 15;
++/*
++ * Frames still in flight when the lens moves were exposed at the old position:
++ * up to four requests can be queued at the device, and the lens needs time to
++ * travel, longest for the jump to the start of a scan.
++ */
++static constexpr unsigned int kLensStepSettleSamples = 4;
++static constexpr unsigned int kLensJumpSettleSamples = 6;
+ 
+ int Af::init(IPAContext &context, const ValueNode &tuningData)
+ {
+@@ -89,6 +115,7 @@ int Af::configure(IPAContext &context, const IPAConfigInfo &configInfo)
+ 				 context.configuration.focus.max);
+ 	af.scanning = false;
+ 	af.pendingScan = true;
++	af.pendingSamples = 0;
+ 
+ 	LOG(IPASoftAf, Info)
+ 		<< "Focus range " << context.configuration.focus.min << "-"
+@@ -106,6 +133,7 @@ void Af::startScan(IPAContext &context)
+ 
+ 	auto &af = context.activeState.af;
+ 	af.pendingScan = false;
++	af.pendingSamples = 0;
+ 	af.scanning = true;
+ 	af.fineScan = false;
+ 	af.state = controls::AfStateScanning;
+@@ -115,7 +143,7 @@ void Af::startScan(IPAContext &context)
+ 	af.position = af.scanStart;
+ 	af.bestPosition = af.position;
+ 	af.bestSharpness = 0;
+-	af.settleSamples = 1;
++	af.settleSamples = kLensJumpSettleSamples;
+ 	af.lowSharpnessSamples = 0;
+ 
+ 	LOG(IPASoftAf, Debug) << "Starting autofocus scan";
+@@ -134,7 +162,19 @@ void Af::queueRequest([[maybe_unused]] typename Module::Context &context,
+ 	if (const auto mode = requestControls.get(controls::AfMode)) {
+ 		if (*mode != af.mode) {
+ 			af.mode = *mode;
+-			if (af.mode == controls::AfModeContinuous) {
++			if (af.mode == controls::AfModeContinuous &&
++			    af.lockedSharpness && af.position == af.bestPosition) {
++				/*
++				 * Back from manual at the position the last scan
++				 * found, such as after a still: keep it and resume
++				 * watching for a change instead of scanning again.
++				 */
++				af.pendingScan = false;
++				af.scanning = false;
++				af.state = controls::AfStateFocused;
++				af.settleSamples = kContinuousMonitorDelaySamples;
++				af.smoothedSharpness = 0;
++			} else if (af.mode == controls::AfModeContinuous) {
+ 				af.pendingScan = true;
+ 				af.scanning = false;
+ 				af.state = controls::AfStateScanning;
+@@ -194,10 +234,12 @@ void Af::processScan(IPAContext &context, uint64_t sharpness)
+ 		af.bestSharpness = sharpness;
+ 		af.bestPosition = af.position;
+ 	}
++	if (af.fineScan)
++		fineSamples_.emplace_back(af.position, sharpness);
+ 
+ 	if (af.position + af.scanStep <= af.scanEnd) {
+ 		af.position += af.scanStep;
+-		af.settleSamples = 1;
++		af.settleSamples = kLensStepSettleSamples;
+ 		return;
+ 	}
+ 
+@@ -211,22 +253,53 @@ void Af::processScan(IPAContext &context, uint64_t sharpness)
+ 		af.scanStep = context.configuration.focus.fineStep;
+ 		af.position = af.scanStart;
+ 		af.bestSharpness = 0;
+-		af.settleSamples = 1;
++		af.settleSamples = kLensJumpSettleSamples;
++		fineSamples_.clear();
+ 		return;
+ 	}
+ 
+ 	af.scanning = false;
+-	af.position = af.bestPosition;
++	af.position = peakPosition(context, af.bestPosition);
++	af.bestPosition = af.position;
+ 	af.lockedSharpness = af.bestSharpness;
+ 	af.state = af.bestSharpness ? controls::AfStateFocused
+ 				    : controls::AfStateFailed;
+-	af.settleSamples = 1;
++	af.settleSamples = kContinuousMonitorDelaySamples;
++	af.smoothedSharpness = 0;
++	af.lowSharpnessSamples = 0;
+ 
+ 	LOG(IPASoftAf, Info)
+ 		<< "Autofocus completed at " << af.position
+ 		<< " (sharpness " << af.bestSharpness << ")";
+ }
+ 
++/*
++ * The fine scan samples every fine step, which at close range is coarse
++ * enough to leave a visibly soft result. Fit a parabola through the best
++ * sample and its neighbours and move to its vertex.
++ */
++int32_t Af::peakPosition(const IPAContext &context, int32_t best) const
++{
++	const auto it = std::find_if(fineSamples_.begin(), fineSamples_.end(),
++				     [best](const auto &sample) { return sample.first == best; });
++	if (it == fineSamples_.end() || it == fineSamples_.begin() ||
++	    std::next(it) == fineSamples_.end())
++		return best;
++
++	const double left = static_cast<double>(std::prev(it)->second);
++	const double centre = static_cast<double>(it->second);
++	const double right = static_cast<double>(std::next(it)->second);
++	const double curvature = left - 2.0 * centre + right;
++	if (curvature >= 0.0)
++		return best;
++
++	const int32_t step = context.configuration.focus.fineStep;
++	const double offset = std::clamp(0.5 * (left - right) / curvature, -0.5, 0.5);
++	return std::clamp(best + static_cast<int32_t>(std::lround(offset * step)),
++			  context.configuration.focus.min,
++			  context.configuration.focus.max);
++}
++
+ float Af::normalizedPosition(const IPAContext &context) const
+ {
+ 	const auto &focus = context.configuration.focus;
+@@ -252,18 +325,37 @@ void Af::process(IPAContext &context,
+ 
+ 	if (stats->valid) {
+ 		if (af.pendingScan &&
+-		    context.activeState.agc.stableSamples >= kAeStableSamples)
++		    (context.activeState.agc.stableSamples >= kAeStableSamples ||
++		     ++af.pendingSamples >= kScanDelayMaxSamples))
+ 			startScan(context);
+ 
++		const uint64_t sharpness = stats->sharpness;
++
+ 		if (af.scanning) {
+-			processScan(context, stats->sharpness);
++			processScan(context, sharpness);
+ 		} else if (af.mode == controls::AfModeContinuous &&
+ 			   af.state == controls::AfStateFocused &&
+-			   !af.settleSamples && af.lockedSharpness &&
+-			   stats->sharpness * 100 < af.lockedSharpness * 65) {
+-			if (++af.lowSharpnessSamples >= 3) {
+-				af.pendingScan = true;
+-				af.state = controls::AfStateScanning;
++			   af.lockedSharpness) {
++			af.smoothedSharpness = af.smoothedSharpness
++				? (af.smoothedSharpness * (kSharpnessSmoothing - 1) +
++				   sharpness) / kSharpnessSmoothing
++				: sharpness;
++			if (af.settleSamples) {
++				/*
++				 * The reference is what this position gives once
++				 * the lens has settled, not the scan's best sample,
++				 * which noise lifts.
++				 */
++				if (!--af.settleSamples)
++					af.lockedSharpness = std::max<uint64_t>(af.smoothedSharpness, 1);
++			} else if (af.smoothedSharpness * 100 <
++				   af.lockedSharpness * kRescanPercent) {
++				if (++af.lowSharpnessSamples >= kRescanSamples) {
++					af.pendingScan = true;
++					af.state = controls::AfStateScanning;
++					af.lowSharpnessSamples = 0;
++				}
++			} else {
+ 				af.lowSharpnessSamples = 0;
+ 			}
+ 		} else {
+diff --git a/src/ipa/simple/algorithms/af.h b/src/ipa/simple/algorithms/af.h
+index f86620f..6ea7a6b 100644
+--- a/src/ipa/simple/algorithms/af.h
++++ b/src/ipa/simple/algorithms/af.h
+@@ -8,6 +8,7 @@
+ #include <optional>
+ #include <stdint.h>
+ #include <utility>
++#include <vector>
+ 
+ #include "algorithm.h"
+ 
+@@ -33,6 +34,10 @@ private:
+ 	void startScan(IPAContext &context);
+ 	void processScan(IPAContext &context, uint64_t sharpness);
+ 	float normalizedPosition(const IPAContext &context) const;
++	int32_t peakPosition(const IPAContext &context, int32_t best) const;
++
++	/* Fine-scan samples as (position, sharpness), for the peak fit. */
++	std::vector<std::pair<int32_t, uint64_t>> fineSamples_;
+ 
+ 	unsigned int coarseSteps_ = 8;
+ 	unsigned int fineSteps_ = 32;
+diff --git a/src/ipa/simple/ipa_context.h b/src/ipa/simple/ipa_context.h
+index a29215b..f768ab9 100644
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -80,8 +80,10 @@ struct IPAActiveState {
+ 		int32_t bestPosition;
+ 		uint64_t bestSharpness;
+ 		uint64_t lockedSharpness;
++		uint64_t smoothedSharpness;
+ 		unsigned int settleSamples;
+ 		unsigned int lowSharpnessSamples;
++		unsigned int pendingSamples;
+ 		bool scanning;
+ 		bool fineScan;
+ 		bool pendingScan;
