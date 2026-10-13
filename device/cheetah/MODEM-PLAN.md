@@ -4,8 +4,13 @@
 Status (2026-10-13): **M0, M2.5, M3.1 and M3.3-B passed** (CPIF binds,
 `/dev/umts_*` and 30 rmnet devices exist). **M3.4.0-M3.4.3 passed; M3.4.4
 ran clean on NV but rfsd found no TOC** (it read the raw `modem_a`, not
-`modem.bin`): fixed in `omandroid-modem` 0.1.1, M3.4.4 to be repeated
-before M3.4.5 (see "M3.4.4, first run"). **Every modem power-off is
+`modem.bin`): fixed in `omandroid-modem` 0.1.1, repeated clean. **M3.4.5,
+the first CP power-on, failed** (2026-10-13): the BOOT image went out but
+the s51xx probe found no memory window for the doorbell, cbd retried 15
+times in 80 s, 9 recovered UFS handler passes; NV unchanged (M3.5). Fixed
+offline on `omandroid-modem` (`1fc15c4a6`..`7d9c1c3a4`) and in
+`omandroid-modem` 0.1.2 (cbd stops after one failed attempt): see "M3.4.5,
+first run" and the M3.4.5b retry runbook. **Every modem power-off is
 followed by one recovered UFS error-handler pass**, so the modem stays on
 once up (M2.6). New offline (2026-10-13): the stack that runs on the phone
 from M3.4 on is packaged (`omandroid-modem` 0.1.1, `omandroid-modem-sit`
@@ -15,9 +20,9 @@ CP boot) and M4 (registration, SMS, data, voice) below. Next on the phone:
 M3.4, held for the human. Section 6.3 lists what our CPIF port still lacks
 for data and suspend.
 Kernel branch `omandroid-modem` in `~/android/mainline/wt-modem` (head
-`23e3d01c4`, section 6.3), build in `~/android/mainline/out-modem` (last
-full build `7.3.0-rc6-omandroid-push1-00356-g23e3d01c4543`,
-`logs/kernel-modem8.log`).
+`7d9c1c3a4`, section 6.3 and M3.4.5b), build in `~/android/mainline/out-modem` (last
+full build `7.3.0-rc6-omandroid-push1-00363-g7d9c1c3a4465`, W=1 clean on
+the touched files).
 Everything new is disabled by default. RADIOS-CAMERA-PLAN.md section 1 is
 the survey this follows.
 
@@ -1066,6 +1071,7 @@ going up, or a handler pass while the modem is up and not changing power.
    2026-10-13 config fragment: the channel extension is on, the packet
    processor is built but stays off without `modem-cpif-pktproc`, and the
    link waits for training to end after the first L0.
+   **For M3.4.5b: `7d9c1c3a4` or later** (the probe fixes below).
 3. The modem chroot image, from the user's own factory image, **re-run
    with the 2026-10-13 tool** (it adds the shell and toybox), never
    committed: `tools/extract-vendor-chroot -p modem -o
@@ -1162,7 +1168,7 @@ tools/phone-ssh 'dmesg | grep -c ufshcd_err_handler; systemctl start --no-block 
 #   expect, in this order in the kmsg terminal (about 10-30 s):
 #   - "IOCTL_POWER_ON", the traced power-on edges (pm-wrst, pwr-on, nreset, cp-wrst = 1);
 #   - "link up: Gen1 x1", "secure ATU SMC: 0x0", 0001:01:00.0 144d:a5a5, the s51xx probe
-#     ("db_addr : 0x14e60000 ..."), 4 MSI vectors;
+#     (from `d1fe3981d`: "doorbell: BAR0 [mem ...] (bus 0x14e00000, ...) + 0x60000"), 4 MSI vectors;
 #   - cbd's boot steps ([cbd] lines in the journal), a link_down, "link up: Gen3 x2" (main firmware);
 #   - CPIF "ONLINE"; the journal: "CP ONLINE (cbd exit 0)", "omandroid-modem-cp: CP ONLINE"
 #   pass: state ONLINE; the marker file is gone; "faults: 0x0"; err_handler count unchanged
@@ -1175,7 +1181,8 @@ tools/phone-ssh 'dmesg | grep -c ufshcd_err_handler; systemctl start --no-block 
 tools/phone-ssh 'systemctl stop x-modem-deadman.timer'     # only once ONLINE was seen
 #   stop (record, then reboot-to omandroid; expect one UFS pass at the power-off):
 #   - an Oops, a panic line, the watchdog;
-#   - "doorbell ... outside the bridge window" (the s51xx probe refused);
+#   - "BAR0 ... not assigned: no doorbell" or "doorbell ... outside BAR0" (the s51xx probe refused;
+#     from `7d9c1c3a4` cbd's attempt then fails at once with "no PCIe endpoint for the ROM boot");
 #   - the journal says "not ONLINE. Leaving it for diagnosis": collect `journalctl -u omandroid-modem`,
 #     the kmsg log and `/usr/lib/omandroid-vendor/omandroid-modem-cp state`, then reboot. The marker
 #     stays, so the next boot skips the modem until `omandroid-modem-start --retry`. Section 6.2
@@ -1260,6 +1267,114 @@ Android shim, and the Android linker's missing `ld.config.txt`.
   checks the baseband property against the same file before any daemon
   runs. **Repeat M3.4.1 (install 0.1.1) and M3.4.4 with the new
   expectations before M3.4.5.**
+
+**M3.4.5, first run (2026-10-13, `7.3.0-rc6-omandroid-push1-00407-g618475741fa7`,
+overlay `modem-cpif-test`, `omandroid-modem` 0.1.1; logs `logs/m3.4.5-*`,
+private): FAILED, recovered by a clean reboot; M3.5 unchanged.**
+- cbd: the stage table from the real TOC, "CDT property invalid" (no
+  per-phone `cdt_hwid`, optional), "Power on CP", "Load CP bootloader",
+  "xmit bootloader complete!", "Start CP bootloader", then "ERR!
+  IOCTL_START_CP_BOOTLOADER fail", "start boot fail". cbd then powered the
+  CP on again by itself, every ~5.5 s: **15 power-ons** until its timeout
+  (exit 124); the unit: "CP is BOOTING: not ONLINE".
+- Kernel, first attempt: IOCTL_POWER_ON, "link up: Gen1 x1", then the PCI
+  core's "removing 2.5GT/s downstream link speed restriction" on the root
+  port; the root port read **class 0x000000** and the modem 144d:a5a5
+  **class 0x000000** with a 1 MiB 64-bit BAR0 and 1 MiB BARs 2-5. The core
+  sizes and assigns nothing for class 0, so the root port's window stayed
+  `[mem 0x00000000 disabled]`. The s51xx probe's stock "Disable BAR
+  resources" loop then failed every BAR ("can't assign; no space"), and our
+  bridge-window check refused to map the doorbell ("doorbell base 0x0 +
+  0x60000 outside the bridge window"): no s51xx device, so the ROM was never
+  given its boot image address and `boot_stage` stayed 0 for 200 polls.
+- Every later attempt: "Driver 's51xx' is already registered, aborting...",
+  `pci_register_driver() failed, rc:-16`: the failed first probe left the
+  driver registered, and register_pcie() registers it on each power-on.
+  The error was ignored and boot_stage polled for 5 s each time.
+- Correctable AER (RxErr, physical layer) on **0000:00:00.0 (144d:eced),
+  the Wi-Fi root port**, near several modem power-ons: not the modem's
+  link. Record whether it recurs.
+- UFS: 9 recovered `ufshcd_err_handler` passes (no resets, aborts or I/O
+  errors) during the retries, as M2.5 predicted for repeated link changes.
+- The debugfs status read "state: cp 0, phy 0/0, link 0" afterwards: the
+  "cp" field only tracks the debugfs steps' own power-on, so it said 0
+  while CPIF had the modem powered.
+
+**Fixes (offline, 2026-10-13; `omandroid-modem` `1fc15c4a6`..`7d9c1c3a4`,
+built as `7.3.0-rc6-omandroid-push1-00363-g7d9c1c3a4465`, W=1 clean,
+checkpatch clean but for the missing sign-off):**
+
+| Commit | What |
+| --- | --- |
+| `1fc15c4a6` | root port set up as `dw_pcie_setup_rc()` does on every link up (bridge class, bus numbers, memory/bus master); AER, PME, DPC and hotplug kept off the port |
+| `e8264de16` | the modem's function reports class "other" (0xff0000) instead of 0, so the core sizes and assigns its BARs |
+| `873fea0cc` | the root port's Link Control 2 target speed stays at link_up's (Gen1 for the ROM): no core retrain under the ROM |
+| `c3e4b7364` | the root port's windows saved after the scan and restored after each link down (the soft power reset clears them; the pci_devs outlive it) |
+| `56b98efba` | debugfs status: "cp -" when CPIF owns the lines; trained speed/width while the link is up |
+| `d1fe3981d` | s51xx probe keeps the core's BAR0 and finds the doorbell at `pci_db_addr`'s offset in it (0x60000); fails if BAR0 is unassigned or the device can't be enabled |
+| `7d9c1c3a4` | the s51xx driver is unregistered when nothing bound, so the next power-on probes again; register_pcie()'s error fails the ROM boot at once (normal and dump boot) instead of 200 polls |
+
+`omandroid-modem` 0.1.2: the profile stops cbd at its first failed boot
+attempt (the first "ERR! IOCTL_... fail" or "start boot fail" after a
+"Power on CP"; `OMANDROID_MODEM_CBD_ATTEMPTS`, default 1), so one failure
+costs one power-on, not 15. The CP is left as it is for diagnosis; the
+reboot powers it off (one UFS pass).
+
+```sh
+# M3.4.5b THE FIRST BOOT, again (announce: the modem powers on and stays on; risk: medium-high)
+# Before (laptop): the human merges omandroid-modem (7d9c1c3a4 or later) into omandroid-int and builds it;
+#   packages/omandroid-modem/test/all passes (0.1.2).
+# 0. M3.4.0 (read-only): the six partitions against the newest backup, as above: no diff
+# 1. install 0.1.2 (asks the human; risk: none)
+tools/phone-install-package packages/omandroid-modem
+tools/phone-ssh 'pacman -Q omandroid-modem; systemctl is-enabled omandroid-modem; cat /var/lib/omandroid/modem-bringup-started 2>&1'
+#   pass: omandroid-modem 0.1.2; "disabled"; the M3.4.5 marker still there (expected: it never reached ONLINE)
+# 2. the int kernel with the overlay (asks the human: reboots; risk: low)
+ov gnss-pmic-test gnss-test aoc-boot-test modem-cpif-test && bin/omandroid push
+tools/phone-ssh 'uname -r; lsmod | grep -cE "^(cpif|shm_ipc|pcie_gs201_cp) "; dmesg | grep -c ufshcd_err_handler'
+#   pass: the new int release (record it); 0 modules; err_handler 0. Second terminal as in M3.4.2:
+tools/phone-ssh dmesg -w | tee logs/m3.4.5b-kmsg.log
+# 3. M3.4.3 again (modules, preconditions, no modem power; risk: low): same pass as M3.4.3, and the
+#    status file now shows "state: cp -, phy 0/0, link 0, atu 0"
+# 4. the boot: clear the M3.4.5 marker and start the unit, never `omandroid-modem-start --retry` by hand
+#    (the unit would not see it; as with the AoC)
+tools/phone-ssh 'systemd-run --unit=x-modem-deadman --on-active=300 systemctl stop omandroid-modem'
+tools/phone-ssh 'dmesg | grep -c ufshcd_err_handler; rm -f /var/lib/omandroid/modem-bringup-started; sync;
+  systemctl start --no-block omandroid-modem; sleep 60;
+  /usr/lib/omandroid-vendor/omandroid-modem-cp state; cat /sys/devices/platform/cpif/modem_state;
+  journalctl -u omandroid-modem --no-pager | grep -v linker | tail -40; ls /var/lib/omandroid/modem-bringup-started 2>&1;
+  cat /sys/kernel/debug/gs201-pcie-cp/status | grep -E "state|link Gen|LTSSM|faults"; dmesg | grep -c ufshcd_err_handler'
+#   expect in the kmsg terminal, first attempt:
+#   - IOCTL_POWER_ON, the power-on edges, "link up: Gen1 x1 (target Gen1)", and NO "removing 2.5GT/s
+#     downstream link speed restriction";
+#   - "pci 0001:00:00.0: [144d:ecec] type 01 class 0x060400", "pci 0001:01:00.0: [144d:a5a5] type 00
+#     class 0xff0000", then "BAR 0 [mem 0x14e00000-0x14efffff 64bit]: assigned" (record the
+#     addresses; the bus side, not CPU) and a bridge window "[mem 0x14e00000-...]" on 0001:00:00.0;
+#   - "s51xx EP driver Probe", "doorbell: BAR0 [mem ...] (bus 0x14e00000, reads 0x14e0000x) + 0x60000;
+#     pci_db_addr 0x14e60000", "Set Doorbell register address", "Enable PCI device", 4 MSI vectors,
+#     "CP EP driver initialization end";
+#   - check_cp_status: boot_stage moving off 0x0, cbd's later stages, a link down and "link up: Gen3 x2";
+#   - CPIF ONLINE; journal "CP ONLINE (cbd exit 0)"
+#   pass: as M3.4.5 (ONLINE, marker gone, faults 0x0, err_handler unchanged across power-on and boot
+#     except a pass at the Gen1->Gen3 link change, which is to be recorded, not a stop on its own);
+#     status "link Gen3 x2 (target Gen3)"
+tools/phone-ssh 'systemctl stop x-modem-deadman.timer'     # only once ONLINE was seen
+#   stop (record, collect the three logs as in M3.4.5, then reboot-to omandroid; one UFS pass expected):
+#   - "BAR0 ... not assigned: no doorbell" / "doorbell ... outside BAR0" / "pci_enable_device() failed":
+#     the probe refused; the journal shows "cbd: 1 failed boot attempt(s): stopping it" and only ONE
+#     IOCTL_POWER_ON in the kmsg (two at most if cbd's retry raced the stop). Record the scan lines
+#     (classes, BARs, bridge windows) and stop: next step is offline;
+#   - the probe passed but boot_stage stays 0x0 to cnt 200 ("check_cp_status fail (err -14)"): the
+#     doorbell or the boot image address doesn't reach the ROM. Record the doorbell line, BAR0's
+#     "reads" value and `lspci -vv -s 0001:01:00.0` (Control: Mem+ BusMaster+), then stop;
+#   - more than 2 IOCTL_POWER_ON in total, or any "already registered": the 0.1.2 profile or
+#     7d9c1c3a4 is not what runs: stop the unit at once (`systemctl stop omandroid-modem`);
+#   - AER lines on 0001:00:00.0 (the modem's root port; 0000:00:00.0 is Wi-Fi's: record only);
+#   - UFS beyond one pass per link change, an Oops, a panic, the watchdog
+#   rollback: reboot (the unit's stop powers the CP off before rfsd); a boot without CPIF: images
+#   without modem-cpif-test
+# 5. M3.5 (read-only), then M3.4.6 if ONLINE
+```
 
 **M3.5 (after every M3.4 or M4 run; read-only; risk: none):** repeat the
 M3.4.0 commands into `logs/m3.4-after.sha256` and diff against

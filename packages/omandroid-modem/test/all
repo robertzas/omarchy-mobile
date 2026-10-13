@@ -69,3 +69,17 @@ if command -v systemd-analyze >/dev/null; then
     fail "unit verify" || true
 fi
 pass "staged layout, props and unit"
+
+# cbd_watch stops a retrying cbd after its first failed boot (M3.4.5: cbd
+# powered the modem on 15 times in 80 s). A fake cbd fails every attempt.
+out=$(RUN=$t CBD_ATTEMPTS=1 bash -c '
+  say() { printf "omandroid-modem: %s\n" "$*"; }
+  eval "$(sed -n "/^cbd_watch() {/,/^}/p" profiles/modem.conf)"
+  fake="while :; do echo \"I -[1]: Power on CP\"; sleep 0.1
+    echo \"E -[1]: ERR! IOCTL_START_CP_BOOTLOADER fail\"; echo \"I -[1]: start boot fail\"; done"
+  sh -c "echo \$\$ > \"\$0\"; exec \"\$@\"" "$RUN/cbd.pid" timeout 10 sh -c "$fake" 2>&1 | cbd_watch
+  echo "rc=${PIPESTATUS[0]}"' 2>&1)
+[[ $(grep -c 'Power on CP' <<<"$out") -le 2 && $out == *"1 failed boot attempt(s)"* && $out == *rc=143* ]] ||
+  fail "cbd stopped after one failed boot: $out"
+[[ ! -e $t/cbd.pid ]] || fail "cbd pid file removed"
+pass "cbd stopped after its first failed boot"
