@@ -21,11 +21,11 @@ lines and 4080x3072 overrun too: the WDMA never gets VC 0's frame
 starts), CAM-M.5g (the WDMA gets VC 0's first frame
 start and only five line ends: no line framing; every VC 0 DMA so far
 ran with the sensor's colour bars), CAM-M.5h (a real image
-fails the same way), next CAM-M.5i (line ends for VC 1, then the link
-pixel mode). CAM7: F.1-F.3 passed (the S5K3J1 answers, link 0's graph is
+fails the same way), CAM-M.5i (VC 1 has line
+ends, VC 0 doesn't; dual/single overflow on the link, octa is clean),
+next CAM-M.5j (CAM 664 MHz, then octa). CAM7: F.1-F.3 passed (the S5K3J1 answers, link 0's graph is
 up); F.4 next. Kernel branch
-`omandroid-camera` head `d73ed198d` (`pixel_mode`; up to `bcc97af77`
-in int `a56ad74dc`);
+`omandroid-camera` head `d73ed198d` (all in int `7e9131775`);
 libcamera 0.7.2-4.6 (patches 0013-0014: the front and
 telephoto sensors, a near-size mode rule) built and checked offline, the
 phone still runs 4.4. Ultrawide quality: CAM5.3, Snapshot CAM5.4, what to
@@ -2974,6 +2974,76 @@ tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA
   packets), not the CSIS. If neither stream has line ends, it is the
   C-PHY link's hand-over: then the link registers the stock HAL writes
   through its field setters that we don't (section 4.3, RE2) are next.
+- **Rollback:** reboot; parameters per load.
+
+**CAM-M.5i results (2026-10-13, int `7e9131775` =
+`7.3.0-rc6-omandroid-push1-00463-g7e9131775953`, + `d73ed198d` and a
+modem fix; fresh boot; libcamera 0.7.2-4.6 installed, not used yet; logs
+`logs/camera-20261013-153*.log`):**
+- **i-1 (link only, 2016x1136):** `pixel_mode=1` (dual): FS/FE 144, INT0
+  b3 x40532, **b4 (`ERR_OVER`) x73887**; `pixel_mode=3` (octa): FS/FE
+  142, b3 x26046 only, as clean as quad; `pixel_mode=0` (single): FS/FE
+  144, b3 x40172, **b4 x69841**. Dual and single overflow on the link, as
+  expected; octa and quad don't.
+- **i-0 (the boot's one DMA, VC 1 alone, `ch0_vc=1 wdma_line_irq=1`,
+  `PATTERN=0`):** link FS/FE (channel 0) 4/4, WDMA FS 4, FE 4, **line
+  ends 1021 (about 255 a frame)**, INT1 b6 x26930 (channel 0's height
+  1136 against VC 1's ~284), 11 632 640 bytes. **VC 1 has its line
+  framing; VC 0 doesn't** (M.5g/M.5h: five line ends, then `LASTADDR`).
+- i-2/i-3 (DMA in dual/octa) skipped: dual overflows on the link.
+
+**Why, ninth pass (offline):**
+- The streams differ in timing more than in kind: both are 2520-byte
+  RAW10 lines with frame syncs, but **VC 0's lines come back to back at
+  the link's full rate** (2.3 us a line in these settings, ~1.1 GB/s
+  during a line, the link's capacity figure 1862 Mpixel/s), while VC 1's
+  come about one in four. Lines the WDMA loses line ends on while VC 1's
+  arrive fine is a throughput sign between the link and the WDMA, not a
+  framing one [I]; the link itself doesn't overflow in quad (no b4), but
+  the CSIS-to-WDMA side runs on the CAM clock (533 MHz) and the WDMA on
+  INT (400 MHz).
+- That matches the earlier finding on another set-up (section 4.4): at a
+  CAM vote of 400 MHz this sensor's link overflowed and the WDMA stopped
+  part-way with `LASTDATA`/`LASTADDR`; 533 MHz was enough there for the
+  same mode, but **our link runs faster** if the output PLL is the symbol
+  rate (2716 Msps against the ~1600 that set-up estimated; section 4.5,
+  open question 16). So CAM 664 MHz (the top of the CAM DVFS table) goes
+  back on the list, ahead of anything sensor-side.
+- **Sensor side (offline, the HAL):** our data file is the HAL's default
+  init list and mode lists in full; the GN1 driver's other code paths in
+  the library are a soft reset and clock enable (ours too), stream on,
+  a "boost settings" path, an OTP read for calibration, and a per-phone
+  gate-voltage file under `persist` (read only by the HAL). None of these
+  names a MIPI framing or line-packet setting; the C-PHY framing
+  registers (lane count 0x0114, 0x0118, data format 0x0112) are in the
+  lists we write. So no sensor write is indicated yet.
+- Octa (clean on the link) is the other cheap DMA try: if the hand-over
+  is per clock, eight pixels a clock halves its rate.
+
+### CAM-M.5j: the CAM clock at its top, then octa. Risk: medium (DMA)
+
+No new kernel (`cam_khz_cphy` and `pixel_mode` exist); one DMA attempt a
+fresh boot.
+
+```sh
+P='modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 1;'
+# M.5j-1 (fresh boot) VC 0, real image, CAM 664 MHz
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=1 FRAMES=4 PATTERN=0 CTRLS=analogue_gain=256 CSIS_OPTS='cam_khz_cphy=664000 wdma_line_irq=1' bash -s" --script tools/camera-cap-test
+tools/phone-ssh 'dmesg | grep -E "link 1 on|so far" | tail -2; dmesg | grep -A9 "stopped:" | tail -10'
+#   check: "CAM 664000000 Hz" in the link-on line (if lower, the vote was capped: record)
+#   pass: wdma_done 4, errors 0, line ends ~1136 a frame, 11 632 640 bytes, a picture
+# M.5j-2 (next boot, only if j-1 failed) octa at the default CAM 533 MHz
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=1 FRAMES=4 PATTERN=0 CSIS_OPTS='pixel_mode=3 wdma_line_irq=1' bash -s" --script tools/camera-cap-test
+# M.5j-3 (next boot, only if both failed) both together
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=1 FRAMES=4 PATTERN=0 CSIS_OPTS='cam_khz_cphy=664000 pixel_mode=3 wdma_line_irq=1' bash -s" --script tools/camera-cap-test
+#   in each: record the line ends at the first error ("so far") and in all: more line
+#   ends before the error than M.5h's five means the change helps
+```
+
+- If all three fail: slow the sensor instead (its output post-divider and
+  a doubled line length halve the link rate, the change that let a whole
+  frame through at 400 MHz on the other set-up), as a data-file variant
+  for one test, and the INT vote above 400 MHz.
 - **Rollback:** reboot; parameters per load.
 
 **The front camera (CAM7), on the next boot that has no camera DMA step**
