@@ -1435,6 +1435,112 @@ tools/camera-stage --watchdog x --cmd 'LINK=2 DMA=1 CH=0 FRAMES=4 bash -s' --scr
 - **Rollback:** reboot (DMA stops with the module); images without the
   overlay.
 
+**CAM3b.5b, CAM4.1 and CAM4.3 results (2026-10-13, int
+`7.3.0-rc6-omandroid-push1-00395-g6c0e876bd580`: the link 2 work plus
+`f9cbc3f50` (scan reads only the programmed sysreg registers) and
+`39afbe857` (clear the per-VC FS/FE sources, which ended an interrupt
+storm); `camera-stream-link2`):**
+
+- **CAM3b.5b passed:** 60 fps on link 2 at CAM 400 MHz, with about one
+  `ERR_WRONG_CONFIG` (INT0 bit 3) per frame (open: probably the parked
+  channels or the data type of the sensor's embedded lines; not fatal).
+- **CAM4.1 passed (first DMA):** `LINK=2 DMA=1 CH=0 FRAMES=4
+  CSIS_OPTS=int_khz=0`, `PATTERN=2`: `wdma_done` 5, `wdma_errors` 0, file
+  15 441 920 bytes (4 x 2560 x 1508: the 64-byte stride is right); frames
+  1-3 bit-identical, frame 0 empty (2 dropped at start). The bars switch at
+  exact eighths of the line. Per-position MSB means over the eight bars
+  (1 = 255, 0 = 0): row 100 even columns `1 1 1 1 0 0 0 0`, odd columns
+  all 1; row 101 even columns all 1, odd columns `1 1 0 0 1 1 0 0`.
+- **CAM4.3: first real image.** `PATTERN=0`, held up at the ceiling,
+  exposure 1700, `analogue_gain` 240: ceiling lamps with their glow and a
+  fixture; MSB p1 15, p50 16, p99 23, so the lit room sits at the black
+  level and only the lamps register (the first run looked all black
+  because the phone lay camera-down). All the ultrawide rails were on at
+  their voltages mid-stream.
+
+**Reading the bars (offline, 2026-10-13).** The CCS colour bars are white,
+yellow, cyan, green, magenta, red, blue, black, so per channel R = `1 1 0
+0 1 1 0 0`, G = `1 1 1 1 0 0 0 0`, B = `1 0 1 0 1 0 1 0`. Row 100 even shows
+G and row 101 odd shows R, but those two positions are diagonal in the 2x2
+cell, where a Bayer sensor has either both greens or red and blue; and no
+position shows the B pattern while two are saturated throughout. So the
+data doesn't fit any of the four Bayer orders with the standard bars:
+either this sensor's bars differ in the binned mode or the analysis
+indexed the packed bytes differently. **Bayer order not settled;
+SRGGB10 stays [I].** CAM4.3b reads it directly with the solid colour
+pattern (one value per channel).
+
+**Why so dim (offline, 2026-10-13).**
+- Writes do reach the sensor in the right order: the driver writes the
+  init and mode lists (which set 0x0202 = 1779, 0x0204 = 0, frame length
+  1799 for 2016x1508), then `__v4l2_ctrl_handler_setup()` writes every
+  control, then mode_select. Controls set before streaming are only stored
+  (the sensor is off) and written there, so the mode list doesn't
+  overwrite them. Neither list uses the group hold (0x0104). Not yet
+  proven by a readback: `ddf414774` logs frame length, exposure,
+  analogue and digital gain and the test pattern as the sensor reads
+  them back after mode_select.
+- **The analogue gain model is the open question.** The control range
+  0-480 is our extraction tool's guess [I]. Two Sony models are in use
+  for sensors of this family: gain = 512 / (512 - code) (0-480 = 1x-16x)
+  and gain = 1024 / (1024 - code) (0-960 = 1x-16x). Code 240 is 1.88x in
+  the first and 1.31x in the second; either way the test ran at under 2x
+  analogue gain and 16 ms (60 fps), where stock indoors runs about 33 ms
+  and several times the gain. So "dim" is expected even with everything
+  right, and only a sweep at a fixed scene tells the model (CAM4.3b).
+- The digital gain control wrote only the Gr channel's gain (0x020e); the
+  mode lists set all four (0x020e-0x0215) to 1.0. Fixed in `ddf414774`
+  (all four). Not a cause of the dim picture (the control was left at 1.0).
+- **Black level: 64 in 10 bits** (p1 15 x 4 + LSBs, the floor of the
+  real image at MSB 15-16), as expected for this kind of sensor.
+
+### CAM4.3b: Bayer order, control readback and the gain model. Risk: medium (DMA as in CAM4.1)
+
+Kernel with `ddf414774` (the human merges `omandroid-camera` into int);
+the same overlay and module options as CAM4.1 (CAM vote, `int_khz=0`).
+Prop the phone so the camera sees the same lit scene for every run (not a
+lamp straight on), the room lights constant. Laptop side,
+`tools/raw10-stats` (plain Python, reads the file only).
+
+```sh
+# 4.3b-1 Bayer order: solid colour, a different value per channel
+tools/camera-stage --watchdog x --cmd 'LINK=2 DMA=1 CH=0 FRAMES=4 CSIS_OPTS=int_khz=0 PATTERN=1 CTRLS="red_pixel_value=256,green_red_pixel_value=512,blue_pixel_value=768,green_blue_pixel_value=1000" bash -s' --script tools/camera-cap-test
+tools/phone-ssh 'cat /tmp/cam-2016x1508.raw' > logs/cam4-solid.raw
+tools/raw10-stats logs/cam4-solid.raw
+#   expect: each of the four positions flat at one of 256/512/768/1000:
+#   row 0 col 0 = R -> RGGB, = Gr -> GRBG, = Gb -> GBRG, = B -> BGGR
+#   (and the bars file again: tools/raw10-stats logs/cam4-bars.raw --bars 8)
+# 4.3b-2 the readback: the same run's dmesg line
+#   "imx386 0-001a: streaming 2016x1508: ... frame_length 1799, exposure E,
+#   analogue gain G, digital gain 0x100, test pattern P" = the values set
+# 4.3b-3 gain model: one run each, same scene, exposure 1700, PATTERN=0
+for g in 0 120 240 360 480; do
+  tools/camera-stage --watchdog x --cmd "LINK=2 DMA=1 CH=0 FRAMES=4 CSIS_OPTS=int_khz=0 PATTERN=0 CTRLS=exposure=1700,analogue_gain=$g bash -s" --script tools/camera-cap-test
+  tools/phone-ssh 'cat /tmp/cam-2016x1508.raw' > logs/cam4-gain$g.raw
+  tools/raw10-stats logs/cam4-gain$g.raw
+done
+# 4.3b-4 exposure is linear: analogue_gain 0, exposure 400, 800, 1600 (same scene)
+# 4.3b-5 a brighter picture: 30 fps, the longest exposure, the top gain code
+#   CTRLS="vblank=2090;exposure=3580,analogue_gain=480"
+```
+
+- **Pass (4.3b-1):** four flat positions with the four values; record
+  the Bayer order. If it isn't RGGB, the data file header's `bayer` field
+  is what changes (`tools/extract-camera-data`; the kernel takes the code
+  from the file).
+- **Pass (4.3b-2):** the readback equals the controls' values that
+  `camera-cap-test` prints before streaming (`v4l2-ctl -l`).
+- **Reading 4.3b-3** (signal = the green positions' p50 minus 64): at a
+  fixed exposure the ratio to the code-0 run is the gain. 512 / (512 -
+  code): 1.31x at 120, 1.88x at 240, 3.37x at 360, 16x at 480. 1024 /
+  (1024 - code): 1.13x, 1.31x, 1.54x, 1.88x. Record the model; it sets
+  the control's range (960 for the second model) and the libcamera helper.
+- **Pass (4.3b-5):** the room visible above the black level.
+- **Stop:** as CAM4.1 (any WDMA error, a torn or shifted frame, a hang);
+  a readback that differs from what was set (a control isn't reaching the
+  sensor: look before another run).
+- **Rollback:** reboot; `PATTERN=2` and no `CTRLS` is CAM4.1 again.
+
 ### CAM5: libcamera. Risk: low (userspace)
 
 ```sh
@@ -1452,6 +1558,29 @@ tools/phone-ssh 'cam -c1 --capture=3 --file=/tmp/frame#.ppm --stream pixelformat
 - **Pass:** a recognisable image (colours off is fine: no tuning yet).
 - **Stop:** `cam -l` empty: check `media-ctl -p` and the libcamera log
   (`LIBCAMERA_LOG_LEVELS=SimplePipeline:0`).
+
+**CAM5 readiness (2026-10-13).** What libcamera's simple pipeline and
+software ISP need, and where it stands:
+- media graph, formats, `V4L2_CAP_IO_MC`, the five sensor controls, a
+  dma-buf heap: in place (CAM4.1 captured through the same nodes);
+- **the Bayer order**: the sensor reports SRGGB10, unverified: CAM4.3b-1
+  first, or the colours come out swapped;
+- **black level**: 64 of 1023 (CAM4.3); without a sensor helper the soft
+  ISP estimates it from the darkest pixels, which works for a first
+  picture; a helper with `blackLevel_ = 4096` (16-bit scale) is better;
+- **gain model**: without a helper libcamera treats the code as linear
+  gain, so its AGC overshoots or crawls; a helper (`AnalogueGainLinear`
+  with the model CAM4.3b-3 measures) goes into `packages/libcamera` as a
+  second patch then, with `unitCellSize` 1.25 um only once there's a
+  citable source;
+- the mode: `cam` picks 2016x1508 at 60 fps (16 ms); for indoor light,
+  libcamera's AGC raises gain but doesn't lengthen the frame (it never sets
+  `VBLANK` in the simple pipeline), so indoor pictures will stay dark-ish
+  until the default blanking gives 30 fps (a driver default, after
+  CAM4.3b-5 shows the picture);
+- `packages/libcamera` is still unbuilt (CAM5.0).
+So CAM5.0-5.2 can run after CAM4.3b-1; CAM5.3 and an indoor-usable
+picture wait for the gain model and the 30 fps default.
 - **Rollback:** `pacman -S libcamera` (Arch Linux ARM's build).
 
 ---
@@ -1471,8 +1600,9 @@ tools/phone-ssh 'cam -c1 --capture=3 --file=/tmp/frame#.ppm --stream pixelformat
    EBUF, and which channel does a plain capture use (CAM4)?
 5. Can mainline `ccs` with static data drive the ultrawide (section 5.3)?
    Not needed now; the IMX386 driver uses the extracted lists.
-9. The IMX386's analogue gain formula, black level and pixel size, for a
-   libcamera sensor helper and properties entry (no citable source yet).
+9. The IMX386's analogue gain formula and pixel size, for a libcamera
+   sensor helper and properties entry: the formula is measured by
+   CAM4.3b-3; black level 64 (CAM4.3). Bayer order: CAM4.3b-1.
 6. ~~Is the SLG51002 revision AA?~~ No: revision AB (`0xb13103`, stock
    dmesg), no trim needed (section 1.2). CAM2.2 confirms it on our kernel.
 7. For the main and tele: if they are C-PHY, can the sensor run a D-PHY

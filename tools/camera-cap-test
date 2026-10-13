@@ -13,7 +13,13 @@
 #   W=, H=       sensor mode (default 2016x1508, binned 60 fps)
 #   DMA=0|1      0: link_only (no DMA, CAM3b); 1: the WDMA writes frames (CAM4)
 #   CH=0..3      WDMA channel (CAM4; default 0)
-#   PATTERN=n    sensor test pattern (default 2, colour bars; 0 = image)
+#   PATTERN=n    sensor test pattern (default 2, colour bars; 1 solid colour;
+#                0 = image)
+#   CTRLS=       more sensor controls for v4l2-ctl --set-ctrl, set before
+#                streaming, e.g. "exposure=1700,analogue_gain=240" (';' runs
+#                separate calls: "vblank=2090;exposure=3580"), or, with
+#                PATTERN=1, "red_pixel_value=256,green_red_pixel_value=512,
+#                blue_pixel_value=768,green_blue_pixel_value=1000"
 #   FRAMES=n     frames to capture with DMA=1 (default 4), saved to
 #                /tmp/cam-<W>x<H>.raw
 #   SECS=n       how long to stream (default 5)
@@ -23,6 +29,7 @@
 set -u
 LINK=${LINK:?LINK=2, the link the overlay enabled} W=${W:-2016} H=${H:-1508} DMA=${DMA:-0} CH=${CH:-0}
 PATTERN=${PATTERN:-2} FRAMES=${FRAMES:-4} SECS=${SECS:-5} CSIS_OPTS=${CSIS_OPTS:-}
+CTRLS=${CTRLS:-}
 say() { echo "cap-test: $*"; echo "cap-test: $*" > /dev/kmsg; }
 
 # Modules, in order; gs201_csis gets the step's parameters on every run.
@@ -59,6 +66,14 @@ media-ctl -d "$MD" -V "\"$CSIS\":0 [fmt:SRGGB10_1X10/${W}x${H}]" || exit 1
 media-ctl -d "$MD" --get-v4l2 "\"$SENSOR\":0"
 media-ctl -d "$MD" --get-v4l2 "\"$CSIS\":1"
 v4l2-ctl -d "$SUBDEV" --set-ctrl test_pattern="$PATTERN"
+# ';' separates calls: a longer frame (vblank) must be set before an
+# exposure that needs it, or the exposure is clamped to the old range.
+IFS=';' read -ra CTRL_SETS <<< "$CTRLS"
+for c in "${CTRL_SETS[@]}"; do
+	[ -n "$c" ] || continue
+	v4l2-ctl -d "$SUBDEV" --set-ctrl "$c" || { say "controls '$c' refused"; exit 1; }
+done
+v4l2-ctl -d "$SUBDEV" -l | grep -E "exposure|gain|vblank|test_pattern|pixel_value"
 v4l2-ctl -d "$VIDEO" --set-fmt-video=width="$W",height="$H",pixelformat=pRAA || exit 1
 v4l2-ctl -d "$VIDEO" --get-fmt-video | grep -E "Width|Pixel Format|Bytes per Line|Size Image"
 

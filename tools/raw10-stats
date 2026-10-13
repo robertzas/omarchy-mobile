@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Per-Bayer-phase statistics of a MIPI CSI-2 RAW10 capture (laptop side).
+
+    tools/raw10-stats FILE [--width 2016] [--height 1508] [--stride 2560]
+                      [--frame N] [--bars 8] [--rows 0:H]
+
+Prints, for each position of the 2x2 cell (row parity, column parity), the
+10-bit percentiles p1/p50/p99 and the mean, and with --bars the mean per
+vertical bar (for the colour bar test pattern). With the solid colour test
+pattern and a different value per channel (CAMERA-PLAN.md CAM4.3b), the
+four means name the Bayer order directly. Reads only the file; plain
+Python, no numpy (a few seconds for a 2016x1508 frame).
+"""
+import argparse
+import sys
+
+
+def unpack_row(row, width):
+    """One MIPI RAW10 line: 4 MSB bytes, then a byte of 2-bit LSBs."""
+    msb = [row[i::5][: width // 4] for i in range(4)]
+    lsb = row[4::5][: width // 4]
+    out = [0] * width
+    for i in range(4):
+        out[i::4] = [(m << 2) | ((l >> (2 * i)) & 3) for m, l in zip(msb[i], lsb)]
+    return out
+
+
+def pct(sorted_vals, q):
+    return sorted_vals[min(len(sorted_vals) - 1, int(q / 100 * len(sorted_vals)))]
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("file")
+    ap.add_argument("--width", type=int, default=2016)
+    ap.add_argument("--height", type=int, default=1508)
+    ap.add_argument("--stride", type=int, default=2560)
+    ap.add_argument("--frame", type=int, default=-1, help="frame index (default: the last)")
+    ap.add_argument("--bars", type=int, default=0, help="also the mean per vertical bar")
+    ap.add_argument("--rows", default=None, help="row range a:b (default all)")
+    a = ap.parse_args()
+
+    size = a.stride * a.height
+    data = open(a.file, "rb").read()
+    frames = len(data) // size
+    if not frames:
+        sys.exit(f"{a.file}: {len(data)} bytes, less than one {size}-byte frame")
+    f = a.frame if a.frame >= 0 else frames - 1
+    r0, r1 = (int(x) for x in a.rows.split(":")) if a.rows else (0, a.height)
+    base = f * size
+    vals = {(py, px): [] for py in (0, 1) for px in (0, 1)}
+    nb = max(a.bars, 1)
+    bars = {k: [[0, 0] for _ in range(nb)] for k in vals}
+    edges = [i * a.width // nb for i in range(nb + 1)]
+    for y in range(r0, r1):
+        row = unpack_row(data[base + y * a.stride: base + (y + 1) * a.stride], a.width)
+        for px in (0, 1):
+            k = (y & 1, px)
+            vals[k] += row[px::2]
+            if a.bars:
+                for i in range(nb):
+                    seg = row[edges[i] + ((px - edges[i]) & 1): edges[i + 1]: 2]
+                    bars[k][i][0] += sum(seg)
+                    bars[k][i][1] += len(seg)
+    print(f"frame {f} of {frames}, {a.width}x{a.height}, stride {a.stride}, rows {r0}:{r1}")
+    for k, v in vals.items():
+        v.sort()
+        line = (f"row {k[0]} col {k[1]}: p1 {pct(v, 1):4d} p50 {pct(v, 50):4d} "
+                f"p99 {pct(v, 99):4d} mean {sum(v) / len(v):7.2f}")
+        if a.bars:
+            line += "  bars " + " ".join(f"{s / n:6.1f}" for s, n in bars[k])
+        print(line)
+
+
+if __name__ == "__main__":
+    main()
