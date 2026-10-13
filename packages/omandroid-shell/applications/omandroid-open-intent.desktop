@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Android link handler
+Comment=Open Android intent links in the browser
+Exec=omandroid-open-intent %u
+MimeType=x-scheme-handler/intent;
+NoDisplay=true
+Terminal=false

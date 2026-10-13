@@ -1,0 +1,53 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Handle Android intent:// links the way a phone without the app does.
+
+Mobile sites (Google Maps among them) hand off to their Android app with
+intent://HOST/PATH#Intent;scheme=...;package=...;S.browser_fallback_url=...;end
+links. With no handler, Chromium passes them to the desktop's "Open With"
+dialog, which finds nothing. Here: open the browser fallback URL if there is
+one, else the plain http(s) URL the intent carries, and drop links that
+only lead to the Play Store.
+"""
+import subprocess
+import sys
+from urllib.parse import unquote, urlsplit
+
+
+def target(link):
+    if not link.startswith("intent:"):
+        return None
+    body, _, fragment = link[len("intent:"):].partition("#Intent;")
+    extras = {}
+    for item in fragment.split(";"):
+        key, sep, value = item.partition("=")
+        if sep:
+            extras[key] = unquote(value)
+    fallback = extras.get("S.browser_fallback_url")
+    if fallback:
+        # The site said where to go without the app; a store page means
+        # "install the app", so do nothing rather than reopen the site.
+        return fallback if web(fallback) else None
+    scheme = extras.get("scheme")
+    if scheme in ("http", "https") and body.startswith("//"):
+        url = f"{scheme}:{body}"
+        return url if web(url) else None
+    return None
+
+
+def web(url):
+    parts = urlsplit(url)
+    return (parts.scheme in ("http", "https")
+            and parts.hostname not in ("play.google.com", "market.android.com"))
+
+
+def main(argv):
+    for link in argv[1:]:
+        url = target(link)
+        if url:
+            subprocess.Popen(["xdg-open", url])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
