@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Road map
 
-Where Omandroid stands, what a good everyday phone still needs, and the order we plan to get there. Last updated 2026-10-12, from the subsystem plans in [`device/cheetah/`](../device/cheetah) and [NOTES.md](../device/cheetah/NOTES.md). The reference device is the Pixel 7 Pro (`cheetah`, gs201); other Pixels are in [DEVICES.md](DEVICES.md).
+Where Omandroid stands, what a good everyday phone still needs, and the order we plan to get there. Last updated 2026-10-13, from the subsystem plans in [`device/cheetah/`](../device/cheetah) and [NOTES.md](../device/cheetah/NOTES.md). The reference device is the Pixel 7 Pro (`cheetah`, gs201); other Pixels are in [DEVICES.md](DEVICES.md).
 
-**In one paragraph:** the Pixel 7 Pro boots mainline Linux and Omarchy from slot B and works as a pocket computer: 120 Hz display with brightness and real screen-off, GPU acceleration, touch, Wi-Fi, Bluetooth audio, battery level, haptics, torch, sensors with auto-rotate, and the built-in speakers and microphones (about 17 dB quieter than stock). It is **not yet a phone**: there are no calls, SMS or mobile data, no cameras, no fingerprint unlock, and it doesn't sleep when the screen is off. The modem is the long pole: realistically two to three months to network registration, with calls after that.
+**In one paragraph:** the Pixel 7 Pro boots mainline Linux and Omarchy from slot B and works as a pocket computer: 120 Hz display with brightness and real screen-off, GPU acceleration, touch, Wi-Fi (now across s2idle), Bluetooth audio, battery level, haptics, torch, sensors with auto-rotate, GPS with an outdoor fix, NFC tags (read, write, tap to open a link), fingerprint unlock with a PIN or password, the ultrawide camera through libcamera, and the built-in speakers and microphones (working, but quiet and thin next to stock). It is **not yet a phone**: there are no calls, SMS or mobile data, and it doesn't sleep by itself when the screen is off. The modem is the long pole: its first boot is being debugged (M3.4), and calls come weeks to months after registration. On the software side the phone still needs its own home screen, more quick settings, notifications that matter, Android apps and over-the-air updates.
 
 Effort figures below are quoted from the plans, which assume one developer writing code and the human running each gated step on the phone. They are estimates, not promises: every stage so far has turned up at least one surprise.
 
@@ -17,121 +17,133 @@ Statuses: **works** (on by default, verified on the phone), **partial** (works, 
 | Display | works | Our flip-only KMS driver at 120 Hz, brightness, DPMS, the panel really off with the screen | [DISPLAY-PLAN](../device/cheetah/DISPLAY-PLAN.md) |
 | GPU | works | Mali-G710 on Panthor and patched Mesa, DVFS through ACPM | [GPU-PLAN](../device/cheetah/GPU-PLAN.md), [ACPM-PLAN](../device/cheetah/ACPM-PLAN.md) |
 | Touch, buttons | works | Our Synaptics TouchComm driver; `gpio-keys` | [NOTES](../device/cheetah/NOTES.md) |
-| Wi-Fi | works | brcmfmac behind a restricted DMA pool. Its D3 handshake (needed across suspend) is built, not yet run | [WIFI-BATTERY-PLAN](../device/cheetah/WIFI-BATTERY-PLAN.md), [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md) S5 |
+| Wi-Fi | works | brcmfmac behind a restricted DMA pool. The D3 handshake keeps it up across s2idle (S5b-3 passed); the long soak (S5c) is next | [WIFI-BATTERY-PLAN](../device/cheetah/WIFI-BATTERY-PLAN.md), [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md) S5 |
 | Bluetooth | works | Pairing and A2DP audio; headset calls (HFP) need the chip's SCO routing changed, not yet done | [BLUETOOTH-PLAN](../device/cheetah/BLUETOOTH-PLAN.md), [AUDIO-PLAN](../device/cheetah/AUDIO-PLAN.md) |
 | Battery | works | MAX77759 fuel gauge with the stock battery model | [WIFI-BATTERY-PLAN](../device/cheetah/WIFI-BATTERY-PLAN.md) |
 | Charging | partial | Works by hand; off by default until the temperature guard (B3g) is in. Type-C (B4) not yet run | [USB-C-PLAN](../device/cheetah/USB-C-PLAN.md) |
 | Haptics, torch | works | CS40L26 through feedbackd; LM3644 with a quick-settings tile | [HAPTICS-TORCH-PLAN](../device/cheetah/HAPTICS-TORCH-PLAN.md) |
 | AoC (audio and sensor DSP) | works | Starts at boot through the GSA and Trusty | [AOC-PLAN](../device/cheetah/AOC-PLAN.md) |
 | Sensors | works | Accelerometer, light, proximity and compass at every boot; auto-rotate | [AOC-PLAN](../device/cheetah/AOC-PLAN.md) C6, [USF-PROTOCOL](../device/cheetah/USF-PROTOCOL.md) |
-| Speakers, microphones | partial | Both speakers in stereo under Google's speaker protection, mics at stock gain. `omandroid-audio` 0.3.0 plays at stage `media` (digital 737, analog 10), inside the no-protection limits and about 17 dB below stock; stock's gains wait for verified protection (C9), and stock's loudness comes from the Waves processing on the AoC. `omandroid-speaker-tuning` (off by default) runs Waves' own controller from the user's image in a sealed chroot; the AoC answers its exchanges (T3.2), and sending the tuning during playback (T3b) is next | [AOC-PLAN](../device/cheetah/AOC-PLAN.md) C8-C10, [AOC-TUNING-RESEARCH](../device/cheetah/AOC-TUNING-RESEARCH.md) |
+| Speakers, microphones | partial | Both speakers in stereo under Google's speaker protection, mics at stock gain. The everyday level (stage `media`, 737/10) is about 17 dB below stock and sounds thin; stock's 817/17 still trips the coil temperature (C9d-3..6). Next: a measured speaker filter (C9g), the V/I feedback and impedance work (C9d-7/8), and stock's Waves processing on the AoC (T3b/T4) | [AOC-PLAN](../device/cheetah/AOC-PLAN.md) C8-C10, [AOC-TUNING-RESEARCH](../device/cheetah/AOC-TUNING-RESEARCH.md) |
 | CPU idle, power | partial | C2 idle on all cores is in the default DTB; battery-drain numbers off the cable not yet measured | [POWER-PLAN](../device/cheetah/POWER-PLAN.md) |
-| Suspend | in progress | s2idle freezes and wakes cleanly: by key, and 20 of 20 unattended RTC-alarm cycles with the AoC and sensors running (S1-S4). Not on by default: Wi-Fi across sleep (S5) and battery numbers first. Deep sleep (SYS_SLEEP), which stock's standby drain needs, not started | [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md) |
-| GNSS | in progress | Google's GNSS stack in a chroot behind GeoClue streams NMEA; no fix yet (only a windowsill test). Package 0.2.0's assistance, time injection and clean stop passed indoors (G4b step 1); the outdoor fix (step 2) is next | [GNSS-PLAN](../device/cheetah/GNSS-PLAN.md) |
-| NFC | in progress | With our plain-NCI fix to st-nci (upstream framed it in NDLC), the ST54J powers up, polls and cycles power (N2.4b-N2.6). Reading a tag (N3) is next; the driver is still blacklisted | [RADIOS-CAMERA-PLAN](../device/cheetah/RADIOS-CAMERA-PLAN.md) §3 |
-| Fingerprint | in progress | Trusty runs at every boot; the kernel side passed F1, the sensor's rail reads off at the right voltage (FB2), and Trusty serves the fingerprint side read-only (F2). The HAL bridge and libfprint driver are built; the first secure-storage write (F4) is irreversible and waits for the human's go | [FINGERPRINT-PLAN](../device/cheetah/FINGERPRINT-PLAN.md) |
-| Modem | in progress | The PCIe link comes up at stock timing, the S5300 enumerates on the bus, and Google's modem interface driver (CPIF) binds with its 52 I/O devices, the modem unpowered (M2.5-M3.3-B); the SIT protocol is documented and a SIT client daemon (`omandroid-modem-sit`) is built and tested against a simulator. No firmware sent yet. Each modem power-off triggers one recovered UFS error-handler pass, so the stack now keeps the modem on once it is up | [MODEM-PLAN](../device/cheetah/MODEM-PLAN.md), [MODEM-SIT-RESEARCH](../device/cheetah/MODEM-SIT-RESEARCH.md), [MODEM-CLIENT](../device/cheetah/MODEM-CLIENT.md) |
-| Cameras | in progress | The ultrawide powers up in stock's order and identifies as a Sony IMX386 (CAM1-CAM3a). Its sensor driver probes and the receiver drivers bind (CAM3b.0-CAM3b.2); libcamera's simple pipeline is packaged. The first stream (CAM3b.3) is next; no frame yet | [CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md) |
-| Android apps (Waydroid) | not started | A goal of the project; no work yet | |
+| Suspend | in progress | s2idle freezes and wakes cleanly (S1-S4), now with Wi-Fi up across sleep (S5b-3). Not on by default: the S5c soak, AoC and sensors across sleep (S6), battery numbers (S7) and the screen-off policy (S8) first. Deep sleep (SYS_SLEEP), which stock's standby drain needs, not started | [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md) |
+| GNSS | works | Google's GNSS stack in a chroot behind GeoClue, on demand from the Location tile; first outdoor fix (G4b), GNOME Maps through GeoClue (G5-2) | [GNSS-PLAN](../device/cheetah/GNSS-PLAN.md) |
+| NFC | works | ST54J through st-nci with our plain-NCI link, loaded at boot; neard reads and writes tags, and a tag with a web link opens it. Card emulation and payments are out of scope | [RADIOS-CAMERA-PLAN](../device/cheetah/RADIOS-CAMERA-PLAN.md) §3 |
+| Fingerprint | works | Google's HAL and Trusty TA on mainline (F3-F9), fprintd and our libfprint driver; the lock screen unlocks with a finger, PIN or password is the user's choice, enrollment from the shell (F10-F18) | [FINGERPRINT-PLAN](../device/cheetah/FINGERPRINT-PLAN.md) |
+| Modem | in progress | The PCIe link, the S5300 on the bus and Google's modem interface driver (CPIF) work without firmware (M2.5-M3.3-B). The modem boots Google's firmware from RAM copies of its NV to ONLINE and stays up (M3.4.5b, M3.4.6, 2026-10-13); the AP-CP IPC handshake isn't complete yet, so the first control message (M4.1) waits. The client stack (`omandroid-modem`, `omandroid-modem-sit`) is packaged. Each modem power-off triggers one recovered UFS error-handler pass, so the stack keeps the modem on once it is up | [MODEM-PLAN](../device/cheetah/MODEM-PLAN.md), [MODEM-SIT-RESEARCH](../device/cheetah/MODEM-SIT-RESEARCH.md), [MODEM-CLIENT](../device/cheetah/MODEM-CLIENT.md) |
+| Cameras | partial | The ultrawide (Sony IMX386, CSIS link 2) works end to end through libcamera's simple pipeline and software ISP (CAM5). The main camera (Samsung S5KGN1, C-PHY) is built and waits for its runbook (CAM-M); image quality (CAM5.3), Snapshot (CAM5.4), the front camera (CAM7) and the telephoto follow | [CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md) |
+| Phone shell | partial | Status bar, swipeable home screens with apps and widgets and an edit mode, quick settings with 19 tiles and a tile editor, launcher, switcher, the lock screen with PIN pad and fingerprint, squeekboard on demand. User-built widgets (made with Omarchy's default agent) in progress; desktop-shaped system dialogs | [`packages/omandroid-shell`](../packages/omandroid-shell), [NOTES](../device/cheetah/NOTES.md) "Phone UX to-dos" |
+| Android apps (Waydroid) | in progress | Planned and packaged offline: the kernel options are found and checked, `omandroid-waydroid` is drafted with the container kept away from debugfs, the camera nodes and every block device. Nothing run on the phone yet | [WAYDROID-PLAN](../device/cheetah/WAYDROID-PLAN.md) |
 | Installer | not started | Putting Arch onto `userdata` is done by hand today ([CONTRIBUTING](../CONTRIBUTING.md) §4) | |
 | Updates | partial | Packages ship through a signed `[omandroid]` pacman repository and `omarchy update`, but the repository is copied to the phone over USB (`tools/repo-push`), not yet hosted; kernel updates go through `bin/omandroid push` | [CONTRIBUTING](../CONTRIBUTING.md) §4 |
-| Upstream kernel | in progress | 65 ready commits are prepared as `omandroid-next` for the published kernel, not yet pushed | [KERNEL-PUBLISH](../device/cheetah/KERNEL-PUBLISH.md) |
+| Upstream kernel | in progress | Ready commits are prepared as `omandroid-next` for the published kernel, not yet pushed | [KERNEL-PUBLISH](../device/cheetah/KERNEL-PUBLISH.md) |
 
 ## 2. What an everyday phone still needs
 
+In priority order: the first four make it a phone, the rest make it a good one.
+
 | Need | Today | What's missing |
 | --- | --- | --- |
-| **Calls** | no | The whole modem chain (M3-M5 below), then IMS (VoLTE: most networks have no 2G/3G left), then the AoC voice path and an earpiece mode under the speaker protection. A dialer UI on top |
-| **SMS** | no | Modem M3 and M4: a SIT client, then an oFono or ModemManager front end; a messaging app |
-| **Mobile data** | no | Modem M3 and M4 (one data call, `rmnet0`), the front end, then suspend with the modem online (M6) |
-| **Cameras** | no | Raw capture through the CSIS, then libcamera's software ISP; four sensors, focus |
-| **Fingerprint unlock** | no | F2-F10: secure storage, the TA, sensor power, the panel's local high-brightness mode, enrolment, fprintd and Omarchy's lock |
-| **Suspend on screen-off** | no | s2idle on by default (S5-S8), then deep sleep for real standby |
-| **Battery life** | unmeasured | s2idle alone won't reach Android's standby: the plan quotes about 274-286 mA in s2idle against about 32-50 mA in deep sleep on this phone. Deep sleep is the fix; the first job is to measure (S7, `power-ab`) |
-| **Loud speakers** | about 17 dB below stock | C9 (protection verified at stock gains), then the AoC's Waves speaker processing ([AOC-TUNING-RESEARCH](../device/cheetah/AOC-TUNING-RESEARCH.md), T0-T6) or a PipeWire loudness filter |
-| **NFC** | powers up | N3 (read a tag), then neard on by default; payments are out of scope |
-| **Outdoor GPS** | untested | G4b step 2: a first fix outdoors |
-| **Notifications, UX polish** | partial | The phone shell (status bar, quick settings, launcher, PIN lock, on-screen keyboard) works. Still desktop-shaped: system dialogs, the screensaver, parts of first run ([NOTES](../device/cheetah/NOTES.md), "Phone UX to-dos"). No incoming-call or SMS notifications until the modem works |
-| **Safe charging by default** | no | The temperature guard (B3g), then Type-C (B4) for USB that survives a replug without the rescue service |
-| **OTA updates** | partial | Host the `[omandroid]` repository publicly so `omarchy update` reaches it without a cable |
+| **Calls** | no | The modem chain (M3.4 first CP boot, M4 registration), a front end (oFono or ModemManager), IMS (VoLTE: most networks have no 2G/3G left), the AoC voice path and an earpiece mode under the speaker protection. Then a dialer: GNOME Calls is already an optional app |
+| **SMS** | no | M4 (`omandroid-sitd`), the front end, then Chatty (optional app today) |
+| **Mobile data** | no | M4's data call (`rmnet`), the front end, then suspend with the modem online (M6) |
+| **Standby and battery life** | unmeasured | s2idle on screen-off (S5c-S8), then measured drain (S7, `power-ab`). s2idle alone won't reach Android's standby (the plan quotes about 274-286 mA in s2idle against 32-50 mA in deep sleep): deep sleep (SYS_SLEEP) is the real fix |
+| **A phone home screen** | pages, apps, built-in widgets | Touch testing, folders, user-built widgets (in progress) |
+| **Notifications** | desktop-style | Phone-shaped banners, a shade with actions, heads-up on the lock screen, do-not-disturb; incoming calls and SMS once the modem works |
+| **Quick settings** | 19 tiles, editable | On-phone checks of airplane, hotspot and mobile data; mobile data needs the modem's M4 |
+| **Loud, full speakers** | about 17 dB below stock, thin | C9g filter, then stock gains with verified protection (C9), or Waves on the AoC (T3b-T6) |
+| **Cameras** | ultrawide only, through `cam` | Main camera (CAM-M), quality (CAM5.3), Snapshot as the camera app (CAM5.4), front (CAM7), telephoto |
+| **Updates over the air** | over USB | Host the `[omandroid]` repository so `omarchy update` reaches it on Wi-Fi; a phone-friendly update notice; kernel updates as a package instead of `bin/omandroid push` |
+| **Apps: store and updates** | pacman in a terminal | A touch app store front end (GNOME Software or a small one of ours over pacman and Flathub), updates included |
+| **Android apps** | no | Waydroid ([WAYDROID-PLAN](../device/cheetah/WAYDROID-PLAN.md), W0-W8) |
+| **Safe charging by default** | by hand | The temperature guard (B3g), then Type-C (B4) for USB that survives a replug without the rescue service |
+| **Accessibility** | none phone-specific | Font and display scaling from settings, the screen reader (Orca) with touch exploration, high contrast, larger touch targets in our plugins |
+| **System dialogs, first run** | desktop-shaped | Keyring, polkit and portal dialogs, the screensaver, Omarchy's first run ([NOTES](../device/cheetah/NOTES.md), "Phone UX to-dos") |
 | **Installer** | no | A scripted, safe install to `userdata` and slot B for people who aren't developers |
-| **Android apps** | no | Waydroid on our kernel (binder, the GPU) |
 
 ## 3. The plan
 
-Milestones in rough priority order. Most tracks are independent and run in parallel; the arrows inside a track are hard dependencies. "Next" is the next concrete step, usually a gated runbook already written in the plan.
+Tracks in rough priority order. Most are independent and run in parallel; the arrows inside a track are hard dependencies. "Next" is the next concrete step, usually a gated runbook already written in the plan.
 
 ### 3.1 Telephony: modem, data, SMS, calls
 
-The highest-value track and the longest. [MODEM-PLAN](../device/cheetah/MODEM-PLAN.md) and [RADIOS-CAMERA-PLAN](../device/cheetah/RADIOS-CAMERA-PLAN.md) §1:
+The highest-value track and the longest. [MODEM-PLAN](../device/cheetah/MODEM-PLAN.md), [MODEM-CLIENT](../device/cheetah/MODEM-CLIENT.md):
 
 ```
-M2.5, M3.1, M3.3-B (passed) ─> M2.6 ─> M3.4 firmware boot, CP ONLINE ─> M3.6 SysMMU
-                                                              │
-                                                              └─> M4 SIT client: attach, data, SMS ─> oFono / ModemManager
-                                                                        │
-                                                                        └─> M5 IMS (VoLTE) ─> calls with audio ◄─ AoC voice path + earpiece mode
-                                                                        └─> M6 boot integration, suspend with the modem online
+M2.5, M3.1, M3.3-B, M3.4.0-3 (passed) ─> M3.4.4-5 firmware boot, CP ONLINE ─> M3.6 SysMMU
+                                                         │
+                                                         └─> M4 SIT client: registration, SMS, data ─> oFono / ModemManager ─> Calls, Chatty
+                                                                    │
+                                                                    └─> M5 IMS (VoLTE) ─> calls with audio ◄─ AoC voice path + earpiece mode
+                                                                    └─> M6 boot integration, suspend with the modem online
 ```
 
 | Milestone | Effort (from the plans) | Next concrete step |
 | --- | --- | --- |
-| M2.5, M3.1: UFS around modem power changes, enumerate the bus | passed 2026-10-12 | Done; modem power-offs disturb UFS once each, so later stages keep power cycles to a minimum |
-| M3.3-B: bind CPIF without firmware | passed 2026-10-12 (52 iodevs, no modem power) | Done |
-| M2.6: one slow power-off, to find which line edge disturbs UFS | an hour | The M2.6 runbook; the kernel now runs stock's exact power-off and keeps the modem on once up |
-| M3.4: Google's boot loader for the modem in the RAM-only NV chroot, firmware over PCIe, CP ONLINE | 1-2 weeks of debugging (MODEM-PLAN) | The M3.4 runbook (rfsd alone first, then cbd); the partition checksums (M3.5) after every run |
-| M3.6: the HSI1 SysMMU confines the modem's DMA | 1 week (MODEM-PLAN) | Offline, after M3.4 |
-| M4: SIT client to registration, a data call and SMS | 3-6 weeks (MODEM-PLAN; MODEM-SIT-RESEARCH breaks it down: daemon 3-5 days, data 1 week, SMS 2-3 days). The daemon, `omandroid-sitd`, is now written and passes against a simulator | The gated M4 runbook in MODEM-CLIENT, once M3.4 reaches ONLINE; the long data-call form and the signal layout are still open |
-| Front end | oFono driver about 2-3 weeks, ModemManager plugin 2-4 weeks (MODEM-PLAN) or 3-4 weeks (MODEM-SIT-RESEARCH, MODEM-CLIENT) | MODEM-CLIENT §3 leans to oFono (its atoms match SIT's families); decide once `omandroid-sitd` has run on the phone |
-| M5: IMS and calls | "weeks more" (RADIOS-CAMERA-PLAN 1.5); needs the AoC voice path and the earpiece design in AOC-PLAN | Design only today |
+| M3.4: Google's boot loader for the modem in the RAM-only NV chroot, firmware over PCIe, CP ONLINE | Done 2026-10-13: ONLINE, 10 min clean, NV unchanged | The main link trains at Gen1 x2, not Gen3 x2 (open) |
+| M3.6: the HSI1 SysMMU confines the modem's DMA | 1 week | Offline, after M3.4 |
+| M4: SIT client to registration, a data call and SMS | 3-6 weeks; `omandroid-sitd` is written and passes against a simulator | M4.1 (read-only) reached the CP but CPIF's IPC init handshake (INIT_END) never completes: the CPIF fix first, then M4.1 again; M4.2 needs a SIM |
+| Front end | oFono driver about 2-3 weeks, ModemManager plugin 2-4 weeks | MODEM-CLIENT §3 leans to oFono; decide once `omandroid-sitd` has run on the phone |
+| Calls and messages UI | days once the front end works, for GNOME Calls and Chatty (already optional in `omandroid-apps`); phone-shaped layout and lock-screen incoming-call UI on top | After the front end; the incoming-call screen belongs to the shell (3.5) |
+| M5: IMS and calls with audio | weeks more; needs the AoC voice path and the earpiece design in AOC-PLAN | Design only today |
+| M6: suspend with the modem online | after S8 and M4 | Design only |
 
-"Registers on the network under ModemManager" is, in MODEM-PLAN's words, realistically two to three months away, M3 included. Calls come after that. The modem's NV is never written from Linux: the chroot works on checksum-verified RAM copies.
+The modem's NV is never written from Linux: the chroot works on checksum-verified RAM copies.
 
 ### 3.2 Standby and battery
 
 [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md), [POWER-PLAN](../device/cheetah/POWER-PLAN.md), [USB-C-PLAN](../device/cheetah/USB-C-PLAN.md):
 
-1. **S3b** (the RTC) and **S4**'s 20-cycle loop passed. Then **S5** (Wi-Fi across sleep with the D3 branch), **S6** (AoC and sensors across sleep), **S7** (battery numbers), **S8** (screen-off sleep on by default, with the sleep hook already in `omandroid-device-cheetah`). Next: S5. The RTC also needs `sec_acpm` loaded at every boot (S3b).
+1. **S5c** (Wi-Fi across sleep, soaked), **S6** (AoC and sensors across sleep), **S7** (battery numbers), **S8** (screen-off sleep on by default; the sleep hook is already in `omandroid-device-cheetah`). Next: S5c.
 2. **Measure drain** off the cable: POWER-PLAN's B0 baseline and `power-ab c2`.
-3. **Deep sleep (SYS_SLEEP)**: the gs201 SoC sleep sequence through the PMU and ACPM, as stock does. Researched in SUSPEND-PLAN §5, no estimate yet. This is what gets standby near Android's.
-4. **Safe charging by default**: the temperature guard (B3g), then Type-C with role switching (B4a, B4b). WIFI-BATTERY-PLAN puts B3-B4 at 2-4 days. Next: the B3g runbook.
+3. **Deep sleep (SYS_SLEEP)**: the gs201 SoC sleep sequence through the PMU and ACPM, as stock does. Researched in SUSPEND-PLAN §5, no estimate yet. This is what gets standby near Android's, and the single biggest battery item.
+4. **Safe charging by default**: the temperature guard (B3g), then Type-C with role switching (B4a, B4b). Next: the B3g runbook.
+5. **Power UX**: battery saver (CPU and refresh-rate caps, Wi-Fi power save), a short power-key press that sleeps, wake on the fingerprint sensor if the hardware allows it.
 
-### 3.3 Fingerprint unlock
-
-[FINGERPRINT-PLAN](../device/cheetah/FINGERPRINT-PLAN.md): about six phone sessions if nothing surprises (F2-F3, F4-F5, F6, F7-F8, F9-F10). F4, the first secure-storage write, is irreversible and needs the human's explicit decision. FB2 and F2 passed. Next: F3 (the RPMB node and read-only copies; `persist` must be mounted with `noload`), then the F4 decision.
-
-### 3.4 Speakers and audio
+### 3.3 Speakers and audio
 
 [AOC-PLAN](../device/cheetah/AOC-PLAN.md) C9-C10, [AUDIO-PLAN](../device/cheetah/AUDIO-PLAN.md):
 
-1. **C9**: the protection firmware only measures the coil at the analog gain its tuning expects (17); at 817/10 it read a false 80 °C. Verify it at stock's gains, then balance (C9e) and real use (C9f), which make stock's levels the default.
-2. **Loudness**: stock's comes from Waves processing inside the AoC. `omandroid-speaker-tuning` runs Waves' controller from the user's own image in a sealed chroot and sends its buffers to the AoC under an allowlist, only during playback and only with the protection watchdog running ([AOC-TUNING-RESEARCH](../device/cheetah/AOC-TUNING-RESEARCH.md)). T1-T3.2 passed; next, T3b (one exchange during a tone); `music` mode also waits for C9. A PipeWire limiter (C9g) is the fallback.
-3. **Bluetooth HFP**: route the BCM4389's SCO over HCI (AUDIO-PLAN A1).
-4. **Earpiece and call audio**: designed in AOC-PLAN; built with the modem's M5.
+1. **C9g**: `omandroid-audio` 0.4.0's speaker filter, measured with the phone's own microphone and checked by ear. Lowest risk, fixes "thin" first.
+2. **C9d-7/C9d-8**: the V/I feedback stream stock runs and the firmware's own impedance reading, for the runaway at analog gain 17; then stock's gains as the default (C9e, C9f).
+3. **Waves on the AoC** ([AOC-TUNING-RESEARCH](../device/cheetah/AOC-TUNING-RESEARCH.md)): T3b (one exchange during a tone), then T4-T6.
+4. **Bluetooth HFP**: route the BCM4389's SCO over HCI (AUDIO-PLAN A1).
+5. **Earpiece and call audio**: designed in AOC-PLAN; built with the modem's M5.
 
-### 3.5 Location and NFC
+### 3.4 Cameras
 
-- **GNSS** ([GNSS-PLAN](../device/cheetah/GNSS-PLAN.md) G4b): the indoor check of `omandroid-gnss` 0.2.0 passed; next, 15 minutes outdoors recording time to first fix.
-- **NFC** ([RADIOS-CAMERA-PLAN](../device/cheetah/RADIOS-CAMERA-PLAN.md) §3): power-up passed (N2.4b-N2.6); next, N3 (a tag's type, with a card in hand), then the driver and neard on by default.
+[CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md): the ultrawide works through libcamera's simple pipeline and software ISP (CAM5). Next: the CAM-M runbook (the main camera's S5KGN1 on C-PHY, with focus through the AK7375 actuator), then quality (CAM5.3: tuning, autofocus, exposure), Snapshot as the default camera app (CAM5.4, moving `snapshot` from optional to default in `omandroid-apps`), the front camera (CAM7, 1-2 weeks) and the telephoto. Video and QR scanning come with Snapshot.
 
-### 3.6 Cameras
+### 3.5 Shell and UX
 
-[CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md): raw Bayer capture through the CSIS write DMA, then libcamera's software ISP. Its timeline: a first raw frame from the ultrawide in 6-9 weeks, a photo in `cam` and a PipeWire app in 8-12 weeks, video 2-3 weeks later, all four cameras with focus in 4-6 months. The main and tele cameras carry most of the risk. K through CAM3a passed (the ultrawide is a Sony IMX386), and the capture path for CAM3b-CAM5 is built; CAM3b.0-CAM3b.2 passed too (the sensor driver probes, the PHY and CSIS bind); next, the corrected CAM3b.3: the sensor streams a test pattern and the receiver counts frames, then CAM4, the first DMA to memory.
+The phone's own software, all offline-heavy and parallel to the hardware tracks. Omarchy changes go upstream first ([`patches/omarchy/`](../patches/omarchy)); the running list is "Phone UX to-dos" in [NOTES.md](../device/cheetah/NOTES.md).
 
-### 3.7 Distribution: updates, installer, upstream
+1. **Home screen** (`omandroid-shell` 0.1.42): swipeable pages of apps and widgets (clock, weather, battery, media, calendar, note, toggles, command) with an edit mode. Next: user-built widgets made with Omarchy's default agent, folders, and touch testing.
+2. **Quick settings** (`omandroid-shell` 0.1.42): a collapsed and an expanded sheet, 19 tiles, an editor to add, remove and reorder them; long-press opens the full setting.
+3. **Notifications**: phone-shaped banners and shade with actions and inline reply, grouping per app, lock-screen privacy, do-not-disturb with exceptions; the incoming-call screen (full screen over the lock) for 3.1.
+4. **Settings for a phone**: display (scale, font size, refresh rate), sound (volume steps per stream, ringtone), battery, mobile network and SIM, about phone; mostly front ends to what Omarchy already has.
+5. **Accessibility**: scaling and font size first, then Orca with touch exploration, high contrast, and a pass over our plugins' touch targets and labels.
+6. **System dialogs, screensaver, first run**: keyring, polkit and portal dialogs sized and styled for the phone; a portrait screensaver; Omarchy's whole user install at first boot, with phone-specific first-run steps (Wi-Fi, PIN, fingerprint).
 
-- **Host the `[omandroid]` repository** publicly, so `omarchy update` updates the phone without a cable (signing and the keyring package already exist).
+### 3.6 Android apps (Waydroid)
+
+[WAYDROID-PLAN](../device/cheetah/WAYDROID-PLAN.md): LineageOS (Android 13) in Waydroid's LXC container, each Android app in its own Hyprland window from our launcher, GLES on the Mali-G710, sound through PipeWire, networking behind ufw.
+
+- **Kernel (W1):** binder, binderfs, PSI, memfd, cgroups and the container network were already on; Android's netd needs legacy iptables and ip6tables with its xt matches and targets, and policy routing (`IP_MULTIPLE_TABLES`, `IPV6_MULTIPLE_TABLES`, `INET_DIAG_DESTROY`). The block is in `kernel/configs/omandroid.config`, verified against `omandroid-int`'s configuration. No new driver code.
+- **GPU:** the image's Mesa has no G710 row; `omandroid-waydroid` patches a copy into Waydroid's vendor overlay until the row is upstream.
+- **Safety:** Waydroid's container is privileged and binds debugfs and the camera nodes; the package removes those binds and denies every block device, so Android can never reach the UFS or undo the storage guard.
+- **Next:** W0 (read-only check on the current kernel), then W1-W5 on the phone; W6-W8 make Android apps behave like phone apps (back gesture, keyboard, notifications, power).
+
+### 3.7 Distribution: updates, app store, installer, upstream
+
+- **OTA: host the `[omandroid]` repository** publicly, so `omarchy update` updates the phone on Wi-Fi (signing and the keyring package already exist). Then an update notice in the shell, and the kernel and its modules as a package with a safe slot-B install path, so `bin/omandroid push` becomes a developer tool.
+- **App store**: a touch front end for installing and updating apps (pacman packages, Flathub, web apps), probably GNOME Software with a phone-shaped layout or a small plugin of ours; updates and the OTA notice in one place.
 - **An installer** that sets up slot B and `userdata` with the safety model built in ([CONTRIBUTING](../CONTRIBUTING.md) §3). Not started.
-- **Publish the kernel**: review, test and push `omandroid-next` ([KERNEL-PUBLISH](../device/cheetah/KERNEL-PUBLISH.md)), then send ready series upstream.
-- **Waydroid** for Android apps. Not started.
-
-### 3.8 Shell and UX
-
-Make the remaining desktop pieces phone-shaped (system dialogs, the screensaver, first run), and add what telephony will need: incoming-call and SMS notifications, a dialer and a messages app. The running list is "Phone UX to-dos" in [NOTES.md](../device/cheetah/NOTES.md); Omarchy changes go upstream first ([`patches/omarchy/`](../patches/omarchy)).
+- **Publish the kernel**: review, test and push `omandroid-next` ([KERNEL-PUBLISH](../device/cheetah/KERNEL-PUBLISH.md)), then send ready series upstream, with the Mesa G710 row and the Omarchy patches.
 
 ## 4. How to help
 
 - **Start with [CONTRIBUTING.md](../CONTRIBUTING.md).** It has the safety model, the build and flash loop and how to submit changes. AI coding agents also read [AGENTS.md](../AGENTS.md).
-- **Pick a plan.** Each subsystem's plan in [`device/cheetah/`](../device/cheetah) has a status line, the evidence, and a gated runbook with the next step. Offline work (drivers, reviews, checkpatch and `dt-validate` runs, packaging, shell UX) needs no phone.
+- **Pick a plan.** Each subsystem's plan in [`device/cheetah/`](../device/cheetah) has a status line, the evidence, and a gated runbook with the next step. Offline work (drivers, reviews, checkpatch and `dt-validate` runs, packaging, shell UX, accessibility) needs no phone.
 - **Bring up another Pixel.** [DEVICES.md](DEVICES.md) lists the devices we'd like and their closest starting point; CONTRIBUTING §5 is the bring-up guide. Most gs201 phones need mainly a board DTS.
 - **Upstream review.** Kernel series from `omandroid-next` and the Mesa and Omarchy patches benefit from review by people who know those subsystems.
