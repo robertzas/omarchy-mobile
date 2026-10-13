@@ -1,0 +1,284 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Tone controls of the built-in speakers' filter (omandroid-audio's PipeWire
+filter-chain, "Speaker loudness"; device/cheetah/AOC-PLAN.md C9g). Runs as
+the desktop user, with that user's PipeWire.
+
+  omandroid-speaker-eq show
+  omandroid-speaker-eq preset default|flat|waves [--save]
+  omandroid-speaker-eq set NAME=VALUE ... [--save]
+  omandroid-speaker-eq save | reset
+  omandroid-speaker-eq measure left|right [--level DBFS] [--out DIR] [--source NODE]
+
+Changes apply at once, while playing, and last until PipeWire restarts;
+--save (or save) keeps the current values in
+~/.config/pipewire/pipewire.conf.d/61-omandroid-speaker-eq.conf, which then
+replaces the package's filter at the next PipeWire start; reset removes it.
+
+Names (left = top speaker / earpiece, right = bottom loudspeaker):
+  hp=HZ            high-pass corner, both channels (20-400)
+  bass=DB          low-shelf gain, both (-6..+8); bass_freq=HZ (100-1000)
+  bass_top=DB, bass_bottom=DB
+  dip=DB           presence cut, both (-8..+3); dip_freq=HZ (1000-8000), dip_q=Q
+  treble=DB        high-shelf gain, both (-8..+3); treble_top=DB, treble_bottom=DB
+  trim_top=DB, trim_bottom=DB   channel level, cuts only (-20..0)
+  NODE:CONTROL=VALUE            any control of the graph, e.g. dip_l:Freq=3000
+The limiter is not adjustable here.
+
+Presets: default (the package file's values), flat (everything off but a
+20 Hz high-pass and the limiter: for measuring, and for A/B listening), waves
+(the same as flat: for when the AoC's own speaker processing is on, which does
+its own shaping; AOC-TUNING-RESEARCH.md T4).
+
+measure plays stepped tones on one speaker with the filter flat, records them
+with the default microphone (the phone's own) and prints the response
+(lib/speaker_response.py); the filter is restored afterwards. Ask before
+running it: it plays about 15 s of tones (-30 dBFS by default).
+"""
+import json
+import math
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+
+NODE = 'effect_input.omandroid_speaker_loudness'
+CONF = os.environ.get('OMANDROID_EQ_CONF',
+                      '/usr/share/pipewire/pipewire.conf.d/60-omandroid-speaker-loudness.conf')
+LIB = os.environ.get('OMANDROID_AUDIO_LIB', '/usr/lib/omandroid-audio')
+USER_CONF = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'),
+                         'pipewire', 'pipewire.conf.d', '61-omandroid-speaker-eq.conf')
+TUNABLE = ('Freq', 'Q', 'Gain', 'Mult')
+FLAT = {'hp_l:Freq': 20.0, 'hp_r:Freq': 20.0,
+        'bass_l:Gain': 0.0, 'bass_r:Gain': 0.0, 'dip_l:Gain': 0.0, 'dip_r:Gain': 0.0,
+        'treble_l:Gain': 0.0, 'treble_r:Gain': 0.0, 'trim_l:Mult': 1.0, 'trim_r:Mult': 1.0}
+# (node, control): (min, max) the tool accepts
+LIMITS = {'hp:Freq': (20, 400), 'hp:Q': (0.5, 1.0),
+          'bass:Freq': (100, 1000), 'bass:Q': (0.4, 1.5), 'bass:Gain': (-6, 8),
+          'dip:Freq': (1000, 8000), 'dip:Q': (0.3, 4), 'dip:Gain': (-8, 3),
+          'treble:Freq': (2000, 12000), 'treble:Q': (0.4, 1.5), 'treble:Gain': (-8, 3),
+          'trim:Mult': (0.1, 1.0)}
+
+
+def die(msg):
+    print(f'omandroid-speaker-eq: {msg}', file=sys.stderr)
+    sys.exit(1)
+
+
+def conf_defaults(path=CONF):
+    """The control values of the package file, {"node:Control": value}."""
+    with open(path) as f:
+        text = f.read()
+    out = {}
+    for m in re.finditer(r'name\s*=\s*(\w+)\s+label\s*=\s*\w+\s+control\s*=\s*\{([^}]*)\}', text):
+        for k, v in re.findall(r'"([^"]+)"\s*=\s*(-?[0-9.]+)', m.group(2)):
+            if k in TUNABLE:
+                out[f'{m.group(1)}:{k}'] = float(v)
+    return out
+
+
+def pw(*args, check=True):
+    r = subprocess.run(list(args), capture_output=True, text=True, check=False)
+    if check and r.returncode != 0:
+        die(f'{" ".join(args[:2])} failed: {r.stderr.strip() or r.returncode}')
+    return r.stdout
+
+
+def node():
+    """(id, {"node:Control": value}) of the filter's input node."""
+    try:
+        objs = json.loads(pw('pw-dump') or '[]')
+    except ValueError:
+        die('pw-dump gave no JSON (is PipeWire running for this user?)')
+    for o in objs:
+        info = o.get('info') or {}
+        if (info.get('props') or {}).get('node.name') != NODE:
+            continue
+        vals = {}
+        for p in (info.get('params') or {}).get('Props') or []:
+            lst = p.get('params') if isinstance(p, dict) else None
+            if isinstance(lst, list):
+                for k, v in zip(lst[0::2], lst[1::2]):
+                    if isinstance(k, str) and ':' in k and k.split(':', 1)[1] in TUNABLE:
+                        vals[k] = v
+        return o['id'], vals
+    die(f'no {NODE} node: the speaker filter is not loaded (omandroid-audio 0.4.0 or later, '
+        'and PipeWire restarted since it was installed?)')
+
+
+def check_limits(changes):
+    for k, v in changes.items():
+        n, c = k.split(':', 1)
+        if n == 'limiter' or c not in TUNABLE:
+            die(f'{k}: not adjustable here')
+        lo, hi = LIMITS.get(f'{re.sub(r"_[lr]$", "", n)}:{c}', (None, None))
+        if lo is None:
+            die(f'{k}: unknown control')
+        if not lo <= v <= hi:
+            die(f'{k}={v:g}: outside {lo:g}..{hi:g}')
+
+
+def parse_set(words):
+    sides = {'top': ['l'], 'bottom': ['r'], None: ['l', 'r']}
+    ctl = {'hp': ('hp', 'Freq'), 'bass': ('bass', 'Gain'), 'bass_freq': ('bass', 'Freq'),
+           'dip': ('dip', 'Gain'), 'dip_freq': ('dip', 'Freq'), 'dip_q': ('dip', 'Q'),
+           'treble': ('treble', 'Gain'), 'treble_freq': ('treble', 'Freq'), 'trim': ('trim', 'Mult')}
+    out = {}
+    for w in words:
+        if '=' not in w:
+            die(f'{w}: expected NAME=VALUE')
+        k, v = w.split('=', 1)
+        try:
+            val = float(v)
+        except ValueError:
+            die(f'{w}: not a number')
+        if ':' in k:
+            out[k] = val
+            continue
+        m = re.fullmatch(r'(hp|bass|bass_freq|dip|dip_freq|dip_q|treble|treble_freq|trim)(?:_(top|bottom))?', k)
+        if not m or (m.group(1) == 'trim' and not m.group(2)):
+            die(f'{k}: unknown name (see --help)')
+        n, c = ctl[m.group(1)]
+        if c == 'Mult':
+            if val > 0:
+                die(f'{k}={v}: trims only cut (dB <= 0)')
+            val = 10 ** (val / 20)
+        for s in sides[m.group(2)]:
+            out[f'{n}_{s}:{c}'] = val
+    return out
+
+
+def apply(nid, changes):
+    check_limits(changes)
+    body = ' '.join(f'"{k}" {v:.6g}' for k, v in sorted(changes.items()))
+    pw('pw-cli', 'set-param', str(nid), 'Props', f'{{ params = [ {body} ] }}')
+    # read back: the filter answers with its new values
+    for _ in range(20):
+        _, now = node()
+        if all(abs(now.get(k, float('nan')) - v) < 1e-3 * max(1.0, abs(v)) for k, v in changes.items()):
+            return now
+        time.sleep(0.05)
+    die('PipeWire took the change but the filter did not report the new values; '
+        'nothing is known to have changed')
+
+
+def fmt(vals):
+    g = lambda k: vals.get(k)
+    db = lambda m: '-' if m is None else f'{20 * math.log10(max(m, 1e-6)):+.1f} dB'
+    rows = []
+    for side, s in (('top (left)', 'l'), ('bottom (right)', 'r')):
+        rows.append(f'{side:15} hp {g(f"hp_{s}:Freq"):g} Hz | bass {g(f"bass_{s}:Gain"):+g} dB at '
+                    f'{g(f"bass_{s}:Freq"):g} Hz | dip {g(f"dip_{s}:Gain"):+g} dB at {g(f"dip_{s}:Freq"):g} Hz '
+                    f'Q {g(f"dip_{s}:Q"):g} | treble {g(f"treble_{s}:Gain"):+g} dB at {g(f"treble_{s}:Freq"):g} Hz | '
+                    f'trim {db(g(f"trim_{s}:Mult"))}')
+    return '\n'.join(rows)
+
+
+def save(vals):
+    with open(CONF) as f:
+        text = f.read()
+    known = conf_defaults()
+    for k, v in vals.items():
+        if k not in known:          # e.g. a high-pass's unused Gain
+            continue
+        n, c = k.split(':', 1)
+        pat = re.compile(r'(name\s*=\s*' + re.escape(n) + r'\s+label\s*=\s*\w+\s+control\s*=\s*\{[^}]*"'
+                         + re.escape(c) + r'"\s*=\s*)(-?[0-9.]+)')
+        text, cnt = pat.subn(lambda m: m.group(1) + f'{v:.6g}', text)
+        if cnt != 1:
+            die(f'cannot save {k}: not found once in {CONF}')
+    text = text.replace('omandroid.speaker-eq = package', 'omandroid.speaker-eq = user')
+    if text.count('omandroid.speaker-eq = user') != 2:
+        die(f'{CONF} has no package/user switch (omandroid-audio too old?)')
+    header = ('# Written by omandroid-speaker-eq save: the speaker filter with your values.\n'
+              '# It replaces the package\'s at the next PipeWire start; omandroid-speaker-eq reset\n'
+              '# removes it. Taken from ' + CONF + '\n')
+    os.makedirs(os.path.dirname(USER_CONF), exist_ok=True)
+    tmp = USER_CONF + '.tmp'
+    with open(tmp, 'w') as f:
+        f.write(header + text)
+    os.replace(tmp, USER_CONF)
+    print(f'saved: {USER_CONF}')
+
+
+def measure(args):
+    side = args[0] if args else None
+    if side not in ('left', 'right'):
+        die('measure left|right [--level DBFS] [--out DIR] [--source NODE]')
+    opt = dict(zip(args[1::2], args[2::2]))
+    level = float(opt.get('--level', -30))
+    if level > -20:
+        die('measure: --level above -20 dBFS is refused')
+    out = opt.get('--out') or tempfile.mkdtemp(prefix='speaker-response-')
+    os.makedirs(out, exist_ok=True)
+    resp = [sys.executable, '-I', os.path.join(LIB, 'speaker_response.py')]
+    stim, rec, res = (os.path.join(out, f'{side}-{n}') for n in ('stimulus.wav', 'rec.wav', 'result.json'))
+    subprocess.run(resp + ['gen', stim, '--channel', side, '--level', str(level)], check=True)
+    nid, before = node()
+    flat = dict(FLAT)
+    try:
+        apply(nid, flat)
+        cmd = ['pw-record', '--rate', '48000', '--channels', '2', '--format', 's16']
+        if '--source' in opt:
+            cmd += ['--target', opt['--source']]
+        recp = subprocess.Popen(cmd + [rec])
+        time.sleep(0.8)
+        subprocess.run(['pw-play', '--target', NODE, stim], check=False)
+        time.sleep(0.5)
+        recp.terminate()
+        recp.wait(timeout=5)
+    finally:
+        apply(nid, {k: before[k] for k in flat if k in before})
+    r = subprocess.run(resp + ['analyze', rec, '--level', str(level), '--json', res], check=False)
+    print(f'files in {out}; with both sides measured: {" ".join(resp[2:])} suggest '
+          f'{os.path.join(out, "left-result.json")} {os.path.join(out, "right-result.json")}')
+    return r.returncode
+
+
+def main(argv):
+    if not argv or argv[0] in ('-h', '--help'):
+        print(__doc__)
+        return 0
+    cmd, rest = argv[0], argv[1:]
+    keep = '--save' in rest
+    rest = [a for a in rest if a != '--save']
+    if cmd == 'reset':
+        if os.path.exists(USER_CONF):
+            os.unlink(USER_CONF)
+            print(f'removed {USER_CONF}')
+        cmd, rest = 'preset', ['default']
+    if cmd == 'measure':
+        return measure(rest)
+    nid, vals = node()
+    if cmd == 'show':
+        print(f'node {nid} ({NODE}){"; your saved values: " + USER_CONF if os.path.exists(USER_CONF) else ""}')
+        print(fmt(vals))
+        return 0
+    if cmd == 'save':
+        save(vals)
+        return 0
+    if cmd == 'preset':
+        name = rest[0] if rest else None
+        if name == 'default':
+            changes = conf_defaults()
+        elif name in ('flat', 'waves'):
+            changes = dict(FLAT)
+        else:
+            die('preset default|flat|waves')
+    elif cmd == 'set':
+        changes = parse_set(rest)
+        if not changes:
+            die('set NAME=VALUE ...')
+    else:
+        die(f'{cmd}: unknown command (see --help)')
+    now = apply(nid, changes)
+    print(fmt(now))
+    if keep:
+        save(now)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

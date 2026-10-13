@@ -1,13 +1,16 @@
 <!-- SPDX-License-Identifier: MIT -->
 # AoC speaker tuning (C10-tuning): research, design and runbook
 
-Status (2026-10-12): **T1 done offline; T2 and T3.1 passed on the phone;
+Status (2026-10-13): **T1 done offline; T2 and T3.1 passed on the phone;
 T3.2 showed the AoC answers, but 0.1.1 discarded its replies.
 omandroid-speaker-tuning 0.1.2 matches replies by command ID and sends only
-during playback; next is T3b, the first exchange during a C8 tone.** T4
-follows T3b; T5 onwards (`SPEAKER_MUSIC` at stock's levels) also waits for
-`AOC-PLAN.md` C9. The package stays disabled (mode `off`); omandroid-audio
-0.3.0 is unchanged.
+during playback; next is T3b, the first exchange during a tone at the
+everyday level.** The listener finds our flat speaker path thin next to
+stock, and this is the lever that gives stock's own sound (`AOC-PLAN.md`,
+"Why the speakers sound thin"). T4 follows T3b at the everyday level
+(737/10), with omandroid-audio 0.4.0's speaker filter set flat. T5 onwards
+(stock's levels) still waits for `AOC-PLAN.md` C9. The package stays
+disabled (mode `off`).
 Sources: static analysis of the stock libraries from the user's own
 factory image (CP2A.260705.006), the AoC firmware's strings and Google's
 GPL AoC driver, the Waves controller run under qemu with a fake sender
@@ -292,6 +295,48 @@ libraries is reproduced.
 - **Message format** seen at the sender: a `u32` Waves message ID, then
   (for parameter messages) a `u32` length of the rest. ID 5 is the 4-byte
   version query, ID 1 a parameter/coefficient upload.
+
+### 2.8 What the speaker upload contains (structure only; 2026-10-13)
+
+From the T1 run (the controller under qemu, `route 2 0 1`, `wake`,
+`flush`) and the module names in `libAlgFx_HiFi3z.so`'s strings. No value
+is recorded here or anywhere in the repository.
+
+- After its two-word header, the 11204-byte upload is a flat list of
+  records: a coefficient ID, a word count, then that many words. The list
+  has 198 records. The ID's bits above bit 8 select the module, and the
+  low 9 bits select the coefficient within it (M: the decoder's error
+  text speaks of a "module ID", and the groups fall exactly on 0x200
+  boundaries). Module numbers match the order of the chain's module
+  name table (M).
+- Modules with coefficients in the internal speaker's upload: the I/O
+  stage, a crossover, MaxxS1, **MaxxBass**, MaxxStereo, MaxxDialog,
+  MaxxTreble, two parametric EQs and a "finishing" EQ, two more EQ types
+  (XEQ, TEQ), **a multiband dynamics stage** (by far the largest share of
+  the upload), a multiband shaper, an exciter, and **MaxxVolume** (the
+  leveler). Only the centre-gain module sends nothing.
+- A coefficient set doesn't show that a module is switched on: the
+  controller may send coefficients for a bypassed module too. Which ones
+  are bypassed is not decoded (open question 8).
+- What follows for our side, whatever the enable states:
+  - **MaxxBass** works on the bass the speakers can't reproduce. It
+    synthesises harmonics from it, so the bass is heard through the
+    harmonics. It needs that low-frequency input, so a high-pass of ours
+    in front of it starves it. T4 therefore sets our PipeWire filter to
+    `preset waves` (a 20 Hz corner, nothing else).
+  - The **multiband dynamics** stage and **MaxxVolume** raise the average
+    level and hold the peaks. That is where most of stock's loudness comes
+    from, and it is why Waves on our 737/10 levels will sound both louder
+    and fuller. Waves runs before the amplifiers, so it cannot push the
+    signal past digital full scale. Its worst case at 737/10 is the same
+    full-scale signal at the same amplifier gains that our limiter
+    already allows (3 dB more than our -3 dBFS ceiling), with the
+    protection firmware in the path. That is still far below stock's
+    power at 817/17.
+  - Stereo: MaxxStereo has coefficients, and stock lets Waves do the
+    orientation swap (section 2.5). Whether it treats the earpiece and the
+    bottom speaker differently can't be seen from the record layout.
+    T4.3 listens for it.
 
 ---
 
@@ -659,11 +704,12 @@ omandroid-speaker-tuning 0.1.1; run by the human).**
   (`blocked the AoC DSP is Idle, ...` otherwise), `--once` included. The
   daemon already waited for `Playback` at stream start.
 
-### T3b first live exchange during a C8 tone (risk low; announce it: one 8 s tone)
+### T3b first live exchange during a tone (risk low; announce it: one 8 s tone)
 
 Prerequisites as T3; 0.1.2 installed (`tools/phone-install-package
-packages/omandroid-speaker-tuning`), the AoC log recorded. One tone at C8
-level; the `--once` starts two seconds into it, so Waves (if the AoC takes
+packages/omandroid-speaker-tuning`), the AoC log recorded. One -23 dBFS tone
+at the everyday amplifier level (stage media, 737/10; this step was first
+written for C8's 657/6, and nothing in it depends on the level); the `--once` starts two seconds into it, so Waves (if the AoC takes
 it) changes the sound for the last seconds only.
 
 ```sh
@@ -689,30 +735,45 @@ Rollback: `amixer ... cset name="AoC Speaker Mixer ASP Mode" 2`
 (`ASP_BYPASS`, proven in T3.1) or `omandroid-speaker-protection mute`;
 worst case reboot (AoC RAM only).
 
-### T4 Waves on, throttle preset, C8 levels (risk medium; announce it)
+### T4 Waves on, throttle preset, the everyday level (risk medium; announce it)
 
-Stage c8 levels (657 / 6), the watchdog on, `monitor` in a second
-terminal. Sink volume 40 %.
+Updated 2026-10-13 for omandroid-audio 0.4.0: the amplifiers at stage media
+(737 / 10, the everyday default since C9d-2, about 17 dB below stock), the
+watchdog on with `OMANDROID_SPK_TEMP_JUMP=5`, `monitor` in a second
+terminal, sink volume 40 % to start. T1 showed that `throttle` and `music`
+send the same bytes for the internal speaker, so `throttle` is stock's
+media sound here. omandroid-audio 0.4.0's speaker filter (`AOC-PLAN.md`
+C9g) shapes the signal too, so set it flat for every T4 step
+(`omandroid-speaker-eq preset waves`, as the desktop user): Waves then
+gets the full-range signal, and the two don't add up. `eq` is the helper
+from C9g.
 
-1. Baseline: the package's multitone through PipeWire for 5 s, tuning
-   `off`; record `monitor` (temperatures, `SPK_OUTPUT_POWER`) and the
-   sound.
+1. Baseline: `eq preset waves`; the package's multitone through
+   PipeWire for 5 s, tuning `off`; record `monitor` (temperatures,
+   `SPK_OUTPUT_POWER`) and the sound.
 2. `OMANDROID_SPK_TUNING=throttle`, restart the tuning unit, the same
    multitone. Expect the daemon's "active SPEAKER_MUSIC_THROTTLE 0",
    reply 0, the AoC log's mixer line for Waves, ASP Mode `ASP_ON` (or
    record what it reads), audibly fuller and louder.
-3. Orientation: turn the phone to each landscape side; expect one resend
+3. Music the listener knows, 20 s each, told which only afterwards:
+   tuning on with `eq preset waves`; tuning on with `eq preset default`;
+   tuning off (`ASP_BYPASS`, as in T3.1, or the unit stopped) with `eq
+   preset default`. Record the preference.
+4. Orientation: turn the phone to each landscape side; expect one resend
    each and left/right following the phone. Note which iio orientation is
    90° and which 270°.
-4. Stop the stream, start it again: does the AoC keep the tuning (no
+5. Stop the stream, start it again: does the AoC keep the tuning (no
    resend needed), or does the daemon's resend fire? Record.
 
-Pass: replies 0; output power and coil temperatures within C9's rules;
-no xruns, no amplifier event. Stop: any watchdog mute, a temperature rise
-above twice the baseline's for the same signal, `SPK_OUTPUT_POWER` above
-twice the baseline, audible distortion, a negative reply, an AoC log
-error. Rollback: `ASP_BYPASS` (if T3 proved it) or
-`omandroid-speaker-protection mute`; tuning `off`; reboot to be sure.
+Pass: replies 0; coil temperatures within the C9 rules (tenths of a degree
+at this level); no xruns, no amplifier event. Record `SPK_OUTPUT_POWER`
+against the baseline. Waves is meant to raise it; at 737/10 even several
+times the baseline stays far below stock's power at 817/17. Stop: any
+watchdog mute (including the 5 °C jump), audible distortion, a negative
+reply, an AoC log error, an over-exc count that moves. Rollback:
+`ASP_BYPASS` (proven in T3.1) or `omandroid-speaker-protection mute`;
+tuning `off`; `eq preset default`; reboot to be sure (tuning lives in AoC
+RAM only).
 
 ### T5 `SPEAKER_MUSIC` at the C9 levels (after C9 passed; risk medium-high)
 
@@ -758,3 +819,9 @@ of section 3.1 item 4 are settled with the `omandroid-audio` owner
    state the controller only sends after a reply? T4.3 listens; with the
    daemon running, a turn costs nothing when the controller has nothing
    to send.
+8. Which of the speaker chain's modules (section 2.8) does the preset
+   switch on? The upload carries coefficients for all but one. The
+   controller's text interface (`ma_get_command`, with
+   get-parameter commands) could list the parameters, but it takes
+   base64-coded command buffers that haven't been worked out. By ear in
+   T4 for now: Waves on against off, at the same sink volume.

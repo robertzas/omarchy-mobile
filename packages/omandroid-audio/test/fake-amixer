@@ -31,6 +31,7 @@ def initial():
         c[f'{p} DRE Switch'] = {'type': 'BOOLEAN', 'v': 0}
         c[f'{p} HW Noise Gate Enable'] = {'type': 'INTEGER', 'max': 63, 'v': 0}
     c['TDM_0_RX Mixer EP6'] = {'type': 'BOOLEAN', 'v': 0}
+    c['NoHost1 TX Mixer TDM_0_TX'] = {'type': 'BOOLEAN', 'v': 0}     # an AoC control
     return c
 
 
@@ -59,6 +60,9 @@ def dsp_controls(c, p):
         c.setdefault(wm_adsp_name(p, alg, n), {'type': 'BYTES', 'v': list(v.to_bytes(4, 'big'))})
     c.setdefault(wm_adsp_name(p, 'cd', 'CSPL_UPDATE_PARAMS_CONFIG'), {'type': 'BYTES', 'v': [0] * 64})
     c.setdefault(wm_adsp_name(p, 'cd', 'CSPL_COMMAND'), {'type': 'BYTES', 'v': [0] * 4})
+    for n, size in (('RTLOG_ENABLE', 4), ('RTLOG_VARIABLE', 16), ('RTLOG_COUNT', 4), ('RTLOG_STATE', 4),
+                    ('RTLOG_DATA', 128)):
+        c.setdefault(wm_adsp_name(p, 'cd', n), {'type': 'BYTES', 'v': [0] * size})
     # a decoy from the other algorithm
     c.setdefault(f'{p} DSP1 Protection f20b CAL_R', {'type': 'BYTES', 'v': [0, 0, 0, 0]})
 

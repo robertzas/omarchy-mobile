@@ -11,6 +11,9 @@ tmp=$(mktemp -d); [[ -n ${KEEP:-} ]] || trap 'rm -rf "$tmp"' EXIT; [[ -z ${KEEP:
 here=$PWD
 
 bash -n bin/omandroid-speaker-protection || fail "the script parses"
+for f in bin/omandroid-speaker-eq lib/speaker_response.py test/fake-pw; do
+  python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$f" || fail "$f compiles"
+done
 python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' test/fake-amixer || fail "fake-amixer compiles"
 pass "scripts parse"
 
@@ -82,6 +85,12 @@ mktree() {
   printf ' 0 [googleaocsndcar]: aoc-snd-card - google,aoc-snd-card\n                      google,aoc-snd-card\n' > "$r/asound/cards"
   printf 'card: 0\ndevice: 5\nsubdevice: 0\nstream: PLAYBACK\nid: EP6 playback (*)\n' > "$r/asound/card0/pcm5p/info"
   echo closed > "$r/asound/card0/pcm5p/sub0/status"
+  mkdir -p "$r/asound/card0/pcm15c/sub0"
+  printf 'card: 0\ndevice: 15\nsubdevice: 0\nstream: CAPTURE\nid: nohost1 capture (*)\n' > "$r/asound/card0/pcm15c/info"
+  echo closed > "$r/asound/card0/pcm15c/sub0/status"
+  # stock's interleaved TX slots (the aoc-sound-test overlay), big-endian u32
+  python3 -c 'import struct, sys; open(sys.argv[1], "wb").write(struct.pack(">4I", 0, 2, 4, 6)); open(sys.argv[2], "wb").write(struct.pack(">4I", 1, 3, 5, 7))' \
+    "$r/dt/spi@10960000/amplifier@0/google,tdm-tx-slots" "$r/dt/spi@10960000/amplifier@1/google,tdm-tx-slots"
   printf 'MAJOR=8\nMINOR=9\nDEVNAME=sda9\nPARTNAME=persist\n' > "$r/block/sda9/uevent"
   for f in cs35l41-dsp1-spk-prot-cheetah.wmfw cs35l41-dsp1-spk-prot-cheetah-top.bin cs35l41-dsp1-spk-prot-cheetah-bottom.bin; do
     echo "$f" > "$r/fw/cirrus/$f"
@@ -104,7 +113,8 @@ sp() {  # run the script against $r
       OMANDROID_FW_DIRS="$r/fw" OMANDROID_STATE="$r/state" OMANDROID_RUN="$r/run" \
       OMANDROID_SPIDEVS="$r/spi" OMANDROID_SPIDRV="$r/spidrv" OMANDROID_SYSMODULE="$r/module" \
       OMANDROID_KMSG="$r/kmsg" OMANDROID_AUDIO_LIB="$here/lib" OMANDROID_CTL_BACKEND="json:$r/amixer.json" \
-      OMANDROID_CARD_WAIT=1 OMANDROID_CTL_WAIT=1 OMANDROID_SPK_STAGE=c8 "${prep[@]}" bin/omandroid-speaker-protection "$@"
+      OMANDROID_CARD_WAIT=1 OMANDROID_CTL_WAIT=1 OMANDROID_SPK_STAGE=c8 OMANDROID_PCM_BACKEND=fake \
+      "${prep[@]}" bin/omandroid-speaker-protection "$@"
 }
 run() {
   mktree "$1"
@@ -304,6 +314,45 @@ wprep=(OMANDROID_SPK_MEDIA_DELTA=1); watchrun
 ((rc == 1)) && muted || fail "watchdog: media delta enabled but missing mutes"
 pass "watchdog: stock media delta at stream start, both amplifiers, or mute"
 
+# the amplifiers' V/I feedback stream (C9d-7): with each speaker stream when asked
+fbstate() { cat "$r/asound/card0/pcm15c/sub0/status"; }
+startok w-fb-off; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; watchrun
+((rc == 0)) && [[ $(fbstate) == closed ]] && ! grep -c NoHost1 "$r/cset.log" >/dev/null || { cat "$r/watch.out" >&2; fail "feedback: off by default"; }
+startok w-fb; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+( sleep 0.6; [[ $(fbstate) == 'state: RUNNING' ]] && touch "$r/fb-seen"; echo closed > "$r/asound/card0/pcm5p/sub0/status" ) &
+wprep=(OMANDROID_SPK_FEEDBACK=1); WATCH_N=30 watchrun; wait
+((rc == 0)) && ! muted && [[ -e $r/fb-seen && $(fbstate) == closed ]] || { cat "$r/watch.out" >&2; fail "feedback: runs during the stream, stops after it"; }
+[[ $(grep NoHost1 "$r/cset.log") == $'NoHost1 TX Mixer TDM_0_TX=1\nNoHost1 TX Mixer TDM_0_TX=0' ]] || { cat "$r/cset.log" >&2; fail "feedback: the mixer path on, then off, as stock"; }
+[[ ! -e $r/run/speaker-feedback.pid ]] || fail "feedback: no pid file left"
+startok w-fb-noslots; rm "$r/dt/spi@10960000/amplifier@1/google,tdm-tx-slots"; wprep=(OMANDROID_SPK_FEEDBACK=1); watchrun
+((rc == 1)) && muted && grep -c 'tdm-tx-slots' "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "feedback: refused without the TX slot overlay, muted"; }
+startok w-fb-overlap
+python3 -c 'import struct, sys; open(sys.argv[1], "wb").write(struct.pack(">4I", 0, 1, 2, 3))' "$r/dt/spi@10960000/amplifier@1/google,tdm-tx-slots"
+rc=0; sp feedback start > "$r/fb.out" 2>&1 || rc=$?
+((rc == 1)) && grep -c overlap "$r/fb.out" >/dev/null && [[ $(fbstate) == closed ]] || { cat "$r/fb.out" >&2; fail "feedback: refuses overlapping TX slots"; }
+startok fb-cli
+rc=0; sp feedback start --seconds 30 > "$r/fb.out" 2>&1 || rc=$?
+((rc == 0)) && [[ $(fbstate) == 'state: RUNNING' && $(val "NoHost1 TX Mixer TDM_0_TX") == on ]] || { cat "$r/fb.out" "$r/run/speaker-feedback.log" >&2; fail "feedback start: by hand, in the background"; }
+sp feedback status | grep -c 'holder pid' >/dev/null || fail "feedback status"
+echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; wprep=(OMANDROID_SPK_FEEDBACK=1); watchrun
+((rc == 0)) && ! muted && [[ $(fbstate) == 'state: RUNNING' ]] || { cat "$r/watch.out" >&2; fail "feedback: the watchdog uses a holder started by hand and leaves it running"; }
+sp feedback stop > "$r/fb.out" 2>&1
+[[ $(fbstate) == closed && $(val "NoHost1 TX Mixer TDM_0_TX") == off && ! -e $r/run/speaker-feedback.pid ]] || { cat "$r/fb.out" "$r/run/speaker-feedback.log" >&2; fail "feedback stop"; }
+pass "feedback (C9d-7): off by default; with each stream when asked, path then PCM, both undone; refused without disjoint TX slots; by hand too"
+
+# the firmware's own impedance measurement, as a ratio to CAL_R (C9d-8)
+startok z; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+out=$(sp impedance --rounds 3 --interval 0.01) || { echo "$out" >&2; fail "impedance: runs"; }
+[[ $out == *"Top    Z/CAL_R 1.000"* && $out == *"Bottom Z/CAL_R 1.000"* && $out == *"coil rise +0.0 C"* ]] || { echo "$out" >&2; fail "impedance: ratio 1.000 at calibration"; }
+n=$(amx controls | sed -n "s/^numid=1,iface=MIXER,name='\(Top DSP1 .*RTLOG_VARIABLE\)'\$/\1/p")
+[[ $(val "$n") == 0x00,0x00,0x03,0x9d,0x00,0x00,0x03,0xb3,0x00,0x00,0x03,0xb4,0x00,0x00,0x00,0x00 ]] || { val "$n" >&2; fail "impedance: arms stock's three variables"; }
+out=$(prep=(FAKE_Z_RATIO=1.1); sp impedance --rounds 2 --interval 0.01)
+[[ $out == *"Z/CAL_R 1.100"* && $out == *"+25.6 C"* ]] || { echo "$out" >&2; fail "impedance: 10 % high reads as about 26 C"; }
+rc=0; out=$(prep=(FAKE_Z_RATIO=low); sp impedance --rounds 2 --interval 0.01) || rc=$?
+((rc == 1)) && [[ $out == *"not measurable"* ]] || { echo "$out" >&2; fail "impedance: no valid sample is said so"; }
+if grep -E '8192|8448|0x20|0x21' <<<"$(prep=(FAKE_Z_RATIO=1.1); sp impedance --rounds 2 --interval 0.01)"; then fail "impedance: prints no calibration value"; fi
+pass "impedance (C9d-8): arms the firmware's logger as stock, prints Z/CAL_R only, says when nothing is measurable"
+
 # --- verify and stage c9 -----------------------------------------------------------
 startok verify; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
 rc=0; prep=(OMANDROID_VERIFY_SECONDS=0.5 OMANDROID_VERIFY_INTERVAL=0.1); sp verify > "$r/v.out" 2>&1 || rc=$?; prep=()
@@ -385,6 +434,102 @@ PY
   pass "alsa-lib control access (ctypes) lists and reads a real card"
 fi
 
+# --- the speaker filter and its tone controls (C9g) -------------------------------
+conf=pipewire/60-omandroid-speaker-loudness.conf
+grep -c 'condition = \[ { omandroid.speaker-eq = package } \]' "$conf" >/dev/null &&
+  grep -c 'omandroid.speaker-eq = package' "$conf" | grep -qx 2 || fail "filter: loads only while no user copy is saved"
+grep -c 'filter.smart.target = { node.name = "alsa_output.platform-sound-aoc.HiFi__Speaker__sink" }' "$conf" >/dev/null || fail "filter: the speaker sink only"
+grep -c '"Input gain (dB)" = 0.0 "Limit (dB)" = -3.0' "$conf" >/dev/null || fail "filter: the limiter adds no gain, ceiling -3 dBFS"
+python3 - "$conf" <<'PY' || fail "filter: graph links each channel through hp, bass, dip, treble, trim to the limiter"
+import re, sys
+s = open(sys.argv[1]).read()
+links = re.findall(r'output = "(\w+):\w+"\s+input = "(\w+):[\w ]+"', s)
+for c in 'lr':
+    chain = [f'hp_{c}', f'bass_{c}', f'dip_{c}', f'treble_{c}', f'trim_{c}', 'limiter']
+    assert all((a, b) in links for a, b in zip(chain, chain[1:])), c
+assert 'inputs = [ "hp_l:In" "hp_r:In" ]' in s and 'outputs = [ "limiter:Output 1" "limiter:Output 2" ]' in s
+PY
+ln -sf "$here/test/fake-pw" "$fake/pw-dump"; ln -sf "$here/test/fake-pw" "$fake/pw-cli"
+pwt=$tmp/pw; mkdir -p "$pwt"
+eqrun() { env PATH="$fake:$PATH" FAKE_PW_STATE="$pwt/state.json" FAKE_PW_LOG="$pwt/log" XDG_CONFIG_HOME="$pwt/xdg" \
+          OMANDROID_EQ_CONF="$here/$conf" OMANDROID_AUDIO_LIB="$here/lib" "${eqprep[@]}" bin/omandroid-speaker-eq "$@"; }
+eqprep=()
+python3 - "$conf" "$pwt/state.json" <<'PY'
+import json, re, sys
+s = open(sys.argv[1]).read(); vals = {}
+for m in re.finditer(r'name\s*=\s*(\w+)\s+label\s*=\s*(\w+)\s+control\s*=\s*\{([^}]*)\}', sys.argv[1] and s):
+    for k, v in re.findall(r'"([^"]+)"\s*=\s*(-?[0-9.]+)', m.group(3)):
+        vals[f'{m.group(1)}:{k}'] = float(v)
+    if m.group(2).startswith('bq_'):
+        vals.setdefault(f'{m.group(1)}:Gain', 0.0)
+json.dump(vals, open(sys.argv[2], 'w'))
+PY
+out=$(eqrun show) || fail "eq: show"
+[[ $out == *"top (left)      hp 100 Hz | bass +4 dB at 400 Hz | dip -2 dB at 3500 Hz"*"trim +0.0 dB"* ]] || { echo "$out" >&2; fail "eq: show reads the filter's values"; }
+eqrun set bass=6 trim_top=-3 >/dev/null || fail "eq: set"
+st() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); print(" ".join(f"{k}={v[k]:g}" for k in sys.argv[2:]))' "$pwt/state.json" "$@"; }
+[[ $(st bass_l:Gain bass_r:Gain trim_l:Mult trim_r:Mult) == "bass_l:Gain=6 bass_r:Gain=6 trim_l:Mult=0.707946 trim_r:Mult=1" ]] || { st bass_l:Gain trim_l:Mult >&2; fail "eq: set changes both channels, a trim in dB as a factor"; }
+eqrun preset flat >/dev/null
+[[ $(st hp_l:Freq bass_r:Gain dip_l:Gain treble_r:Gain trim_l:Mult) == "hp_l:Freq=20 bass_r:Gain=0 dip_l:Gain=0 treble_r:Gain=0 trim_l:Mult=1" ]] || fail "eq: preset flat"
+eqrun preset default >/dev/null
+[[ $(st hp_r:Freq bass_l:Gain dip_r:Gain dip_r:Freq) == "hp_r:Freq=100 bass_l:Gain=4 dip_r:Gain=-2 dip_r:Freq=3500" ]] || fail "eq: preset default is the package file"
+for bad in trim_top=1 bass=9 hp=10 dip=4 limiter:Limit=0 'limiter:Input gain (dB)=6' foo=1 bass=x; do
+  if eqrun set "$bad" >/dev/null 2>&1; then fail "eq: refuses $bad"; fi
+done
+[[ $(st bass_l:Gain) == "bass_l:Gain=4" ]] || fail "eq: a refused change changes nothing"
+rc=0; eqprep=(FAKE_PW_IGNORE=1); eqrun set bass=2 >/dev/null 2>&1 || rc=$?; eqprep=()
+((rc == 1)) || fail "eq: says so when the filter does not take a value"
+eqrun set bass=3 trim_bottom=-2 --save >/dev/null || fail "eq: --save"
+u=$pwt/xdg/pipewire/pipewire.conf.d/61-omandroid-speaker-eq.conf
+[[ $(grep -c 'omandroid.speaker-eq = user' "$u") == 2 && $(grep -c 'speaker-eq = package' "$u") == 0 ]] || fail "eq: the saved copy switches the package filter off"
+grep -c 'name = bass_r   label = bq_lowshelf  control = { "Freq" = 400 "Q" = 0.707 "Gain" = 3 }' "$u" >/dev/null &&
+  grep -c '"Mult" = 0.794328' "$u" >/dev/null && grep -c '"Limit (dB)" = -3.0' "$u" >/dev/null || { cat "$u" >&2; fail "eq: the saved copy carries the values and keeps the limiter"; }
+eqrun reset >/dev/null; [[ ! -e $u && $(st bass_l:Gain) == "bass_l:Gain=4" ]] || fail "eq: reset removes the copy and goes back to the package values"
+pass "speaker filter: hp, bass, dip, treble, trim, limiter per channel; omandroid-speaker-eq show/set/preset/save/reset within limits"
+
+# the response measurement, on a simulated speaker (a 700 Hz roll-off, a 3.5 kHz peak)
+python3 -I - "$here/lib" "$tmp" <<'PY' || fail "response: recovers a known speaker response within 1 dB"
+import json, math, random, struct, sys, wave
+sys.path.insert(0, sys.argv[1]); tmp = sys.argv[2]
+import speaker_response as r
+def bq(kind, f, q, g, rate=48000):
+    A = 10 ** (g / 40); w = 2 * math.pi * f / rate; al = math.sin(w) / (2 * q); c = math.cos(w)
+    b, a = ([(1 + c) / 2, -(1 + c), (1 + c) / 2], [1 + al, -2 * c, 1 - al]) if kind == 'hp' else \
+           ([1 + al * A, -2 * c, 1 - al * A], [1 + al / A, -2 * c, 1 - al / A])
+    return [x / a[0] for x in b], [x / a[0] for x in a]
+def run(x, ba):
+    (b, a), y, x1, x2, y1, y2 = ba, [], 0.0, 0.0, 0.0, 0.0
+    for v in x:
+        o = b[0] * v + b[1] * x1 + b[2] * x2 - a[1] * y1 - a[2] * y2
+        x2, x1, y2, y1 = x1, v, y1, o; y.append(o)
+    return y
+def mag(ba, f):
+    (b, a), z = ba, complex(math.cos(2 * math.pi * f / 48000), -math.sin(2 * math.pi * f / 48000))
+    return 20 * math.log10(abs((b[0] + b[1] * z + b[2] * z * z) / (a[0] + a[1] * z + a[2] * z * z)))
+freqs = r.steps()
+r.write_wav(f'{tmp}/stim.wav', r.stimulus(freqs, -30), 'right')
+rate, ch = r.read_wav(f'{tmp}/stim.wav')
+assert ch[0] == [0.0] * len(ch[0]) and max(ch[1]) > 0.04          # one channel only
+hp, pk = bq('hp', 700, 0.9, 0), bq('pk', 3500, 1.5, 6)
+random.seed(1)
+y = [random.gauss(0, 10 ** (-75 / 20)) for _ in range(int(0.4 * 48000))] + \
+    [v * 10 ** (-10 / 20) + random.gauss(0, 10 ** (-75 / 20)) for v in run(run(ch[1], hp), pk)]
+with wave.open(f'{tmp}/rec.wav', 'wb') as w:                       # a mono "microphone"
+    w.setnchannels(1); w.setsampwidth(2); w.setframerate(48000)
+    w.writeframes(b''.join(struct.pack('<h', max(-32768, min(32767, int(v * 32767)))) for v in y))
+res = r.analyze(f'{tmp}/rec.wav', freqs, -30)
+assert len(res['steps']) == len(freqs)
+for s in res['steps']:
+    exp = mag(hp, s['freq']) + mag(pk, s['freq']) - 10
+    assert s['snr'] is None or s['snr'] < 10 or abs(s['db'] - exp) < 1.0, (s, exp)
+json.dump(res, open(f'{tmp}/R.json', 'w')); json.dump(res, open(f'{tmp}/L.json', 'w'))
+out, notes = r.suggest(res, res)
+assert 0 < out['bass'] <= 6 and out['dip'] < 0 and 60 <= out['hp'] <= 200, out
+assert all(v <= 0 for k, v in out.items() if k.startswith(('trim', 'treble', 'dip'))), out
+PY
+python3 -I lib/speaker_response.py suggest "$tmp/L.json" "$tmp/R.json" | grep -c '^suggested: omandroid-speaker-eq set hp=' >/dev/null || fail "response: suggest prints a command"
+pass "response measurement: stepped tones on one channel, recovered within 1 dB, a bounded suggestion"
+
 # --- install ---------------------------------------------------------------------
 ./install "$tmp/root"
 for f in usr/bin/omandroid-speaker-protection usr/lib/systemd/system/omandroid-speaker-protection.service \
@@ -392,7 +537,9 @@ for f in usr/bin/omandroid-speaker-protection usr/lib/systemd/system/omandroid-s
          usr/lib/udev/rules.d/70-omandroid-cs35l41.rules \
          usr/lib/modprobe.d/omandroid-audio.conf etc/omandroid/speaker.conf \
          usr/share/alsa/ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf usr/share/alsa/ucm2/Google/cheetah/HiFi.conf \
-         usr/share/wireplumber/wireplumber.conf.d/51-omandroid-aoc.conf; do
+         usr/share/wireplumber/wireplumber.conf.d/51-omandroid-aoc.conf \
+         usr/share/pipewire/pipewire.conf.d/60-omandroid-speaker-loudness.conf usr/bin/omandroid-speaker-eq \
+         usr/lib/omandroid-audio/speaker_response.py; do
   [[ -e $tmp/root/$f ]] || fail "install stages $f"
 done
 [[ -z $(find "$tmp/root" -path '*wants*') ]] || fail "install enables nothing"

@@ -62,6 +62,7 @@ DSP_KEYS = ('HALO_STATE', 'HALO_HEARTBEAT', 'CSPL_STATE', 'CSPL_ERRORNO', 'CAL_S
             'BDLOG_MAX_EXC', 'BDLOG_OVER_TEMP_COUNT', 'BDLOG_OVER_EXC_COUNT', 'BDLOG_ABNORMAL_MUTE')
 AMP_KEYS = ('PCM Source', 'Digital PCM Volume', 'Analog PCM Volume')
 DELTA_KEYS = ('CSPL_UPDATE_PARAMS_CONFIG', 'CSPL_COMMAND')
+RTLOG_KEYS = ('RTLOG_ENABLE', 'RTLOG_VARIABLE', 'RTLOG_COUNT', 'RTLOG_STATE', 'RTLOG_DATA')
 CSPL_CMD_UPDATE_PARAM = 8
 CSPL_STATES = {0: 'running', 1: 'error', 2: 'muted', 3: 'reiniting', 6: 'diagnosing'}
 HALO_RUN = 2
@@ -255,6 +256,18 @@ class JsonCtl:
         if not c or c['type'] != 'BYTES' or len(c['v']) != len(data):
             return False
         c['v'] = list(data)
+        if name.endswith('RTLOG_STATE') and int.from_bytes(data[:4], 'big') == 0:
+            # the fake firmware's logger: a sample of the coil impedance,
+            # FAKE_Z_RATIO times the CAL_R written (or not measurable)
+            amp = name.split(' ')[0]
+            en = next((v for k, v in state.items() if k.startswith(amp + ' ') and k.endswith('RTLOG_ENABLE')), None)
+            cal = next((v for k, v in state.items() if k.startswith(amp + ' ') and k.endswith(' CAL_R')), None)
+            dat = next((k for k in state if k.startswith(amp + ' ') and k.endswith('RTLOG_DATA')), None)
+            if en and en['v'][3] == 1 and cal and dat:
+                ratio = os.environ.get('FAKE_Z_RATIO', '1.0')
+                z = 0xfffffd if ratio == 'low' else int(int.from_bytes(bytes(cal['v']), 'big') * float(ratio))
+                state[dat]['v'] = list((5).to_bytes(4, 'big') + z.to_bytes(4, 'big')) + [0] * (len(state[dat]['v']) - 8)
+                c['v'] = [0, 0, 0, 1]
         if name.endswith('CSPL_COMMAND') and int.from_bytes(data, 'big') == 8:
             # the fake firmware takes the parameter update and stays running
             log_path = os.environ.get('FAKE_DELTA_LOG')
@@ -295,7 +308,7 @@ class Amps:
         names = self.ctl.names()
         self.names = {}
         for amp in AMPS:
-            for key in DSP_KEYS + DELTA_KEYS:
+            for key in DSP_KEYS + DELTA_KEYS + RTLOG_KEYS:
                 self.names[amp, key] = resolve(names, amp, key)
             for key in AMP_KEYS:
                 self.names[amp, key] = f'{amp} {key}'
@@ -641,6 +654,402 @@ def apply_delta(amps, amp):
     return f'{amp}: CSPL_STATE not running after the media delta'
 
 
+# --- the amplifiers' V/I feedback stream (AOC-PLAN C9d-7) ---------------------
+#
+# Stock's speaker HAL, whenever the speaker plays, also applies the mixer path
+# "hostless-ulC spk-vi" (NoHost1 TX Mixer TDM_0_TX = 1) and opens and starts
+# the hostless capture PCM (UC_HOSTLESS_UL, PCM 15, "nohost1 capture"), without
+# ever reading it; at the end it closes the PCM and resets the path. That runs
+# TDM 0's transmit side: both amplifiers send their VMON/IMON to the AoC. The
+# protection firmware and its tunings were validated in that state only.
+# Both amplifiers share one SDOUT line, so their TX slots must be disjoint
+# (stock: top 0/2/4/6, bottom 1/3/5/7, the aoc-sound-test overlay); with the
+# reset slots they would drive the line in the same slots. Refused otherwise.
+
+FEEDBACK_MIXER = 'NoHost1 TX Mixer TDM_0_TX'
+TX_SLOTS_PROP = 'google,tdm-tx-slots'
+
+
+def hostless_pcm(card):
+    """(device number, status path) of the AoC's hostless capture PCM, found by
+    its id ("nohost1 capture"); None if the card has none."""
+    for info in sorted(glob.glob(f'{ASOUND}/card{card}/pcm*c/info')):
+        try:
+            with open(info) as f:
+                text = f.read()
+        except OSError:
+            continue
+        m = re.search(r'^device: (\d+)', text, re.M)
+        if m and re.search(r'^id: nohost1 capture', text, re.M | re.I):
+            return int(m.group(1)), os.path.join(os.path.dirname(info), 'sub0', 'status')
+    return None
+
+
+def tx_slots(dev):
+    try:
+        with open(os.path.join(dev, 'of_node', TX_SLOTS_PROP), 'rb') as f:
+            data = f.read()
+    except OSError:
+        return None
+    return [int.from_bytes(data[i:i + 4], 'big') for i in range(0, len(data) - 3, 4)]
+
+
+def tx_slot_problems(devs):
+    """Why the two amplifiers must not transmit (empty if they may)."""
+    problems, seen = [], {}
+    for amp in AMPS:
+        d = devs.get(amp)
+        s = tx_slots(d) if d else None
+        if not s:
+            problems.append(f'{amp}: no {TX_SLOTS_PROP} in its DT node (the aoc-sound-test overlay '
+                            'with stock\'s TX slots is not applied)')
+            continue
+        seen[amp] = set(s)
+    if len(seen) == 2 and seen['Top'] & seen['Bottom']:
+        problems.append(f'TX slots overlap on the shared SDOUT line: Top {sorted(seen["Top"])}, '
+                        f'Bottom {sorted(seen["Bottom"])}')
+    return problems
+
+
+def amixer_set(card, name, value):
+    r = subprocess.run(['amixer', '-q', '-c', str(card), 'cset', f'name={name}', str(value)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    return r.returncode == 0
+
+
+def feedback_pidfile():
+    return os.path.join(os.environ.get('OMANDROID_RUN', '/run/omandroid'), 'speaker-feedback.pid')
+
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, TypeError):
+        return False
+
+
+def feedback_pid():
+    try:
+        with open(feedback_pidfile()) as f:
+            pid = int(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+    return pid if pid_alive(pid) else None
+
+
+class Feedback:
+    """The hostless capture, held by a child process (speaker_dsp.py hostless)
+    for as long as the speaker plays. One holder at a time: a holder started
+    by hand (the feedback command) is used as it is and left running."""
+
+    def __init__(self, card, seconds=0):
+        self.card, self.seconds, self.proc = card, seconds, None
+
+    def problems(self):
+        p = tx_slot_problems(amp_devices())
+        if not p and hostless_pcm(self.card) is None:
+            p.append('no hostless capture PCM ("nohost1 capture") on the card')
+        return p
+
+    def start(self, detach=False):
+        """None when the stream runs (or already ran), else why not."""
+        if self.proc is not None and self.proc.poll() is None:
+            return None
+        pid = feedback_pid()
+        if pid is not None:
+            return None
+        p = self.problems()
+        if p:
+            return '; '.join(p)
+        dev, status = hostless_pcm(self.card)
+        cmd = [sys.executable, '-I', os.path.abspath(__file__), '--card', str(self.card), 'hostless',
+               '--device', str(dev), '--seconds', str(self.seconds)]
+        out = None
+        if detach:      # by hand: don't hold the caller's terminal (or ssh session) open
+            os.makedirs(os.path.dirname(feedback_pidfile()), exist_ok=True)
+            out = open(feedback_pidfile()[:-4] + '.log', 'a')
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=out,
+                                     start_new_session=detach)
+        if out:
+            out.close()
+        # The holder writes its pid file once the PCM runs; give it two seconds.
+        for _ in range(40):
+            if self.proc.poll() is not None:
+                return f'the hostless capture holder exited with {self.proc.returncode}'
+            if feedback_pid() == self.proc.pid:
+                return None
+            time.sleep(0.05)
+        return 'the hostless capture did not start within 2 s'
+
+    def alive(self):
+        return (self.proc is not None and self.proc.poll() is None) or feedback_pid() is not None
+
+    def stop(self):
+        """Stop our holder (it closes the PCM and resets the mixer path)."""
+        if self.proc is None:
+            return
+        if self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait()
+                amixer_set(self.card, FEEDBACK_MIXER, 0)
+        self.proc = None
+
+
+class HostlessPcm:
+    """Open, configure and start a capture PCM through alsa-lib, never read it
+    (as stock's pcm_open + pcm_start), and drop it on close."""
+    CAPTURE, ACCESS_RW_INTERLEAVED = 1, 3
+    FORMATS = {'S16_LE': 2, 'S32_LE': 10}
+
+    def __init__(self, name, channels, rate, fmt, period, periods):
+        lib = ctypes.util.find_library('asound') or 'libasound.so.2'
+        a = self.a = ctypes.CDLL(lib)
+        vp, ul = ctypes.c_void_p, ctypes.c_ulong
+        for fn, args in (('snd_pcm_open', [ctypes.POINTER(vp), ctypes.c_char_p, ctypes.c_int, ctypes.c_int]),
+                         ('snd_pcm_hw_params_malloc', [ctypes.POINTER(vp)]),
+                         ('snd_pcm_hw_params_any', [vp, vp]),
+                         ('snd_pcm_hw_params_set_access', [vp, vp, ctypes.c_int]),
+                         ('snd_pcm_hw_params_set_format', [vp, vp, ctypes.c_int]),
+                         ('snd_pcm_hw_params_set_channels', [vp, vp, ctypes.c_uint]),
+                         ('snd_pcm_hw_params_set_rate', [vp, vp, ctypes.c_uint, ctypes.c_int]),
+                         ('snd_pcm_hw_params_set_period_size', [vp, vp, ul, ctypes.c_int]),
+                         ('snd_pcm_hw_params_set_buffer_size', [vp, vp, ul]),
+                         ('snd_pcm_hw_params', [vp, vp]),
+                         ('snd_pcm_prepare', [vp]), ('snd_pcm_start', [vp]),
+                         ('snd_pcm_drop', [vp]), ('snd_pcm_close', [vp])):
+            f = getattr(a, fn)
+            f.restype, f.argtypes = ctypes.c_int, args
+        self.h = vp()
+        rc = a.snd_pcm_open(ctypes.byref(self.h), name.encode(), self.CAPTURE, 0)
+        if rc < 0:
+            raise OSError(f'cannot open {name}: {os.strerror(-rc)}')
+        hw = vp()
+        a.snd_pcm_hw_params_malloc(ctypes.byref(hw))
+        for what, rc in (('any', a.snd_pcm_hw_params_any(self.h, hw)),
+                         ('access', a.snd_pcm_hw_params_set_access(self.h, hw, self.ACCESS_RW_INTERLEAVED)),
+                         ('format', a.snd_pcm_hw_params_set_format(self.h, hw, self.FORMATS[fmt])),
+                         ('channels', a.snd_pcm_hw_params_set_channels(self.h, hw, channels)),
+                         ('rate', a.snd_pcm_hw_params_set_rate(self.h, hw, rate, 0)),
+                         ('period', a.snd_pcm_hw_params_set_period_size(self.h, hw, period, 0)),
+                         ('buffer', a.snd_pcm_hw_params_set_buffer_size(self.h, hw, period * periods)),
+                         ('hw_params', a.snd_pcm_hw_params(self.h, hw)),
+                         ('prepare', a.snd_pcm_prepare(self.h)),
+                         ('start', a.snd_pcm_start(self.h))):
+            if rc < 0:
+                a.snd_pcm_close(self.h)
+                raise OSError(f'{name}: {what}: {os.strerror(-rc)}')
+
+    def close(self):
+        self.a.snd_pcm_drop(self.h)
+        self.a.snd_pcm_close(self.h)
+
+
+class FakePcm:
+    """Tests only (OMANDROID_PCM_BACKEND=fake): the status file stands in."""
+
+    def __init__(self, status):
+        self.status = status
+        with open(status, 'w') as f:
+            f.write('state: RUNNING\n')
+
+    def close(self):
+        with open(self.status, 'w') as f:
+            f.write('closed\n')
+
+
+def cmd_hostless(args):
+    """Hold the hostless capture: the mixer path, then the PCM, until SIGTERM
+    (or --seconds); then the PCM closed and the path reset, as stock."""
+    import signal as sig
+    stop = []
+    for s in (sig.SIGTERM, sig.SIGINT, sig.SIGHUP):
+        sig.signal(s, lambda *_: stop.append(1))
+    found = hostless_pcm(args.card)
+    dev = args.device if args.device is not None else (found[0] if found else None)
+    if dev is None:
+        log('feedback: no hostless capture PCM')
+        return 1
+    p = tx_slot_problems(amp_devices())
+    if p:
+        log('feedback: refused: ' + '; '.join(p))
+        return 1
+    if not amixer_set(args.card, FEEDBACK_MIXER, 1):
+        log(f'feedback: cannot set {FEEDBACK_MIXER}')
+        return 1
+    name = f'hw:{args.card},{dev}'
+    try:
+        if os.environ.get('OMANDROID_PCM_BACKEND') == 'fake':
+            pcm = FakePcm(found[1])
+        else:
+            pcm = HostlessPcm(name, args.channels, args.rate, args.format, args.period, args.periods)
+    except (OSError, KeyError) as e:
+        amixer_set(args.card, FEEDBACK_MIXER, 0)
+        log(f'feedback: {e}')
+        return 1
+    pidfile = feedback_pidfile()
+    try:
+        os.makedirs(os.path.dirname(pidfile), exist_ok=True)
+        with open(pidfile, 'w') as f:
+            f.write(f'{os.getpid()} {name}\n')
+        log(f'feedback: V/I stream running: {FEEDBACK_MIXER} on, {name} started '
+            f'({args.channels} ch, {args.rate} Hz, {args.format}, {args.periods} x {args.period})')
+        end = time.monotonic() + args.seconds if args.seconds > 0 else None
+        while not stop and (end is None or time.monotonic() < end):
+            time.sleep(0.1)
+    finally:
+        pcm.close()
+        amixer_set(args.card, FEEDBACK_MIXER, 0)
+        try:
+            os.unlink(pidfile)
+        except OSError:
+            pass
+        log(f'feedback: V/I stream stopped: {name} closed, {FEEDBACK_MIXER} off')
+    return 0
+
+
+def cmd_feedback(args):
+    """By hand (C9d-7): start a holder in the background, stop it, or report."""
+    if args.action == 'start':
+        if feedback_pid() is not None:
+            print(f'already running (pid {feedback_pid()})')
+            return 0
+        fb = Feedback(args.card, seconds=args.seconds)
+        err = fb.start(detach=True)
+        if err:
+            print(f'not started: {err}')
+            return 1
+        print(f'running (pid {fb.proc.pid}), stops by itself after {args.seconds:g} s' if args.seconds > 0
+              else f'running (pid {fb.proc.pid})')
+        return 0
+    if args.action == 'stop':
+        pid = feedback_pid()
+        if pid is None:
+            print('not running')
+            amixer_set(args.card, FEEDBACK_MIXER, 0)
+            return 0
+        os.kill(pid, 15)
+        for _ in range(60):
+            if not pid_alive(pid):
+                break
+            time.sleep(0.05)
+        else:
+            os.kill(pid, 9)
+            amixer_set(args.card, FEEDBACK_MIXER, 0)
+        print('stopped')
+        return 0
+    pid = feedback_pid()
+    found = hostless_pcm(args.card)
+    state = '-'
+    if found:
+        try:
+            with open(found[1]) as f:
+                state = f.readline().strip()
+        except OSError:
+            pass
+    p = tx_slot_problems(amp_devices())
+    print(f'holder {"pid " + str(pid) if pid else "not running"}; hostless PCM '
+          f'{"device " + str(found[0]) if found else "missing"} ({state}); '
+          f'TX slots {"ok" if not p else "; ".join(p)}')
+    return 0
+
+
+# --- the firmware's own coil impedance measurement (C9d-8) ---------------------
+#
+# The protection firmware has a real-time logger. Stock's amplifier library
+# arms it at every speaker stream start (three firmware variables, count 3),
+# then takes five samples about 0.2 s apart: RTLOG_STATE := 0, wait for it to
+# read 1, read RTLOG_DATA. Word 1 of the data is the impedance the firmware
+# measures from its voltage and current sense, in the same units as CAL_R
+# (0xfffffd and 0xfffffe: no valid measurement, e.g. a signal too low to
+# measure). So Z / CAL_R is the coil's resistance relative to the factory
+# calibration: about 1.00 at room temperature, +0.39 % per degree C (copper).
+# Printed only as that ratio, never as a resistance: the calibration is this
+# phone's. Writes only the logger's own controls.
+
+RTLOG_VARIABLES = (0x39d, 0x3b3, 0x3b4)
+RTLOG_INVALID = 0xfffffd
+COPPER_TC = 0.0039
+
+
+def words(data):
+    return [int.from_bytes(data[i:i + 4], 'big') for i in range(0, len(data) - 3, 4)]
+
+
+def write_words(amps, amp, key, values):
+    n = amps.names.get((amp, key))
+    cur = amps.ctl.read_bytes(n) if n else None
+    data = b''.join(struct.pack('>I', w) for w in values)
+    if cur is None or len(cur) < len(data):
+        return False
+    return amps.ctl.write_bytes(n, data + bytes(len(cur) - len(data)))
+
+
+def rtlog_arm(amps):
+    problems = []
+    for amp in AMPS:
+        missing = [k for k in RTLOG_KEYS if amps.names.get((amp, k)) is None]
+        if missing:
+            problems.append(f'{amp}: no {", ".join(missing)} control')
+            continue
+        if not (write_words(amps, amp, 'RTLOG_ENABLE', [0])
+                and write_words(amps, amp, 'RTLOG_VARIABLE', list(RTLOG_VARIABLES))
+                and write_words(amps, amp, 'RTLOG_COUNT', [len(RTLOG_VARIABLES)])
+                and write_words(amps, amp, 'RTLOG_ENABLE', [1])):
+            problems.append(f'{amp}: arming the logger failed')
+    return problems
+
+
+def rtlog_sample(amps, amp):
+    """One impedance word, or None if the logger did not answer."""
+    if not write_words(amps, amp, 'RTLOG_STATE', [0]):
+        return None
+    for _ in range(10):         # stock polls 3 times at 3 ms; a little longer here
+        time.sleep(0.003)
+        if amps.ctl.read(amps.names[amp, 'RTLOG_STATE']) == 1:
+            data = amps.ctl.read_bytes(amps.names[amp, 'RTLOG_DATA'])
+            w = words(data or b'')
+            return w[1] if len(w) > 1 else None
+    return None
+
+
+def cmd_impedance(args):
+    amps = Amps(args.card)
+    if not args.no_arm:
+        problems = rtlog_arm(amps)
+        if problems:
+            print('not armed: ' + '; '.join(problems))
+            return 1
+    pcm = speaker_pcm_status(args.card)
+    z = {a: [] for a in AMPS}
+    for _ in range(args.rounds):
+        time.sleep(args.interval)
+        for amp in AMPS:
+            z[amp].append(rtlog_sample(amps, amp))
+    if not running(pcm):
+        print('note: the speaker PCM is not running: the firmware measures only during playback')
+    rc = 0
+    for amp in AMPS:
+        cal = amps.ctl.read(amps.names[amp, 'CAL_R']) if amps.names.get((amp, 'CAL_R')) else None
+        good = sorted(w for w in z[amp] if w is not None and w < RTLOG_INVALID)
+        if not cal or not good:
+            rc = 1
+            why = 'no CAL_R' if not cal else (f'no valid sample ({sum(w is None for w in z[amp])} unanswered, '
+                                               f'{sum(w is not None and w >= RTLOG_INVALID for w in z[amp])} '
+                                               'not measurable)')
+            print(f'{amp:6} {why}')
+            continue
+        ratios = [w / cal for w in good]
+        med = ratios[len(ratios) // 2]
+        print(f'{amp:6} Z/CAL_R {med:.3f} (median of {len(good)}/{len(z[amp])}: '
+              f'{", ".join(f"{r:.3f}" for r in ratios)}), as a coil rise {(med - 1) / COPPER_TC:+.1f} C')
+    return rc
+
+
 def cmd_watch(args):
     digital_ceil, analog_ceil = ceilings()
     # The heartbeat counts the firmware's audio blocks (about 1500 a second
@@ -671,17 +1080,41 @@ def cmd_watch(args):
         return 1
     log(f'watchdog: watching {pcm}, ceilings digital {digital_ceil} analog {analog_ceil}, '
         f'heartbeat {"enforced" if strict_hb else "logged"}')
-    since = None
-    beat = {}
-    start_temp = {}
-    warned = False
     # Stock's media delta: on when asked (1), off when asked (0), and by
     # default on when both files are installed.
     mode = os.environ.get('OMANDROID_SPK_MEDIA_DELTA', '')
     media_delta = mode == '1' or (mode == '' and all(load_delta(a) is not None for a in AMPS))
     log(f'watchdog: stock media delta {"on" if media_delta else "off"}')
+    # The V/I feedback stream with every speaker stream, as stock (C9d-7):
+    # OMANDROID_SPK_FEEDBACK=1. Off by default until C9d-7 has run.
+    feedback = Feedback(args.card) if os.environ.get('OMANDROID_SPK_FEEDBACK', '0') == '1' else None
+    if feedback:
+        p = feedback.problems()
+        if p:
+            reason = 'watchdog: V/I feedback asked for but impossible: ' + '; '.join(p)
+            log(reason)
+            mute(reason)
+            return 1
+    log(f'watchdog: V/I feedback stream {"with every speaker stream" if feedback else "off"}')
+    import signal as sig
+    sig.signal(sig.SIGTERM, lambda *_: sys.exit(0))   # run the finally below on a stop
+    try:
+        return watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max, temp_jump,
+                          strict_hb, media_delta, feedback)
+    finally:
+        if feedback:
+            feedback.stop()
+
+
+def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max, temp_jump,
+               strict_hb, media_delta, feedback):
+    since = None
+    beat = {}
+    start_temp = {}
+    warned = False
     applied = False
     problems_delta = []
+    problems_fb = []
     failures = 0
     n = 0
     while args.iterations == 0 or n < args.iterations:
@@ -702,7 +1135,10 @@ def cmd_watch(args):
             mute(reason)
             return 1
         if not running(pcm):
+            if since is not None and feedback:
+                feedback.stop()
             since = None
+            problems_fb = []
             # Levels are checked when idle too: nobody raises them by hand.
             v = amps.read(AMP_KEYS)
             problems = check(v, digital_ceil, analog_ceil, temp_max, strict=False)
@@ -713,6 +1149,13 @@ def cmd_watch(args):
                 start_temp = {}
                 applied = False
                 problems_delta = []
+                if feedback:
+                    err = feedback.start()
+                    problems_fb = [f'V/I feedback stream: {err}'] if err else []
+                    if not err:
+                        log('watchdog: V/I feedback stream started')
+            elif feedback and not feedback.alive():
+                problems_fb = ['V/I feedback stream: the hostless capture stopped during the stream']
             strict = now - since >= args.grace
             if strict and media_delta and not applied:
                 applied = True
@@ -723,7 +1166,7 @@ def cmd_watch(args):
                     else:
                         log(f'watchdog: {amp}: stock media delta applied')
             v = amps.read()
-            problems = check(v, digital_ceil, analog_ceil, temp_max, strict=strict) + problems_delta
+            problems = check(v, digital_ceil, analog_ceil, temp_max, strict=strict) + problems_delta + problems_fb
             for amp in AMPS:
                 t = q(v.get((amp, 'CSPL_TEMPERATURE')), 14)
                 if t is not None:
@@ -865,6 +1308,21 @@ def main(argv):
     v.add_argument('--temp-low', type=float, default=10.0)
     v.add_argument('--temp-high', type=float, default=45.0)
     v.add_argument('--temp-spread', type=float, default=5.0)
+    fb = sub.add_parser('feedback')
+    fb.add_argument('action', choices=('start', 'stop', 'status'))
+    fb.add_argument('--seconds', type=float, default=120.0, help='start: stop by itself after this long (0: never)')
+    z = sub.add_parser('impedance')
+    z.add_argument('--rounds', type=int, default=5)
+    z.add_argument('--interval', type=float, default=0.2)
+    z.add_argument('--no-arm', action='store_true', help='the logger is armed already')
+    hl = sub.add_parser('hostless')
+    hl.add_argument('--device', type=int, default=None)
+    hl.add_argument('--seconds', type=float, default=0.0)
+    hl.add_argument('--channels', type=int, default=int(env('OMANDROID_HOSTLESS_CHANNELS', '2')))
+    hl.add_argument('--rate', type=int, default=48000)
+    hl.add_argument('--format', default=env('OMANDROID_HOSTLESS_FORMAT', 'S16_LE'), choices=('S16_LE', 'S32_LE'))
+    hl.add_argument('--period', type=int, default=int(env('OMANDROID_HOSTLESS_PERIOD', '480')))
+    hl.add_argument('--periods', type=int, default=int(env('OMANDROID_HOSTLESS_PERIODS', '2')))
     s = sub.add_parser('signal')
     s.add_argument('kind', choices=('tone', 'multitone'))
     s.add_argument('out')
@@ -880,7 +1338,8 @@ def main(argv):
             print('no AoC sound card')
             return 1
     return {'status': cmd_status, 'health': cmd_health, 'monitor': cmd_monitor, 'watch': cmd_watch,
-            'verify': cmd_verify}[args.cmd](args)
+            'verify': cmd_verify, 'feedback': cmd_feedback, 'hostless': cmd_hostless,
+            'impedance': cmd_impedance}[args.cmd](args)
 
 
 if __name__ == '__main__':

@@ -1,20 +1,25 @@
 <!-- SPDX-License-Identifier: MIT -->
 # AoC plan (cheetah / gs201): audio and sensor DSP bring-up
 
-Status (2026-10-12): **the AoC starts at every boot and serves audio and
+Status (2026-10-13): **the AoC starts at every boot and serves audio and
 sensors.** On the phone: C1-C4a, C4t (the start through Trusty), C5 (core,
 IPC and character devices), C6 (sensors at every boot, auto-rotate), C7 (the
 AoC sound card: both speakers with stock's channel map, the microphones), C8
 (speaker protection, UCM, PipeWire) and C8f (the amplifiers across idle)
-passed; C9a-C9d-2 ran. The everyday level is stage `media` (737/10 on both
-amplifiers, media delta on), about 17 dB below stock. **Next:** C9d-3
-(stock's gains, 817/17, with the protection sensing the coil), then C9e
-(balance) and C9f (real use); stock's loudness (Waves on the AoC) is
-`AOC-TUNING-RESEARCH.md`. Kernel: `omandroid-aoc` @ `829fd316a` (`wt-aoc`,
-`out-aoc`) and `omandroid-audio-amp` @ `60d3ca176` (amplifier hibernate fix,
+passed; C9a-C9d-6 ran. The everyday level is stage `media` (737/10 on both
+amplifiers, media delta, DRE and noise gate on), about 17 dB below stock;
+stock's 817/17 still trips the coil temperature at once (C9d-3..6).
+**Next (2026-10-13):** the speakers sound thin; the ranked plan and three
+runbooks follow C9d-6: C9g (omandroid-audio 0.4.0's speaker filter, by ear
+and measured, risk low), C9d-7/C9d-8 (the V/I feedback stream stock runs
+and the firmware's own impedance reading, for the gain-17 runaway), and
+T3b/T4 in `AOC-TUNING-RESEARCH.md` (stock's Waves processing on the AoC).
+Kernel: `omandroid-aoc` @ `829fd316a` (`wt-aoc`, `out-aoc`) and
+`omandroid-audio-amp` @ `9fcc941b3` (hibernate, word length, RX6 knob;
 `wt-audio-amp`), both merged into `omandroid-int`. Packages:
 omandroid-device-cheetah 0.1.25 (`omandroid-aoc.service`, start script,
-sensor-rail cycle), omandroid-sensors 0.1.3, omandroid-audio 0.3.0,
+sensor-rail cycle), omandroid-sensors 0.1.3, omandroid-audio 0.4.0 (not yet
+installed: 0.3.5 runs),
 omandroid-speaker-tuning 0.1.2 (off by default). The "Checkpoint" section
 below is the running log of C5-C9: its first lists are the state before C5,
 and each stage's results follow its runbook.
@@ -1529,6 +1534,169 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
        mismatch is the lead. The default stays 737/10.
      - omandroid-audio 0.3.5: the watchdog also mutes on a rise of more
        than 5 °C within a stream (`OMANDROID_SPK_TEMP_JUMP`).
+
+   **Why the speakers sound thin, and the plan (2026-10-13, offline;
+   omandroid-audio 0.4.0).** The listener: the speakers work but sound
+   tinny next to a stock Pixel. In order of expected effect:
+   1. **Stock shapes the speaker signal on the AoC (Waves), and we send
+      none of it.** That processing is stock's sound: EQ, bass
+      enhancement, loudness. Our path is flat apart from our own filter.
+      The package exists (omandroid-speaker-tuning 0.1.2, off); the next
+      steps are T3b and T4 in `AOC-TUNING-RESEARCH.md`, now at the
+      everyday level (737/10) with our filter set flat for the comparison.
+      This is the only lever that gives stock's sound itself.
+   2. **Level.** Media plays about 17 dB below stock. The ear hears bass
+      and the low mids least at low levels, so the same speakers sound
+      thinner the quieter they play. Stock's level needs the gain-17
+      runaway solved: C9d-7 and C9d-8 below.
+   3. **Our filter.** 0.3.3-0.3.5 high-passed at 150 Hz (2nd order) with no
+      other shaping. The cut itself removed little these speakers can
+      play, but nothing compensated their steep low-frequency roll-off.
+      0.4.0 replaces it (C9g below): a 100 Hz high-pass, a +4 dB low shelf
+      at 400 Hz, a -2 dB presence dip at 3.5 kHz, per-channel treble and
+      trim, and the same limiter (-3 dBFS, no gain), all adjustable while
+      playing (`omandroid-speaker-eq`). The values are a starting point.
+      C9g measures the speakers with the phone's own microphone and sets
+      them by ear.
+   4. **Balance.** Stock maps left to the top speaker (the earpiece, small,
+      little bass) and right to the bottom one, at equal gains. Measured
+      balance and per-speaker trims belong to C9e, now in software
+      (`trim_top`, `trim_bottom`; cuts only) instead of the amplifier
+      levels.
+
+   **C9d-7 and C9d-8: the gain-17 runaway (design and helpers, 2026-10-13,
+   offline).** Two things we don't do that stock does at every speaker
+   stream, from our analysis of the stock speaker library (in our own words):
+   - **C9d-7, the V/I feedback stream.** When the speaker use case starts,
+     stock applies `hostless-ulC spk-vi` (`NoHost1 TX Mixer TDM_0_TX` 1),
+     then opens and starts PCM 15 (`UC_HOSTLESS_UL`, "nohost1 capture")
+     for capture: 2 channels, 48 kHz, S16_LE, 2 periods of 480 frames. It
+     never reads from it. At the end it closes the PCM and resets the path.
+     That runs TDM 0's transmit side, so both amplifiers send VMON/IMON to
+     the AoC. omandroid-audio 0.4.0 does the same:
+     `omandroid-speaker-protection feedback start|stop|status`, or the
+     watchdog with every stream when `OMANDROID_SPK_FEEDBACK=1` (default
+     off). It refuses unless both amplifiers' DT nodes carry disjoint
+     `google,tdm-tx-slots` (the aoc-sound-test overlay, stock's 0/2/4/6 and
+     1/3/5/7), because the two share one SDOUT line. arecord can't hold
+     this PCM: no data ever arrives, and ALSA fails a blocking read after
+     10 s. So a small alsa-lib holder starts it without reading, as stock
+     does.
+   - **C9d-8, the firmware's own impedance reading.** Stock arms the
+     protection firmware's real-time logger at every speaker stream: 3
+     firmware variables, count 3, enable. It then takes five samples about
+     0.2 s apart: `RTLOG_STATE` := 0, wait for 1, read `RTLOG_DATA`. Word 1
+     is the coil impedance the firmware measures from its voltage and
+     current sense, in CAL_R's units. 0xfffffd and 0xfffffe mean no valid
+     measurement, as at a signal too low to measure. Stock keeps the median
+     as a metric only. `omandroid-speaker-protection impedance` does the
+     same and prints only Z/CAL_R and the coil rise that ratio means
+     (copper, 0.39 %/°C), never a resistance. At gain 17 the first
+     temperature sample read about 25 °C high, which matches a Z/CAL_R near
+     1.10. This step tells whether the firmware really measures a 10 %
+     higher V/I at gain 17 (sense scaling) or not (the model's inputs).
+   - Nothing else stock writes at stream start could plausibly change the
+     sensing. CH_BAL and rotation are for four-amplifier devices only. The
+     ultrasound configuration isn't on cheetah's paths. Hibernate Force
+     Wake only controls hibernation, and AMCS is telemetry.
+
+   **C9d-7/C9d-8 runbook** (omandroid-audio 0.4.0; the TX slot overlay in
+   the DTB; rules as C9d-6: the phone screen up on a table, the human told
+   before each burst, `tools/speaker-trip-burst` with RISE 5, 30 s between
+   bursts). Stop on TRIPPED, any watchdog mute, R_selected NO, over-counts
+   that move, or anything the listener dislikes. Rollback for every step:
+   `omandroid-speaker-protection feedback stop; omandroid-speaker-protection
+   mute`, then `lvl 737 10 media`.
+   ```sh
+   lvl() { tools/phone-ssh "printf 'OMANDROID_SPK_STAGE=${3:-c9}\nOMANDROID_SPK_DIGITAL=$1\nOMANDROID_SPK_ANALOG=$2\nOMANDROID_SPK_TEMP_JUMP=5\nOMANDROID_WATCH_INTERVAL=0.5\n' > /etc/omandroid/speaker.conf; systemctl restart omandroid-speaker-protection; sleep 3; omandroid-speaker-protection status | head -1"; }
+   tb() { tools/phone-ssh "F=$1 S=${2:-5} VOL=1.0 RISE=5 IMP=${IMP:-0} FB=${FB:-0} bash -s" < tools/speaker-trip-burst | tee -a logs/c9d7.log; }
+   tools/phone-ssh 'S=omandroid-speaker-protection;
+     $S signal tone /tmp/t1k30.wav --level -30 --seconds 3; $S signal tone /tmp/t1k23.wav --level -23 --seconds 3;
+     $S signal multitone /tmp/mt20.wav --level -20 --seconds 3'
+   ```
+   | Step | What | Risk | Pass | Stop |
+   | --- | --- | --- | --- | --- |
+   | 0 | **Read-only, no sound:** `tools/phone-ssh 'uname -r; omandroid-speaker-protection feedback status; amixer -c0 controls \| grep -c RTLOG'` | none | "TX slots ok", hostless PCM device 15 (closed); 10 RTLOG controls (5 per amplifier) | TX slots not ok (the overlay is missing: stop, it needs its own boot) |
+   | 1 | **The feedback stream alone, no playback:** `tools/phone-ssh 'S=omandroid-speaker-protection; $S feedback start --seconds 5; sleep 1; $S feedback status; sleep 6; $S feedback status; dmesg \| tail -5'` | low | "holder pid …", PCM "state: RUNNING", then "not running"; no AoC or cs35l41 error | an oops, an AoC or amplifier error, a PCM that stays open |
+   | 2 | **The impedance at the everyday level** (737/10, the current default): `IMP=1 tb /tmp/t1k23.wav 3`, then `IMP=1 FB=1 tb /tmp/t1k23.wav 3`. If both say "not measurable", the same with `/tmp/mt20.wav` | low | Z/CAL_R 0.97-1.05 on both, or "not measurable" (record which); CLEAN | Z/CAL_R off by more than 10 % at 737/10 |
+   | 3 | **Gain 17, one 1 s burst, feedback off:** `lvl 817 17; IMP=1 tb /tmp/t1k30.wav 1`, then `lvl 737 10 media` | medium | CLEAN, Z/CAL_R near 1.00 | TRIPPED (expected, as in C9d-5/6): record Z/CAL_R or "not measurable" and go on to 4 |
+   | 4 | **Gain 17 with the feedback stream:** `lvl 817 17; IMP=1 FB=1 tb /tmp/t1k30.wav 1`, then `lvl 737 10 media` | medium | CLEAN where 3 tripped: C9d-7 is the fix | TRIPPED again: stop listening steps, send the lines |
+
+   A -30 dBFS 1 kHz tone at 817/17 is well under 10 mW in either speaker,
+   for 1 s, so a coil cannot really heat. The tripwire and the watchdog's
+   5 °C jump rule stay armed regardless.
+
+   Reading 3 and 4:
+   - **Z/CAL_R near 1.10 at gain 17, near 1.00 at gain 10:** the firmware
+     really measures a higher V/I at gain 17. Then the sense path's
+     scaling depends on the gain on our setup. Next, offline: the
+     amplifiers' VMON/IMON configuration at gain 17 against stock's.
+   - **"Not measurable" at gain 17 while the temperature still jumps:**
+     the sensing isn't used, and the model's open-loop estimate is what
+     runs away. Suspect its inputs (the tuning's expected gain, the media
+     delta, the class-H input on DSP RX6).
+   - **Z/CAL_R near 1.00 and the temperature still jumps:** the
+     temperature isn't computed from that impedance. Suspect CAL_AMBIENT or
+     the calibration's own gain fields.
+   - **4 CLEAN:** set `OMANDROID_SPK_FEEDBACK=1` in
+     `/etc/omandroid/speaker.conf`, then run C9d-3 step 4 (817/17, mt20,
+     then mt10, then music at 50/75/100 %, each burst ≤ 10 s through `tb`,
+     `IMP=1`). With the C9 rules met, C9e and C9f follow, and the package
+     default changes in its own version bump.
+
+   **C9g: the speaker filter, by ear and measured (omandroid-audio 0.4.0;
+   risk low).** The amplifiers stay at stage media (737/10) throughout;
+   only the signal into the protection DSP changes. The limiter still caps
+   it at -3 dBFS. `omandroid-speaker-eq` runs as the desktop user:
+   ```sh
+   U='U=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}"); I=$(id -u $U); as_user() { runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/$I "$@"; }'
+   eq() { tools/phone-ssh "$U; as_user omandroid-speaker-eq $*"; }
+   ```
+   0. Install, then restart the user's PipeWire. Announce it: the sound
+      changes, with more low end.
+      ```sh
+      tools/phone-install-package packages/omandroid-audio
+      tools/phone-ssh "$U"'; as_user systemctl --user restart pipewire pipewire-pulse wireplumber; sleep 3; as_user omandroid-speaker-eq show'
+      ```
+      Expect: the filter's node and the package values (hp 100 Hz, bass
+      +4 dB at 400 Hz, dip -2 dB at 3500 Hz, treble 0, trims 0). Stop: "no
+      effect_input.omandroid_speaker_loudness node". Send `journalctl
+      --user -u pipewire -b | tail` (as the user). Rollback: reinstall
+      0.3.5.
+   1. **A/B by ear** with music the listener knows, at their normal
+      volume. Run `omandroid-speaker-protection monitor 120 2` in a second
+      terminal. Switch every 15-20 s and tell the listener which is which
+      only afterwards: `eq preset flat`, `eq preset default`, and 0.3.5's
+      sound `eq set hp=150 bass=0 dip=0`. Then vary one thing at a time:
+      `eq set bass=2`, `bass=6`, `bass_freq=600`, `dip=-4`,
+      `treble_top=-3`. Pass: the listener prefers a setting clearly. The
+      monitor shows temperatures moving by tenths of a degree and no
+      over-count changes. Stop: distortion, rattle or pumping on bass-heavy
+      music (`eq set bass=2`, or `eq preset flat`).
+   2. **Measure** (two runs of about 15 s of stepped tones at -30 dBFS,
+      100 Hz-16 kHz, one speaker at a time; tell the listener first):
+      ```sh
+      eq measure right --out /tmp/resp; eq measure left --out /tmp/resp
+      tools/phone-ssh 'python3 -I /usr/lib/omandroid-audio/speaker_response.py suggest /tmp/resp/left-result.json /tmp/resp/right-result.json'
+      ```
+      The filter is flat during the tones and restored afterwards. Record
+      the printed responses (a frequency-and-level table, no identifiers),
+      each speaker's -12 dB corner and the suggestion. The phone's
+      microphone sits beside the bottom speaker, so treat its balance
+      figure as a rough guide. C9e settles balance by ear. Stop: "CLIPPED"
+      (repeat with `--level -40`) or "no 1 kHz marker" (check the default
+      source with `wpctl status`).
+   3. **Apply the suggestion and A/B it** against `preset default`. Fine-
+      tune by ear. With the listener's choice, `eq set … --save` keeps it
+      for them. Record the values here. The next omandroid-audio version
+      takes them as the package's defaults.
+   4. **Full volume with the chosen values:** bass-heavy music at 100 %
+      sink volume for 30 s, the monitor running. Pass: nothing the
+      listener dislikes; temperatures within tenths of a degree; no
+      over-exc count change. Stop: over-exc count moves (lower `bass` by
+      2 dB, repeat).
+   Rollback: `eq reset` (the package's values), or `eq preset flat`.
+
    - **C9e balance** (at the last step that passed; risk medium):
      `burst /tmp/mtL.wav 1.0`, then `burst /tmp/mtR.wav 1.0`, with the
      phone upright in front of the listener at about 30 cm (and, if
@@ -1537,9 +1705,13 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      50 %, 75 % and 100 % sink volume. Stock's amplifiers are equal, so
      equal levels are the target; what stock adds on top is the AoC's
      Waves processing, which we lack. If the top still dominates clearly:
-     lower `OMANDROID_SPK_TOP_DIGITAL` in 24-step (3 dB) steps until the
-     balance sounds right, and record the value: a stand-in, not stock,
-     until C10-tuning. Never raise the bottom above 817/17 to compensate.
+     from omandroid-audio 0.4.0 lower it in software, `eq set trim_top=-2`
+     and so on in 1-2 dB steps (C9g; trims only cut), until the balance
+     sounds right, and record the value: a stand-in, not stock, until
+     C10-tuning. Try also `eq set bass_top=0`: the earpiece plays little
+     below its own resonance, so a bass lift there only adds excursion.
+     The amplifier level `OMANDROID_SPK_TOP_DIGITAL` stays the fallback.
+     Never raise the bottom above 817/17 to compensate.
    - **C9f real use** (risk medium): 15 minutes of mixed media at the
      user's normal volume, the watchdog on, then `omandroid-speaker-protection
      status` and `journalctl -u omandroid-speaker-watch -b`. Expect no
@@ -1557,7 +1729,8 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    and PipeWire's source at 100 %; revisit only if calls or recordings
    clip.
 
-   **Loudness filter:** not before C9e. Stock's loudness comes from the
+   **Loudness filter** (historical: done in 0.3.3-0.3.5, replaced by C9g's
+   filter in 0.4.0): not before C9e. Stock's loudness comes from the
    AoC's Waves processing, not from the amplifiers. If, at stock gains with
    the media delta, media is still too soft, a PipeWire filter-chain on the
    speaker sink only (a 150-200 Hz high-pass, then a lookahead limiter with

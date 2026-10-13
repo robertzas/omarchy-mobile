@@ -43,6 +43,15 @@
 #   omandroid-speaker-protection verify             (during playback; C9a)
 #   omandroid-speaker-protection signal tone|multitone FILE [options]
 #   omandroid-speaker-protection mute [--reason TEXT]
+#   omandroid-speaker-protection impedance [--rounds N]
+#                           during playback: the coil impedance the protection
+#                           firmware measures, as a ratio to the factory CAL_R
+#                           (its real-time logger, as stock samples it)
+#   omandroid-speaker-protection feedback start [--seconds S] | stop | status
+#                           the amplifiers' VMON/IMON stream to the AoC, as stock
+#                           runs it with every speaker stream (hostless capture
+#                           PCM 15; AOC-PLAN.md C9d-7). OMANDROID_SPK_FEEDBACK=1
+#                           makes the watchdog run it with every speaker stream
 #
 # Levels come from the environment (the services read /etc/omandroid/speaker.conf):
 #   OMANDROID_SPK_STAGE     media (default: 737 / 10 on both), c8 (bring-up:
@@ -474,6 +483,8 @@ case ${1:-} in
   monitor) dsp monitor --duration "${2:-10}" --interval "${3:-1}" ;;
   verify) shift; verify "$@" ;;
   signal) shift; dsp signal "$@" ;;
+  impedance) shift; find_card || { echo "no AoC sound card"; exit 1; }; dsp --card "$card" impedance "$@" ;;
+  feedback) shift; find_card || { echo "no AoC sound card"; exit 1; }; dsp --card "$card" feedback "$@" ;;
   mute)
     reason="by request"
     [[ ${2:-} == --reason ]] && reason=${3:-}
@@ -487,5 +498,7 @@ case ${1:-} in
   *)
     echo "Usage: omandroid-speaker-protection start [--retry] | watch | status | health | monitor [SECONDS [INTERVAL]]" >&2
     echo "       | verify | signal tone|multitone FILE [--level DBFS --seconds S --channels both|left|right] | mute [--reason TEXT]" >&2
+    echo "       | impedance [--rounds N] [--no-arm]   (during playback: the firmware's measured coil impedance / CAL_R)" >&2
+    echo "       | feedback start [--seconds S]|stop|status   (the amplifiers' V/I stream to the AoC, AOC-PLAN C9d-7)" >&2
     exit 2 ;;
 esac
