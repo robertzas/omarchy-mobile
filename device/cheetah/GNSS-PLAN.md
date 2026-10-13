@@ -1048,6 +1048,21 @@ Stop conditions and what they mean:
 - Chip still powered 80 s after the capture ended: `omandroid-gnss off`,
   check the rails, send the journal; do not go outdoors.
 
+
+**Step 0-1 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00345-g606b84c7a9fd,
+omandroid-gnss 0.2.0): passed.** Step 0: all four settings as expected,
+`NTPSynchronized=yes`, route via USB, LTO 3 h old (no download needed).
+Step 1, indoors: "time: injected" → gpsd `IRMSetRefTime:: ulUtcOffsetMs =
+1791849457760 UNC_MS=1000`, 6.8 s after the "start" stamp in ms (the
+injection happens at stack start, before the capture: correct, ms since
+1970). `control pipe: req_pos`; gpsd opened `/data/vendor/gps/lto2.dat` and
+reported LTO ages GPS 0.2 d, GLONASS 0.3 d, QZSS 0.3 d, BeiDou 0.2 d; the
+bridge's "client connected (1)" and "first NMEA sentence received" (+7.7 s).
+After: receiver no, chip powered no, `powered: 0`, `nstandby: 0`. gpsd left
+no state file in `data/vendor/gps/` (only chip.info, lto2.dat and the pipes):
+it doesn't save one there. No fix indoors (expected); gpsd's own power
+estimate 38.5 mA. G4b step 2 (outdoors) is next.
+
 **Step 2 (outdoors, unplugged, 15 min): the first fix.**
 
 ```sh

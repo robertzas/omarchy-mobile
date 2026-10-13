@@ -233,6 +233,10 @@ The sub-PMIC binds with the GNSS power stack, which loads only while
 Location is in use, so read FB2 with GNSS running (`omandroid-gnss force`,
 then the read, then `unforce`), or after F1 as the note says.
 
+**FB2 result (2026-10-12, same kernel, read while GNSS ran so pmic-2 was
+bound): passed.** `L15S_CTRL` (0x3a) = 0x3c: bit 7 clear (off), 1.8 V + 25
+mV × 0x3c = 3.3 V, inside 2.5-3.3 V. Registering `ldo15s` writes nothing.
+
 ### F1: int + fingerprint kernel, overlays as today (one boot; risk low)
 
 The human merges and builds int (the branch is int + 7 commits):
