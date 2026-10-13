@@ -16,11 +16,12 @@ CAM-M.5c (error bits: only `ERR_WRONG_CONFIG`; LRTE no effect; the
 overrun's last packet is a VC 1 RAW10 line), CAM-M.5d (VC 1 is the
 phase data, 2016 x ~284, and lands cleanly alone; VC 0 still overruns
 with VC 1 on its own channel), CAM-M.5e (VC 0 overran even at
-twice the height), next CAM-M.5f
-(the largest WDMA height, then the 4080x3072 mode) with CAM7 in
-parallel. Kernel branch
-`omandroid-camera` head `48e1ba5e0` (`extra_lines`; `8c93e69cb` VC
-parameters is in int `fd0aeb894`);
+twice the height), CAM-M.5f (8192
+lines and 4080x3072 overrun too: the WDMA never gets VC 0's frame
+starts), next CAM-M.5g (frame-sync counts per VC and WDMA channel) with
+CAM7 in parallel. Kernel branch
+`omandroid-camera` head `bcc97af77` (frame-sync counters; up to
+`48e1ba5e0` is in int `aca2c8163`);
 libcamera 0.7.2-4.6 (patches 0013-0014: the front and
 telephoto sensors, a near-size mode rule) built and checked offline, the
 phone still runs 4.4. Ultrawide quality: CAM5.3, Snapshot CAM5.4, what to
@@ -2777,6 +2778,87 @@ PHY, bus, sensor and supplies; the int kernel the phone runs has it):
    the overlay; ASK FIRST). F.2 and F.3 on that boot.
 3. F.4 (link only) on a later fresh boot; F.5 (first DMA) on its own fresh
    boot. M.5f's DMA steps and F.5 never share a boot.
+
+**CAM-M.5f results (2026-10-13, int `aca2c8163`, fresh boots):**
+- **M.5f-1 (2016x1136, `extra_lines=7056`: WDMA height 8192, 20 971 520
+  bytes a buffer, CmaFree 364180 kB before, no allocation failure):**
+  `LASTADDR` ("ADDR1 0xef600000 RESOL 0x200007e0 STRIDE 0x00000a00 ...
+  link last packet 0x09d86b00"); FS/FE 143, link errors 29736 (b3), WDMA
+  done 0, errors 190 (b14 x1, b15 x188, b20 x2), no data.
+- **M.5f-2 (4080x3072, no parameters):** `LASTADDR` ("ADDR1 0xef100000
+  RESOL 0x0c000ff0 STRIDE 0x00001400 ... link last packet 0x13ec2b00": a
+  VC 0 RAW10 line of 5100 bytes, the right length); "link 1 on:
+  4080x3072 ... CAM 533000000 Hz, INT 400000000 Hz"; FS/FE 143, link
+  errors 96662 (b3), WDMA done 0, errors 2128 (b15 x2125, b20 x3).
+
+**Why, sixth pass (offline):**
+- No buffer height helps and no mode works, so the frame isn't merely
+  long: the WDMA writes VC 0 lines without ever being brought back to the
+  top of the buffer. **The driver's own counters say the same:** in every
+  VC 0 run `missed_fe` and `dropped` stayed 0 with four buffers queued,
+  so the WDMA channel's frame-start interrupt (which makes a buffer
+  active, and counts a missed frame end on the next one) came at most
+  once. With VC 1 captured alone (d-4) it came every frame (FS 5, done 4,
+  dropped 1). **The WDMA gets VC 1's frame starts but not VC 0's** [I],
+  while the link itself counts 30 frame starts a second.
+- What could separate them: the per-VC frame start/end sources at link
+  0x24/0x2c (which VC's FS the link sees at all), how the GN1 frames VC 0
+  on C-PHY (its VC 0 frame start packet could carry a VC the link files
+  elsewhere, or be missing, with VC 1's FS framing both), or which WDMA
+  channel a VC's frame syncs go to. The ultrawide (D-PHY, VC 0 only)
+  works with the same WDMA set-up, so it is about this sensor's stream.
+- `bcc97af77` `media: gs201-csis: count frame syncs per VC and per WDMA
+  channel` (W=1 clean): counts the link's per-VC FS/FE source bits and
+  the WDMA's FS/FE on all four channels (now all unmasked; only the
+  capturing channel drives buffers), and with `wdma_line_irq=1` its line
+  ends per channel; prints the counts at the first WDMA error and per-VC
+  and per-channel totals after the stop line.
+
+### CAM-M.5g: whose frame syncs reach the WDMA. Risk: medium (DMA)
+
+```sh
+# M.5g-K kernel: int + omandroid-camera bcc97af77, the same overlays (ASK FIRST)
+P='modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 1;'
+# M.5g-0 (this boot, link only) the link's frame syncs by VC
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=0 bash -s" --script tools/camera-cap-test
+tools/phone-ssh 'dmesg | grep -A8 "stopped:" | tail -9'
+#   record: "link FS by VC" and "link FE by VC" (expect bits 0 and 1 about 143 each; a
+#   missing or odd bit 0 is the answer)
+# M.5g-1 (same boot, the first DMA of the boot) VC 0, with line ends counted
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=1 FRAMES=2 SECS=3 CSIS_OPTS=wdma_line_irq=1 bash -s" --script tools/camera-cap-test
+tools/phone-ssh 'dmesg | grep -E "WDMA error|so far" | tail -2; dmesg | grep -A8 "stopped:" | tail -9'
+#   record: "so far: WDMA FS a/b/c/d FE ... lines ..." and the totals by channel
+# M.5g-2 (next boot) the same with VC 1 (the stream that works) as the reference
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=1 FRAMES=2 SECS=3 PATTERN=0 CSIS_OPTS='ch0_vc=1 wdma_line_irq=1' bash -s" --script tools/camera-cap-test
+#   record: the same totals (expect WDMA FS/FE on channel 0 every frame, ~284 lines a frame)
+```
+
+- Reading it: WDMA FS on channel 0 about once in M.5g-1 but every frame
+  in M.5g-2 confirms the missing VC 0 frame start; the link's FS-by-VC
+  counts tell whether the link sees it; line ends per frame tell the
+  real line count; FS on another channel (1-3) would show the VC 0
+  frame syncs going to the wrong WDMA channel. The next change follows
+  from those numbers (no guess in the sensor's registers before them).
+- **Rollback:** reboot; parameters per load.
+
+**The front camera (CAM7), on the next boot that has no camera DMA step**
+(it can be M.5g-K's boot, if M.5g-0/-1 move to the boot after, or the boot
+after M.5g-2):
+
+```sh
+# F.1 (read-only, any boot)
+tools/phone-ssh 'grep -E "gpp4-[012]|gpp5-0" /sys/kernel/debug/pinctrl/*/pins 2>/dev/null | head'
+# F.K images: the int build the phone runs plus camera-front (ASK FIRST: flashes, reboots)
+KERNEL_DIR=~/android/mainline/wt-int KERNEL_OUT=~/android/mainline/out-int \
+    ov <the overlays of the current int images> camera-front && bin/omandroid push
+# F.2 (that boot) power-up and chip ID
+tools/camera-stage --watchdog x --cmd 'modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; modprobe s5kgn1; sleep 1; dmesg | grep -E "s5kgn1|slg51002" | tail -6; grep -E "ldo12s|vddd_main_front|cam_sw4" /sys/kernel/debug/regulator/regulator_summary'
+#   pass: "s5kgn1 N-0010: S5K3J1, model 0x30a1" (and the main camera's line as before);
+#   LDO8 and switch 4 off afterwards
+# F.3 (same boot) the graph
+tools/phone-ssh 'modprobe phy_gs201_mipi_dcphy_rx; modprobe gs201_csis; sleep 1; dmesg | grep "link 0 ->"; for d in /dev/media*; do media-ctl -d $d -p | grep -E "s5k3j1|link 0"; done'
+#   pass: "link 0 -> WDMA context 0, 4 D-PHY data lanes"; "s5k3j1 N-0010" -> "gs201-csis link 0"
+```
 
 ### CAM5.3: ultrawide quick wins. Risk: low to medium
 
