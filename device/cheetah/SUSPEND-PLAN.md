@@ -719,6 +719,22 @@ tools/phone-ssh 'tail -n +1 /var/lib/omandroid/suspend/s3b-*.log | grep -E "spm_
   another IRQ every time, an interrupt storm after resume.
 - **Rollback:** as S3b.
 
+**S3b result (2026-10-12, 7.3.0-rc6-omandroid-push1-00345-g606b84c7a9fd,
+overlays incl. `suspend-pmic-test`, `camera-pwr-test`, `modem-cpif-test`;
+run unattended): passed.** pmic-1 enabled; `sec_acpm` is blacklisted
+(`/etc/modprobe.d/omandroid-g1.conf`, the GNSS stack loads it on demand), so
+it was loaded by hand: "s5m-rtc s2mpg12-rtc: registered as rtc0", "setting
+system clock to 2026-10-13T00:08:09 UTC", and the RTC agreed with NTP time
+to the second (no `hwclock -w` needed). `s2mpg12-pmic` (128, level) and
+`rtc-alarm0` (129, edge) stayed at 0 for 10 s idle (no storm). The awake
+`rtcwake -m no -s 15` raised rtc-alarm0 once (pmic 2) and `wakealarm`
+cleared. Freeze with Wi-Fi unloaded: `rtcwake -m freeze -s 30` slept
+31 s (wall clock) and woke by itself (rtc-alarm0 +1), rc 0, no UFS error,
+USB back on its own, Wi-Fi restarted. The AoC and the sensor proxy ran
+through it. To make the RTC part of every boot, `sec_acpm` must load at boot
+(drop it from the G1 blacklist once GNSS's own loading tolerates it being
+loaded already).
+
 ### S4: C2 in s2idle, then a loop (no flash)
 
 Kernel and DTB from S3b. C2 and the MCT are in the default DTB since
