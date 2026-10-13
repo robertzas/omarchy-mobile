@@ -17,20 +17,27 @@ Nothing from Google's software is stored in the Omandroid repository: this
 tool only knows how to find the functions (CAMERA-PLAN.md section 5.3). The
 output is for the user's own phone; don't redistribute it.
 
-The main camera's Samsung S5KGN1 (--sensor s5kgn1) works the same way: its
-default initialisation and mode lists are found from its model-ID function
-through the sensor driver's virtual table, the HAL's static initialisers
-that build the mode list are run, and the output is
-/usr/lib/firmware/omandroid/camera/s5kgn1-main.bin (data file version 2,
-16-bit values). The main camera's link is C-PHY, and the same run writes
-the DC-PHY's C-PHY receive settings too (gs201-cphy.bin): the HAL's PHY
-setup function is run once per symbol rate with a stand-in register
-writer that records what it writes.
+The Samsung sensors work the same way: the main camera's S5KGN1
+(s5kgn1-main.bin), the front S5K3J1 (s5k3j1-front.bin) and the telephoto
+S5KGM5 (s5kgm5-tele.bin). Each one's default initialisation and mode
+lists are found from its model-ID function through the sensor driver's
+virtual table (for the 3J1, through the settings object its driver holds),
+the HAL's static initialisers that build the mode lists are run, and the
+output is data file version 2 (16-bit values).
+
+Every run also writes the DC-PHY receive settings (gs201-dcphy.bin), for
+D-PHY and C-PHY links alike: the HAL's PHY setup function is run once per
+rate with a stand-in register writer that records what it writes; the
+writes that change with the rate become a rate table. The kernel's PHY
+driver needs this file for every camera.
 
 Usage:
-  tools/extract-camera-data --hal PATH/liblyric_hwl.so [-o OUT] [--with-pd]
-  tools/extract-camera-data --apex PATH/com.google.pixel.camera.hal.apex [-o OUT]
-  tools/extract-camera-data --sensor s5kgn1 --hal ... [-o OUT] [--cphy-output OUT]
+  tools/extract-camera-data --apex PATH/com.google.pixel.camera.hal.apex [-d DIR]
+  tools/extract-camera-data --hal PATH/liblyric_hwl.so [-d DIR]
+  tools/extract-camera-data --hal ... --sensor imx386|s5kgn1|s5k3j1|s5kgm5 [-o OUT]
+      [--phy-output OUT | --no-phy] [--with-pd] [--list]
+Without --sensor it writes all four sensors' files and the PHY file into
+DIR; install them in /usr/lib/firmware/omandroid/camera/.
 
 Needs python3 with the unicorn and pyelftools packages, for example in a
 virtual environment:
@@ -82,6 +89,9 @@ class Emu:
         self.data = open(path, "rb").read()
         self.elf = ELFFile(open(path, "rb"))
         self.uc = unicorn.Uc(unicorn.UC_ARCH_ARM64, unicorn.UC_MODE_ARM)
+        # The library uses Armv8.3 RCpc loads (LDAPR) on its static-guard
+        # bytes; the default CPU model faults on them.
+        self.uc.ctl_set_cpu_model(A.UC_CPU_ARM64_MAX)
         top = 0
         for seg in self.elf.iter_segments():
             if seg["p_type"] == "PT_LOAD":
@@ -219,8 +229,10 @@ class Emu:
             ret = x0
         elif name in ("_ZdlPv", "_ZdaPv", "free", "_ZdlPvm"):
             pass
-        elif name in ("__cxa_guard_acquire",):
-            ret = 0
+        elif name == "__cxa_guard_acquire":
+            # 1: "initialise it now", so a function-local static list is
+            # built by the function that returns it
+            ret = 1
         elif name == "__stack_chk_fail":
             raise RuntimeError("stack check failed in emulation")
         else:
@@ -582,16 +594,237 @@ def gn1_link_freq(init):
     return 931229968
 
 
-def write_fw_v2(path, chip_id, bayer, again, margin, init, modes, link_freq):
+# --- Samsung S5K3J1 (front) and S5KGM5 (telephoto) ----------------------------
+
+# Per part: chip ID, Bayer order as read out without flips [I], analogue
+# gain code range [I], exposure margin [I], the data file name, and the
+# writes the kernel driver makes itself at the start of its init list
+# (the soft reset), which must be the list's first entries.
+SAMSUNG_PARTS = {
+    "s5k3j1": dict(chip=0x30A1, bayer=1, again=(0x20, 0x200), margin=16,
+                   out="s5k3j1-front.bin",
+                   reset=[(0xFCFC, 0x4000), (0x6010, 0x0001)]),
+    "s5kgm5": dict(chip=0x08D5, bayer=1, again=(0x20, 0x200), margin=16,
+                   out="s5kgm5-tele.bin", reset=[]),
+}
+SAMSUNG_THIS_SIZE = 0x4000
+SAMSUNG_PAGE = 0xFCFC           # direct-access page; 0x4000 holds the CCS registers
+SAMSUNG_CCS_PAGE = 0x4000
+SAMSUNG_DELAY = 2**64 - 1       # a list record that is a delay in us, not a write
+# The HAL's mode records [HAL layout]: 1424 bytes, the pixel rate (pixels/s)
+# as a 32-bit word at 0x150.
+SAMSUNG_REC_SIZE = 1424
+SAMSUNG_REC_PIXEL_RATE = 0x150
+
+
+def samsung_model_fn(emu, chip):
+    pat = (bytes.fromhex("5f2403d5") + struct.pack("<I", 0x52800000 | chip << 5) +
+           bytes.fromhex("c0035fd6"))
+    fn = emu.data.find(pat)
+    if fn < 0 or emu.data.find(pat, fn + 1) >= 0:
+        die(f"model-ID function for 0x{chip:04x} not found exactly once: "
+            "unknown HAL version")
+    return fn
+
+
+def samsung_delegate(emu, fn):
+    """A selector that forwards to a settings object the driver holds:
+    'bti c; ldr x0, [x0, #off]; ldr x8, [x0]; ldr x16, [x8, #slot]; br x16'.
+    Returns (offset, slot) or None."""
+    w = struct.unpack_from("<5I", emu.data, fn)
+    if w[0] != 0xD503245F or w[1] & 0xFFC003FF != 0xF9400000 or \
+            w[2] != 0xF9400008 or w[3] & 0xFFC003FF != 0xF9400110 or w[4] != 0xD61F0200:
+        return None
+    return ((w[1] >> 10) & 0xFFF) * 8, ((w[3] >> 10) & 0xFFF) * 8
+
+
+def samsung_providers(emu, near, holder_off):
+    """Virtual tables of the settings objects handed to the driver's
+    constructor: the constructor stores its argument at holder_off, and its
+    callers allocate the 8-byte object just before ('mov w0, #8; bl
+    operator new; adrp x8; add x8, x8, #lo', the table at lo + 0x10)."""
+    d = emu.data
+    ctors = set()
+    for a in range(near - 0x40000, near + 0x40000, 4):
+        w = struct.unpack_from("<I", d, a)[0]
+        if w & 0xFFC00000 == 0xF9000000 and ((w >> 10) & 0xFFF) * 8 == holder_off:
+            fn = find_function_start(emu, a)
+            if fn is not None:
+                ctors.add(fn)
+    text, size = _section(emu, ".text")
+    words = struct.unpack_from(f"<{size // 4}I", d, text)
+    found = []
+    for i, w in enumerate(words):
+        if w & 0xFC000000 != 0x94000000:
+            continue
+        pc = text + 4 * i
+        if branch_target(w, pc) not in ctors:
+            continue
+        for k in range(i - 64, i):
+            if words[k] & 0xFC000000 != 0x94000000 or \
+                    _bl_name(emu, text + 4 * k) != "_Znwm" or \
+                    0x52800100 not in words[k - 3:k]:
+                continue
+            adrp = [j for j in range(k + 1, k + 4) if words[j] & 0x9F00001F == 0x90000008]
+            if not adrp:
+                continue
+            j = adrp[0]
+            add = [words[m] for m in range(j + 1, j + 4)
+                   if words[m] & 0xFFC003FF == 0x91000108]
+            if not add:
+                continue
+            w, p = words[j], text + 4 * j
+            page = (p & ~0xFFF) + ((((w >> 5) & 0x7FFFF) << 2 | (w >> 29) & 3) << 12)
+            found.append(page + ((add[0] >> 10) & 0xFFF) + 0x10)
+    return sorted(set(found))
+
+
+def samsung_list(emu, ptr, count):
+    """A {u64 register, u64 value} list; delay records become the delay (ms,
+    rounded up) after the write before them."""
+    out = []
+    for a in range(ptr, ptr + 16 * count, 16):
+        reg, val = struct.unpack("<QQ", emu.read(a, 16))
+        if reg == SAMSUNG_DELAY:
+            if not out or val > 255000:
+                return None
+            r, v, dly = out[-1]
+            out[-1] = (r, v, min(255, dly + (val + 999) // 1000))
+            continue
+        if reg > 0xFFFF or val > 0xFFFF:
+            return None
+        out.append((reg, val, 0))
+    return out
+
+
+def samsung_mode_vector(emu, begin):
+    """The [begin, end) vector a mode selector returned the begin of."""
+    for a in range(HEAP_BASE, emu.heap, 8):
+        if emu.u64(a) == begin:
+            end = emu.u64(a + 8)
+            if begin < end <= emu.heap:
+                recs = gn1_mode_records(emu, begin, end)
+                if recs:
+                    return recs
+    return None
+
+
+def samsung_ccs(regs, page=SAMSUNG_CCS_PAGE):
+    """The CCS registers a list leaves, following the page register; also
+    the page it ends in."""
+    view = {}
+    for r, v, *_ in regs:
+        if r == SAMSUNG_PAGE:
+            page = v
+        elif page == SAMSUNG_CCS_PAGE:
+            view[r] = v
+    return view, page
+
+
+def samsung_candidates(emu, chip):
+    """(init, [(record address, mode list)]) per driver variant."""
+    fn = samsung_model_fn(emu, chip)
+    tables = gn1_vtables(emu, fn)
+    if not tables:
+        die(f"no virtual table holds the 0x{chip:04x} model-ID function")
+    gn1_run_initialisers(emu, fn)
+    out = []
+    for vt in tables:
+        init_sel = emu.u64(vt + 8 * GN1_SLOT_INIT)
+        modes_sel = emu.u64(vt + 8 * GN1_SLOT_MODES)
+        di, dm = samsung_delegate(emu, init_sel), samsung_delegate(emu, modes_sel)
+        calls = []
+        if di and dm and di[0] == dm[0]:
+            for pvt in samsung_providers(emu, fn, di[0]):
+                obj = emu._alloc(64)
+                emu.uc.mem_write(obj, struct.pack("<Q", pvt))
+                calls.append((emu.u64(pvt + di[1]), emu.u64(pvt + dm[1]), obj))
+        else:
+            this = emu._alloc(SAMSUNG_THIS_SIZE)
+            emu.uc.mem_write(this, bytes(SAMSUNG_THIS_SIZE))
+            calls.append((init_sel, modes_sel, this))
+        for init_fn, modes_fn, obj in calls:
+            try:
+                ptr = emu.call(init_fn, obj)
+                count = emu.uc.reg_read(A.UC_ARM64_REG_X1)
+                init = samsung_list(emu, ptr, count) if 0 < count < 20000 else None
+                begin = emu.call(modes_fn, obj)
+            except unicorn.UcError:
+                continue
+            recs = samsung_mode_vector(emu, begin) if init else None
+            if not recs:
+                continue
+            offs = [off for off, _ in recs]
+            stride = offs[1] - offs[0] if len(offs) > 1 else SAMSUNG_REC_SIZE
+            if stride != SAMSUNG_REC_SIZE or any(b - a != stride for a, b in
+                                                 zip(offs, offs[1:])):
+                die(f"mode records of {stride} bytes: unknown HAL version")
+            first = offs[0] % stride
+            out.append((init, [(begin + off - first, [(r, v, 0) for r, v in regs])
+                               for off, regs in recs]))
+    return out
+
+
+def samsung_mode_info(emu, init, rec, regs):
+    """Geometry from the CCS registers; the pixel rate from the HAL's mode
+    record; the link rate (Mbps per lane, or Msps per trio) from the output
+    PLL: EXCK x multiplier (0x0310) / pre-divider (0x030e) / post (0x0312) [I]."""
+    view, _ = samsung_ccs(init)
+    mview, _ = samsung_ccs(regs)
+    view.update(mview)
+    w, h, fll, llp = (view.get(r) for r in (0x034C, 0x034E, 0x0340, 0x0342))
+    pre, mult, post = view.get(0x030E), view.get(0x0310), view.get(0x0312) or 1
+    if not all((w, h, fll, llp, pre, mult)):
+        return None
+    pixel_rate = struct.unpack("<I", emu.read(rec + SAMSUNG_REC_PIXEL_RATE, 4))[0]
+    fps = pixel_rate / (fll * llp)
+    if not 5 <= fps <= 480:
+        die(f"mode {w}x{h}: pixel rate {pixel_rate} gives {fps:.1f} fps: "
+            "unknown HAL version")
+    return dict(width=w, height=h, fll=fll, llp=llp, binning=view.get(0x0900, 0) & 0xFF,
+                pixel_rate=pixel_rate, fps=fps,
+                rate_hz=EXCK_HZ * mult // pre // post)
+
+
+def build_samsung(hal, part):
+    p = SAMSUNG_PARTS[part]
+    emu = Emu(hal)
+    cands = samsung_candidates(emu, p["chip"])
+    cands = [c for c in cands if len(c[0]) >= 100]
+    if not cands:
+        die(f"{part}: init and mode lists not found")
+    # The camera's own driver has the most modes; others (a "virtual"
+    # sensor sharing the model ID) have fewer or none.
+    cands.sort(key=lambda c: -len(c[1]))
+    if len(cands) > 1 and len(cands[0][1]) == len(cands[1][1]):
+        die(f"{part}: {len(cands)} drivers with {len(cands[0][1])} modes, can't choose")
+    init, recs = cands[0]
+    n = len(p["reset"])
+    if [(r, v) for r, v, _ in init[:n]] != p["reset"]:
+        die(f"{part}: the init list doesn't start with the expected soft reset")
+    init = init[n:]
+    modes = []
+    for addr, regs in recs:
+        info = samsung_mode_info(emu, init, addr, regs)
+        if not info:
+            continue
+        modes.append((info, regs, addr))
+    return init, modes, emu, cands[0]
+
+
+def write_fw_v2(path, chip_id, bayer, again, margin, init, modes, link_freq=None):
+    """Data file version 2 (16-bit values). Register entries are (address,
+    value) or (address, value, delay in ms after the write); link_freq None
+    takes each mode's own."""
     hdr_size, mode_size = 28, 28
     regs_blob = bytearray()
 
     def add_regs(regs):
         off = len(regs_blob)
-        for r, v in regs:
+        for r, v, *delay in regs:
             if r in GN1_DROP:
                 continue
-            regs_blob.extend(struct.pack("<HHBBH", r, v, 0, 2, 0))
+            regs_blob.extend(struct.pack("<HHBBH", r, v, delay[0] if delay else 0, 2, 0))
         return off, (len(regs_blob) - off) // 8
 
     base = hdr_size + mode_size * len(modes)
@@ -600,7 +833,8 @@ def write_fw_v2(path, chip_id, bayer, again, margin, init, modes, link_freq):
     for info, regs in modes:
         off, n = add_regs(regs)
         recs += struct.pack("<HHHHIIBBHII", info["width"], info["height"], info["llp"],
-                            info["fll"], info["pixel_rate"], link_freq, 10,
+                            info["fll"], info["pixel_rate"],
+                            link_freq or info["link_freq"], 10,
                             info["binning"], 0, base + off, n)
     hdr = struct.pack("<IHHHHHHHHII", FW_MAGIC, 2, len(modes), chip_id, bayer,
                       again[0], again[1], margin, 0, base + init_off, init_n)
@@ -608,25 +842,31 @@ def write_fw_v2(path, chip_id, bayer, again, margin, init, modes, link_freq):
         f.write(hdr + recs + regs_blob)
 
 
-# --- DC-PHY C-PHY receive settings (main and tele links) ---------------------
+# --- DC-PHY receive settings (every link, D-PHY and C-PHY) -------------------
 
-CPHY_MAGIC = 0x4850434F     # "OCPH", read by phy-gs201-mipi-dcphy-rx
-CPHY_VERSION = 1
+DCPHY_MAGIC = 0x4850444F    # "ODPH", read by phy-gs201-mipi-dcphy-rx
+DCPHY_VERSION = 1
+DCPHY_DPHY, DCPHY_CPHY = 0, 1                       # section types
+DCPHY_BIAS, DCPHY_LANE, DCPHY_CLOCK = 0, 1, 2       # register blocks
+DCPHY_WRITE, DCPHY_UPDATE, DCPHY_RATE = 0, 1, 2     # operations
 # The HAL's PHY setup function writes through a register-access object
-# (HAL layout): region 10 is the DC-PHY, the bias block at 0x1000, each
-# trio's lane block 0x100 apart from base + 0x100, and the access object's
-# virtual table has a write at 0x60 and a masked write at 0x70. Its
-# arguments: (this, trios, symbol rate in Hz (32-bit), C-PHY flag, base).
-CPHY_REGION = 0xA
-CPHY_SLOT_WRITE, CPHY_SLOT_UPDATE = 0x60, 0x70
-CPHY_BIAS = 0x1000
-CPHY_LANE = 0x100
-CPHY_TIME_CON0 = 0x30       # settle count (7:0) and settle clock select (8)
-CPHY_MAX_MSPS = 2147        # the rate argument is a signed 32-bit Hz count
-CPHY_OBJ_SIZE = 0x1000
+# (HAL layout): region 10 is the DC-PHY, the bias block at 0x1000; from the
+# link's base, its clock lane (D-PHY) and then one 0x100 block per data lane
+# or trio. The access object's virtual table has a write at 0x60 and a
+# masked write at 0x70. Its arguments: (this, lanes or trios, rate in Hz
+# (signed 32-bit), C-PHY flag, base).
+PHY_REGION = 0xA
+PHY_SLOT_WRITE, PHY_SLOT_UPDATE = 0x60, 0x70
+PHY_BIAS = 0x1000
+PHY_LANE = 0x100
+PHY_GNR_CON0 = 0x00         # lane enable
+PHY_MAX_RATE = 2147         # Mbps or Msps: the rate argument is a signed 32-bit Hz count
+PHY_MIN_RATE = {DCPHY_DPHY: 80, DCPHY_CPHY: 1}
+PHY_MAX_LANES = {DCPHY_DPHY: 4, DCPHY_CPHY: 3}
+PHY_OBJ_SIZE = 0x1000
 
 
-def cphy_locate(emu):
+def phy_locate(emu):
     """The PHY setup function: the only one that writes a trio's register
     0x64 (base + 0x100 + 0x64) to region 10."""
     d = emu.data
@@ -638,17 +878,17 @@ def cphy_locate(emu):
         if w & 0xFFFFFC1F != 0x11000000 | (0x164 << 10) | 2:
             continue
         near = struct.unpack_from("<8I", d, a - 16)
-        if 0x52800001 | (CPHY_REGION << 5) in near:     # mov w1, #10
+        if 0x52800001 | (PHY_REGION << 5) in near:      # mov w1, #10
             fn = find_function_start(emu, a)
             if fn is not None:
                 hits.add(fn)
     if len(hits) != 1:
-        die(f"C-PHY setup function: {len(hits)} candidates, expected one: "
+        die(f"DC-PHY setup function: {len(hits)} candidates, expected one: "
             "unknown HAL version")
     return hits.pop()
 
 
-def cphy_run(emu, fn, trios, msps):
+def phy_run(emu, fn, kind, lanes, rate):
     """Run the setup once; returns [(slot, region, offset, value, mask)]."""
     calls = []
 
@@ -660,84 +900,145 @@ def cphy_run(emu, fn, trios, msps):
             return 0
         return h
 
-    if not hasattr(emu, "cphy_obj"):
+    if not hasattr(emu, "phy_obj"):
         # One stand-in object: every word of 'this' points at it, every
         # word of it at its virtual table, whose slots are traps.
         vt = emu._alloc(0x200)
-        dev = emu._alloc(CPHY_OBJ_SIZE)
-        this = emu._alloc(CPHY_OBJ_SIZE)
+        dev = emu._alloc(PHY_OBJ_SIZE)
+        this = emu._alloc(PHY_OBJ_SIZE)
         for off in range(0, 0x200, 8):
             trap = TRAP_BASE + 0xC000 + 2 * off
-            name = f"cphy-slot-{off:#x}"
-            emu.traps[trap] = name
-            emu.handlers[name] = slot_handler(off)
+            emu.traps[trap] = f"phy-slot-{off:#x}"
             emu.uc.mem_write(vt + off, struct.pack("<Q", trap))
-        emu.uc.mem_write(dev, struct.pack("<Q", vt) * (CPHY_OBJ_SIZE // 8))
-        emu.uc.mem_write(this, struct.pack("<Q", dev) * (CPHY_OBJ_SIZE // 8))
-        emu.cphy_obj = this
-    else:
-        for off in range(0, 0x200, 8):
-            emu.handlers[f"cphy-slot-{off:#x}"] = slot_handler(off)
-    emu.call(fn, emu.cphy_obj, trios, msps * 1_000_000, 1, 0)
+        emu.uc.mem_write(dev, struct.pack("<Q", vt) * (PHY_OBJ_SIZE // 8))
+        emu.uc.mem_write(this, struct.pack("<Q", dev) * (PHY_OBJ_SIZE // 8))
+        emu.phy_obj = this
+    for off in range(0, 0x200, 8):
+        emu.handlers[f"phy-slot-{off:#x}"] = slot_handler(off)
+    emu.call(fn, emu.phy_obj, lanes, rate * 1_000_000, kind == DCPHY_CPHY, 0)
     return calls
 
 
-def cphy_ops(calls, trios):
-    """Bias writes and one trio's writes, in order; the masked settle writes
-    become one settle operation. Returns (ops, (settle, clk_sel))."""
-    bias, lanes = [], {}
-    settle = clk = None
+def phy_ops(calls, kind, lanes):
+    """The writes as (block, op, offset, value, mask), checked to come as
+    bias, then the clock lane (D-PHY), then each lane with the same writes.
+    The lane-disable writes ahead of the bias block are dropped: the driver
+    turns the lanes off itself first. Returns one lane's operations."""
+    out = []
+    started = False
     for slot, region, off, val, mask in calls:
-        if region != CPHY_REGION:
-            die(f"C-PHY setup wrote region {region}, expected {CPHY_REGION}")
-        if CPHY_BIAS <= off < CPHY_BIAS + CPHY_LANE and slot == CPHY_SLOT_WRITE:
-            bias.append((0, 0, off - CPHY_BIAS, val))
-            continue
-        t, o = divmod(off - CPHY_LANE, CPHY_LANE)
-        if not CPHY_LANE <= off < CPHY_LANE * (trios + 1):
-            die(f"C-PHY setup wrote unexpected offset {off:#x}")
-        ops = lanes.setdefault(t, [])
-        if slot == CPHY_SLOT_WRITE:
-            ops.append((1, 0, o, val))
-        elif slot == CPHY_SLOT_UPDATE and o == CPHY_TIME_CON0 and mask == 0xFF:
-            settle = val
-            ops.append((1, 1, o, 0))
-        elif slot == CPHY_SLOT_UPDATE and o == CPHY_TIME_CON0 and mask == 0x100:
-            clk = val >> 8
+        if region != PHY_REGION:
+            die(f"PHY setup wrote region {region}, expected {PHY_REGION}")
+        if slot not in (PHY_SLOT_WRITE, PHY_SLOT_UPDATE):
+            die(f"PHY setup: unexpected call slot {slot:#x}")
+        if PHY_BIAS <= off < PHY_BIAS + PHY_LANE:
+            block, lane, o = DCPHY_BIAS, None, off - PHY_BIAS
+            started = True
+        elif off < PHY_LANE * (lanes + 1):
+            lane, o = divmod(off, PHY_LANE)
+            block = DCPHY_CLOCK if lane == 0 else DCPHY_LANE
+            lane -= 1
+            if block == DCPHY_CLOCK and kind == DCPHY_CPHY:
+                die("C-PHY setup wrote a clock lane")
         else:
-            die(f"C-PHY setup: unexpected call slot {slot:#x} offset {off:#x}")
-    if sorted(lanes) != list(range(trios)) or \
-            any(lanes[t] != lanes[0] for t in lanes):
-        die("C-PHY setup: the trios' writes differ")
-    if settle is None or clk is None or clk > 1:
-        die("C-PHY setup: no settle count")
-    return bias + lanes[0], (settle, clk)
+            die(f"PHY setup wrote unexpected offset {off:#x}")
+        if not started:
+            if slot != PHY_SLOT_WRITE or o != PHY_GNR_CON0 or val:
+                die("PHY setup: a write other than a lane disable before the bias block")
+            continue
+        if slot == PHY_SLOT_WRITE:
+            out.append((block, lane, DCPHY_WRITE, o, val, 0))
+        else:
+            if not mask or val & ~mask:
+                die(f"PHY setup: masked write {val:#x}/{mask:#x}")
+            out.append((block, lane, DCPHY_UPDATE, o, val, mask))
+    # order: bias, clock, lane 0, lane 1, ...
+    order = [(b, -1 if ln is None else ln) for b, ln, *_ in out]
+    rank = [(0 if b == DCPHY_BIAS else 1 if b == DCPHY_CLOCK else 2 + ln)
+            for b, ln in order]
+    if rank != sorted(rank):
+        die("PHY setup: writes not in bias, clock lane, data lane order")
+    per_lane = [[op[2:] for op in out if op[0] == DCPHY_LANE and op[1] == i]
+                for i in range(lanes)]
+    if any(p != per_lane[0] for p in per_lane) or not per_lane[0]:
+        die("PHY setup: the lanes' writes differ")
+    return ([(b, *op[2:]) for op in out for b in [op[0]] if b != DCPHY_LANE] +
+            [(DCPHY_LANE, *op) for op in per_lane[0]])
 
 
-def build_cphy(hal, emu=None):
-    emu = emu or Emu(hal)
-    fn = cphy_locate(emu)
-    ref = None
+def build_phy_section(emu, fn, kind):
+    """One section: the operations, with the masked writes whose value
+    changes with the rate as table columns, and the rate table."""
+    lo = PHY_MIN_RATE[kind]
+    runs = []
+    for rate in range(lo, PHY_MAX_RATE + 1):
+        runs.append((rate, phy_ops(phy_run(emu, fn, kind, 1, rate), kind, 1)))
+    for rate in (lo, 1000, PHY_MAX_RATE):
+        n = PHY_MAX_LANES[kind]
+        if phy_ops(phy_run(emu, fn, kind, n, rate), kind, n) != \
+                [r for r in runs if r[0] == rate][0][1]:
+            die(f"PHY setup: {n} lanes differ from one at {rate}")
+    ref = runs[0][1]
+    shape = [(b, op, o, m) for b, op, o, v, m in ref]
+    varying = set()
+    for rate, ops in runs:
+        if [(b, op, o, m) for b, op, o, v, m in ops] != shape:
+            die(f"PHY setup: a different sequence at {rate}")
+        for i, (r, x) in enumerate(zip(ref, ops)):
+            if r[3] != x[3]:
+                if r[1] != DCPHY_UPDATE:
+                    die(f"PHY setup: a plain write changes with the rate at {rate}")
+                varying.add(i)
+    cols = sorted(varying)
+    ops = []
+    for i, (b, op, o, v, m) in enumerate(ref):
+        if i in varying:
+            ops.append((b, DCPHY_RATE, o, cols.index(i), m))
+        else:
+            ops.append((b, op, o, v, m))
     table = []
-    for msps in range(1, CPHY_MAX_MSPS + 1):
-        ops, st = cphy_ops(cphy_run(emu, fn, 1, msps), 1)
-        if ref is None:
-            ref = ops
-            # the trio stride: two trios write the same per trio
-            cphy_ops(cphy_run(emu, fn, 3, msps), 3)
-        elif ops != ref:
-            die(f"C-PHY setup: writes other than the settle change at {msps} Msps")
-        if not table or table[-1][1:] != st:
-            table.append((0 if not table else msps, *st))
-    return ref, table
+    for rate, run in runs:
+        row = tuple(run[i][3] for i in cols)
+        if not table or table[-1][1] != row:
+            table.append((rate, row))
+    return dict(kind=kind, ops=ops, table=table, cols=len(cols),
+                min_rate=lo, max_rate=PHY_MAX_RATE)
 
 
-def write_cphy(path, ops, table):
-    blob = struct.pack("<IHHHH", CPHY_MAGIC, CPHY_VERSION, len(ops), len(table), 0)
-    for block, op, off, val in ops:
-        blob += struct.pack("<BBHI", block, op, off, val)
-    for msps, settle, clk in table:
-        blob += struct.pack("<IBBH", msps, settle, clk, 0)
+def build_phy(hal, emu=None):
+    emu = emu or Emu(hal)
+    fn = phy_locate(emu)
+    return [build_phy_section(emu, fn, k) for k in (DCPHY_DPHY, DCPHY_CPHY)]
+
+
+def phy_settle(sect, rate):
+    """The settle count (TIME_CON0 7:0) at a rate, for the summary."""
+    row = [r for m, r in sect["table"] if m <= rate][-1]
+    for b, op, o, v, m in sect["ops"]:
+        if b == DCPHY_LANE and o == 0x30 and m == 0xFF:
+            return row[v] if op == DCPHY_RATE else v
+    return None
+
+
+def phy_summary(sects):
+    for s in sects:
+        name = "D-PHY" if s["kind"] == DCPHY_DPHY else "C-PHY"
+        unit = "Mbps" if s["kind"] == DCPHY_DPHY else "Msps"
+        print(f"{name}: {len(s['ops'])} register writes, {s['cols']} by rate in "
+              f"{len(s['table'])} ranges ({s['min_rate']}-{s['max_rate']} {unit})")
+        for rate in ((1548, 1665) if s["kind"] == DCPHY_DPHY else (1802, 1862)):
+            print(f"  settle at {rate} {unit}: {phy_settle(s, rate)}")
+
+
+def write_phy(path, sects):
+    blob = struct.pack("<IHHI", DCPHY_MAGIC, DCPHY_VERSION, len(sects), 0)
+    for s in sects:
+        blob += struct.pack("<BBHHHII", s["kind"], s["cols"], len(s["ops"]),
+                            len(s["table"]), 0, s["min_rate"], s["max_rate"])
+        for b, op, o, v, m in s["ops"]:
+            blob += struct.pack("<BBHII", b, op, o, v, m)
+        for rate, row in s["table"]:
+            blob += struct.pack("<I", rate) + b"".join(struct.pack("<I", x) for x in row)
     with open(path, "wb") as f:
         f.write(blob)
 
@@ -753,66 +1054,107 @@ def from_apex(apex, tmp):
     return out
 
 
+def samsung_dedupe(modes):
+    """One mode per output size: the HAL's first (its default) of each."""
+    seen, out = set(), []
+    for m in modes:
+        key = (m[0]["width"], m[0]["height"])
+        if key not in seen:
+            seen.add(key)
+            out.append(m)
+    return out
+
+
+def run_imx386(hal, args, out):
+    init, modes = build(hal, args.with_pd)
+    print(f"IMX386 init: {len(init)} register writes{' (with PD)' if args.with_pd else ''}")
+    for info, regs in modes:
+        print(f"  mode {info['width']}x{info['height']}: {len(regs)} writes, "
+              f"FLL {info['fll']} LLP {info['llp']}, pixel rate {info['pixel_rate']}, "
+              f"link {info['link_freq']} Hz, {info['fps']:.1f} fps, binning {info['binning']}")
+    if not args.list:
+        write_fw(out, init, modes)
+        print(f"wrote {out}: install as {FW_DIR}/imx386-uw.bin")
+
+
+def run_s5kgn1(hal, args, out):
+    init, modes, emu = build_gn1(hal)
+    lf = gn1_link_freq(init)
+    print(f"S5KGN1 init: {len(init)} register writes")
+    for info, regs in modes:
+        print(f"  mode {info['width']}x{info['height']}: {len(regs)} writes, "
+              f"FLL {info['fll']} LLP {info['llp']}, pixel rate {info['pixel_rate']}, "
+              f"{info['fps']:.1f} fps, link {lf} Hz [I]")
+    if not args.list:
+        write_fw_v2(out, GN1_CHIP_ID, GN1_BAYER, GN1_AGAIN, GN1_EXPOSURE_MARGIN,
+                    init, modes, lf)
+        print(f"wrote {out}: install as {FW_DIR}/s5kgn1-main.bin")
+
+
+def run_samsung(hal, args, out, part):
+    p = SAMSUNG_PARTS[part]
+    init, modes, _, _ = build_samsung(hal, part)
+    modes = samsung_dedupe(modes)
+    print(f"{part.upper()} init: {len(init)} register writes")
+    for info, regs, _ in modes:
+        # [I] D-PHY: the output PLL is the lane bit rate; C-PHY: the trio
+        # symbol rate. The link frequency is half of it either way.
+        info["link_freq"] = info["rate_hz"] // 2
+        print(f"  mode {info['width']}x{info['height']}: {len(regs)} writes, "
+              f"FLL {info['fll']} LLP {info['llp']}, pixel rate {info['pixel_rate']}, "
+              f"{info['fps']:.1f} fps, link {info['link_freq']} Hz [I], "
+              f"binning 0x{info['binning']:02x}")
+    if not args.list:
+        write_fw_v2(out, p["chip"], p["bayer"], p["again"], p["margin"], init,
+                    [(i, r) for i, r, _ in modes])
+        print(f"wrote {out}: install as {FW_DIR}/{p['out']}")
+
+
+SENSORS = {
+    "imx386": ("imx386-uw.bin", run_imx386),
+    "s5kgn1": ("s5kgn1-main.bin", run_s5kgn1),
+    "s5k3j1": ("s5k3j1-front.bin", lambda h, a, o: run_samsung(h, a, o, "s5k3j1")),
+    "s5kgm5": ("s5kgm5-tele.bin", lambda h, a, o: run_samsung(h, a, o, "s5kgm5")),
+}
+FW_DIR = "/usr/lib/firmware/omandroid/camera"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--hal", help="liblyric_hwl.so from your own phone's camera HAL APEX")
     src.add_argument("--apex", help="com.google.pixel.camera.hal.apex from your own image")
-    ap.add_argument("--sensor", choices=("imx386", "s5kgn1"), default="imx386",
-                    help="imx386 (ultrawide, default) or s5kgn1 (main camera)")
-    ap.add_argument("-o", "--output")
-    ap.add_argument("--cphy-output", default="gs201-cphy.bin",
-                    help="with --sensor s5kgn1: the C-PHY settings file "
-                    "(default gs201-cphy.bin)")
+    ap.add_argument("--sensor", choices=(*SENSORS, "all"), default="all",
+                    help="imx386 (ultrawide), s5kgn1 (main), s5k3j1 (front), "
+                    "s5kgm5 (telephoto) or all (default)")
+    ap.add_argument("-o", "--output", help="the sensor's data file (one sensor only)")
+    ap.add_argument("-d", "--dir", default=".",
+                    help="where the files go (default: the current directory)")
+    ap.add_argument("--phy-output",
+                    help="the DC-PHY settings file (default DIR/gs201-dcphy.bin)")
+    ap.add_argument("--no-phy", action="store_true", help="don't write the DC-PHY file")
     ap.add_argument("--with-pd", action="store_true",
-                    help="use the init settings with phase detection on (default off)")
-    ap.add_argument("--list", action="store_true", help="only print the modes found")
+                    help="imx386: the init settings with phase detection on (default off)")
+    ap.add_argument("--list", action="store_true", help="only print what was found")
     args = ap.parse_args()
+    names = list(SENSORS) if args.sensor == "all" else [args.sensor]
+    if args.output and len(names) > 1:
+        ap.error("-o needs one --sensor")
 
-    if args.sensor == "s5kgn1":
-        out = args.output or "s5kgn1-main.bin"
-        with tempfile.TemporaryDirectory() as tmp:
-            hal = from_apex(args.apex, tmp) if args.apex else args.hal
-            print(f"HAL sha256 {hashlib.sha256(open(hal, 'rb').read()).hexdigest()}")
-            init, modes, emu = build_gn1(hal)
-            cphy, settle = build_cphy(hal)
-        lf = gn1_link_freq(init)
-        print(f"C-PHY: {len(cphy)} register writes, settle by rate: " +
-              ", ".join(f"{s} from {m} Msps" for m, s, _ in settle))
-        print(f"init: {len(init)} register writes")
-        for info, regs in modes:
-            print(f"mode {info['width']}x{info['height']}: {len(regs)} writes, "
-                  f"FLL {info['fll']} LLP {info['llp']}, pixel rate {info['pixel_rate']}, "
-                  f"{info['fps']:.1f} fps, link {lf} Hz [I]")
-        if emu.unknown_calls:
-            print("note: imported calls ignored in emulation:",
-                  ", ".join(sorted(emu.unknown_calls)), file=sys.stderr)
-        if args.list:
-            return
-        write_fw_v2(out, GN1_CHIP_ID, GN1_BAYER, GN1_AGAIN, GN1_EXPOSURE_MARGIN,
-                    init, modes, lf)
-        print(f"wrote {out}: install as /usr/lib/firmware/omandroid/camera/s5kgn1-main.bin")
-        write_cphy(args.cphy_output, cphy, settle)
-        print(f"wrote {args.cphy_output}: install as "
-              "/usr/lib/firmware/omandroid/camera/gs201-cphy.bin")
-        return
-
-    args.output = args.output or "imx386-uw.bin"
     with tempfile.TemporaryDirectory() as tmp:
         hal = from_apex(args.apex, tmp) if args.apex else args.hal
         print(f"HAL sha256 {hashlib.sha256(open(hal, 'rb').read()).hexdigest()}")
-        init, modes = build(hal, args.with_pd)
-
-    print(f"init: {len(init)} register writes{' (with PD)' if args.with_pd else ''}")
-    for info, regs in modes:
-        print(f"mode {info['width']}x{info['height']}: {len(regs)} writes, "
-              f"FLL {info['fll']} LLP {info['llp']}, pixel rate {info['pixel_rate']}, "
-              f"link {info['link_freq']} Hz, {info['fps']:.1f} fps, binning {info['binning']}")
-    if args.list:
-        return
-    write_fw(args.output, init, modes)
-    print(f"wrote {args.output}: install as /usr/lib/firmware/omandroid/camera/imx386-uw.bin")
+        for name in names:
+            out = args.output or os.path.join(args.dir, SENSORS[name][0])
+            SENSORS[name][1](hal, args, out)
+        if not args.no_phy:
+            sects = build_phy(hal)
+            phy_summary(sects)
+            if not args.list:
+                out = args.phy_output or os.path.join(args.dir, "gs201-dcphy.bin")
+                write_phy(out, sects)
+                print(f"wrote {out}: install as {FW_DIR}/gs201-dcphy.bin")
 
 
 if __name__ == "__main__":
