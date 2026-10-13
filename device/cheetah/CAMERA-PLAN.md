@@ -23,7 +23,9 @@ start and only five line ends: no line framing; every VC 0 DMA so far
 ran with the sensor's colour bars), CAM-M.5h (a real image
 fails the same way), CAM-M.5i (VC 1 has line
 ends, VC 0 doesn't; dual/single overflow on the link, octa is clean),
-next CAM-M.5j (CAM 664 MHz, then octa). CAM7: F.1-F.3 passed (the S5K3J1 answers, link 0's graph is
+CAM-M.5j-1 (CAM 664 MHz: no change). Paused there; next options under
+"Where we stopped" (CAM-M.5j-1 result). libcamera 0.7.2-4.6 is
+installed on the phone. CAM7: F.1-F.3 passed (the S5K3J1 answers, link 0's graph is
 up); F.4 next. Kernel branch
 `omandroid-camera` head `d73ed198d` (all in int `7e9131775`);
 libcamera 0.7.2-4.6 (patches 0013-0014: the front and
@@ -3045,6 +3047,33 @@ tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA
   frame through at 400 MHz on the other set-up), as a data-file variant
   for one test, and the INT vote above 400 MHz.
 - **Rollback:** reboot; parameters per load.
+
+**CAM-M.5j-1 result (2026-10-13, int `7e9131775`, fresh boot):** VC 0,
+2016x1136, `PATTERN=0`, `cam_khz_cphy=664000`: "link 1 on" with "CAM
+664000000 Hz"; "so far: WDMA FS 1/0/0/0 FE 0/0/0/0 lines 4/0/0/0; link
+FS VC0 1 VC1 0, FE VC0 0 VC1 0"; FS/FE 143, link errors 25723 (b3), WDMA
+done 0, errors 246 (last 0x00108001; b15 x245, b20 x2), line ends 251, no
+data. **The CAM clock isn't it** (four line ends before the error, as at
+533 MHz).
+
+**Where we stopped (2026-10-13, hardware work paused):**
+- Main camera: the sensor, its C-PHY link (30 fps, only VC 1 packets
+  unmatched) and the phase stream on VC 1 (captured whole, with line
+  ends) work; the VC 0 image reaches the WDMA without line ends, so every
+  frame stops at `LASTADDR`. Ruled out: the 2032x1536 mode, the WDMA
+  start value, LRTE, the test pattern, buffer height up to 8192 lines,
+  the 4080x3072 mode, VC 1 on its own link channel, CAM 664 MHz;
+  dual/single pixel modes overflow on the link.
+- **Next options, in order** (one DMA attempt a fresh boot, no new
+  kernel for the first two): M.5j-2 octa (`pixel_mode=3`) at 533 MHz;
+  M.5j-3 octa with 664 MHz; then the sensor slowed (its output
+  post-divider and a doubled line length, as a one-off data-file
+  variant) together with an INT vote above 400 MHz.
+- Front camera: F.1-F.3 passed (the S5K3J1 answers, link 0's graph is
+  up); F.4 (link only) and F.5 (first DMA, its own boot) next.
+- Telephoto: not started on the phone (CAM-T).
+- libcamera 0.7.2-4.6 is installed on the phone, not used for a capture
+  yet (CAM5.3-1 is the first run with it).
 
 **The front camera (CAM7), on the next boot that has no camera DMA step**
 (it can be M.5g-K's boot, if M.5g-0/-1 move to the boot after, or the boot
