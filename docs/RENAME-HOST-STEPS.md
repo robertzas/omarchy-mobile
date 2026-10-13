@@ -75,9 +75,10 @@ update it to `omamobile-phone`.
 
 - The package-signing key (fingerprint
   `6C84FE3D240709E70E27CC94B301F5EA62B249FE`, unchanged) got a new primary
-  user ID, "Omarchy Mobile Package Signing <derekross@gmail.com>". The old
-  user ID stays on the key, so signatures made before the rename still
-  verify. `packages/omamobile-keyring/omamobile.gpg` was re-exported;
+  user ID, "Omarchy Mobile Package Signing <derekross@gmail.com>"; the old
+  user ID was then deleted from the key (no package signed under it was
+  ever installed from the repository), so the exported key carries only the
+  new name. Signatures stay valid: they bind to the key, not the user ID. `packages/omamobile-keyring/omamobile.gpg` was re-exported;
   `-trusted` and `-revoked` didn't change. The keyring installs as
   `pacman-key --populate omamobile`.
 - The gitignored bionic prebuilts were rebuilt with the new names and are
