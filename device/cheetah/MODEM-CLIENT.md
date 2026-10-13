@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Modem client: the SIT RIL, its interface, and the user-facing path
 
-Status (2026-10-13): **`omandroid-modem-sit` 0.2.0 replaces the 0.1 client;
+Status (2026-10-13): **`omamobile-modem-sit` 0.2.0 replaces the 0.1 client;
 built and tested offline against `tools/sit-sim`; nothing run on our phone
 yet.** The RIL is a port of a SIT stack that registered on LTE, made and
 answered IMS calls with two-way audio, sent and received SMS and carried
@@ -12,7 +12,7 @@ their SPDX headers. Our 0.1 client was built from the protocol research only
 and had never met real firmware; where the two disagree, the hardware-tested
 layouts win (for example the data call: the stock 983-byte version-2 setup
 request, the initial attach APN being essential, and the DNS offsets in the
-setup response). The runtime it needs is `omandroid-modem`
+setup response). The runtime it needs is `omamobile-modem`
 ([MODEM-PLAN.md](MODEM-PLAN.md) M3.4); the first runs on our phone are the
 M4 runbook in MODEM-PLAN.md.
 
@@ -24,10 +24,10 @@ Two packages:
 
 | Package | What |
 |---|---|
-| `packages/omandroid-modem` 0.1.0 (new) | The runtime: `omandroid-modem.service` loads CPIF and runs the `modem` vendor-chroot profile (rfsd, then a one-shot cbd, on RAM copies of NV); `omandroid-modem-cp` (CP state, crash record, power-off for the unit's stop, the baseband version, the stock NV checksum); the M0.5 read-only udev rule |
-| `packages/omandroid-modem-sit` 0.2.0 | The RIL: `omandroid-sitd` (registration, calls, SMS), `omandroid-sit-data` (the cellular route), `omandroid-sit` (CLI) |
+| `packages/omamobile-modem` 0.1.0 (new) | The runtime: `omamobile-modem.service` loads CPIF and runs the `modem` vendor-chroot profile (rfsd, then a one-shot cbd, on RAM copies of NV); `omamobile-modem-cp` (CP state, crash record, power-off for the unit's stop, the baseband version, the stock NV checksum); the M0.5 read-only udev rule |
+| `packages/omamobile-modem-sit` 0.2.0 | The RIL: `omamobile-sitd` (registration, calls, SMS), `omamobile-sit-data` (the cellular route), `omamobile-sit` (CLI) |
 
-`omandroid-modem-sit/lib/` (installed to `/usr/lib/omandroid-sit/`):
+`omamobile-modem-sit/lib/` (installed to `/usr/lib/omamobile-sit/`):
 
 | File | Origin | What |
 |---|---|---|
@@ -47,24 +47,24 @@ Two packages:
 
 Units (`systemd/`), none enabled by the package:
 
-- `omandroid-sitd.service`: `Type=notify`, `Requires=`/`After=omandroid-modem.service`,
-  `ExecStart=omandroid-sitd --bringup`, `Restart=no` (a second start-up on
+- `omamobile-sitd.service`: `Type=notify`, `Requires=`/`After=omamobile-modem.service`,
+  `ExecStart=omamobile-sitd --bringup`, `Restart=no` (a second start-up on
   the same CP is not supported: reboot), `TimeoutStartSec=15min`.
-- `omandroid-sit-data.service`: after the RIL is ready; `omandroid-sit data
+- `omamobile-sit-data.service`: after the RIL is ready; `omamobile-sit data
   on|off` starts and stops it.
-- `/usr/lib/NetworkManager/conf.d/90-omandroid-rmnet.conf`: `rmnet*` unmanaged.
+- `/usr/lib/NetworkManager/conf.d/90-omamobile-rmnet.conf`: `rmnet*` unmanaged.
 
-Config: `/etc/omandroid/modem-sit.conf` (`[network] apn` is required; `ims`,
+Config: `/etc/omamobile/modem-sit.conf` (`[network] apn` is required; `ims`,
 `ims_apn`, `nr`, timeouts; `[control] group`; `[audio] card`,
 `mic_boost_db`).
 
-Tests: `packages/omandroid-modem-sit/test/all` (about 10 s): 53 unit tests
+Tests: `packages/omamobile-modem-sit/test/all` (about 10 s): 53 unit tests
 (most ported with the code: transport, layouts, bearer lifecycle failure
 cases, SMS codec, audio cleanup, the route watch), then three runs of the
 real daemon against `tools/sit-sim`: start-up to IMS registration with the
 request order checked, SMS both ways, a call through the CLI, no
 identifiers in the logs; a rejected bearer ends start-up before any IMS
-request; no APN means no radio command. `packages/omandroid-modem/test/all`
+request; no APN means no radio command. `packages/omamobile-modem/test/all`
 checks the CP helper's parsers on made-up inputs.
 
 ### 1.1 The start-up order (bringup.py)
@@ -108,7 +108,7 @@ exits, the modem stays up, nothing is retried.
   the only way to be sure the radio isn't still carrying a call. That is a
   CP power-off (one UFS handler pass) and is the one place the RIL powers
   the modem off.
-- **Storage**: received SMS in `/var/lib/omandroid-sit` (0700, files 0600):
+- **Storage**: received SMS in `/var/lib/omamobile-sit` (0700, files 0600):
   numbers and text, never to be copied into the repository.
 
 ### 1.3 Known gaps
@@ -126,7 +126,7 @@ exits, the modem stays up, nothing is retried.
 
 ---
 
-## 2. The socket API (`/run/omandroid-sit/socket`)
+## 2. The socket API (`/run/omamobile-sit/socket`)
 
 A stream Unix socket; one JSON object per line each way. Root and members
 of `[control] group` (default `wheel`, checked with `SO_PEERCRED`) may
@@ -144,25 +144,25 @@ connect. Replies are `{"ok": true, "result": ...}` or `{"ok": false,
 | `{"action": "sms-status", "request_id": ...}`, `{"action": "sms-list"}`, `{"action": "sms-delete", "id": ...}` | |
 | `{"action": "screen-state", "on": bool}` | SIT screen state and the indication filter (fewer wakeups with the screen off); refused during a call |
 
-`/run/omandroid-sit/state.json` holds the same status without numbers
+`/run/omamobile-sit/state.json` holds the same status without numbers
 (calls as direction and state only, an unread SMS count), rewritten on
 every change, for pollers.
 
 ## 3. The user-facing path for calls, SMS and data
 
-**Today: the `omandroid-sit` CLI and the socket above.** `omandroid-sit
+**Today: the `omamobile-sit` CLI and the socket above.** `omamobile-sit
 status`, `dial`, `answer`, `hangup`, `dtmf`, `mute`, `sms send|list|delete`,
 `data on|off`, `watch`. Mobile data needs nothing from the user once
-`omandroid-sit-data` runs: rmnet0 is a fallback route behind Wi-Fi, so any
+`omamobile-sit-data` runs: rmnet0 is a fallback route behind Wi-Fi, so any
 application uses it when Wi-Fi is down.
 
 The stack this is ported from has **no ModemManager plugin, no oFono driver
 and no D-Bus API**: its own phone and messaging apps talk to exactly this
 socket protocol (JSON lines, the same actions). So:
 
-- The shell's quick-settings "Mobile data" tile (`omandroid-shell`) can
-  read `omandroid-sit status --json` or `state.json` and toggle with
-  `omandroid-sit data on|off`, as section 2.1 of the 0.1 note planned.
+- The shell's quick-settings "Mobile data" tile (`omamobile-shell`) can
+  read `omamobile-sit status --json` or `state.json` and toggle with
+  `omamobile-sit data on|off`, as section 2.1 of the 0.1 note planned.
 - An incoming call shows up in `status`/`state.json` (`ringing-in`); a
   shell overlay that polls `watch` and offers answer/hang-up is the
   smallest useful UI. Not built yet.
@@ -170,6 +170,6 @@ socket protocol (JSON lines, the same actions). So:
   The options are unchanged from the 0.1 note: an oFono `sitmodem` driver
   (the natural fit: SIT families map one to one onto oFono atoms; port
   `sit.py`'s layouts to C and test it against `tools/sit-sim`) or a
-  ModemManager SIT port type upstream. Either replaces `omandroid-sitd` as
+  ModemManager SIT port type upstream. Either replaces `omamobile-sitd` as
   the IPC0 owner (`Conflicts=` between the units), because SIT has no
   multiplexing.

@@ -1,14 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Publishing the kernel: candidate `omandroid-next` (cheetah / gs201)
+# Publishing the kernel: candidate `omamobile-next` (cheetah / gs201)
 
-Status (2026-10-12): **prepared, not pushed.** Branch `omandroid-next` in
+Status (2026-10-12): **prepared, not pushed.** Branch `omamobile-next` in
 `~/android/mainline/wt-next`, built in `~/android/mainline/out-next`
-(`7.3.0-rc6-omandroid-push1-00123-gadb29333ff8c`). Head `adb29333f`, 65
-commits on top of the published `omandroid` (`7b0f8b5d1`, 58 commits on
+(`7.3.0-rc6-omamobile-push1-00123-gadb29333ff8c`). Head `adb29333f`, 65
+commits on top of the published `omamobile` (`7b0f8b5d1`, 58 commits on
 v7.3-rc6). Nothing here has run on the phone as this exact tree; see
 section 5 before publishing.
 
-`omandroid-int` (what the phone runs) had 194 commits beyond `omandroid`.
+`omamobile-int` (what the phone runs) had 194 commits beyond `omamobile`.
 Each was classified as ready, bring-up only, superseded or not yet verified on
 the phone, from the plans' recorded results and NOTES.md. The ready ones
 were picked into a clean series grouped by subsystem; fixups were squashed
@@ -16,7 +16,7 @@ into what they fix, and debug or staging code inside otherwise ready commits
 was removed. Authorship and author dates are kept. No commit carries a
 `Signed-off-by:` (the human signs off; see 6.2 in CONTRIBUTING.md).
 
-## 1. What is in `omandroid-next`
+## 1. What is in `omamobile-next`
 
 | Subsystem | Commits | Source in int | On by default? | Evidence |
 | --- | --- | --- | --- | --- |
@@ -40,7 +40,7 @@ was removed. Authorship and author dates are kept. No commit carries a
 `e1c6379cf`* (with its conflict against the dropped debug code resolved),
 `c0545e232` `24cfee473`.
 
-The series, in order (`git log --oneline omandroid..omandroid-next`):
+The series, in order (`git log --oneline omamobile..omamobile-next`):
 
 | Commit | Subject |
 | --- | --- |
@@ -134,7 +134,7 @@ wording, or the squashes named here.
 - **brcmfmac `pcie.c`:** dropped the debug-only commits `e765e7004` (32-bit
   alias watcher) and `53a679e7a` (dongle DMA dump), and the index dump half
   of `2c738ed2d`. After the series the file differs from int only by that
-  debug code (checked with `git diff omandroid-int`). `07c519fd7` (host
+  debug code (checked with `git diff omamobile-int`). `07c519fd7` (host
   ready only once, 0x12345678) is squashed into `2c738ed2d`. The proprietary
   firmware symbol-map citation (`_hnd_die`, `pciedev_handle_hostready_intr`)
   is gone from the message and the code comment; the trap lines from the
@@ -162,7 +162,7 @@ wording, or the squashes named here.
 | Area | int commits | Why |
 | --- | --- | --- |
 | Display (gs-decon KMS, 120 Hz, panel sleep) | `1ca875861` `1d567d206` `96f810ca9` `00e49c41b` `52ec674f1` `a2a2ee90d` `fa6d7aec8` `04cbbeca6` `32b4bf0c3` `445d2b4f7` `3e242dc3f` `cb0400f56` `5081097ac` `d4b2e68a3` `fe2647543` `dcc41a530` `2ca20ad4d` `172c08f89` `7d689978a` `5f4808c32` | Works (D6, 120 Hz), but needs rework: the driver commit is a staged bring-up driver (`stage`, `force_xrgb`, "bring-up driver" Kconfig); five later commits are fixups of it; `cb0400f56` mixes the KMS-default change with the 120 Hz mode; comments cite DISPLAY-PLAN. Its DTS needs the ACPM `mif`/`disp` clocks, so it also waits for the ACPM clock commit. `screen_off` (`172c08f89`, `dcc41a530`, `2ca20ad4d`) has not passed D3b-1c/D3b-2. |
-| ACPM GPU clock and GPU DVFS | `12af44fa2` `d9a47b2d0` | Verified (151-572 MHz), but the cap is a staging module parameter (`gs201_gpu_max_khz`, default read-only) that `omandroid-device-cheetah` sets. Rework: cap through the OPP table, drop the parameter and the package option together. |
+| ACPM GPU clock and GPU DVFS | `12af44fa2` `d9a47b2d0` | Verified (151-572 MHz), but the cap is a staging module parameter (`gs201_gpu_max_khz`, default read-only) that `omamobile-device-cheetah` sets. Rework: cap through the OPP table, drop the parameter and the package option together. |
 | Bluetooth enable | `ff4788789`, `d273f95bf` | Works only with the `btbcm patchram_nowait=1` bring-up parameter the package sets. Needs an upstream-style BCM4389 quirk first. The BT nodes are in next, disabled. |
 | S2MPG12 PMIC, RTC, VGPIO2AP, s2idle PMU hint | `279130ea5` `a0cdfa111` `6c0840744` `9270c1a8c` `9f0ff0acc` `93555da2a` `8d820bc0a` | SUSPEND-PLAN S3/S4 not run. |
 | S2MPG13, USI5, GNSS | `4a2cadde4` `7ef20d70e` `3510a9c19` `c3937a59e` `cb0505cc1` `bb576befa` `85664485f` `eb04c6c3c` `7f4083e7c` | S2MPG13 passed G1-G3d, but only with overlays, and it depends on the held S2MPG12 commits. The BCM4775x driver is a misc driver with Broadcom's private ABI and bring-up logging (belongs in `drivers/gnss/`); `7f4083e7c` mixes its needed nstandby fix with event logging. `bb576befa` cites GNSS-PLAN in comments. |
@@ -181,17 +181,17 @@ mailbox ranges replaced by `mboxes` (`01be75e8a` `7bea582c5`); and
 `375055bd1`, a duplicate of `33b28cee6`.
 
 Not merged into int and not considered: 7 commits only on
-`omandroid-fingerprint`, 1 only on `omandroid-wifi-d3`.
+`omamobile-fingerprint`, 1 only on `omamobile-wifi-d3`.
 
-**For the repo, when publishing:** `kernel/configs/omandroid.config` still
+**For the repo, when publishing:** `kernel/configs/omamobile.config` still
 enables `CONFIG_PCIE_GS201_SYSMMU=m` and the modem, AoC and Trusty symbols;
-`merge_config` ignores symbols the tree doesn't have, so `omandroid-next`
+`merge_config` ignores symbols the tree doesn't have, so `omamobile-next`
 builds as is. `CONFIG_BRCMDBG=y` is a debug option worth reviewing.
 
 ## 4. Checks run (offline, 2026-10-12)
 
 - Full build with the repo's config fragment:
-  `KERNEL_DIR=~/android/mainline/wt-next KERNEL_OUT=~/android/mainline/out-next bin/omandroid kernel`:
+  `KERNEL_DIR=~/android/mainline/wt-next KERNEL_OUT=~/android/mainline/out-next bin/omamobile kernel`:
   no compiler warnings.
 - `W=1` of every C file the series touches: no warnings.
 - Every commit builds its changed objects and `gs201-cheetah.dtb` on top of
@@ -227,9 +227,9 @@ Every step is the human's. Nothing is pushed until step 5.4.
 
 ```sh
 cd ~/android/mainline/wt-next
-git log --oneline omandroid..omandroid-next
-git range-diff omandroid..omandroid-int omandroid..omandroid-next | less   # what changed vs int
-git diff omandroid-int omandroid-next -- drivers/phy/samsung/phy-gs201-pcie.c \
+git log --oneline omamobile..omamobile-next
+git range-diff omamobile..omamobile-int omamobile..omamobile-next | less   # what changed vs int
+git diff omamobile-int omamobile-next -- drivers/phy/samsung/phy-gs201-pcie.c \
   drivers/pci/controller/dwc/pcie-gs201.c drivers/net/wireless/broadcom/   # only bring-up code may differ
 ```
 
@@ -242,7 +242,7 @@ differs.
 consistent with the existing 58 commits, which carry `Co-Authored-By:`.
 
 ```sh
-git -C ~/android/mainline/wt-next rebase --signoff omandroid
+git -C ~/android/mainline/wt-next rebase --signoff omamobile
 ```
 
 **5.3 Boot it once (optional but recommended; risk: medium).** The phone
@@ -254,36 +254,36 @@ torch, buttons, touch and USB should come up. Expect `clk_acpm`,
 unknown or unused. Ask the human first (AGENTS.md section 1).
 
 ```sh
-cd ~/Projects/omandroid
-KERNEL_DIR=~/android/mainline/wt-next KERNEL_OUT=~/android/mainline/out-next bin/omandroid initramfs
-KERNEL_DIR=~/android/mainline/wt-next KERNEL_OUT=~/android/mainline/out-next bin/omandroid images
-KERNEL_DIR=~/android/mainline/wt-next KERNEL_OUT=~/android/mainline/out-next bin/omandroid push
+cd ~/Projects/omarchy-mobile
+KERNEL_DIR=~/android/mainline/wt-next KERNEL_OUT=~/android/mainline/out-next bin/omamobile initramfs
+KERNEL_DIR=~/android/mainline/wt-next KERNEL_OUT=~/android/mainline/out-next bin/omamobile images
+KERNEL_DIR=~/android/mainline/wt-next KERNEL_OUT=~/android/mainline/out-next bin/omamobile push
 tools/phone-ssh 'uname -r; ip -br link; journalctl -b -p err --no-pager | head -50'
 ```
 
 Pass: SSH comes back, `uname -r` is the next release, Wi-Fi associates,
 `dmesg` shows no new oops. Stop on any hang (wait for the watchdog, then
 section 1 "When a reboot gets stuck"). Rollback: push the int build again
-(`KERNEL_DIR=~/android/mainline/wt-int KERNEL_OUT=~/android/mainline/out-int bin/omandroid push`,
+(`KERNEL_DIR=~/android/mainline/wt-int KERNEL_OUT=~/android/mainline/out-int bin/omamobile push`,
 with the int images still in `out-int/images`),
 or flash `~/android/mainline/known-good` from fastboot.
 
-**5.4 Publish (irreversible: force-pushes the public `omandroid`).**
+**5.4 Publish (irreversible: force-pushes the public `omamobile`).**
 
 ```sh
-cd ~/android/mainline/linux                  # has `omandroid` checked out, must be clean
-git merge --ff-only omandroid-next           # omandroid-next sits directly on omandroid
-cd ~/Projects/omandroid
-tools/publish-kernel                         # defaults: branch omandroid, tag v7.3-rc6
+cd ~/android/mainline/linux                  # has `omamobile` checked out, must be clean
+git merge --ff-only omamobile-next           # omamobile-next sits directly on omamobile
+cd ~/Projects/omarchy-mobile
+tools/publish-kernel                         # defaults: branch omamobile, tag v7.3-rc6
 ```
 
 `tools/publish-kernel` replays the 123 commits on the squashed v7.3-rc6
-base in a throwaway worktree, checks the tree matches `omandroid`, and
-force-pushes `publish/omandroid` to `github.com/derekross/linux-omandroid`.
-Pass: "Published omandroid (123 commits on v7.3-rc6)". Rollback: the
-previous published head is `publish/omandroid` before the run
-(`056bfe463`); `git push --force <remote> 056bfe463:refs/heads/omandroid`
+base in a throwaway worktree, checks the tree matches `omamobile`, and
+force-pushes `publish/omamobile` to `github.com/derekross/linux-omarchy-mobile`.
+Pass: "Published omamobile (123 commits on v7.3-rc6)". Rollback: the
+previous published head is `publish/omamobile` before the run
+(`056bfe463`); `git push --force <remote> 056bfe463:refs/heads/omamobile`
 restores it.
 
 Afterwards: `git worktree remove ~/android/mainline/wt-next` and
-`git branch -d omandroid-next` once merged.
+`git branch -d omamobile-next` once merged.

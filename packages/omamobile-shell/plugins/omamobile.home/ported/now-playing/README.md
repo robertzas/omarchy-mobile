@@ -45,4 +45,4 @@ The original is MIT licensed, and so is this port:
     SOFTWARE.
 
 The same text is in `LICENSE-omarchy-widgets` in the home screen's plugin folder
-(`/usr/share/omandroid/shell/plugins/omandroid.home/LICENSE-omarchy-widgets`).
+(`/usr/share/omamobile/shell/plugins/omamobile.home/LICENSE-omarchy-widgets`).

@@ -5,22 +5,22 @@ Status (2026-10-12): **Wi-Fi and the battery gauge work by default.** Wi-Fi:
 W1-W3 passed (WPA2 on 5 GHz, about 19 MB/s; 9.14-9.16), and W4 ended in the
 decision of 9.21: brcmfmac comes up at boot behind the restricted DMA pool,
 without the SysMMU, which can't tell PCIe from UFS
-(`omandroid-wifi.service`, omandroid-device-cheetah 0.1.12+). Battery: B1
+(`omamobile-wifi.service`, omamobile-device-cheetah 0.1.12+). Battery: B1
 and B1b passed (stock's battery model loaded at probe; NOTES.md). Charging
 (B2-B4) continues in `USB-C-PLAN.md`, Bluetooth in `BLUETOOTH-PLAN.md`.
-Kernel: `omandroid-wifi` @ `a3061be71` (`wt-wifi`) and `omandroid-w4` @
-`242602382` (`wt-pcie`, on the `omandroid-pcie` work), both merged into
-`omandroid-int`. **Next:** the D3 handshake for suspend, branch
-`omandroid-wifi-d3` @ `e20614037` (`wt-wifi-d3`; built, not merged;
+Kernel: `omamobile-wifi` @ `a3061be71` (`wt-wifi`) and `omamobile-w4` @
+`242602382` (`wt-pcie`, on the `omamobile-pcie` work), both merged into
+`omamobile-int`. **Next:** the D3 handshake for suspend, branch
+`omamobile-wifi-d3` @ `e20614037` (`wt-wifi-d3`; built, not merged;
 `SUSPEND-PLAN.md` S5); 6 GHz is future work.
 
 Earlier status (historical, superseded by the status above): W0/B0 (offline prep) done, see "G0 status". B1 done on the phone.
 PCIe drivers for Wi-Fi (W0b) built offline (section 7). **W1 hung the phone
 twice on 2026-10-11; the cause is found and fixed offline, and W1.3 now runs
 in stages with a log capture tool: see section 8, which replaces the W1.3
-step of 7.5.** Written 2026-10-11 against `omandroid` @ `0e73f9013`
-(Linux 7.3-rc6), kernel branch `omandroid-wifi` in `wt-wifi`; PCIe work in
-`omandroid-pcie` (`wt-pcie`).
+step of 7.5.** Written 2026-10-11 against `omamobile` @ `0e73f9013`
+(Linux 7.3-rc6), kernel branch `omamobile-wifi` in `wt-wifi`; PCIe work in
+`omamobile-pcie` (`wt-pcie`).
 
 Goal: Wi-Fi through mainline brcmfmac, Bluetooth through hci_bcm, and battery
 level plus charging through the upstream MAX77759 drivers, each with Google's
@@ -29,7 +29,7 @@ own firmware files taken from the user's factory image.
 Path abbreviations:
 
 - `L/` = `/home/raven/android/mainline/wt-wifi` (our kernel, this branch)
-- `G/` = `/home/raven/android/omandroid/out-kernel/google/gs-6.1/private`
+- `G/` = `/home/raven/android/omamobile/out-kernel/google/gs-6.1/private`
 - `GS/` = `G/google-modules/soc/gs`
 - `W/` = `G/google-modules/wlan/bcm4389` (Google's bcmdhd for this chip)
 - `R/` = `/home/raven/android/reference/cheetah-stock-cp2a-root` (stock live DT, logs)
@@ -313,7 +313,7 @@ tar -C out/vendor-firmware -cf - usr | tools/phone-ssh 'tar -C / -xf -'
   are offered for restoring Pixel devices, under Google's terms. They carry no
   redistribution licence like linux-firmware's `LICENCE.broadcom_bcm43xx`, and
   the NVRAM header even says `<<Broadcom-WL-IPTag/Proprietary:Vendor1007>>`.
-- **So Omandroid never ships them:** not in git, not in a package, not in an
+- **So Omarchy Mobile never ships them:** not in git, not in a package, not in an
   image we publish. `*.img` and `*.zip` are already gitignored, and the script
   writes under `out/`, which is ignored too. The user extracts them on their own
   machine from the factory image of their own phone, as LineageOS's
@@ -329,7 +329,7 @@ tar -C out/vendor-firmware -cf - usr | tools/phone-ssh 'tar -C / -xf -'
 ## 3. Bluetooth
 
 **Moved to `BLUETOOTH-PLAN.md` (2026-10-12)**, which has the hardware table
-with evidence, the kernel work (branch `omandroid-bt`, all off by default)
+with evidence, the kernel work (branch `omamobile-bt`, all off by default)
 and the BT1-BT3 runbook. Bluetooth does not depend on the PCIe/Wi-Fi work.
 What changed against the notes that were here:
 
@@ -421,7 +421,7 @@ is the template. We use the same nodes on hsi2c_13 with gs201's pins.
 ## 5. Bring-up sequence with gates
 
 Rules: everything new is a module, blacklisted from autoload where probing
-changes hardware state (`device/cheetah/rootfs/etc/modprobe.d/omandroid-max77759.conf`).
+changes hardware state (`device/cheetah/rootfs/etc/modprobe.d/omamobile-max77759.conf`).
 It is loaded by hand over SSH while a second session runs `dmesg -w`.
 `panic=10` and ABL's A/B fallback are the recovery path (NOTES.md).
 
@@ -491,7 +491,7 @@ Program `s2mpu_hsi2` for the Wi-Fi VID to a restricted DMA pool (1.5). The
 pool is already in the DT, disabled (`wifi_dma_pool`, 16 MiB); 7.7 shows how
 to test brcmfmac through it before the S2MPU work. **Until W4 is done, Wi-Fi
 must not ship enabled:** `pcie_1` stays `disabled` in the default DTB, and
-`pcie_gs201` and `brcmfmac` stay blacklisted in `omandroid-device-cheetah`.
+`pcie_gs201` and `brcmfmac` stay blacklisted in `omamobile-device-cheetah`.
 
 What W1-W2 found about the HSI2 SysMMU and S2MPU (registers that abort,
 the working DMA setup) is in 9.14, "W4".
@@ -535,13 +535,13 @@ Top risks:
 > **Historical.** Superseded by the B1 and B1b results, sections 8 and 9
 > (W1-W4, decision 9.21) and the status at the top.
 
-### Kernel: `omandroid-wifi` in `wt-wifi`, on `omandroid` @ `0e73f9013`
+### Kernel: `omamobile-wifi` in `wt-wifi`, on `omamobile` @ `0e73f9013`
 
 | Commit | What | State |
 |---|---|---|
 | `6efec864b` wifi: brcmfmac: add BCM4389 PCIe support | chip/PCI IDs, CA7 RAM base 0x200000, firmware name `brcmfmac4389c1-pcie`, random seed | built; idle until W1 (no PCIe host) |
 | `6b1fe828d` dt-bindings: net: wireless: brcm,bcm4329-fmac: add BCM4389 PCI ID | `pci14e4,4441` | `dt-doc-validate` ok |
-| `aed2733f5` arm64: dts: exynos: google: gs201: add ALIVE pinctrl | **cherry-pick of `a3e96fceb` from `omandroid-buttons`**, needed for gpa9; it drops out when both land | as in buttons |
+| `aed2733f5` arm64: dts: exynos: google: gs201: add ALIVE pinctrl | **cherry-pick of `a3e96fceb` from `omamobile-buttons`**, needed for gpa9; it drops out when both land | as in buttons |
 | `93dd7f5c2` dt-bindings: i2c: exynos5: add Google gs201 compatible | `google,gs201-hsi2c` | `dt-doc-validate` ok |
 | `dab016aab` arm64: dts: exynos: google: gs201: add USI13 with its HSI2C | `usi13` + `hsi2c_13` (disabled in the SoC dtsi), `hsi2c13_bus` pins | |
 | `f14275eb2` arm64: dts: exynos: google: gs201-cheetah: add the MAX77759 | USI13 in I2C mode, **okay**; `pmic@66` + `gpio`, `fuel-gauge@36` **okay**; `usb-typec@25` **disabled**; gpa9 IRQ pin configs | modules blacklisted (below) |
@@ -549,7 +549,7 @@ Top risks:
 | `a79ca362f` Bluetooth: hci_bcm: add BCM4389 compatible | OF match only | built; idle until BT1 |
 
 - Build: `logs/kernel-wifi.log`, `modules-wifi.log` and `images-wifi.log`
-  all exit 0. Release `7.3.0-rc6-omandroid-push1-00041-ga79ca362f84d`;
+  all exit 0. Release `7.3.0-rc6-omamobile-push1-00041-ga79ca362f84d`;
   1680 modules; images in `~/android/mainline/out-wifi/images`.
 - `dt-validate` (dtschema 2026.9) of `gs201-cheetah.dtb` against this tree's
   bindings reports only the existing `soc_id` property.
@@ -562,17 +562,17 @@ Top risks:
   `pcie_1` node (no binding or driver yet; sketch in 1.7), and anything for the
   APM UART (no CMU_APM).
 
-### omandroid repo
+### omamobile repo
 
-- `kernel/configs/omandroid.config`: `BRCMFMAC_PCIE=y`, `BRCMFMAC=m`,
+- `kernel/configs/omamobile.config`: `BRCMFMAC_PCIE=y`, `BRCMFMAC=m`,
   `BT_HCIUART(_BCM)`, `MFD_MAX77759`, `CHARGER_MAX77759`, `BATTERY_MAX17042`
   (the MAX77759 gauge driver; not MAX1720X).
-- `device/cheetah/rootfs/etc/modprobe.d/omandroid-max77759.conf`: blacklists
+- `device/cheetah/rootfs/etc/modprobe.d/omamobile-max77759.conf`: blacklists
   `max77759`, `max77759_charger`, `tcpci_maxim`, `max17042_battery`,
   `gpio_max77759` and `nvmem_max77759`.
 - `tools/extract-vendor-firmware`: section 2.2.
 
-### B1 runbook (phone in Arch over USB; run from the omandroid repo)
+### B1 runbook (phone in Arch over USB; run from the omamobile repo)
 
 ```sh
 export KERNEL_OUT=$HOME/android/mainline/out-wifi
@@ -582,11 +582,11 @@ tools/extract-vendor-firmware -o out/vendor-firmware \
 tar -C out/vendor-firmware -cf - usr | tools/phone-ssh 'tar -C / -xf -'
 tools/phone-ssh 'pacman -S --needed --noconfirm i2c-tools'
 # 1. blacklist FIRST, so the new DTB cannot autoload the charger
-tools/phone-ssh 'mkdir -p /etc/modprobe.d && cat > /etc/modprobe.d/omandroid-max77759.conf' \
-  < device/cheetah/rootfs/etc/modprobe.d/omandroid-max77759.conf
+tools/phone-ssh 'mkdir -p /etc/modprobe.d && cat > /etc/modprobe.d/omamobile-max77759.conf' \
+  < device/cheetah/rootfs/etc/modprobe.d/omamobile-max77759.conf
 # 2. modules, then the images into slot B, and reboot
-bin/omandroid modules-push
-bin/omandroid push
+bin/omamobile modules-push
+bin/omamobile push
 # 3. B0 pass check: unchanged USB/UFS/touch, the bus and unbound clients
 tools/phone-ssh 'uname -r; lsmod | grep -cE "max77759|max17042|tcpci"; \
   ls -l /sys/bus/i2c/devices/ | grep 10d60000'   # i2c-BUS, BUS-0036, BUS-0066 (0x25 is disabled)
@@ -617,7 +617,7 @@ runbook.
 
 ## B1 result (2026-10-11, on the phone)
 
-- Kernel `7.3.0-rc6-...-ga3061be71070` (`omandroid-wifi`, now merged into `omandroid`). USB, UFS, touch and the GPU unchanged.
+- Kernel `7.3.0-rc6-...-ga3061be71070` (`omamobile-wifi`, now merged into `omamobile`). USB, UFS, touch and the GPU unchanged.
 - `10d60000.i2c` is `i2c-0`: the first gs201 HSI2C on mainline works with the clocks as they are. Clients `0-0036` and `0-0066` enumerate.
 - `i2cget 0x66 0x00` = **0x3b** (PMIC_ID). Charger mode `0x69/0xb9` = 0x05.
 - **Fuel gauge STATUS = 0x0082: the POR bit is set**, and DesignCap reads 3000 (the chip default; Google's model has 0x09c5). The gauge has lost Google's model and runs its own default EZ model. Read-only register dump: RepSOC 98 %, VCell 4.327 V, current about 0, Temp exactly 22.0 °C (probably a default; no thermistor configuration).
@@ -628,8 +628,8 @@ runbook.
 ## B1b battery model (2026-10-11, offline; nothing was run on the phone)
 
 Goal: right capacity and temperature from the MAX77759 gauge, by loading the
-same ModelGauge m5 model that stock loads. Kernel branch `omandroid-battery`
-in `/home/raven/android/mainline/wt-battery`, on `omandroid` @ `43918aeb7`;
+same ModelGauge m5 model that stock loads. Kernel branch `omamobile-battery`
+in `/home/raven/android/mainline/wt-battery`, on `omamobile` @ `43918aeb7`;
 build in `/home/raven/android/mainline/out-battery`.
 
 ### Why the B1 readings are wrong
@@ -673,7 +673,7 @@ through `gbms_storage` tag BRID, `max1720x_read_batt_id()`; the pack EEPROM
 is `google,bee-name = "8-00500"` in `gs201-cheetah-battery.dtsi`).
 
 Build: `logs/kernel-battery.log`, `modules-battery.log`, `images-battery.log`,
-all exit 0. Release `7.3.0-rc6-omandroid-push1-00057-g50c4b244a706`, 1682 modules, images in `~/android/mainline/out-battery/images` (initramfs rebuilt there: `logs/initramfs-battery.log`). W=1 build of `max17042_battery.o` has no
+all exit 0. Release `7.3.0-rc6-omamobile-push1-00057-g50c4b244a706`, 1682 modules, images in `~/android/mainline/out-battery/images` (initramfs rebuilt there: `logs/initramfs-battery.log`). W=1 build of `max17042_battery.o` has no
 warnings; `dt-validate` of `gs201-cheetah.dtb` (dtschema 2026.9) reports only the existing
 `soc_id` and framebuffer `post-init-providers`; `dt-doc-validate` of the binding is clean.
 
@@ -715,8 +715,8 @@ tools/phone-ssh 'grep . /sys/class/power_supply/max170xx_battery/{capacity,charg
 #   loaded its own model), check 0x18=0x09c5 and 0x3c=0x2d00: then the gauge
 #   already has the right model and the new kernel will leave it alone. Skip to B1b.3.
 # B1b.1  new kernel + DTB (slot B), modules first
-bin/omandroid modules-push
-bin/omandroid push          # reboots into slot B
+bin/omamobile modules-push
+bin/omamobile push          # reboots into slot B
 # B1b.2  the load happens at probe (max17042_battery autoloads). Watch for:
 tools/phone-ssh 'dmesg | grep -i -E "max17042|max170xx|battery model"'
 #   pass: "battery model loaded (DesignCap 0x9c5, TaskPeriod 0x2d00)", no
@@ -746,7 +746,7 @@ loss, and every change can be undone in software:
 
 1. Bad readings after the load: `i2cset -f -y 0 0x36 0x60 0x000f w`
    (hardware reset: back to the default EZ model, POR set), then boot the
-   previous kernel/DTB (`bin/omandroid push` from `out-wifi`, or let ABL fall
+   previous kernel/DTB (`bin/omamobile push` from `out-wifi`, or let ABL fall
    back to slot A). With the old DTB, the driver writes nothing again.
 2. Or boot stock Android in slot A: it reloads its own model (below).
 3. A loader failure is already safe: POR stays set and the driver reports
@@ -793,7 +793,7 @@ enables the alert pin.
 
 > **Historical.** Superseded by sections 8 and 9 (W1-W4 on the phone).
 
-Kernel branch `omandroid-pcie` in `/home/raven/android/mainline/wt-pcie`
+Kernel branch `omamobile-pcie` in `/home/raven/android/mainline/wt-pcie`
 (on top of the BCM4389 and MAX77759 commits), built into
 `~/android/mainline/out-pcie`. Path abbreviations as at the top, plus
 `P/` = `wt-pcie` and `GD/` = `GS/drivers/pci/controller/dwc`.
@@ -810,14 +810,14 @@ Kernel branch `omandroid-pcie` in `/home/raven/android/mainline/wt-pcie`
 | `3f6c342fe` arm64: dts: exynos: google: gs201: add HSI2 pinctrl and PCIe GEN4A_1 | `pinctrl_hsi2` (enabled), `pcie_1` + `pcie_1_phy` (**disabled**) |
 | `c2b4f9d3d` arm64: dts: exynos: google: gs201-cheetah: wire up the BCM4389 Wi-Fi | WL_REG_ON regulator, root port + `wifi@0,0`, pins, `wifi_dma_pool` (**disabled**) |
 
-omandroid repo: `kernel/configs/omandroid.config` (`PCIE_GS201=m`,
+omamobile repo: `kernel/configs/omamobile.config` (`PCIE_GS201=m`,
 `PHY_GS201_PCIE=m`, `PCI_PWRCTRL_GENERIC=y` (built in anyway: the arm64
 defconfig's `PCIE_QCOM` selects it), `DMA_RESTRICTED_POOL=y`),
 `device/cheetah/overlays/wifi-pcie-test.dtso` and `wifi-dma-pool-test.dtso`
-(the explicit enable steps), and `packages/omandroid-device-cheetah/vendor/modprobe.d/omandroid-wifi.conf`
+(the explicit enable steps), and `packages/omamobile-device-cheetah/vendor/modprobe.d/omamobile-wifi.conf`
 (blacklists `pcie_gs201` and `brcmfmac`).
 
-Checks: `bin/omandroid kernel`, `modules` and `images` exit 0
+Checks: `bin/omamobile kernel`, `modules` and `images` exit 0
 (`logs/kernel-pcie.log`, `modules-pcie.log`, `images-pcie.log`). Both new
 drivers build with `W=1` and no warnings, as does the DTB (the only dtc
 warning is the existing `/chosen/framebuffer`). `dt_binding_check` and
@@ -947,7 +947,7 @@ the PHY and the pool all enabled) reports only the existing `soc_id`.
 Until gate W4, the BCM4389 can DMA to all of RAM (1.5). Therefore:
 `pcie_1`, `pcie_1_phy` and `wifi_dma_pool` are `disabled` in the default
 DTB; `pcie_gs201` and `brcmfmac` are blacklisted in
-`omandroid-device-cheetah`; enabling is the explicit overlay step below.
+`omamobile-device-cheetah`; enabling is the explicit overlay step below.
 **Wi-Fi must not ship enabled until W4** (a restricted-dma-pool that the
 HSI2 S2MPU confines the chip to, or S2MPU programming by other means). Run
 W1-W3 on a network you trust. Never commit the firmware (2.3) or the MAC
@@ -955,7 +955,7 @@ from `/chosen/config`.
 
 ### 7.5 W1 runbook: link up (on the phone; each step has its rollback)
 
-From the omandroid repo, phone in Arch over USB, a second terminal running
+From the omamobile repo, phone in Arch over USB, a second terminal running
 `tools/phone-ssh dmesg -w`. `devmem` is `tools/devmem.c` (in the initramfs
 at `/usr/local/bin/devmem`; copy it to the root if needed).
 
@@ -964,11 +964,11 @@ export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainli
 O=$KERNEL_OUT D=$O/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb
 
 # W1.0  the blacklist must be on the phone BEFORE any DTB with pcie_1 on
-tools/phone-ssh 'grep -H . /usr/lib/modprobe.d/omandroid-wifi.conf'   # pcie_gs201, brcmfmac
-#       if missing: reinstall omandroid-device-cheetah (or stream the file to /etc/modprobe.d/)
+tools/phone-ssh 'grep -H . /usr/lib/modprobe.d/omamobile-wifi.conf'   # pcie_gs201, brcmfmac
+#       if missing: reinstall omamobile-device-cheetah (or stream the file to /etc/modprobe.d/)
 
 # W1.1  new kernel, default DTB (pcie_1 off). Only change: HSI2 pinctrl + an idle regulator
-bin/omandroid modules-push && bin/omandroid push          # slot B, reboots
+bin/omamobile modules-push && bin/omamobile push          # slot B, reboots
 tools/phone-ssh 'uname -r; grep -E "gph2|gph4" /sys/kernel/debug/gpio | head -3;
   grep wlan /sys/kernel/debug/regulator/regulator_summary; lsmod | grep -c gs201'
 #       pass: USB/SSH, UFS, touch, GPU as before; gph2/gph4 chips; wlan-reg-on 0 users; 0 modules
@@ -979,7 +979,7 @@ tools/phone-ssh 'devmem 0x145e0000'    # S2MPU_HSI2 CTRL0: expect 0 (off). UFS s
 cp "$D" "$D.default"
 $O/scripts/dtc/dtc -q -I dts -O dtb -o out/wifi-pcie-test.dtbo device/cheetah/overlays/wifi-pcie-test.dtso
 $O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" out/wifi-pcie-test.dtbo
-bin/omandroid images && bin/omandroid push
+bin/omamobile images && bin/omamobile push
 tools/phone-ssh 'ls /sys/bus/platform/devices | grep -E "14520000|14550000"; lsmod | grep gs201'
 #       pass: both devices exist; phy_gs201_pcie may be loaded (it only maps registers), pcie_gs201 not
 # DO NOT read the controller's registers here (e.g. devmem 0x145202c8): ABL
@@ -987,8 +987,8 @@ tools/phone-ssh 'ls /sys/bus/platform/devices | grep -E "14520000|14550000"; lsm
 # hangs the SoC (no panic, so no auto-reboot; recover by holding Power ~30 s).
 # This happened on 2026-10-11 (section 8.1). Never devmem PCIe registers at all;
 # the driver logs what is needed.
-#       rollback: cp "$D.default" "$D"; bin/omandroid images && bin/omandroid push
-#       (bin/omandroid kernel also rebuilds the DTB without the overlay)
+#       rollback: cp "$D.default" "$D"; bin/omamobile images && bin/omamobile push
+#       (bin/omamobile kernel also rebuilds the DTB without the overlay)
 
 # W1.3  SUPERSEDED by section 8 (staged, with tools/wifi-w1-capture). Kept for the record:
 tools/phone-ssh 'modprobe phy_gs201_pcie &&
@@ -1188,7 +1188,7 @@ Why nothing was logged:
 
 ### 8.3 What changed (all offline)
 
-Kernel `omandroid-pcie` in `wt-pcie`, fixups squashed into the existing
+Kernel `omamobile-pcie` in `wt-pcie`, fixups squashed into the existing
 commits. The new heads:
 
 | Commit | What |
@@ -1270,7 +1270,7 @@ boot.
 9. `tools/wifi-w1-capture --pstore` saves `/sys/fs/pstore/*` after a watchdog
    reset.
 
-Builds: `bin/omandroid kernel`, `modules` and `images` with
+Builds: `bin/omamobile kernel`, `modules` and `images` with
 `KERNEL_DIR=wt-pcie KERNEL_OUT=out-pcie` exit 0 (`logs/kernel-pcie.log`,
 `modules-pcie.log`, `images-pcie.log`). Both drivers are clean with `W=1`.
 `out-pcie`'s DTB **has the test overlay applied** (`pcie_1` and the PHY
@@ -1283,7 +1283,7 @@ not installed in the container or on the host); the YAML parses.
 Prerequisites:
 - The W1.0 blacklist is on the phone.
 - The phone boots the `out-pcie` kernel with the test DTB:
-  `bin/omandroid modules-push && bin/omandroid push` with
+  `bin/omamobile modules-push && bin/omamobile push` with
   `KERNEL_DIR=$HOME/android/mainline/wt-pcie
   KERNEL_OUT=$HOME/android/mainline/out-pcie`. The new modules must be on the
   phone, because the old `pcie_gs201.ko` is the one that hangs.
@@ -1365,10 +1365,10 @@ What each pass looks like (lines from the summary, `14520000.pcie:` /
 - A hang: a Power hold of about 30 s (or the watchdog). ABL then boots
   slot B again, or slot A after its retries.
 - To return to the main kernel: unset `KERNEL_DIR`/`KERNEL_OUT`, then run
-  `bin/omandroid modules-push && bin/omandroid push`. That pushes
+  `bin/omamobile modules-push && bin/omamobile push`. That pushes
   `~/android/mainline/out`, which has no PCIe at all.
 - To keep `out-pcie` but turn PCIe off: `cp "$D.default" "$D"`, then
-  `bin/omandroid images && bin/omandroid push`.
+  `bin/omamobile images && bin/omamobile push`.
 
 ### 8.5 Still open
 
@@ -1492,7 +1492,7 @@ remove path that the failed setup triggers cancels it unconditionally
 
 ### 9.3 What changed (all offline)
 
-Kernel, branch `omandroid-pcie` in `wt-pcie`, one upstream-style commit each:
+Kernel, branch `omamobile-pcie` in `wt-pcie`, one upstream-style commit each:
 
 | Commit | Change |
 |---|---|
@@ -1530,18 +1530,18 @@ the power requests once the firmware runs, and the ABL MAC address (1.6).
 
 ### 9.4 W2 runbook (on the phone; each step has its rollback)
 
-From the omandroid repo, phone in Arch over USB.
+From the omamobile repo, phone in Arch over USB.
 
 ```sh
 export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
 
 # W2.0  new kernel + modules (out-pcie, DTB already has both test overlays)
-bin/omandroid modules-push && bin/omandroid push          # slot B, reboots
+bin/omamobile modules-push && bin/omamobile push          # slot B, reboots
 tools/phone-ssh 'uname -r; ls /usr/lib/firmware/updates/brcm/ | grep 4389c1;
-  grep -H . /usr/lib/modprobe.d/omandroid-wifi.conf; dmesg | grep "restricted DMA pool"'
-#   pass: release 7.3.0-rc6-omandroid-push1-00068-g2733238b74d0; .bin .txt .clm_blob present;
+  grep -H . /usr/lib/modprobe.d/omamobile-wifi.conf; dmesg | grep "restricted DMA pool"'
+#   pass: release 7.3.0-rc6-omamobile-push1-00068-g2733238b74d0; .bin .txt .clm_blob present;
 #         blacklist lists pcie_gs201 and brcmfmac; "created restricted DMA pool ... 16 MiB"
-#   rollback: unset KERNEL_DIR KERNEL_OUT; bin/omandroid modules-push && bin/omandroid push
+#   rollback: unset KERNEL_DIR KERNEL_OUT; bin/omamobile modules-push && bin/omamobile push
 
 # W2.1  link + brcmfmac in one run, watchdog armed, every line on the laptop
 tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
@@ -1599,9 +1599,9 @@ a 30 s Power hold, then boot the default DTB (9.5).
 - **brcmfmac only:** `tools/phone-ssh 'modprobe -r brcmfmac'`. The chip keeps
   running until `modprobe -r pcie_gs201` drops WL_REG_ON.
 - **PCIe off, same kernel:** `D=$KERNEL_OUT/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb;
-  cp "$D.default" "$D"; bin/omandroid images && bin/omandroid push`.
+  cp "$D.default" "$D"; bin/omamobile images && bin/omamobile push`.
 - **Back to the main kernel:** unset `KERNEL_DIR`/`KERNEL_OUT`, then
-  `bin/omandroid modules-push && bin/omandroid push` (`~/android/mainline/out`,
+  `bin/omamobile modules-push && bin/omamobile push` (`~/android/mainline/out`,
   no PCIe).
 - **A leftover watchdog:** `tools/wifi-w1-capture --disarm`.
 - Nothing is written to the chip's OTP or to any phone partition other than
@@ -1642,7 +1642,7 @@ came from the failed index-buffer allocation, not from the flags. The
 new debug line `shared flags 0x...` shows them: bit 16 (0x10000) should be
 set and bit 20 (0x100000, 2-byte indices) clear (stock: "4 * 43").
 
-**Fix** (wt-pcie, now rebased onto `omandroid` so it includes the battery
+**Fix** (wt-pcie, now rebased onto `omamobile` so it includes the battery
 model commits `84217ab38`, `fdd6273e1`, `7b0f8b5d1`):
 
 | Commit | Change |
@@ -1656,13 +1656,13 @@ rebase: `6505722a9`, `18b233c95`, `f5efa077b`, `9f7b5cac4`, `44dca3e6b`,
 
 Builds: `logs/{kernel,modules,images}-w2dma.log`, out-pcie with both
 overlays re-applied (plain DTB in `.default`), release
-`7.3.0-rc6-omandroid-push1-00073-g449fdf52b5d2`.
+`7.3.0-rc6-omamobile-push1-00073-g449fdf52b5d2`.
 
 **Next run (same command as 9.4 W2.1):**
 
 ```sh
 export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
-bin/omandroid modules-push && bin/omandroid push           # reboots into slot B
+bin/omamobile modules-push && bin/omamobile push           # reboots into slot B
 tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
 ```
 
@@ -1736,13 +1736,13 @@ appear during a normal boot. Not a lead.
 
 Builds: `logs/{kernel,modules,images}-w2ipc.log`; out-pcie with both
 overlays re-applied (plain DTB in `.default`), release
-`7.3.0-rc6-omandroid-push1-00076-ge89538839a44`.
+`7.3.0-rc6-omamobile-push1-00076-ge89538839a44`.
 
 **Next run (same command):**
 
 ```sh
 export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
-bin/omandroid modules-push && bin/omandroid push
+bin/omamobile modules-push && bin/omamobile push
 tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
 ```
 
@@ -1799,7 +1799,7 @@ once, before link up. Now we do all three, and print the registers.
 | `2c738ed2d` wifi: brcmfmac: pcie: ring host ready early on the BCM4389, debug the indices | `host ready on 0x144` after `request_irq` (and again in preinit); `ring info: ringmem …, TCM idx …`; at each control doorbell and every 64th poll: `host H2D w … r …, D2H w … r …` and `TCM H2D w … r …, D2H w … r …, mailboxint 0x…` |
 
 Builds: `logs/{kernel,modules,images}-w2db.log`, release
-`7.3.0-rc6-omandroid-push1-00078-g2c738ed2d334`; out-pcie with both
+`7.3.0-rc6-omamobile-push1-00078-g2c738ed2d334`; out-pcie with both
 overlays re-applied, and `.default` rebuilt from kbuild's preprocessed
 source (pcie_1 disabled; checked).
 
@@ -1807,7 +1807,7 @@ source (pcie_1 disabled; checked).
 
 ```sh
 export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
-bin/omandroid modules-push && bin/omandroid push
+bin/omamobile modules-push && bin/omamobile push
 tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
 ```
 
@@ -1832,10 +1832,10 @@ $KERNEL_OUT/scripts/dtc/dtc -q -I dtb -O dts "$D" |
   awk '/pcie@14520000 \{/{f=1} f&&/^[ \t]*dma-coherent;/{f=0;next} {print}' |
   $KERNEL_OUT/scripts/dtc/dtc -q -I dts -O dtb -o "$D" -
 $KERNEL_OUT/scripts/dtc/dtc -q -I dtb -O dts "$D" | grep -c dma-coherent   # 1 (UFS only; was 2)
-bin/omandroid images && bin/omandroid push
+bin/omamobile images && bin/omamobile push
 tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
 #   expect: no "IOCC after ..." lines (coherent is off), then the same table as run A
-#   rollback: cp "$D.coherent" "$D"; bin/omandroid images && bin/omandroid push
+#   rollback: cp "$D.coherent" "$D"; bin/omamobile images && bin/omamobile push
 ```
 
 Rollback otherwise as 9.5.
@@ -1880,7 +1880,7 @@ section 7.5 forbids), or the D2H path stalls in the chip.
 | `e765e7004` wifi: brcmfmac: pcie: watch the 32-bit aliases of high DMA buffers | at PCIe debug level: snapshot the RAM at the low-32-bit alias of the index buffer and of the control and rx completion rings before the first doorbell, and with each index dump report which words changed (`alias <name> +0x..: old -> new`, `alias <name>: N words changed`). Read-only |
 | `device/cheetah/overlays/wifi-dma-pool-low-test.dtso` | `alloc-ranges` 0x80000000-0xffffffff for the pool: the pool below 4 GiB, so no address bit above 31 |
 
-Builds: `logs/{kernel,modules,images}-w2alias.log`, release `7.3.0-rc6-omandroid-push1-00079-ge765e70044e3`. out-pcie has the
+Builds: `logs/{kernel,modules,images}-w2alias.log`, release `7.3.0-rc6-omamobile-push1-00079-ge765e70044e3`. out-pcie has the
 standard test DTB (pcie_1 + pool, coherent); `.default` was rebuilt
 plain.
 
@@ -1888,7 +1888,7 @@ plain.
 
 ```sh
 export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
-bin/omandroid modules-push && bin/omandroid push      # also replaces the run-B DTB on the phone
+bin/omamobile modules-push && bin/omamobile push      # also replaces the run-B DTB on the phone
 tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
 ```
 
@@ -1906,10 +1906,10 @@ O=$KERNEL_OUT D=$O/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb
 cp "$D" "$D.highpool"
 $O/scripts/dtc/dtc -q -I dts -O dtb -o out/wifi-dma-pool-low-test.dtbo device/cheetah/overlays/wifi-dma-pool-low-test.dtso
 $O/scripts/dtc/fdtoverlay -i "$D.highpool" -o "$D" out/wifi-dma-pool-low-test.dtbo
-bin/omandroid images && bin/omandroid push
+bin/omamobile images && bin/omamobile push
 tools/phone-ssh 'dmesg | grep "restricted DMA pool"'    # expect an address below 0x100000000
 tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
-#   rollback: cp "$D.highpool" "$D"; bin/omandroid images && bin/omandroid push
+#   rollback: cp "$D.highpool" "$D"; bin/omamobile images && bin/omamobile push
 ```
 
 | Line | Pass |
@@ -1954,14 +1954,14 @@ shows the raw properties, so they looked right.
 | `7ba655a94` arm64: dts: …gs201-cheetah: keep the Wi-Fi DMA pool below 4 GiB | `alloc-ranges = <0x0 0x80000000 0x80000000>` in the pool node itself, so the standard test DTB (pcie + pool overlays) is run D. Still disabled by default |
 | `device/cheetah/overlays/wifi-dma-pool-low-test.dtso` | fixed to one size cell; no longer needed with the DT change, kept for older builds |
 
-Builds: `logs/{kernel,modules,images}-w2low.log`, release `7.3.0-rc6-omandroid-push1-00081-g7ba655a9481e`; out-pcie has the
+Builds: `logs/{kernel,modules,images}-w2low.log`, release `7.3.0-rc6-omamobile-push1-00081-g7ba655a9481e`; out-pcie has the
 standard test DTB (pcie_1 + pool), `.default` rebuilt plain.
 
 **Run D (same command, standard DTB):**
 
 ```sh
 export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
-bin/omandroid modules-push && bin/omandroid push       # replaces the fixed-reg DTB in slot B
+bin/omamobile modules-push && bin/omamobile push       # replaces the fixed-reg DTB in slot B
 tools/phone-ssh 'dmesg | grep -E "restricted DMA pool|wifi-dma-pool|not a multiple"'
 #   pass: "created restricted DMA pool at 0x00000000........" (below 4 GiB), "OF: reserved mem:
 #         0x00000000........ (16384 KiB) map non-reusable wifi-dma-pool", no "not a multiple"
@@ -2033,7 +2033,7 @@ carry on. This build reads the chip's own DMA engine state to settle it.
 
 `tools/wifi-w1-capture --hsi2-probe N` runs groups 1..N after the link and
 brcmfmac, under the same watchdog. Builds: `logs/{kernel,modules,images}-w2hsi2.log`,
-release `7.3.0-rc6-omandroid-push1-00083-g53a679e7ae2a`, standard test DTB
+release `7.3.0-rc6-omamobile-push1-00083-g53a679e7ae2a`, standard test DTB
 (pool with `alloc-ranges`), `.default` rebuilt plain.
 
 **Runbook (one group further per run; stop at the first hang).** The
@@ -2044,7 +2044,7 @@ what the watchdog is for.
 
 ```sh
 export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
-bin/omandroid modules-push && bin/omandroid push
+bin/omamobile modules-push && bin/omamobile push
 
 # E1: brcmfmac with the dongle DMA dump + SysMMU groups 1-2
 tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac --hsi2-probe 2 5
@@ -2134,14 +2134,14 @@ work as its INTx handler. So no handshake is owed on it.
 | `998f718de` PCI: dwc: gs201: drop the SysMMU fault registers from the HSI2 probe | group 1 ends at INT_STATUS |
 
 Builds: `logs/{kernel,modules,images}-w2intx.log`, release
-`7.3.0-rc6-omandroid-push1-00087-g998f718de3f6`; the standard test DTB
+`7.3.0-rc6-omamobile-push1-00087-g998f718de3f6`; the standard test DTB
 (wifi node without `interrupts`, interrupt-map 1..4; checked), `.default` rebuilt plain.
 
 **Runbook (after the reboot that clears the stuck module):**
 
 ```sh
 export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
-bin/omandroid modules-push && bin/omandroid push
+bin/omamobile modules-push && bin/omamobile push
 tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5        # no --hsi2-probe
 tools/phone-ssh 'grep -E "brcmf|gs201|97:" /proc/interrupts'
 ```
@@ -2198,14 +2198,14 @@ chip's reads worked all along, and there was nothing to write yet.
 | `07c519fd7` wifi: brcmfmac: pcie: ring host ready only once on the BCM4389 | no host ready in preinit for the 4389 (the early one stays); value 0x12345678 |
 
 Builds: `logs/{kernel,modules,images}-w2hrdy.log`, release
-`7.3.0-rc6-omandroid-push1-00088-g07c519fd78ff`; standard test DTB,
+`7.3.0-rc6-omamobile-push1-00088-g07c519fd78ff`; standard test DTB,
 `.default` rebuilt plain.
 
 **Runbook:**
 
 ```sh
 export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
-bin/omandroid modules-push && bin/omandroid push
+bin/omamobile modules-push && bin/omamobile push
 tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
 tools/phone-ssh 'grep -E "brcmf|gs201" /proc/interrupts; dmesg | grep -iE "TRAP|hnd_die|halted" | tail'
 ```
@@ -2253,12 +2253,12 @@ and at remove (`W/dhd_pcie.c` `dhdpcie_dongle_reset()` →
 | `1b668f01f` wifi: brcmfmac: pcie: reset the BCM4389 with an FLR | FLR instead of the watchdog for 14e4:4441, between the power-domain requests; watchdog as fallback |
 
 Build: `logs/{kernel,modules,images}-w2flr.log`, release
-`7.3.0-rc6-omandroid-push1-00089-g1b668f01f21d`; standard test DTB,
+`7.3.0-rc6-omamobile-push1-00089-g1b668f01f21d`; standard test DTB,
 `.default` plain.
 
 ```sh
 export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
-bin/omandroid modules-push && bin/omandroid push
+bin/omamobile modules-push && bin/omamobile push
 tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5       # W2 again: must still pass
 tools/phone-ssh 'dmesg | grep -c "FLR done"'                   # >= 1 (probe)
 # W2.4: driver-only reload, twice
@@ -2289,14 +2289,14 @@ tools/phone-ssh 'for i in 1 2; do modprobe -r brcmfmac_wcc brcmfmac; sleep 1; mo
   tools/phone-ssh 'test -s /proc/device-tree/chosen/config/wlan_mac1 && echo wlan_mac1 present;
     test -s /proc/device-tree/chosen/config/bt_addr && echo bt_addr present'
   ```
-- **Proposal: a udev rule in `omandroid-device-cheetah`.** It runs before
+- **Proposal: a udev rule in `omamobile-device-cheetah`.** It runs before
   NetworkManager touches the link. Nothing is stored, and the value is
   never printed.
-  - `/usr/lib/udev/rules.d/80-omandroid-wlan-mac.rules`:
+  - `/usr/lib/udev/rules.d/80-omamobile-wlan-mac.rules`:
     ```
-    ACTION=="add", SUBSYSTEM=="net", DRIVERS=="brcmfmac", RUN+="/usr/lib/omandroid/wlan-mac %k"
+    ACTION=="add", SUBSYSTEM=="net", DRIVERS=="brcmfmac", RUN+="/usr/lib/omamobile/wlan-mac %k"
     ```
-  - `/usr/lib/omandroid/wlan-mac` (MIT):
+  - `/usr/lib/omamobile/wlan-mac` (MIT):
     ```sh
     #!/bin/sh
     # Set the Wi-Fi MAC from the bootloader's /chosen/config/wlan_mac1, as Android does.
@@ -2310,7 +2310,7 @@ tools/phone-ssh 'for i in 1 2; do modprobe -r brcmfmac_wcc brcmfmac; sleep 1; mo
   - NetworkManager keeps the current address with its default
     `cloned-mac-address` (`preserve`), and only randomises the MAC while
     scanning. To test by hand before packaging:
-    `tools/phone-ssh '/usr/lib/omandroid/wlan-mac wlp1s0; ip -br link show wlp1s0 | cut -c1-30'`
+    `tools/phone-ssh '/usr/lib/omamobile/wlan-mac wlp1s0; ip -br link show wlp1s0 | cut -c1-30'`
     (check that the address changed, without pasting it anywhere).
   - Bluetooth's `bt_addr` is the same kind of value, for the BT plan.
 
@@ -2320,7 +2320,7 @@ Omarchy uses **NetworkManager** (with wpa_supplicant) for Wi-Fi:
 `/usr/share/omarchy/install/hardware/network.sh` disables iwd, and
 `install/config/enable-services.sh` enables NetworkManager. Its UI is the
 shell's network panel (`omarchy-shell shell toggle omarchy.network`). Our
-`omandroid-device-cheetah` only keeps NetworkManager off `usb0`.
+`omamobile-device-cheetah` only keeps NetworkManager off `usb0`.
 
 ```sh
 # W3.0  state: NM running and managing wlp1s0, Wi-Fi radio on
@@ -2422,8 +2422,8 @@ NetworkManager reports "ssid-not-found". There is no trap.
 | `dfc8407db` wifi: brcmfmac: use the versioned join parameters on the BCM4389 | new `JOIN_V1` feature from `wlc_ver` (bcmdhd's test), BCM4389 only; `brcmf_ext_join_params_v1_le`/`brcmf_assoc_params_v1_le`; v1 "join" when set, logging the firmware's own error code (`join (v1, chanspec 0x...., N bytes) failed: firmware error E`) |
 
 Build: `logs/{kernel,modules,images}-w3join.log`, wt-pcie release
-`7.3.0-rc6-omandroid-push1-00090-gdfc8407db34a` (standard test DTB,
-`.default` plain), to be merged into omandroid-int.
+`7.3.0-rc6-omamobile-push1-00090-gdfc8407db34a` (standard test DTB,
+`.default` plain), to be merged into omamobile-int.
 
 **Runbook.**
 
@@ -2439,7 +2439,7 @@ Build: `logs/{kernel,modules,images}-w3join.log`, wt-pcie release
    `NOTASSOCIATED`, `BUSY`, `NOTREADY`) means the layout is not the
    problem: send it.
 
-2. **New kernel** (wt-pcie, to merge into omandroid-int):
+2. **New kernel** (wt-pcie, to merge into omamobile-int):
    ```sh
    # after merging and pushing your integration kernel, with Wi-Fi loaded as before:
    tools/phone-ssh 'dmesg | grep -i "enabling firmware feature: JOIN_V1"'   # needs debug=0x4 at load
@@ -2458,7 +2458,7 @@ Build: `logs/{kernel,modules,images}-w3join.log`, wt-pcie release
 
 ### 9.16 W3: the join works, the 4-way handshake does not (2026-10-12)
 
-**What happened.** On omandroid-int 00128 (with `dfc8407db`), JOIN_V1 is
+**What happened.** On omamobile-int 00128 (with `dfc8407db`), JOIN_V1 is
 enabled and the join goes through: wpa_supplicant goes associating →
 4way_handshake. Then "Authentication with … timed out" and "4-Way
 Handshake failed" (reason 3, locally generated)
@@ -2508,9 +2508,9 @@ commonring", escan -12) until a full reload (`logs/w3-join-00128-dmesg2.txt`).
 | `e1c6379cf` wifi: brcmfmac: pcie: poll the D2H rings after interrupts on the BCM4389 | after each interrupt and doorbell, process the D2H rings every 10 ms for 500 ms (bcmdhd re-runs its interrupt work for INTx with DMA'd indices); mutex between poll and IRQ thread; `poll: mailboxint … pending without an interrupt` at PCIe debug |
 
 Build: `logs/{kernel,modules,images}-w3eapol.log`, wt-pcie release
-`7.3.0-rc6-omandroid-push1-00092-ge1c6379cf4e3` (standard test DTB).
+`7.3.0-rc6-omamobile-push1-00092-ge1c6379cf4e3` (standard test DTB).
 
-**Capture runbook** (after merging into omandroid-int and pushing). The debug
+**Capture runbook** (after merging into omamobile-int and pushing). The debug
 mask 0x1c8000 is MSGBUF + PCIE + FWCON + CONN; PCIE is chatty but carries
 the index dumps.
 
@@ -2549,7 +2549,7 @@ comparisons:
 
 ### 9.17 W4: the DMA firewall (2026-10-12, offline; started)
 
-W3 passed on omandroid-int 00131 (WPA2, 5 GHz, DHCP, real MAC, 50 MB at
+W3 passed on omamobile-int 00131 (WPA2, 5 GHz, DHCP, real MAC, 50 MB at
 19 MB/s, no timeouts or traps). W4 must confine the BCM4389's DMA before
 Wi-Fi may load at boot.
 
@@ -2605,7 +2605,7 @@ Wi-Fi may load at boot.
     gigabyte cut down by an L2 table. **Not needed for W4's goal.**
 - **pKVM:** out of scope. It is a large change of the boot model.
 
-#### What was built (branch `omandroid-w4` off `omandroid-pcie`)
+#### What was built (branch `omamobile-w4` off `omamobile-pcie`)
 
 | Commit | Change |
 |---|---|
@@ -2614,24 +2614,24 @@ Wi-Fi may load at boot.
 | `cb50d430a` arm64: dts: …gs201: add the PCIe GEN4A_1 System MMU | `pcie_1_sysmmu` (`sysmmu@145c0000`, SPI 446, `CLK_GOUT_HSI2_SYSMMU_HSI2_CLK_S1/S2`, VID 1), **disabled**; cheetah points it at `wifi_dma_pool` |
 | `434a1be2e` PCI: dwc: gs201: probe the SysMMU v7+ fault registers | `hsi2_probe` group 6: 0x870, 0x874, 0x1010, 0x1014, 0x1018, 0x2004, 0x2008 |
 
-- omandroid repo:
+- omamobile repo:
   - `CONFIG_PCIE_GS201_SYSMMU=m`;
   - overlay `device/cheetah/overlays/wifi-dma-firewall-test.dtso`
     (enables the node);
   - `wifi-w1-capture --hsi2-probe` now also takes a list (`2,6`).
-- Boot pieces, **committed disabled** in `omandroid-device-cheetah`:
-  - `bin/omandroid-wifi-start` and `vendor/systemd/system/omandroid-wifi.service`;
+- Boot pieces, **committed disabled** in `omamobile-device-cheetah`:
+  - `bin/omamobile-wifi-start` and `vendor/systemd/system/omamobile-wifi.service`;
   - no wants link, so the service is installed but not enabled;
   - the script writes and syncs a marker
-    (`/var/lib/omandroid/wifi-bringup-started`) before touching the
+    (`/var/lib/omamobile/wifi-bringup-started`) before touching the
     hardware, and skips Wi-Fi on a boot that finds it;
   - order: `pcie_gs201_sysmmu mode=1`, then check it is bound, then
     `pcie_gs201`, then `brcmfmac`, then wait up to 30 s for the
     interface, then remove the marker;
   - `--retry` clears the marker;
-  - the `omandroid-wifi.conf` blacklist stays (explicit modprobe works).
+  - the `omamobile-wifi.conf` blacklist stays (explicit modprobe works).
 - Builds: `logs/{kernel,modules,images}-w4a.log`, release
-  `7.3.0-rc6-omandroid-push1-00096-g434a1be2ee09`.
+  `7.3.0-rc6-omamobile-push1-00096-g434a1be2ee09`.
   - The images carry the **standard test DTB** (pcie + pool; firewall node
     disabled).
   - `gs201-cheetah.dtb.firewall` is the same plus the firewall overlay,
@@ -2645,7 +2645,7 @@ hang the SoC: recovery is the watchdog (if armed) or a 30 s Power hold.
 ```sh
 export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
 O=$KERNEL_OUT D=$O/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb
-bin/omandroid modules-push && bin/omandroid push            # standard test DTB (no firewall node)
+bin/omamobile modules-push && bin/omamobile push            # standard test DTB (no firewall node)
 
 # F1 ⚠ read-only: SysMMU VID registers (group 2) and the v7+ fault/TLB registers (group 6)
 tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac --hsi2-probe 2,6 5
@@ -2657,7 +2657,7 @@ tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac --hsi2-probe 2,6 5
 #   Wi-Fi still works in this run (nothing was changed)
 ```
 
-F2-F4 come only after F1 passes. Each needs the firewall DTB (`cp "$D.firewall" "$D"; bin/omandroid images && bin/omandroid push`) and the order *firewall, then PCIe, then brcmfmac*:
+F2-F4 come only after F1 passes. Each needs the firewall DTB (`cp "$D.firewall" "$D"; bin/omamobile images && bin/omamobile push`) and the order *firewall, then PCIe, then brcmfmac*:
 
 ```sh
 # F2  log only (mode=0): the driver binds, reads the same registers, changes nothing
@@ -2678,7 +2678,7 @@ tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
 #   brcmfmac comes up anyway with no "blocked" lines: the Wi-Fi traffic is not on VID 1 → stop (the
 #   firewall would be a no-op); tell me
 # rollback for all: modprobe -r brcmfmac_wcc brcmfmac pcie_gs201 pcie_gs201_sysmmu;
-#   DTB: cp "$D.default" "$D" + both test overlays (9.4), or bin/omandroid images from a fresh kernel build
+#   DTB: cp "$D.default" "$D" + both test overlays (9.4), or bin/omamobile images from a fresh kernel build
 ```
 
 #### After F2-F4 pass (not now)
@@ -2686,15 +2686,15 @@ tools/wifi-w1-capture --watchdog --wait 40 --brcmfmac 5
 1. Default DTB: enable `pcie_1`, `pcie_1_phy`, `wifi_dma_pool` and
    `pcie_1_sysmmu` (one DT commit), plus `options pcie_gs201_sysmmu mode=1`
    in a modprobe.d file.
-2. Enable `omandroid-wifi.service`: add the
-   `multi-user.target.wants/omandroid-wifi.service` link in
-   `omandroid-device-cheetah`. Keep the blacklist, so the stack only ever
+2. Enable `omamobile-wifi.service`: add the
+   `multi-user.target.wants/omamobile-wifi.service` link in
+   `omamobile-device-cheetah`. Keep the blacklist, so the stack only ever
    loads through the guarded script.
 3. Optional second layer: the S2MPU, after probe groups 3-5.
 
 ### 9.18 F1 results; probe hang explained (2026-10-12)
 
-F1 on omandroid-int 00143 (contains `434a1be2e`):
+F1 on omamobile-int 00143 (contains `434a1be2e`):
 - Group 2: `CTRL_VID0` 0, `CFG_VID0` 0x00020000, `PT_BASE_PPN_VID0` 0,
   and the same for VID1 (0, 0x00020000, 0). **Neither VID translates.**
 - Group 6: `CAPA0_V7` 0x41085800, `CAPA1_V7` 0x0000f011, `FAULT_ADDR_VA`,
@@ -2706,7 +2706,7 @@ F1 on omandroid-int 00143 (contains `434a1be2e`):
 **Cause of the hang:** the probe parameter held a mutex across its reads,
 and `pcie_gs201`'s remove() takes the same mutex. A read that aborts kills
 the writing task with the mutex held, so remove() waits forever. Fixed in
-`49b341b4a` (wt-pcie `omandroid-w4`):
+`49b341b4a` (wt-pcie `omamobile-w4`):
 - the mutex is replaced by a ready flag;
 - every probe line is logged at KERN_ERR, so a brcmfmac debug flood can't
   push it out of the log;
@@ -2735,9 +2735,9 @@ CFG_VID1 and PT_BASE_PPN_VID1, and all of them read fine in E1/F1.** There
 is nothing risky in it.
 
 Build: `logs/{kernel,modules,images}-w4b.log`, release
-`7.3.0-rc6-omandroid-push1-00097-g49b341b4a7bb`; standard test DTB in the
-images, `gs201-cheetah.dtb.firewall` beside it. Merge `omandroid-w4`
-(now `49b341b4a`) into omandroid-int, then F2-F4 as in 9.17. Also in
+`7.3.0-rc6-omamobile-push1-00097-g49b341b4a7bb`; standard test DTB in the
+images, `gs201-cheetah.dtb.firewall` beside it. Merge `omamobile-w4`
+(now `49b341b4a`) into omamobile-int, then F2-F4 as in 9.17. Also in
 `wifi-w1-capture`: the `grep -q` checks are now `grep -c … >/dev/null`.
 With `pipefail` and a large log, `grep -q` exiting early SIGPIPEd
 `since_start` and silently skipped steps.
@@ -2782,7 +2782,7 @@ page table. Fixes:
   address or overlaps the window;
 - the log says `table at 0x… (outside the window)`.
 
-**New in `pcie_gs201_sysmmu`** (wt-pcie `omandroid-w4`: `aecc19faa`,
+**New in `pcie_gs201_sysmmu`** (wt-pcie `omamobile-w4`: `aecc19faa`,
 `528c3381f`, `841baece6`):
 - `vids=<mask>`: the VIDs to translate (default: the DT's `google,vid`);
 - `mode=3`: everything 1:1 **except** the window. Only DMA into the window
@@ -2791,17 +2791,17 @@ page table. Fixes:
 - on remove, each VID's CTRL is restored.
 
 Build: `logs/{kernel,modules,images}-w4c.log`, release
-`7.3.0-rc6-omandroid-push1-00100-g841baece617c`. The images carry the
+`7.3.0-rc6-omamobile-push1-00100-g841baece617c`. The images carry the
 standard test DTB, with `gs201-cheetah.dtb.firewall` beside it (rebuilt:
 it now has `google,dma-window`). **The old firewall DTB will not work:**
 the driver no longer reads `memory-region`.
 
-#### Runbook (after merging `omandroid-w4` @ `841baece6` into int)
+#### Runbook (after merging `omamobile-w4` @ `841baece6` into int)
 
 ```sh
 export KERNEL_DIR=$HOME/android/mainline/wt-pcie KERNEL_OUT=$HOME/android/mainline/out-pcie
 O=$KERNEL_OUT D=$O/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb
-cp "$D.firewall" "$D"; bin/omandroid images && bin/omandroid modules-push && bin/omandroid push
+cp "$D.firewall" "$D"; bin/omamobile images && bin/omamobile modules-push && bin/omamobile push
 reset_wifi() { tools/phone-ssh 'modprobe -r brcmfmac_wcc brcmfmac; modprobe -r pcie_gs201; modprobe -r pcie_gs201_sysmmu'; }
 
 # F4a ⚠ find the VID: block only the window, on all eight VIDs
@@ -2832,7 +2832,7 @@ tools/phone-ssh -t 'nmcli con up <SSID>'; tools/phone-ssh 'curl -o /dev/null -w 
 ```
 
 If n ≠ 1: put `google,vid = <n>` in the cheetah DT (one-line DT commit), and
-`omandroid-wifi-start` needs nothing else. Nothing ships until F4b passes.
+`omamobile-wifi-start` needs nothing else. Nothing ships until F4b passes.
 
 ### 9.20 F4a/F4b/F3: the SysMMU is shared with UFS on VID 0 (2026-10-12)
 
@@ -2872,8 +2872,8 @@ in either block: the SysMMU's `TLB_MATCH_ID` only steers TLB allocation.
 **Change:** `pcie_gs201_sysmmu` now **refuses any mode that translates VID
 0** unless `allow_vid0=1` (debug only). It still never enables VID 0 by
 default, and the DT stays `google,vid = <1>`. On this hardware, mode 1 on
-VID 1 is a harmless no-op. Commit `7ff22794d` (wt-pcie `omandroid-w4`),
-release `7.3.0-rc6-omandroid-push1-00101-g7ff22794d119`, logs
+VID 1 is a harmless no-op. Commit `7ff22794d` (wt-pcie `omamobile-w4`),
+release `7.3.0-rc6-omamobile-push1-00101-g7ff22794d119`, logs
 `logs/{kernel,modules,images}-w4d.log`. Nothing that enforces is proposed.
 
 **Options:**
@@ -2917,7 +2917,7 @@ Derek chose option (a) from 9.20:
 - this protects against driver bugs and stray pointers, not hostile
   firmware, which appears to be no worse than stock.
 
-**Kernel** (wt-pcie `omandroid-w4`, on top of the pcie work):
+**Kernel** (wt-pcie `omamobile-w4`, on top of the pcie work):
 - `7ff22794d` the SysMMU driver refuses VID 0 unless `allow_vid0=1`;
 - `c0545e232` brcmutil decodes the 6 GHz band (band 0x4000) in d11ac
   chanspecs. This silences `WARN_ONCE("Invalid chanspec 0x5001")` from
@@ -2928,48 +2928,48 @@ Derek chose option (a) from 9.20:
   enabled by default. `pcie_1_sysmmu` stays disabled, so the two test
   overlays (`wifi-pcie-test`, `wifi-dma-pool-test`) are no longer needed.
 
-Build: release `7.3.0-rc6-omandroid-push1-00104-g242602382ed0`, logs
+Build: release `7.3.0-rc6-omamobile-push1-00104-g242602382ed0`, logs
 `logs/{kernel,modules,images}-w4e.log`. The images carry the plain
 default DTB with no overlays.
 
-**omandroid-device-cheetah 0.1.12:**
-- `omandroid-wifi-start` no longer touches the SysMMU. It writes the hang
+**omamobile-device-cheetah 0.1.12:**
+- `omamobile-wifi-start` no longer touches the SysMMU. It writes the hang
   marker, then:
   - exits quietly if `14520000.pcie` doesn't exist (DTB without Wi-Fi);
   - refuses if the `wifi-dma-pool` node is missing or disabled;
   - then `pcie_gs201`, then `brcmfmac`, then waits up to 30 s for the
     interface.
-- `omandroid-wifi.service` is enabled by a vendor
+- `omamobile-wifi.service` is enabled by a vendor
   `multi-user.target.wants` link, with
   `ConditionPathExists=/sys/bus/platform/devices/14520000.pcie`.
-- `modprobe.d/omandroid-wifi.conf` keeps `blacklist pcie_gs201` and
+- `modprobe.d/omamobile-wifi.conf` keeps `blacklist pcie_gs201` and
   `blacklist brcmfmac`. That only stops udev autoloading them ahead of the
   guard (explicit modprobe still works), so the service is the only loader
   and a hang skips Wi-Fi on the next boot.
 - Tests check the staged files, the wants link, the blacklist, and that the
   script never passes `mode=`.
 
-#### Runbook (merge `omandroid-w4` @ `242602382` into int; package 0.1.12)
+#### Runbook (merge `omamobile-w4` @ `242602382` into int; package 0.1.12)
 
 ```sh
 # build/push the int kernel as usual (no DTB overlays for Wi-Fi any more), then:
-bin/omandroid modules-push && bin/omandroid push          # reboots
-# install omandroid-device-cheetah 0.1.12 on the phone (your usual package path), then
+bin/omamobile modules-push && bin/omamobile push          # reboots
+# install omamobile-device-cheetah 0.1.12 on the phone (your usual package path), then
 tools/phone-ssh 'nmcli con modify <SSID> connection.autoconnect yes'
 tools/phone-ssh 'systemctl reboot'
 
 # boot 1 (repeat for boot 2)
-tools/phone-ssh 'uname -r; systemctl is-enabled omandroid-wifi; systemctl status --no-pager omandroid-wifi | tail -3;
-  journalctl -b -u omandroid-wifi --no-pager | tail -3; ls /var/lib/omandroid/wifi-bringup-started 2>&1;
+tools/phone-ssh 'uname -r; systemctl is-enabled omamobile-wifi; systemctl status --no-pager omamobile-wifi | tail -3;
+  journalctl -b -u omamobile-wifi --no-pager | tail -3; ls /var/lib/omamobile/wifi-bringup-started 2>&1;
   lsmod | grep -E "^(pcie_gs201|brcmfmac|pcie_gs201_sysmmu) "; dmesg | grep -E "restricted|wifi-dma-pool" | head -3;
   dmesg | grep -cE "Invalid chanspec|WARNING"; nmcli -t -f DEVICE,STATE,CONNECTION dev | grep -i wl'
-#   pass: enabled; "omandroid-wifi: up: wlp1s0" (or the renamed interface); no marker file;
+#   pass: enabled; "omamobile-wifi: up: wlp1s0" (or the renamed interface); no marker file;
 #         pcie_gs201 + brcmfmac loaded, pcie_gs201_sysmmu NOT loaded; the pool assigned to
 #         0000:01:00.0; 0 "Invalid chanspec"; NetworkManager connected to <SSID>
 tools/phone-ssh 'curl -o /dev/null -w "%{speed_download}\n" https://speed.cloudflare.com/__down?bytes=50000000'
 #   pass: ~19-21 MB/s
 # if a boot hangs: after the watchdog reset, Wi-Fi is skipped and the journal says
-#   "the last bring-up (...) never finished"; send that boot's log, retry with omandroid-wifi-start --retry
+#   "the last bring-up (...) never finished"; send that boot's log, retry with omamobile-wifi-start --retry
 # rollback: systemctl disable is not possible for a vendor link; mask it instead:
-#   systemctl mask omandroid-wifi.service   (or reinstall 0.1.11 and the previous kernel)
+#   systemctl mask omamobile-wifi.service   (or reinstall 0.1.11 and the previous kernel)
 ```

@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# mesa (Omandroid build)
+# mesa (Omarchy Mobile build)
 
 Arch Linux's Mesa 26.2.4 package, rebuilt for the Pixel 7 Pro with one
 change: Mali-G710 is added to Panfrost's model table. Without it, Mesa
@@ -24,8 +24,8 @@ an unknown model, and PanVK returns `VK_ERROR_INCOMPATIBLE_DRIVER`. See
   - The `device-select` and `anti-lag` layers.
 - Only three split packages: `mesa`, `vulkan-panfrost` and
   `vulkan-mesa-implicit-layers` (which `vulkan-panfrost` depends on).
-- `pkgrel=1.1`. makepkg only accepts `integer[.integer]`, so the Omandroid
-  marker is in Mesa's version string instead: `26.2.4-arch1.1.1.omandroid1`.
+- `pkgrel=1.1`. makepkg only accepts `integer[.integer]`, so the Omarchy Mobile
+  marker is in Mesa's version string instead: `26.2.4-arch1.1.1.omamobile1`.
   That string shows up in `GL_VERSION` and in the `libgallium-*.so` file name.
 
 The other ALARM split packages (`vulkan-swrast`, `opencl-mesa` and so on)
@@ -70,7 +70,7 @@ line to `/etc/pacman.conf`:
 IgnorePkg = mesa vulkan-panfrost vulkan-mesa-implicit-layers
 ```
 
-Alternatively, publish the build in Omandroid's own repo listed ahead of
+Alternatively, publish the build in Omarchy Mobile's own repo listed ahead of
 `[extra]`. Rebase on each new ALARM Mesa release:
 
 1. Take the new Arch tag.

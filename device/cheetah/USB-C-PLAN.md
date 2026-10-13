@@ -3,24 +3,24 @@
 Status (2026-10-12): **charging works by hand; Type-C has not run yet.**
 B3.3 passed on the phone under the dead-man switch (NOTES.md: 500 mA input,
 4450 mV float, 93 to 96 % in 10 minutes). USB comes back after a replug
-through `omandroid-usb-rescue.service` (the R1 fix, omandroid-device-cheetah
+through `omamobile-usb-rescue.service` (the R1 fix, omamobile-device-cheetah
 0.1.15+). The battery temperature guard (B3g) is built, not run: kernel
-`omandroid-chgguard` @ `37a83337c` (`temp_guard`, default off) and
-`omandroid-charge-guard` (device-cheetah 0.1.14+), so the charger stays
+`omamobile-chgguard` @ `37a83337c` (`temp_guard`, default off) and
+`omamobile-charge-guard` (device-cheetah 0.1.14+), so the charger stays
 blacklisted at boot and the bootloader's settings apply. Kernel:
-`omandroid-usbc` @ `c86bd2db7` (`wt-usbc`, `out-usbc`) and
-`omandroid-chgguard`, both merged into `omandroid-int`. **Next:** the B3g
+`omamobile-usbc` @ `c86bd2db7` (`wt-usbc`, `out-usbc`) and
+`omamobile-chgguard`, both merged into `omamobile-int`. **Next:** the B3g
 runbook, then B4a and B4b (Type-C and the role switch), which retire the
 rescue service; B4c (host mode) is design only. Open: the gauge current
 above the 500 mA input limit in B3.3 (NOTES.md).
 
 Earlier status (historical, superseded by the status above): Follows `WIFI-BATTERY-PLAN.md` sections 4-5 (MAX77759 wiring, gates B1/B1b
 done, B2 pending). Written 2026-10-12, offline: nothing here has run on the
-phone yet. Kernel: branch `omandroid-usbc` in `~/android/mainline/wt-usbc`,
+phone yet. Kernel: branch `omamobile-usbc` in `~/android/mainline/wt-usbc`,
 out dir `~/android/mainline/out-usbc`.
 
 Sources: `L/` = the worktree, `G/` = Google's GPL kernel
-(`~/android/omandroid/out-kernel/google/gs-6.1/private`), `R/` = the stock
+(`~/android/omamobile/out-kernel/google/gs-6.1/private`), `R/` = the stock
 root capture (`~/android/reference/cheetah-stock-cp2a-root`).
 
 ## 1. Facts this plan rests on
@@ -60,7 +60,7 @@ change), and a dead-man drill.
 
 ## 3. What was built
 
-### Kernel (`omandroid-usbc`, on `omandroid` @ `7b0f8b5d1`)
+### Kernel (`omamobile-usbc`, on `omamobile` @ `7b0f8b5d1`)
 
 | Commit | What | Default state |
 |---|---|---|
@@ -74,7 +74,7 @@ change), and a dead-man drill.
 
 Hashes, oldest first: `1074d2178`, `49a930690`, `6cb72374d`, `80ffae6d5`,
 `45e5489db`, `06e60a228`, `c86bd2db7`. Built: release
-`7.3.0-rc6-omandroid-push1-00065-gc86bd2db7c72`, `kernel`/`modules`/`images`
+`7.3.0-rc6-omamobile-push1-00065-gc86bd2db7c72`, `kernel`/`modules`/`images`
 exit 0 (`logs/kernel-usbc.log`, `modules-usbc.log`, `images-usbc.log`); the
 changed C files build W=1 clean; `dt-doc-validate` passes for the PHY
 binding; `dt-validate` of the base DTB, base + B4a and base + B4a + B4b
@@ -85,7 +85,7 @@ Not changed in the base DT on purpose: the PHY (`orientation-switch`, graph
 port) and dwc3 (`dr_mode`, role switch). Those come from overlays, so the
 default DTB keeps today's USB exactly.
 
-### omandroid repo
+### omamobile repo
 
 - `device/cheetah/overlays/usbc-tcpm-test.dtso` (B4a): TCPC `okay`, connector
   port@0 <-> PHY port, PHY `orientation-switch`.
@@ -94,7 +94,7 @@ default DTB keeps today's USB exactly.
   <-> dwc3 port.
 - `tools/usbc-deadman` (laptop) and `tools/usbc-deadman-phone` (phone): the
   dead-man switch, register dump, replug rescue.
-- No change to `omandroid-max77759.conf`: `max77759`, `max77759_charger`
+- No change to `omamobile-max77759.conf`: `max77759`, `max77759_charger`
   and `tcpci_maxim` stay blacklisted; every step loads them by hand.
 
 ## 4. The dead-man switch (`tools/usbc-deadman`)
@@ -209,9 +209,9 @@ Packaging the watcher as a service is a follow-up if B4 is far off.
 
 ```sh
 # B3.1 new kernel and modules (default DTB, no overlay); everything still blacklisted
-KERNEL_DIR=~/android/mainline/wt-usbc KERNEL_OUT=$O bin/omandroid modules > logs/modules-usbc.log 2>&1
-KERNEL_DIR=~/android/mainline/wt-usbc KERNEL_OUT=$O bin/omandroid images > logs/images-usbc.log 2>&1
-KERNEL_OUT=$O bin/omandroid modules-push && KERNEL_OUT=$O bin/omandroid push
+KERNEL_DIR=~/android/mainline/wt-usbc KERNEL_OUT=$O bin/omamobile modules > logs/modules-usbc.log 2>&1
+KERNEL_DIR=~/android/mainline/wt-usbc KERNEL_OUT=$O bin/omamobile images > logs/images-usbc.log 2>&1
+KERNEL_OUT=$O bin/omamobile modules-push && KERNEL_OUT=$O bin/omamobile push
 tools/phone-ssh 'cat /sys/module/phy_exynos5_usbdrd/parameters/force_vbus_valid'   # N
 tools/usbc-deadman dump                       # same as R0 (the battery node changed, nothing else)
 # B3.2 MFD core + GPIO (gate B2) under the dead-man
@@ -269,8 +269,8 @@ software from the `google,battery` step-charging table (`R/live.dts:17774-17776`
 **Design: in the charger driver, not a userspace service.** A service can be
 stopped, crash or be frozen in suspend, and the guard must hold whenever the
 charger driver is bound. So the policy lives in `max77759_charger` (branch
-`omandroid-chgguard` in `~/android/mainline/wt-chgguard`, commit
-`37a83337c` on top of `omandroid-usbc` `c86bd2db7`; built W=1 clean into
+`omamobile-chgguard` in `~/android/mainline/wt-chgguard`, commit
+`37a83337c` on top of `omamobile-usbc` `c86bd2db7`; built W=1 clean into
 `~/android/mainline/out-suspend/chgguard`):
 
 - Module parameter `temp_guard` (bool, runtime-writable, **default off**).
@@ -292,14 +292,14 @@ charger driver is bound. So the policy lives in `max77759_charger` (branch
   `CHG_DETAILS_01` CHG_DTLS 0xc). External reports say the bootloader leaves
   it on (`CHG_CNFG_08` 0xc1, bit 2). G0 reads it.
 
-**Package:** `omandroid-device-cheetah` 0.1.14 adds `omandroid-charge-guard`
-(`status`, `on`, `off`) and `/usr/lib/modprobe.d/omandroid-charger.conf`,
+**Package:** `omamobile-device-cheetah` 0.1.14 adds `omamobile-charge-guard`
+(`status`, `on`, `off`) and `/usr/lib/modprobe.d/omamobile-charger.conf`,
 whose `options max77759_charger temp_guard=1` line stays commented out. The
 package test fails if it is uncommented, or if the charger stops being
 blacklisted, until this gate passes.
 
-Runbook (needs the B3 kernel plus `omandroid-chgguard`; merge order:
-`omandroid-usbc`, then `omandroid-chgguard`):
+Runbook (needs the B3 kernel plus `omamobile-chgguard`; merge order:
+`omamobile-usbc`, then `omamobile-chgguard`):
 
 - **G0, read-only:** `tools/usbc-deadman dump`, plus
   `tools/phone-ssh 'i2cget -f -y 0 0x69 0xc1; i2cget -f -y 0 0x69 0xb8; i2cget -f -y 0 0x69 0xb6'`
@@ -310,7 +310,7 @@ Runbook (needs the B3 kernel plus `omandroid-chgguard`; merge order:
   temperature that moves (not stuck at 22.0 °C, which would mean the
   thermistor isn't in use; B1b fixed that).
 - **G1, guard on, normal temperature:** load the charger as in B3.3, then
-  `omandroid-charge-guard on`, wait 35 s, `omandroid-charge-guard status`.
+  `omamobile-charge-guard on`, wait 35 s, `omamobile-charge-guard status`.
   Expect `temperature guard on (max170xx_battery)`, then `battery 2x.x C,
   .... mV: band 20-42 C, float 4450 mV, charge 1466730 uA` (or the 10-20 °C
   band in a cold room: 4450 mV, 50 % = 1466730 capped). Charging continues.
@@ -323,7 +323,7 @@ Runbook (needs the B3 kernel plus `omandroid-chgguard`; merge order:
 - **G3, hot band (attended, cable in):** warm the phone gently (a long GPU
   load: `glmark2-es2-wayland --run-forever` with the screen at full
   brightness, or a warm room). Stop the load at once if the battery passes
-  50 °C. Watch `omandroid-charge-guard status` every minute. Expect at 42 °C
+  50 °C. Watch `omamobile-charge-guard status` every minute. Expect at 42 °C
   the 42-46 band (1.47 A capped -> current stays, float 4450), at 46 °C float
   4300 mV, at 48 °C 4200 mV. Cool down: the bands come back only 2 °C inside
   each one.
@@ -336,7 +336,7 @@ Runbook (needs the B3 kernel plus `omandroid-chgguard`; merge order:
 **Pass:** G0-G2 and G5 (G3/G4 as far as can be done safely). Then uncomment the
 modprobe option together with removing the charger from the blacklist, in
 the same package release, so charging is never on by default without the
-guard. **Rollback:** `omandroid-charge-guard off` (restores the battery
+guard. **Rollback:** `omamobile-charge-guard off` (restores the battery
 node's limits), or unload the charger (`tools/usbc-deadman undo b3-charger`).
 
 ### B4a: TCPM drives VBUS valid and the data switch (device only)
@@ -346,9 +346,9 @@ node's limits), or unload the charger (`tools/usbc-deadman undo b3-charger`).
 cp "$D" "$D.default"
 $O/scripts/dtc/dtc -q -I dts -O dtb -o out/usbc-tcpm-test.dtbo device/cheetah/overlays/usbc-tcpm-test.dtso
 $O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" out/usbc-tcpm-test.dtbo
-KERNEL_DIR=~/android/mainline/wt-usbc KERNEL_OUT=$O bin/omandroid images > logs/images-usbc-b4a.log 2>&1
+KERNEL_DIR=~/android/mainline/wt-usbc KERNEL_OUT=$O bin/omamobile images > logs/images-usbc-b4a.log 2>&1
 cp -r $O/images $O/images.b4a
-KERNEL_OUT=$O bin/omandroid push
+KERNEL_OUT=$O bin/omamobile push
 tools/phone-ssh 'ls /proc/device-tree/soc@0/phy@11200000/; cat /sys/module/phy_exynos5_usbdrd/parameters/force_vbus_valid;
   cat /sys/class/udc/*/state; ls /sys/bus/i2c/devices/ | grep 0025'
 ```
@@ -390,8 +390,8 @@ is the "USB doesn't reconnect after unplugging" fix for NOTES.md.
 ```sh
 $O/scripts/dtc/dtc -q -I dts -O dtb -o out/usbc-role-test.dtbo device/cheetah/overlays/usbc-role-test.dtso
 $O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" out/usbc-tcpm-test.dtbo out/usbc-role-test.dtbo
-KERNEL_DIR=~/android/mainline/wt-usbc KERNEL_OUT=$O bin/omandroid images > logs/images-usbc-b4b.log 2>&1
-KERNEL_OUT=$O bin/omandroid push
+KERNEL_DIR=~/android/mainline/wt-usbc KERNEL_OUT=$O bin/omamobile images > logs/images-usbc-b4b.log 2>&1
+KERNEL_OUT=$O bin/omamobile push
 tools/phone-ssh 'cat /sys/class/usb_role/*/role; cat /sys/class/udc/*/state'   # device, configured
 tools/usbc-deadman b4b-role
 tools/usbc-deadman replug

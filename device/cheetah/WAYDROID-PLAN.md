@@ -2,13 +2,13 @@
 # Waydroid plan: Android apps in a container (cheetah / gs201)
 
 Status (2026-10-13): **offline work done, nothing run on the phone.** The
-kernel options are in `kernel/configs/omandroid.config` (the "Waydroid"
+kernel options are in `kernel/configs/omamobile.config` (the "Waydroid"
 block at the end, uncommitted) and verified with `merge_config.sh` and
-`olddefconfig` on top of `omandroid-int`'s configuration: every option
+`olddefconfig` on top of `omamobile-int`'s configuration: every option
 resolves as written, and the only side effects are the helpers they select
 (`FIB_RULES`, `NF_SOCKET_*`, `NF_TPROXY_*`, `NF_NAT_REDIRECT`,
 `NETFILTER_CONNCOUNT`, `TEXTSEARCH*`). No new kernel code and no new DT
-nodes are needed. The `packages/omandroid-waydroid` draft (0.1.0, uncommitted)
+nodes are needed. The `packages/omamobile-waydroid` draft (0.1.0, uncommitted)
 passes `test/all`. Next: W0 (read-only) on the current kernel, then W1 (a
 kernel with the block above).
 
@@ -42,9 +42,9 @@ Wayland and PulseAudio sockets into the container.
 
 ### 1.1 The kernel block (W1)
 
-In `kernel/configs/omandroid.config`, block "Waydroid (WAYDROID-PLAN.md
+In `kernel/configs/omamobile.config`, block "Waydroid (WAYDROID-PLAN.md
 W1)". Built in: the routing options (they change `struct net`, so every
-module is rebuilt with the kernel, as `bin/omandroid kernel` always does)
+module is rebuilt with the kernel, as `bin/omamobile kernel` always does)
 and `NETFILTER_XTABLES_LEGACY`; everything else is a module that loads on
 first use. The set follows Android's own base kernel requirements for
 netd, without the out-of-tree `xt_quota2` (netd falls back to `xt_quota`
@@ -78,14 +78,14 @@ exists; the HWC uses real sync files from the GPU, `SYNC_FILE=y`),
 
 ## 2. Images
 
-`omandroid-waydroid init` runs `waydroid init -s $SYSTEM_TYPE`, which
+`omamobile-waydroid init` runs `waydroid init -s $SYSTEM_TYPE`, which
 downloads the system and vendor images from Waydroid's OTA channels
 (`ota.waydro.id`) and checks them against the OTA's hashes. About 1 GB on
 `userdata`; check `df -h /var` first. Images live in
 `/var/lib/waydroid/images`; Android's data in
 `~/.local/share/waydroid/data`.
 
-- **VANILLA** (the default in `/etc/omandroid/waydroid.conf`): no Google.
+- **VANILLA** (the default in `/etc/omamobile/waydroid.conf`): no Google.
   F-Droid installs as an APK (check its signature against F-Droid's key).
   For push notifications, microG can be installed as ordinary apps: the
   LineageOS-for-Waydroid VANILLA build allows signature spoofing for
@@ -106,7 +106,7 @@ no card node and binds none; that's fine, Android never does KMS here.
 - **The image's Mesa refuses the G710.** Upstream Mesa's Panfrost model
   table has no G710 row (our `packages/mesa/0001-*` adds it; UPSTREAM.md has
   the merge request). Gralloc then can't allocate and surfaceflinger aborts
-  at every start. `omandroid-waydroid-mesa` reads `libgallium_dri.so` (64-
+  at every start. `omamobile-waydroid-mesa` reads `libgallium_dri.so` (64-
   and 32-bit) out of `vendor.img` with `debugfs`, swaps the G610 row's
   product ID (`0xa8070000`, mask `0xff0f0000`) for the G710's
   (`0xa8020000`), and writes the copies to
@@ -133,7 +133,7 @@ data). No conflict with USB networking (172.16.42.0/24).
 
 ufw is on with a DROP forward policy, and a packet must pass every
 netfilter base chain at a hook, so Waydroid's `accept` rules don't help on
-their own. `omandroid-waydroid firewall on` adds:
+their own. `omamobile-waydroid firewall on` adds:
 
 ```
 ufw allow in on waydroid0 to any port 67 proto udp   # DHCP to dnsmasq
@@ -168,7 +168,7 @@ Waydroid 1.6.3 does three things that are wrong on this phone:
    only `CAP_SYS_ADMIN`) and write a partition: the IMEI, `persist`, the
    bootloader. The guard exists to make that impossible.
 
-`omandroid-waydroid-harden` fixes all three, without forking Waydroid:
+`omamobile-waydroid-harden` fixes all three, without forking Waydroid:
 
 - `patch` (pacman hook after every `waydroid` install or upgrade) comments
   out the debugfs, video and framebuffer binds in `lxc.py` and the video,
@@ -177,7 +177,7 @@ Waydroid 1.6.3 does three things that are wrong on this phone:
   version is refused, not half-patched.
 - `config` (`ExecStartPre` of `waydroid-container.service`, through our
   drop-in) drops any such lines from the generated `config_nodes` and
-  appends `lxc.include = /usr/share/omandroid-waydroid/lxc-omandroid.conf`,
+  appends `lxc.include = /usr/share/omamobile-waydroid/lxc-omamobile.conf`,
   whose one rule is `lxc.cgroup2.devices.deny = b *:* rwm`: no block
   device at all, whoever makes the node.
 - `verify` (`ExecStartPre` too) refuses to start the container unless all
@@ -186,7 +186,7 @@ Waydroid 1.6.3 does three things that are wrong on this phone:
 
 Sound reaches Android only through PipeWire's PulseAudio socket (no
 `/dev/snd` is bound), so the speaker stages and protection in
-`omandroid-audio` stay in the path. Sensors are stubbed (Arch ships no
+`omamobile-audio` stay in the path. Sensors are stubbed (Arch ships no
 `waydroid-sensord`): Android gets no accelerometer, which is fine, since
 the window follows the shell's rotation.
 
@@ -195,7 +195,7 @@ the window follows the shell's rotation.
 ### 6.1 Windows, launcher, touch
 
 - **Multi-window mode** (`persist.waydroid.multi_windows=true`, set by
-  `omandroid-waydroid props`): each Android activity is its own Wayland
+  `omamobile-waydroid props`): each Android activity is its own Wayland
   window with app ID `waydroid.<package>`, so it gets a switcher card,
   maximizes under `phone.lua` like our own apps and closes from the
   switcher. No Android home screen or navigation bar.
@@ -255,18 +255,18 @@ Android, or Android posts "Configure physical keyboard".
 - **Camera:** none for now (the nodes are hidden on purpose). Later through
   PipeWire and a v4l2loopback bridge, MJPEG, if Android apps really need it.
 
-## 7. The package (`packages/omandroid-waydroid`, 0.1.0 draft)
+## 7. The package (`packages/omamobile-waydroid`, 0.1.0 draft)
 
 | File | Installed as | What |
 | --- | --- | --- |
-| `bin/omandroid-waydroid` | `/usr/bin` | `check`, `init`, `mesa`, `props`, `firewall on\|off`, `on\|off`, `status` |
-| `lib/omandroid-waydroid-check` | `/usr/lib/omandroid-waydroid` | Read-only: kernel options (`/proc/config.gz` or `CONFIG_FILE=`), binderfs, PSI, the Panthor render node, cgroup2 |
-| `lib/omandroid-waydroid-harden` | same | Section 5 |
-| `lib/omandroid-waydroid-mesa` | same | Section 3 |
-| `lib/lxc-omandroid.conf` | `/usr/share/omandroid-waydroid` | The block-device deny rule |
-| `systemd/waydroid-container-omandroid.conf` | `waydroid-container.service.d/omandroid.conf` | `ExecStartPre`: check, harden config, harden verify |
-| `libalpm/90-omandroid-waydroid.hook` | `/usr/share/libalpm/hooks` | `harden patch` after `waydroid` installs or upgrades |
-| `etc/omandroid/waydroid.conf` | `/etc/omandroid` (backup) | `SYSTEM_TYPE`, `LCD_DENSITY`, `MULTI_WINDOWS` |
+| `bin/omamobile-waydroid` | `/usr/bin` | `check`, `init`, `mesa`, `props`, `firewall on\|off`, `on\|off`, `status` |
+| `lib/omamobile-waydroid-check` | `/usr/lib/omamobile-waydroid` | Read-only: kernel options (`/proc/config.gz` or `CONFIG_FILE=`), binderfs, PSI, the Panthor render node, cgroup2 |
+| `lib/omamobile-waydroid-harden` | same | Section 5 |
+| `lib/omamobile-waydroid-mesa` | same | Section 3 |
+| `lib/lxc-omamobile.conf` | `/usr/share/omamobile-waydroid` | The block-device deny rule |
+| `systemd/waydroid-container-omamobile.conf` | `waydroid-container.service.d/omamobile.conf` | `ExecStartPre`: check, harden config, harden verify |
+| `libalpm/90-omamobile-waydroid.hook` | `/usr/share/libalpm/hooks` | `harden patch` after `waydroid` installs or upgrades |
+| `etc/omamobile/waydroid.conf` | `/etc/omamobile` (backup) | `SYSTEM_TYPE`, `LCD_DENSITY`, `MULTI_WINDOWS` |
 | `test/all` | n/a | Syntax, staging, the check against good and bad configs (`KCONFIG=` for a real one), the hardening against synthetic copies of Waydroid's lines (idempotent, refuses unknown versions) |
 
 Depends on `waydroid lxc nftables dnsmasq e2fsprogs`; ufw optional.
@@ -282,7 +282,7 @@ Everything below is for the human to run or approve. Before every step:
 ### W0: what the current kernel lacks (read-only, risk none)
 
 ```sh
-tools/phone-ssh 'bash -s' < packages/omandroid-waydroid/lib/omandroid-waydroid-check
+tools/phone-ssh 'bash -s' < packages/omamobile-waydroid/lib/omamobile-waydroid-check
 ```
 
 - **Expect:** `ok` for binder, binderfs, PSI, cgroups, bridge, veth, nft
@@ -294,9 +294,9 @@ tools/phone-ssh 'bash -s' < packages/omandroid-waydroid/lib/omandroid-waydroid-c
 
 ### W1: a kernel with the Waydroid block (push, ask the human; risk low)
 
-Build `omandroid-int` with the fragment
-(`KERNEL_DIR=~/android/mainline/wt-int KERNEL_OUT=~/android/mainline/out-int bin/omandroid kernel`),
-then modules, images and `bin/omandroid push` as usual.
+Build `omamobile-int` with the fragment
+(`KERNEL_DIR=~/android/mainline/wt-int KERNEL_OUT=~/android/mainline/out-int bin/omamobile kernel`),
+then modules, images and `bin/omamobile push` as usual.
 
 - **Expect:** a normal boot; the check from W0 passes with no `MISS`;
   `ufw status` unchanged and active; SSH, Wi-Fi, sound, sensors as before;
@@ -310,8 +310,8 @@ then modules, images and `bin/omandroid push` as usual.
 
 ```sh
 tools/phone-ssh 'pacman -S --needed waydroid'      # from Arch Linux ARM's extra
-tools/phone-install-package packages/omandroid-waydroid
-tools/phone-ssh 'omandroid-waydroid check; systemctl is-enabled waydroid-container'
+tools/phone-install-package packages/omamobile-waydroid
+tools/phone-ssh 'omamobile-waydroid check; systemctl is-enabled waydroid-container'
 ```
 
 - **Expect:** the hook prints "removed fb nodes ... removed debugfs";
@@ -319,19 +319,19 @@ tools/phone-ssh 'omandroid-waydroid check; systemctl is-enabled waydroid-contain
   the service is `disabled`. Arch's `waydroid` enables nothing by itself;
   if it did, `systemctl disable --now waydroid-container`.
 - **Stop:** the hook says "expected text not found" (a Waydroid newer than
-  1.6.3: update `omandroid-waydroid-harden` before going on).
-- **Rollback:** `pacman -R omandroid-waydroid waydroid`.
+  1.6.3: update `omamobile-waydroid-harden` before going on).
+- **Rollback:** `pacman -R omamobile-waydroid waydroid`.
 
 ### W3: images and hardening (risk low; about 1 GB download over Wi-Fi)
 
 ```sh
-tools/phone-ssh 'df -h /var; omandroid-waydroid init'
+tools/phone-ssh 'df -h /var; omamobile-waydroid init'
 tools/phone-ssh 'grep -E "video|fb[0-9]|kernel/debug" /var/lib/waydroid/lxc/waydroid/config_nodes; \
   tail -1 /var/lib/waydroid/lxc/waydroid/config; ls -l /var/lib/waydroid/overlay/vendor/lib*/'
 ```
 
 - **Expect:** the images verify; the grep prints nothing; the config's last
-  line is the `lxc.include` of `lxc-omandroid.conf`; both patched
+  line is the `lxc.include` of `lxc-omamobile.conf`; both patched
   `libgallium_dri.so` files exist (the tool prints their row offset and
   SHA-256: record them).
 - **Stop:** less than 4 GB free; the Mesa tool refuses the library (record
@@ -342,7 +342,7 @@ tools/phone-ssh 'grep -E "video|fb[0-9]|kernel/debug" /var/lib/waydroid/lxc/wayd
 Firewall, under a dead-man switch (AGENTS.md):
 
 ```sh
-tools/phone-ssh 'systemd-run --unit=x-deadman --on-active=90 /usr/bin/ufw disable && omandroid-waydroid firewall on && ufw status'
+tools/phone-ssh 'systemd-run --unit=x-deadman --on-active=90 /usr/bin/ufw disable && omamobile-waydroid firewall on && ufw status'
 tools/phone-ssh 'systemctl stop x-deadman.timer'   # from a fresh SSH login
 ```
 
@@ -401,7 +401,7 @@ Then by hand: it appears in our launcher with its icon, opens maximized in
 its own window, scrolls and taps correctly, closes from the switcher; the
 back gesture (once the shell sends `KEY_BACK`); Android's keyboard in a
 text field; a short sound from an Android app at low volume (announce it;
-it goes through PipeWire under `omandroid-audio`'s stage); rotate the
+it goes through PipeWire under `omamobile-audio`'s stage); rotate the
 phone with an Android app open. Watch for system_server watchdog restarts
 (`waydroid logcat | grep -i watchdog`).
 

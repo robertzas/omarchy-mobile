@@ -4,18 +4,18 @@
 Status (2026-10-12): **Bluetooth works and is on by default.** BT1.1-BT1.3
 (the CMU_APM clocks, UART loopback, HCI_Reset: Bluetooth 5.2) and BT3 passed
 on the phone (NOTES.md). The controller comes up at boot from the default
-DTB with the bootloader's address (`omandroid-bt-addr` powers it on first),
-pairs from the shell's Bluetooth panel (omandroid-shell 0.1.11+,
-`omandroid-bt-agent`) and plays A2DP through PipeWire. Kernel:
-`omandroid-bt` @ `ff4788789` (`wt-bt`, `out-bt`), merged into
-`omandroid-int`; omandroid-device-cheetah 0.1.25. **Next:** headset calls
+DTB with the bootloader's address (`omamobile-bt-addr` powers it on first),
+pairs from the shell's Bluetooth panel (omamobile-shell 0.1.11+,
+`omamobile-bt-agent`) and plays A2DP through PipeWire. Kernel:
+`omamobile-bt` @ `ff4788789` (`wt-bt`, `out-bt`), merged into
+`omamobile-int`; omamobile-device-cheetah 0.1.25. **Next:** headset calls
 (HFP/HSP), which need the SCO routing moved from PCM to HCI (`AUDIO-PLAN.md`
 A1). BT3's low-power checks and Bluetooth across suspend (`SUSPEND-PLAN.md`)
 are not recorded here.
 
 Earlier status (historical, superseded by the status above): **BT0 (offline) done, 2026-10-12. Nothing has run on the phone.**
-Kernel branch `omandroid-bt` in `~/android/mainline/wt-bt` (out dir
-`out-bt`), on `omandroid` @ `e7cb10fe5`. Everything new is off by default;
+Kernel branch `omamobile-bt` in `~/android/mainline/wt-bt` (out dir
+`out-bt`), on `omamobile` @ `e7cb10fe5`. Everything new is off by default;
 bring-up uses the overlays in `device/cheetah/overlays/bt-*.dtso` and
 `tools/bt-uart-test`. This replaces section 3 of `WIFI-BATTERY-PLAN.md`
 (which now points here). Bluetooth does not depend on any of the Wi-Fi or
@@ -25,7 +25,7 @@ Path abbreviations as in `WIFI-BATTERY-PLAN.md`: `L/` = our kernel
 (`wt-bt`), `G/` = Google's GPL kernel (`out-kernel/google/gs-6.1/private`),
 `GS/` = `G/google-modules/soc/gs`, `R/` = stock captures
 (`reference/cheetah-stock-cp2a-root`), `V/` = the LineageOS vendor blobs
-(`~/android/omandroid/vendor/google/cheetah/proprietary/vendor`).
+(`~/android/omamobile/vendor/google/cheetah/proprietary/vendor`).
 
 ---
 
@@ -156,7 +156,7 @@ does not acknowledge every record; if BT2 stops at
 `BCM: Patch command fc4c failed (-110)`, this is the next try. It is a
 bring-up knob, not meant for upstream as is.
 
-## 3. Kernel commits (`omandroid-bt`)
+## 3. Kernel commits (`omamobile-bt`)
 
 | Commit | What |
 |---|---|
@@ -178,7 +178,7 @@ The `hci_bcm` compatible and its binding were already on the branch.
 
 ## 4. Runbook (on the phone; each step has its rollback)
 
-From the omandroid repo, phone in Arch over USB, a second terminal running
+From the omamobile repo, phone in Arch over USB, a second terminal running
 `tools/phone-ssh dmesg -w`. Overlays are applied to the built DTB exactly as
 for Wi-Fi (`WIFI-BATTERY-PLAN.md` 7.5).
 
@@ -189,15 +189,15 @@ ov() {  # ov NAME: rebuild the DTB from default + overlay NAME, then images
   cp -n "$D" "$D.default"
   $O/scripts/dtc/dtc -q -I dts -O dtb -o out/$1.dtbo device/cheetah/overlays/$1.dtso
   $O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" out/$1.dtbo
-  bin/omandroid images
+  bin/omamobile images
 }
-# rollback for every overlay step: cp "$D.default" "$D"; bin/omandroid images && bin/omandroid push
+# rollback for every overlay step: cp "$D.default" "$D"; bin/omamobile images && bin/omamobile push
 ```
 
 ### BT1.0 new kernel, default DTB (nothing Bluetooth is enabled)
 
 ```sh
-bin/omandroid modules-push && bin/omandroid push          # slot B, reboots
+bin/omamobile modules-push && bin/omamobile push          # slot B, reboots
 tools/phone-ssh 'uname -r; ls /sys/bus/platform/devices | grep -E "18000000|10840000|181b00c0"; true'
 ```
 
@@ -208,7 +208,7 @@ which nothing references while the USI is off.
 ### BT1.1 CMU_APM only (reads, never writes)
 
 ```sh
-ov bt-cmu-test && bin/omandroid push
+ov bt-cmu-test && bin/omamobile push
 tools/phone-ssh 'grep -E "apm|pll_alv|pad_clk" /sys/kernel/debug/clk/clk_summary'
 ```
 
@@ -239,7 +239,7 @@ Q-channel (information only).
 ### BT1.2 UART up, loopback (chip stays off)
 
 ```sh
-ov bt-uart-test && bin/omandroid push
+ov bt-uart-test && bin/omamobile push
 tools/phone-ssh 'dmesg | grep -E "181b0000|181b00c0|10840000"; ls -l /dev/ttySAC0'
 tools/phone-ssh python3 - loop < tools/bt-uart-test
 ```
@@ -284,8 +284,8 @@ tools/extract-vendor-firmware -o out/vendor-firmware \
 tar -C out/vendor-firmware -cf - usr | tools/phone-ssh 'tar -C / -xf -'
 tools/phone-ssh 'ls -l "/usr/lib/firmware/updates/brcm/BCM.google,gs201-cheetah.hcd"'
 # keep hci_uart from loading at boot, so it loads with dmesg -w running
-tools/phone-ssh 'echo "blacklist hci_uart" > /etc/modprobe.d/omandroid-bt-test.conf'
-ov bt-hci-test && bin/omandroid push
+tools/phone-ssh 'echo "blacklist hci_uart" > /etc/modprobe.d/omamobile-bt-test.conf'
+ov bt-hci-test && bin/omamobile push
 tools/phone-ssh 'modprobe hci_uart; sleep 15; dmesg | grep -iE "bluetooth|hci0|btbcm|serial"'
 ```
 
@@ -311,7 +311,7 @@ Rollback: `modprobe -r hci_uart` (powers the chip down); the DTB rollback above.
 ### BT3 BlueZ, scan, pair, low power
 
 ```sh
-tools/phone-ssh 'rm /etc/modprobe.d/omandroid-bt-test.conf'
+tools/phone-ssh 'rm /etc/modprobe.d/omamobile-bt-test.conf'
 tools/phone-ssh 'systemctl enable --now bluetooth; rfkill list; bluetoothctl show'
 tools/phone-ssh 'timeout 20 bluetoothctl --timeout 15 scan on'
 ```
@@ -326,7 +326,7 @@ lists nearby devices with RSSI. Then pair a headset or another phone with
   `btmgmt power off; btmgmt public-addr "$(tr -d '\0' < /proc/device-tree/chosen/config/bt_addr)"; btmgmt power on`.
   First check that our DTB gets that property at all
   (`ls /proc/device-tree/chosen/config/`). A small unit in
-  `omandroid-device-cheetah` does this at every boot once proven.
+  `omamobile-device-cheetah` does this at every boot once proven.
 - **Low power.** `grep host-wake /proc/interrupts` (or the gpa6 line) counts
   host-wake edges; with the link idle for 10 s, `hci_bcm` runtime-suspends
   and drops BT_DEV_WAKE; an incoming connection must still wake it.
@@ -352,12 +352,12 @@ and drop `patchram_nowait` if it was not needed.
 - **Power state:** `omarchy-bluetooth-power` keeps on/off in the rfkill soft
   block (restored by `systemd-rfkill`), so `rfkill` (module, in our config)
   and `systemd-rfkill` must work; hci_uart registers the rfkill switch.
-- **Quick settings tile:** `omandroid.quicksettings` already has a Bluetooth
+- **Quick settings tile:** `omamobile.quicksettings` already has a Bluetooth
   tile (`Quickshell.Bluetooth` adapter state, `omarchy-bluetooth-power`
-  on/off), and `omandroid.bar` shows the icon when a device is connected.
+  on/off), and `omamobile.bar` shows the icon when a device is connected.
   Both read "No adapter" today and should come alive as soon as BlueZ has
   hci0, with no code change. Check with
-  `omarchy-shell shell call omandroid.quicksettings state ''`.
+  `omarchy-shell shell call omamobile.quicksettings state ''`.
 - **Device list / pairing:** Omarchy's `omarchy.bluetooth` panel (device
   list, connect, forget) is a desktop bar widget; the phone bar doesn't host
   it. Next UI step: a long-press on the tile opens a phone-sized device list

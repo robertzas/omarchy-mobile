@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Contributing to Omandroid
+# Contributing to Omarchy Mobile
 
-Omandroid runs native Omarchy on Google Pixel phones: Arch Linux ARM, Hyprland and Omarchy's own packages on a mainline Linux kernel, with no Android underneath. It works today on the Pixel 7 Pro (`cheetah`, Google Tensor G2 / `gs201`). We want help with two things: bringing up more Pixels, and getting our device-tree and driver work merged upstream.
+Omarchy Mobile runs native Omarchy on Google Pixel phones: Arch Linux ARM, Hyprland and Omarchy's own packages on a mainline Linux kernel, with no Android underneath. It works today on the Pixel 7 Pro (`cheetah`, Google Tensor G2 / `gs201`). We want help with two things: bringing up more Pixels, and getting our device-tree and driver work merged upstream.
 
 - **Supported devices and their status:** [docs/DEVICES.md](docs/DEVICES.md)
 - **What's missing and the order we plan to tackle it:** [docs/ROADMAP.md](docs/ROADMAP.md)
@@ -22,7 +22,7 @@ Omandroid runs native Omarchy on Google Pixel phones: Arch Linux ARM, Hyprland a
 
 ## 1. Goals and principles
 
-- **Omarchy-native.** The phone runs Omarchy's own packages, shell and update path (`omarchy update`). Phone-specific behaviour lives in Omandroid packages (`omandroid-shell`, `omandroid-device-<codename>`) that sit beside Omarchy's, as `omarchy-mac` does for Apple Silicon. Changes Omarchy itself needs go upstream to Omarchy ([`patches/omarchy/`](patches/omarchy) holds them while they wait). Avoid one-off local hacks.
+- **Omarchy-native.** The phone runs Omarchy's own packages, shell and update path (`omarchy update`). Phone-specific behaviour lives in Omarchy Mobile packages (`omamobile-shell`, `omamobile-device-<codename>`) that sit beside Omarchy's, as `omarchy-mac` does for Apple Silicon. Changes Omarchy itself needs go upstream to Omarchy ([`patches/omarchy/`](patches/omarchy) holds them while they wait). Avoid one-off local hacks.
 - **Upstream-able changes.** The kernel is mainline plus one commit per logical change, written the way upstream wants it: bindings, then the driver, then the DTS. Mesa and Hyprland changes are kept as patch files with their upstream merge-request text (see [`packages/mesa/UPSTREAM.md`](packages/mesa/UPSTREAM.md)). Any change we can't send upstream needs a good reason, written down.
 - **No Google Play services**, and no Google apps. Android apps run in Waydroid. Where Google's proprietary userspace is needed (GNSS, fingerprint), it runs in a small chroot built from the user's own factory image, and only for the job it does.
 - **Safety first.** Every Pixel holds calibration data that can't be replaced: IMEI, radio NV, sensor and display calibration. Bricking a phone or wiping that data is the worst thing this project can do. The [safety model](#3-the-safety-model-read-this-first) comes before speed, every time.
@@ -41,12 +41,12 @@ Omandroid runs native Omarchy on Google Pixel phones: Arch Linux ARM, Hyprland a
 
 - `docker`: kernel builds run in the [`docker/Dockerfile`](docker/Dockerfile) environment (Ubuntu 24.04).
 - `adb`, `fastboot` (`android-tools`), `lz4`, `zstd`, `cpio`, `python3`, `ssh`, plus `unzip`, `debugfs` (e2fsprogs), `simg2img`/`lpunpack` and `erofs-utils` for firmware extraction.
-- **Android's prebuilt clang and the AOSP boot-image tools.** `bin/omandroid` takes clang from `CLANG_DIR`, and `mkbootimg` and `mkdtboimg.py` from `SRC_DIR` (`system/tools/mkbootimg`, `system/libufdt`). Today these come from a LineageOS checkout (`bin/lineage-ref sync`, about 400 GB). A smaller setup also works: the AOSP `platform/prebuilts/clang/host/linux-x86`, `platform/system/tools/mkbootimg` and `platform/system/libufdt` projects under `~/android`, with `CLANG_DIR` and `SRC_DIR` set in `omandroid.local.conf`. The initramfs build links against that clang's Android compiler-rt builtins. A lighter toolchain setup would make a good PR.
-- **The kernel tree.** Clone [derekross/linux-omandroid](https://github.com/derekross/linux-omandroid) to `~/android/mainline/linux`, or set `KERNEL_DIR`. Branch `omandroid-int` is what the phone runs today (every subsystem merged, work in progress included, as one snapshot commit); branch `omandroid` holds the curated, upstream-ready commits and lags behind it. Build `omandroid-int` to match this repository's packages and overlays; base your own kernel work on `omandroid`.
+- **Android's prebuilt clang and the AOSP boot-image tools.** `bin/omamobile` takes clang from `CLANG_DIR`, and `mkbootimg` and `mkdtboimg.py` from `SRC_DIR` (`system/tools/mkbootimg`, `system/libufdt`). Today these come from a LineageOS checkout (`bin/lineage-ref sync`, about 400 GB). A smaller setup also works: the AOSP `platform/prebuilts/clang/host/linux-x86`, `platform/system/tools/mkbootimg` and `platform/system/libufdt` projects under `~/android`, with `CLANG_DIR` and `SRC_DIR` set in `omamobile.local.conf`. The initramfs build links against that clang's Android compiler-rt builtins. A lighter toolchain setup would make a good PR.
+- **The kernel tree.** Clone [derekross/linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile) to `~/android/mainline/linux`, or set `KERNEL_DIR`. Branch `omamobile-int` is what the phone runs today (every subsystem merged, work in progress included, as one snapshot commit); branch `omamobile` holds the curated, upstream-ready commits and lags behind it. Build `omamobile-int` to match this repository's packages and overlays; base your own kernel work on `omamobile`.
 - **Google's GPL kernel for your device**, as a reference for registers, clocks and power sequences (manifests at `android.googlesource.com/kernel/manifest`, branches named `android-gs-<family>-…`). The postmarketOS Tensor kernel is a useful second reference.
 - **The host side of USB networking:** give the laptop `172.16.42.2/24` on the phone's USB network interface. A NetworkManager profile with a manual address works (see "Host setup" in [NOTES.md](device/cheetah/NOTES.md)).
 
-Shared settings live in [`omandroid.conf`](omandroid.conf). Override them in `omandroid.local.conf`, which is gitignored.
+Shared settings live in [`omamobile.conf`](omamobile.conf). Override them in `omamobile.local.conf`, which is gitignored.
 
 ## 3. The safety model (read this first)
 
@@ -54,7 +54,7 @@ Every rule here exists because breaking it either bricks a phone or loses data n
 
 ### 3.1 Stock Android stays on slot A
 
-- Pixels have A/B slots. **Omandroid only ever lives on slot B.** Slot A keeps the stock factory build, so the phone always has a known-good system to fall back to and a way back to `fastboot` (`adb reboot bootloader`).
+- Pixels have A/B slots. **Omarchy Mobile only ever lives on slot B.** Slot A keeps the stock factory build, so the phone always has a known-good system to fall back to and a way back to `fastboot` (`adb reboot bootloader`).
 - **We flash only these partitions:** `boot_b`, `init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b`, `dtbo_b`, and `userdata`, which holds the Arch root.
 - **Never flash** `bootloader`, `abl`, `bl1`/`bl2`/`bl31`, `pbl`, `radio`/`modem`, `devinfo`, `persist`, `efs*`, `modem_userdata`, `vbmeta`, or anything without an explicit `_b` suffix. `fastboot flash boot …` without a suffix writes whichever slot is active.
 - **Never relock the bootloader** (`fastboot flashing lock`) while any non-stock image is on the phone.
@@ -68,8 +68,8 @@ UFS holds the per-device calibration. The initramfs ([`device/cheetah/initramfs/
 - It sets every SCSI disk and partition read-only (`blockdev --setro`) as soon as it appears, and keeps a watcher running for the life of PID 1.
 - The only exceptions are an allowlist of GPT partition names: slot B's five boot images and `userdata`.
 - It deletes the whole-disk node of the main LUN (`/dev/sda`), so nothing can write across partitions. The boot LUNs stay read-only at the disk level.
-- In Arch, [`10-omandroid-storage.rules`](packages/omandroid-device-cheetah/vendor/udev/rules.d/10-omandroid-storage.rules) keeps the whole-disk node unusable and hides the Android partitions from desktop tools.
-- The one write outside the allowlist is the boot-success marker (`omandroid-boot-success`). It opens exactly `devinfo` for a single verified write of the slot flag bytes, then sets it read-only again.
+- In Arch, [`10-omamobile-storage.rules`](packages/omamobile-device-cheetah/vendor/udev/rules.d/10-omamobile-storage.rules) keeps the whole-disk node unusable and hides the Android partitions from desktop tools.
+- The one write outside the allowlist is the boot-success marker (`omamobile-boot-success`). It opens exactly `devinfo` for a single verified write of the slot flag bytes, then sets it read-only again.
 
 **A new device gets this guard before its UFS driver is ever enabled.** Check the device's LUN layout and partition names first, because the allowlist works by name.
 
@@ -90,15 +90,15 @@ Bring-up steps hang phones. Plan for it before you start:
 - **Capture the log first.** The stage tools (`tools/wifi-w1-capture`, `acpm-stage`, `aoc-stage`, `fingerprint-capture`) open one SSH connection that streams `/dev/kmsg` into `logs/` **before** a second connection touches the hardware. The last line before a hang is then already on the laptop.
 - **Arm the hardware watchdog for risky loads.** Pass `--watchdog`: an s3c2410 watchdog (about 15 s) with a feeder loop. A full hang then ends in a warm reset by itself, and pstore keeps the console (`--pstore` saves it afterwards).
 - **Use dead-man switches for anything that can cut the USB link** (USB-C, firewall, network changes). The step runs detached on the phone and undoes itself unless the laptop confirms over a **new** SSH login. If even the undo doesn't bring USB back, the watchdog resets the phone into the known-good setup. See [`tools/usbc-deadman`](tools/usbc-deadman). The quick version for a config change is `systemd-run --unit=x-deadman --on-active=90 <undo command>`: test with a fresh connection, then stop the timer.
-- **Use hang markers for anything that runs at boot.** Write and `sync` a marker before touching the hardware, and remove it once the step has finished. If the next boot finds the marker, it skips the step. See [`omandroid-wifi-start`](packages/omandroid-device-cheetah/bin/omandroid-wifi-start) and [`omandroid-aoc-start`](packages/omandroid-device-cheetah/bin/omandroid-aoc-start).
-- **Shutdown hangs** end in a watchdog reset after a minute (`RebootWatchdogSec=1min`, [`10-omandroid-reboot-watchdog.conf`](packages/omandroid-device-cheetah/vendor/systemd/system.conf.d/10-omandroid-reboot-watchdog.conf)). A hang inside the kernel's `device_shutdown` isn't covered: an oops that leaves a device lock held (as unloading the AoC modules once did) needs a forced restart.
+- **Use hang markers for anything that runs at boot.** Write and `sync` a marker before touching the hardware, and remove it once the step has finished. If the next boot finds the marker, it skips the step. See [`omamobile-wifi-start`](packages/omamobile-device-cheetah/bin/omamobile-wifi-start) and [`omamobile-aoc-start`](packages/omamobile-device-cheetah/bin/omamobile-aoc-start).
+- **Shutdown hangs** end in a watchdog reset after a minute (`RebootWatchdogSec=1min`, [`10-omamobile-reboot-watchdog.conf`](packages/omamobile-device-cheetah/vendor/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf)). A hang inside the kernel's `device_shutdown` isn't covered: an oops that leaves a device lock held (as unloading the AoC modules once did) needs a forced restart.
 - **When the phone hangs:**
   1. Wait about 2 minutes. A dead-man undo, a watchdog reset or `panic=10` may bring it back on its own.
   2. Unplug and replug the cable once.
   3. Force a restart: hold Power for about 30 s until the phone is off, then press Power.
   4. Reach fastboot by hand: with the phone off, hold Volume Down, add Power, and keep both held about 20 s until "Fastboot Mode" appears. Letting go early lands on the unlocked-bootloader warning, which carries on booting slot B.
   5. From fastboot, flash known-good images to slot B, or `fastboot --set-active=a` to boot stock Android.
-- **Slot fallback:** a slot B that hasn't been marked successful falls back to stock slot A after the bootloader's retries run out. Once `omandroid-boot-success` has marked slot B, don't rely on that fallback: use fastboot. Keep a known-good image set (we keep one in `~/android/mainline/known-good`).
+- **Slot fallback:** a slot B that hasn't been marked successful falls back to stock slot A after the bootloader's retries run out. Once `omamobile-boot-success` has marked slot B, don't rely on that fallback: use fastboot. Keep a known-good image set (we keep one in `~/android/mainline/known-good`).
 
 ### 3.5 Never touch PMU registers from userspace; mind `devmem`
 
@@ -112,31 +112,31 @@ Bring-up steps hang phones. Plan for it before you start:
 - **One change per boot.** If two new things break together, you learn nothing.
 - **New DT nodes are `status = "disabled"` in the board DTS** and switched on by a bring-up overlay ([`device/cheetah/overlays/`](device/cheetah/overlays)). When a feature has passed every gate, it becomes default-on in a separate commit.
 - **Blacklist the module before installing a DTB that enables its node**, so it can't autoload. Load it by hand with `dmesg -w` running.
-- **Remove bring-up blacklists** (`/etc/modprobe.d/omandroid-*-bringup.conf`) when the feature moves into the device package. A stale one once left the GPU unbound. The same goes for a package's own modprobe file copied to `/etc/modprobe.d` by hand: a file there replaces the package's `/usr/lib/modprobe.d` file of the same name, so the package's later changes never apply.
+- **Remove bring-up blacklists** (`/etc/modprobe.d/omamobile-*-bringup.conf`) when the feature moves into the device package. A stale one once left the GPU unbound. The same goes for a package's own modprobe file copied to `/etc/modprobe.d` by hand: a file there replaces the package's `/usr/lib/modprobe.d` file of the same name, so the package's later changes never apply.
 - **Don't unload a bring-up module to retry** unless its exit path is known good. On cheetah, `rmmod` of the AoC modules left freed drivers on the platform bus, oopsed the deferred-probe worker and hung every shutdown after it. Reboot instead.
 
 ## 4. The development loop
 
 ```sh
-# Kernel: defconfig + kernel/configs/omandroid.config, built in the container
-bin/omandroid kernel           # Image, DTBs, modules into $KERNEL_OUT
-bin/omandroid modules          # stripped modules tarball for the Arch root
-bin/omandroid initramfs        # Alpine + dropbear + device/<codename>/initramfs/init
-bin/omandroid images           # boot, init_boot, vendor_boot, vendor_kernel_boot, dtbo
+# Kernel: defconfig + kernel/configs/omamobile.config, built in the container
+bin/omamobile kernel           # Image, DTBs, modules into $KERNEL_OUT
+bin/omamobile modules          # stripped modules tarball for the Arch root
+bin/omamobile initramfs        # Alpine + dropbear + device/<codename>/initramfs/init
+bin/omamobile images           # boot, init_boot, vendor_boot, vendor_kernel_boot, dtbo
 
 # Phone in fastboot (first install, or when Linux won't boot)
-bin/omandroid fastboot         # get there without buttons, if possible
-bin/omandroid flash            # flash the five *_b images, set slot B active, boot
+bin/omamobile fastboot         # get there without buttons, if possible
+bin/omamobile flash            # flash the five *_b images, set slot B active, boot
 
 # Phone running our Linux (normal loop: no fastboot)
-bin/omandroid push             # modules-push if needed, write slot B over SSH, verify, reboot
-bin/omandroid modules-push     # modules only, no reboot
+bin/omamobile push             # modules-push if needed, write slot B over SSH, verify, reboot
+bin/omamobile modules-push     # modules only, no reboot
 tools/phone-ssh <command>      # root@172.16.42.1 over USB
-tools/phone-mirror             # the phone's screen in a window here, mouse and keyboard included (omandroid-mirror)
+tools/phone-mirror             # the phone's screen in a window here, mouse and keyboard included (omamobile-mirror)
 ```
 
-- **The device** comes from `DEVICE` (default `cheetah`, in [`omandroid.conf`](omandroid.conf)) and its descriptor `device/<codename>/device.conf`: `DEVICE=<codename> bin/omandroid images`. How builds and releases work for several devices: [docs/RELEASES.md](docs/RELEASES.md).
-- **One worktree per subsystem branch.** Each branch gets its own output directory (`KERNEL_DIR=~/android/mainline/wt-gnss KERNEL_OUT=~/android/mainline/out-gnss bin/omandroid kernel`), so builds don't step on each other.
+- **The device** comes from `DEVICE` (default `cheetah`, in [`omamobile.conf`](omamobile.conf)) and its descriptor `device/<codename>/device.conf`: `DEVICE=<codename> bin/omamobile images`. How builds and releases work for several devices: [docs/RELEASES.md](docs/RELEASES.md).
+- **One worktree per subsystem branch.** Each branch gets its own output directory (`KERNEL_DIR=~/android/mainline/wt-gnss KERNEL_OUT=~/android/mainline/out-gnss bin/omamobile kernel`), so builds don't step on each other.
 - **The kernel command line goes in the DTB** (`/chosen/bootargs`), not in `vendor_boot`: the Pixel bootloader (ABL) ignores the vendor_boot cmdline.
 - **Building a DTB with a bring-up overlay** (the helper the runbooks use):
 
@@ -146,14 +146,14 @@ tools/phone-mirror             # the phone's screen in a window here, mouse and 
     cp -n "$D" "$D.default"; local o= n
     for n; do $O/scripts/dtc/dtc -q -I dts -O dtb -o out/$n.dtbo device/cheetah/overlays/$n.dtso; o="$o out/$n.dtbo"; done
     $O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" $o
-    bin/omandroid images
+    bin/omamobile images
   }
-  # rollback: cp "$D.default" "$D"; bin/omandroid images && bin/omandroid push
+  # rollback: cp "$D.default" "$D"; bin/omamobile images && bin/omamobile push
   ```
 
   Don't rely on the applied node order: where a driver numbers things by node order (an ASoC card numbers its PCMs by DAI link order), make the driver order them explicitly.
 
-- **Packages** build natively on the phone: `tools/phone-install-package packages/<name>` builds one with makepkg and installs it with pacman. The maintainer publishes the signed `[omandroid]` repository with `tools/repo-build` and `tools/repo-push`.
+- **Packages** build natively on the phone: `tools/phone-install-package packages/<name>` builds one with makepkg and installs it with pacman. The maintainer publishes the signed `[omamobile]` repository with `tools/repo-build` and `tools/repo-push`.
 - **Shell UI** can be developed on the desktop in a nested Hyprland: `phone/dev/run-desktop` ([phone/README.md](phone/README.md)).
 - **Getting Arch onto `userdata`** (an ext4 Arch Linux ARM root with Omarchy's packages, which the initramfs hands over to) isn't scripted in this repository yet. Ask in an issue before you try it. Formatting `userdata` erases stock Android's data: slot A will need a factory reset if you ever boot it again.
 
@@ -166,7 +166,7 @@ The order below is the one that worked for cheetah. Expect each step to take lon
 On stock Android, before you change anything:
 
 ```sh
-bin/omandroid capture <codename>-stock          # over adb; or in fastboot: getvar all
+bin/omamobile capture <codename>-stock          # over adb; or in fastboot: getvar all
 ```
 
 - **Without root** this saves `getprop`, the partition list (`/dev/block/by-name`), cpuinfo, meminfo, the kernel command line and the vendor module list.
@@ -190,7 +190,7 @@ The same SoC does **not** mean the same board. The panel, touch controller, PMIC
 
 ### 5.3 Write the board DTS
 
-- The board DTS lives in the **kernel repository** ([linux-omandroid](https://github.com/derekross/linux-omandroid)), not here. Start from the SoC `.dtsi` (`arch/arm64/boot/dts/exynos/google/gs201.dtsi` or `gs101.dtsi`) and from the live stock DT. Add `<soc>-<codename>.dts` with `compatible = "google,<soc>-<codename>", "google,<soc>"`, plus its entry in `Documentation/devicetree/bindings/arm/google.yaml`.
+- The board DTS lives in the **kernel repository** ([linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile)), not here. Start from the SoC `.dtsi` (`arch/arm64/boot/dts/exynos/google/gs201.dtsi` or `gs101.dtsi`) and from the live stock DT. Add `<soc>-<codename>.dts` with `compatible = "google,<soc>-<codename>", "google,<soc>"`, plus its entry in `Documentation/devicetree/bindings/arm/google.yaml`.
 - Read [BRINGUP-M1.md](device/cheetah/BRINGUP-M1.md) §1 (the boot chain) and §4 (the minimal DTS) first. The Pixel bootloader has rules of its own:
   - It picks the base DTB by `/soc_id`. Ship one copy per silicon revision.
   - It requires `/chosen/bootargs` and an empty `/ect` node.
@@ -199,7 +199,7 @@ The same SoC does **not** mean the same board. The panel, touch controller, PMIC
   - It injects `/memory` and the framebuffer carve-out itself.
   - It leaves the cluster watchdogs running, which resets the phone after about 60 s unless a watchdog driver takes them over.
 - **Check every stock `reserved-memory` node against `/proc/iomem`.** Firmware that writes into RAM the kernel thinks is free corrupts data silently. Mind the cell sizes: on gs201 each `reg` entry is 12 bytes, and a wrong length makes the kernel ignore the property without a word.
-- **Write the device descriptor**, `device/<codename>/device.conf`, starting from [cheetah's](device/cheetah/device.conf): the DTB name, the `soc_id` values (from the live DT and `fastboot getvar all`), the board dtbo source and its `board_id`/`board_rev`, the boot images the phone has (`fastboot getvar all` lists the partitions; older Pixels lack `init_boot` and `vendor_kernel_boot`), the storage-guard allowlist and the panel size. Then every `bin/omandroid` command takes the device from the environment: `DEVICE=<codename> bin/omandroid images`. [docs/RELEASES.md](docs/RELEASES.md) §3 describes each key and what `bin/omandroid` checks. The allowlist may only name `*_b` partitions and `userdata`.
+- **Write the device descriptor**, `device/<codename>/device.conf`, starting from [cheetah's](device/cheetah/device.conf): the DTB name, the `soc_id` values (from the live DT and `fastboot getvar all`), the board dtbo source and its `board_id`/`board_rev`, the boot images the phone has (`fastboot getvar all` lists the partitions; older Pixels lack `init_boot` and `vendor_kernel_boot`), the storage-guard allowlist and the panel size. Then every `bin/omamobile` command takes the device from the environment: `DEVICE=<codename> bin/omamobile images`. [docs/RELEASES.md](docs/RELEASES.md) §3 describes each key and what `bin/omamobile` checks. The allowlist may only name `*_b` partitions and `userdata`.
 - The initramfs `init` is still cheetah's ([`device/cheetah/initramfs/init`](device/cheetah/initramfs/init)): copy it to `device/<codename>/initramfs/init`, keep its `UFS_RW` identical to the descriptor's (the build checks), and **remove cheetah's display trigger `devmem` write and its `probe()` register reads**: they are gs201 DECON and watchdog addresses. **Never run cheetah's `devmem` writes on another phone.** A shared init with these quirks generated from the descriptor is step 2 of the release track ([ROADMAP](docs/ROADMAP.md) §3.8).
 
 ### 5.4 Bring-up order that worked
@@ -249,14 +249,14 @@ Findings that matter beyond one subsystem go into `device/<codename>/NOTES.md`, 
 
 | Change | Repository | Branch or path |
 | --- | --- | --- |
-| Kernel: drivers, bindings, DTS | [derekross/linux-omandroid](https://github.com/derekross/linux-omandroid) | fork it, branch off `omandroid`, one subsystem per branch (`omandroid-<subsystem>`, e.g. `omandroid-gs101-oriole-dts`), and open a pull request against `omandroid` |
+| Kernel: drivers, bindings, DTS | [derekross/linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile) | fork it, branch off `omamobile`, one subsystem per branch (`omamobile-<subsystem>`, e.g. `omamobile-gs101-oriole-dts`), and open a pull request against `omamobile` |
 | Device notes, plans, descriptor, bring-up overlays | this repository | `device/<codename>/` (descriptor `device.conf`), overlays in `device/<codename>/overlays/` |
-| Device support package | this repository | `packages/omandroid-device-<codename>/` |
+| Device support package | this repository | `packages/omamobile-device-<codename>/` |
 | Shell, sensors, GNSS, Mesa, Hyprland | this repository | `packages/<name>/` |
 | Omarchy changes | upstream [Omarchy](https://github.com/omacom/omarchy) first | `patches/omarchy/` while they wait |
 | Tools | this repository | `tools/`, `bin/` |
 
-**Device tree nodes go in the kernel; overlays only switch them on.** A new block (a sensor, a regulator, a bus) is described in the board DTS in linux-omandroid with `status = "disabled"`, next to its binding and driver. The `.dtso` files in this repository's `device/<codename>/overlays/` only set nodes to `"okay"` (and add bring-up-only tweaks) for one gated test boot; once a node is proven, it is enabled in the DTS itself and its overlay goes away. A driver, binding or DTS change never belongs in this repository, and a bring-up overlay never belongs in the kernel.
+**Device tree nodes go in the kernel; overlays only switch them on.** A new block (a sensor, a regulator, a bus) is described in the board DTS in linux-omarchy-mobile with `status = "disabled"`, next to its binding and driver. The `.dtso` files in this repository's `device/<codename>/overlays/` only set nodes to `"okay"` (and add bring-up-only tweaks) for one gated test boot; once a node is proven, it is enabled in the DTS itself and its overlay goes away. A driver, binding or DTS change never belongs in this repository, and a bring-up overlay never belongs in the kernel.
 
 ### 6.2 Kernel patches, upstream-style
 
@@ -271,18 +271,18 @@ Findings that matter beyond one subsystem go into `device/<codename>/NOTES.md`, 
 
   The plans record these results (for example [HAPTICS-TORCH-PLAN.md](device/cheetah/HAPTICS-TORCH-PLAN.md)).
 - **New hardware is `disabled` by default.** A separate, later commit turns it on once it has passed on the phone.
-- **Code imported from Google's GPL tree** keeps its copyright and is marked as such. Port it to upstream APIs and style before proposing it for `omandroid`.
-- **Sending upstream:** the published `omandroid` branch sits on one squashed commit that holds the tree of the upstream tag (see [`tools/publish-kernel`](tools/publish-kernel)). Rebase your commits onto the real tag (`git rebase --onto v7.3-rc6 <squashed base>`), run `scripts/get_maintainer.pl`, and follow `Documentation/process/submitting-patches.rst`.
+- **Code imported from Google's GPL tree** keeps its copyright and is marked as such. Port it to upstream APIs and style before proposing it for `omamobile`.
+- **Sending upstream:** the published `omamobile` branch sits on one squashed commit that holds the tree of the upstream tag (see [`tools/publish-kernel`](tools/publish-kernel)). Rebase your commits onto the real tag (`git rebase --onto v7.3-rc6 <squashed base>`), run `scripts/get_maintainer.pl`, and follow `Documentation/process/submitting-patches.rst`.
 - **Sign-off and AI tools.** Upstream needs your own `Signed-off-by:` (the DCO). If an AI assistant helped, follow `Documentation/process/coding-assistants.rst`: the human signs off, the AI never does, and its help is credited with an `Assisted-by:` tag.
 
 ### 6.3 This repository
 
-- **Commit subjects** name the area, then say what changed: `omandroid-gnss: package GNSS with location on demand`, `device-cheetah 0.1.15: reconnect USB after a replug`, `shell 0.1.17: …`, `DISPLAY-PLAN: D3b-1b result, …`, `NOTES: …`. When a commit changes a package, bump its `version` file and put the new version in the subject.
+- **Commit subjects** name the area, then say what changed: `omamobile-gnss: package GNSS with location on demand`, `device-cheetah 0.1.15: reconnect USB after a replug`, `shell 0.1.17: …`, `DISPLAY-PLAN: D3b-1b result, …`, `NOTES: …`. When a commit changes a package, bump its `version` file and put the new version in the subject.
 - **Bodies** explain the why and what was tested. Wrap at 72 columns. If an AI assistant co-wrote the commit, end with a `Co-Authored-By:` trailer, as the history does.
 - **Every file has an SPDX header** (§7).
-- **Packages** follow the existing layout: `PKGBUILD`, `install`, `version`, `README.md`, and `test/all`, which must pass. Device packages are named `omandroid-device-<codename>`. Nothing in them is enabled unless it's safe at boot, with hang markers where needed.
+- **Packages** follow the existing layout: `PKGBUILD`, `install`, `version`, `README.md`, and `test/all`, which must pass. Device packages are named `omamobile-device-<codename>`. Nothing in them is enabled unless it's safe at boot, with hang markers where needed.
 - **Keep identifying data out.** No Wi-Fi names, MAC or Bluetooth addresses, serial numbers, IMEIs, account names or captures: use placeholders such as `<SSID>`. Screenshots must not show any of these either.
-- **Open a PR** with what you ran on the phone, the kernel release, and the plan section it follows. Kernel PRs go to your fork's topic branch against linux-omandroid's `omandroid`; everything else to this repository's `main`. A new device's first PR here is usually its `device/<codename>/device.conf` and notes (§5).
+- **Open a PR** with what you ran on the phone, the kernel release, and the plan section it follows. Kernel PRs go to your fork's topic branch against linux-omarchy-mobile's `omamobile`; everything else to this repository's `main`. A new device's first PR here is usually its `device/<codename>/device.conf` and notes (§5).
 
 ### 6.4 Adding your device to the matrix
 
@@ -293,7 +293,7 @@ Add a row to [docs/DEVICES.md](docs/DEVICES.md) in the same PR as your device no
 - **This repository is MIT** ([LICENSE](LICENSE)), except where a file's SPDX header says otherwise. That covers the tools, packages, docs, bring-up overlays, the initramfs and the fingerprint and GNSS chroot pieces. Packages that are installed on their own also carry their own MIT `LICENSE`. Every file of ours starts with an SPDX header; new files get `SPDX-License-Identifier: MIT`.
 - **Kernel patches are GPL-2.0** (`GPL-2.0-only`, or whatever the subsystem uses), and so are the DTS files that go into the kernel. In this repository, the board `dtbo` source ([`cheetah-m1-overlay.dts`](device/cheetah/cheetah-m1-overlay.dts)) is GPL-2.0-only for the same reason.
 - **Exceptions keep their upstream licence:**
-  - the port of Google's Apache-2.0 boot-control code keeps that licence and Google's notice ([`omandroid-bootctl.c`](packages/omandroid-device-cheetah/src/omandroid-bootctl.c), with `LICENSE.Apache-2.0` beside it);
+  - the port of Google's Apache-2.0 boot-control code keeps that licence and Google's notice ([`omamobile-bootctl.c`](packages/omamobile-device-cheetah/src/omamobile-bootctl.c), with `LICENSE.Apache-2.0` beside it);
   - PKGBUILDs derived from Arch's are 0BSD;
   - patches to Mesa, Hyprland and Omarchy are under those projects' licences.
 - **Only use code from properly licensed sources.** Google's GPL kernel, upstream Linux, postmarketOS and Mesa are fine. Leaked or unlicensed code is not, and neither is decompiled proprietary code: describe protocols (as [USF-PROTOCOL.md](device/cheetah/USF-PROTOCOL.md) does), don't copy code.

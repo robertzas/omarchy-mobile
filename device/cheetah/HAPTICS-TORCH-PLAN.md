@@ -7,19 +7,19 @@ runs firmware 7.2.91 and buzzes, the LM3644TT gives 17 torch steps with no
 fault flags. H2 needed two kernel fixes (the i2c-exynos5 timeout now scales
 with the message length; cs_dsp's write sequence accepts 1, "changed"). H4:
 feedbackd uses the CS40L26 through the device package's udev rule
-(`74a5f74`). T4: the shell's torch tile works (omandroid-shell 0.1.10+).
-Kernel: `omandroid-haptics` @ `d609c1b3e` (`wt-haptics`), merged into
-`omandroid-int`. Open: T5 (stock's torch current, before any higher cap).
+(`74a5f74`). T4: the shell's torch tile works (omamobile-shell 0.1.10+).
+Kernel: `omamobile-haptics` @ `d609c1b3e` (`wt-haptics`), merged into
+`omamobile-int`. Open: T5 (stock's torch current, before any higher cap).
 
 Earlier status (historical, superseded by the status above): offline work done (drivers, DT, overlays, firmware extraction), built,
 **nothing tested on the phone yet**. Build: release
-`7.3.0-rc6-omandroid-push1-00065-gebcd2674f279`, images in
+`7.3.0-rc6-omamobile-push1-00065-gebcd2674f279`, images in
 `~/android/mainline/out-haptics/images` (`logs/haptics-*.log`); both drivers
 W=1 and checkpatch `--strict` clean; `dt-doc-validate` of the three schemas
 and `dt-validate` of `gs201-cheetah.dtb`, alone and with the `haptics` +
 `torch` overlays applied, report only the existing `soc_id` and
-framebuffer items. Written 2026-10-12 against `omandroid`
-@ `7b0f8b5d1` (Linux 7.3-rc6), kernel branch `omandroid-haptics` in
+framebuffer items. Written 2026-10-12 against `omamobile`
+@ `7b0f8b5d1` (Linux 7.3-rc6), kernel branch `omamobile-haptics` in
 `wt-haptics`, build in `out-haptics`.
 
 Goal: vibration through the standard force-feedback API (FF_RUMBLE, which
@@ -29,7 +29,7 @@ feedbackd uses) and the rear flash LED as an LED class torch
 Path abbreviations:
 
 - `L/` = `/home/raven/android/mainline/wt-haptics` (our kernel, this branch)
-- `G/` = `/home/raven/android/omandroid/out-kernel/google/gs-6.1/private`
+- `G/` = `/home/raven/android/omamobile/out-kernel/google/gs-6.1/private`
 - `C/` = `G/google-modules/amplifiers/cs40l26` (Cirrus Logic's GPL driver as shipped by Google)
 - `R/` = `/home/raven/android/reference/cheetah-stock-cp2a-root` (stock live DT, logs)
 
@@ -161,7 +161,7 @@ after each switch-on and before switch-off.
 
 ## 3. Kernel and repo changes
 
-Kernel branch `omandroid-haptics` (`L/`), one commit per subsystem:
+Kernel branch `omamobile-haptics` (`L/`), one commit per subsystem:
 
 | Commit | What | Default |
 |---|---|---|
@@ -176,9 +176,9 @@ Kernel branch `omandroid-haptics` (`L/`), one commit per subsystem:
 Note for merging: `wt-fingerprint` and `wt-bt` add the same `pinctrl_peric0`
 node and banks (uncommitted there at the time of writing); keep one copy.
 
-Repo (`/home/raven/Projects/omandroid`):
+Repo (`/home/raven/Projects/omarchy-mobile`):
 
-- `kernel/configs/omandroid.config`: `CONFIG_INPUT_CS40L26_VIBRA=m`, `CONFIG_LEDS_LM3644=m`.
+- `kernel/configs/omamobile.config`: `CONFIG_INPUT_CS40L26_VIBRA=m`, `CONFIG_LEDS_LM3644=m`.
 - `device/cheetah/overlays/haptics-i2c.dtso`, `haptics.dtso`, `torch-i2c.dtso`, `torch.dtso`.
 - `tools/extract-vendor-firmware`: also copies `cs40l26.wmfw`, `cs40l26.bin`,
   `cs40l26-svc.bin`, `cs40l26-dvl.bin`, `cs40l26-calib.wmfw` to
@@ -193,7 +193,7 @@ Repo (`/home/raven/Projects/omandroid`):
 
 ## 4. Runbook (on the phone; each step has its rollback)
 
-From the omandroid repo, phone in Arch over USB, a second terminal running
+From the omamobile repo, phone in Arch over USB, a second terminal running
 `tools/phone-ssh dmesg -w`. Overlays are applied as in `BLUETOOTH-PLAN.md` 4:
 
 ```sh
@@ -203,20 +203,20 @@ ov() {  # ov NAME...: rebuild the DTB from default + overlays, then images
   cp -n "$D" "$D.default"; local o= n
   for n; do $O/scripts/dtc/dtc -q -I dts -O dtb -o out/$n.dtbo device/cheetah/overlays/$n.dtso; o="$o out/$n.dtbo"; done
   $O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" $o
-  bin/omandroid images
+  bin/omamobile images
 }
-# rollback for every overlay step: cp "$D.default" "$D"; bin/omandroid images && bin/omandroid push
+# rollback for every overlay step: cp "$D.default" "$D"; bin/omamobile images && bin/omamobile push
 ```
 
 ### H0/T0 new kernel, default DTB, firmware installed (nothing new enabled)
 
 ```sh
-bin/omandroid modules && bin/omandroid initramfs && bin/omandroid images   # already done once
+bin/omamobile modules && bin/omamobile initramfs && bin/omamobile images   # already done once
 tools/extract-vendor-firmware -o out/vendor-firmware ~/android/factory/cheetah-cp2a.260705.006/image-cheetah-cp2a.260705.006.zip
 tar -C out/vendor-firmware -cf - usr | tools/phone-ssh 'tar -C / -xf -'
 # keep both drivers from loading on their own while the overlays are on
-tools/phone-ssh 'printf "blacklist cs40l26_vibra\nblacklist leds_lm3644\n" > /etc/modprobe.d/omandroid-haptics-bringup.conf'
-bin/omandroid modules-push && bin/omandroid push          # slot B, reboots
+tools/phone-ssh 'printf "blacklist cs40l26_vibra\nblacklist leds_lm3644\n" > /etc/modprobe.d/omamobile-haptics-bringup.conf'
+bin/omamobile modules-push && bin/omamobile push          # slot B, reboots
 tools/phone-ssh 'uname -r; ls /usr/lib/firmware/updates/cs40l26*; pacman -Q i2c-tools || pacman -S --noconfirm i2c-tools'
 ```
 
@@ -225,7 +225,7 @@ Expect: boots as before; the five `cs40l26*` files present. Rollback: previous i
 ### H1 haptics bus, read-only ID check
 
 ```sh
-ov haptics-i2c && bin/omandroid push
+ov haptics-i2c && bin/omamobile push
 tools/phone-ssh 'B=$(ls /sys/bus/platform/devices/10970000.i2c | sed -n "s/^i2c-//p"); echo bus $B
   i2ctransfer -y $B w4@0x43 0x00 0x00 0x00 0x00 r4; i2ctransfer -y $B w4@0x43 0x00 0x00 0x00 0x04 r4'
 ```
@@ -239,7 +239,7 @@ Anything else (bus timeout, a hang): stop and report. Rollback: default DTB.
 ### H2 driver probe (loads the RAM firmware)
 
 ```sh
-ov haptics && bin/omandroid push
+ov haptics && bin/omamobile push
 tools/phone-ssh 'modprobe cs40l26_vibra; sleep 2; dmesg | grep -iE "cs40l26|cs_dsp|0043" ; cat /proc/bus/input/devices | grep -A4 cs40l26_vibra'
 ```
 
@@ -281,7 +281,7 @@ After H4 passes: remove the blacklist file and make the overlay's nodes
 ### T1 torch bus, read-only
 
 ```sh
-ov torch-i2c && bin/omandroid push
+ov torch-i2c && bin/omamobile push
 tools/phone-ssh 'B=$(ls /sys/bus/platform/devices/10da0000.i2c | sed -n "s/^i2c-//p"); echo bus $B
   i2cget -y $B 0x50 0x00; i2cget -y $B 0x63 0x0c; true'
 ```
@@ -292,7 +292,7 @@ answer** from `0x63` (HWEN low = shutdown). Rollback: default DTB.
 ### T2 driver probe (ID and reset values, nothing written)
 
 ```sh
-ov torch && bin/omandroid push
+ov torch && bin/omamobile push
 tools/phone-ssh 'modprobe leds_lm3644; dmesg | grep -i lm3644; ls /sys/class/leds; cat /sys/class/leds/white:torch/max_brightness'
 ```
 
@@ -313,7 +313,7 @@ Rollback: `echo 0 > brightness` / `rmmod leds_lm3644` (HWEN low).
 ### T4 shell tile
 
 See section 5. Combined DTB for daily use until merged:
-`ov haptics torch && bin/omandroid push`.
+`ov haptics torch && bin/omamobile push`.
 
 ### T5 (optional, on stock Android) reference torch current
 
@@ -325,9 +325,9 @@ stock value).
 
 ---
 
-## 5. What the Omandroid shell needs
+## 5. What the Omarchy Mobile shell needs
 
-`packages/omandroid-shell/plugins/omandroid.quicksettings/QuickSettings.qml`,
+`packages/omamobile-shell/plugins/omamobile.quicksettings/QuickSettings.qml`,
 the `torch` stub (around line 221), should become:
 
 - **available**: a `*:torch` LED exists: `/sys/class/leds/white:torch`.
@@ -342,5 +342,5 @@ the `torch` stub (around line 221), should become:
   kernel without the torch overlay).
 
 Haptics need nothing in the shell itself: feedbackd (once the udev rule of
-H4 is in `omandroid-device-cheetah`) gives touch/notification feedback to
+H4 is in `omamobile-device-cheetah`) gives touch/notification feedback to
 anything that uses libfeedback.

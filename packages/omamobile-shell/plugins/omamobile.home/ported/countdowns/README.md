@@ -7,7 +7,7 @@ A built-in home-screen widget, ported from
 by Simon Schubert, in [omarchy-widgets](https://github.com/SimonSchubert/omarchy-widgets),
 the widget store of Simon Schubert's Omalauncher.
 
-**Differences from the original:** The dates are a setting (`2026-12-24 christmas; 2027-03-01 trip`) instead of the file `~/.config/omarchy-proot/countdown`, and a tap opens the settings instead of an editor. No command runs. Its id is `countdowns`, since the Omandroid `countdown` example already exists.
+**Differences from the original:** The dates are a setting (`2026-12-24 christmas; 2027-03-01 trip`) instead of the file `~/.config/omarchy-proot/countdown`, and a tap opens the settings instead of an editor. No command runs. Its id is `countdowns`, since the Omarchy Mobile `countdown` example already exists.
 
 **Capabilities:** none.
 
@@ -36,4 +36,4 @@ The original is MIT licensed, and so is this port:
     SOFTWARE.
 
 The same text is in `LICENSE-omarchy-widgets` in the home screen's plugin folder
-(`/usr/share/omandroid/shell/plugins/omandroid.home/LICENSE-omarchy-widgets`).
+(`/usr/share/omamobile/shell/plugins/omamobile.home/LICENSE-omarchy-widgets`).

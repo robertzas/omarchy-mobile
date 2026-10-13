@@ -3,19 +3,19 @@
 Status (2026-10-12): **our flip-only KMS driver, gs-decon, runs the display
 by default** at 120 Hz (with a 60 Hz mode), with brightness over DSI and a
 real screen-off. D1b, D2, D5a-c, D4a-1/2, D5d/D6 and D3b-1/D3b-2 passed on
-the phone. omandroid-device-cheetah 0.1.16+ sets `gs_decon screen_off=2`
+the phone. omamobile-device-cheetah 0.1.16+ sets `gs_decon screen_off=2`
 (trigger masked and the panel asleep on DPMS off; commit `1aa851d`), with
-hyprland 0.56.2-5.1 (the DPMS retry) and omandroid-shell 0.1.20+ (the power
-key with the panel off). Kernel: `omandroid-display` @ `43918aeb7` and
-`omandroid-display2` @ `5f4808c32` (`wt-display2`, `out-display2`), both
-merged into `omandroid-int`. **Next:** D3b-3 (screen-off power at each
+hyprland 0.56.2-5.1 (the DPMS retry) and omamobile-shell 0.1.20+ (the power
+key with the panel off). Kernel: `omamobile-display` @ `43918aeb7` and
+`omamobile-display2` @ `5f4808c32` (`wt-display2`, `out-display2`), both
+merged into `omamobile-int`. **Next:** D3b-3 (screen-off power at each
 `screen_off`), D3b-4 (soak), then D4a-3 (trigger masked between flips,
 vblank from TE) and the panel's 10 Hz idle. Sections 1-5 are the original
 research; the results follow in date order from "G0 status".
 
 Earlier status (historical, superseded by the status above): D1b, D2, D5a-c and D4a-1/2 pass on the phone (brightness, flip-only
 KMS under Hyprland, 120 Hz by hand). D5d/D6 (gs-decon by default, 120 Hz as a
-KMS mode) is built offline in branch `omandroid-display2`
+KMS mode) is built offline in branch `omamobile-display2`
 (`~/android/mainline/wt-display2`); see "D5d/D6" at the end for the design and
 the staged runbook.
 
@@ -34,8 +34,8 @@ DECON0 sends a frame on every panel TE pulse (NOTES.md, "Display").
 
 Path abbreviations:
 
-- `K/` = `~/android/mainline/wt-display` (our kernel, branch `omandroid-display`)
-- `G/` = `~/android/omandroid/out-kernel/google/gs-6.1/private/google-modules/display/samsung`
+- `K/` = `~/android/mainline/wt-display` (our kernel, branch `omamobile-display`)
+- `G/` = `~/android/omamobile/out-kernel/google/gs-6.1/private/google-modules/display/samsung`
 - `HC4` = `G/panel/panel-samsung-s6e3hc4.c`, `DRV` = `G/panel/panel-samsung-drv.c`
 - `GS/` = `.../google-modules/soc/gs`, `CAL/` = `GS/drivers/soc/google/cal-if/gs201`
 - `GDT/` = `.../gs-6.1/private/devices/google`
@@ -325,7 +325,7 @@ involved.
   Omarchy's idle and lock call `hyprctl dispatch dpms off|on`. A small
   hypridle/`omarchy-hook` script also writes
   `/sys/class/backlight/*/bl_power` (4 = off, 0 = on). This is userspace, in
-  the omandroid repo; brightness needs no glue (`brightnessctl` finds the
+  the omamobile repo; brightness needs no glue (`brightnessctl` finds the
   backlight).
 
 ### (a+) Same, plus DECON trigger control
@@ -399,7 +399,7 @@ Rules for every gate:
   - `panic=10` reboots on any panic.
   - Our slot B never marks itself successful, so after its retries ABL falls
     back to stock slot A (NOTES.md "Boot chain").
-  - Known-good images stay in `~/android/mainline/known-good`; `bin/omandroid
+  - Known-good images stay in `~/android/mainline/known-good`; `bin/omamobile
     push` writes slot B from a running phone.
 - **One change per boot.** Driver loads are by hand over SSH while
   `dmesg -w` runs in a second session.
@@ -535,7 +535,7 @@ Rules for every gate:
 > **Historical.** Superseded by the D1a, D1b/D2 and D6 results below and the
 > status at the top.
 
-### Kernel: `omandroid-display` in `wt-display`, on `omandroid` @ `a3061be71`
+### Kernel: `omamobile-display` in `wt-display`, on `omamobile` @ `a3061be71`
 
 | Commit | What |
 |---|---|
@@ -568,16 +568,16 @@ Rules for every gate:
 
 **Builds:**
 
-- `bin/omandroid kernel/modules/initramfs/images` with
+- `bin/omamobile kernel/modules/initramfs/images` with
   `KERNEL_OUT=~/android/mainline/out-display` all pass; logs are
   `logs/*-display.log`.
 - W=1 is clean for the three changed objects.
-- Release `7.3.0-rc6-omandroid-push1-00053-gb32b686639d8`; images in
+- Release `7.3.0-rc6-omamobile-push1-00053-gb32b686639d8`; images in
   `out-display/images`.
 - DT in this state: `dsi0`, `cmu_dpu` and `cmu_disp` are disabled, so nothing
   new probes.
 
-**omandroid repo:** `kernel/configs/omandroid.config` gains
+**omamobile repo:** `kernel/configs/omamobile.config` gains
 `CONFIG_DRM_GS_DSIM_CMD=m` and `CONFIG_DRM_PANEL_SAMSUNG_S6E3HC4=m`. That file
 also holds someone else's uncommitted Wi-Fi lines, so it's left for them to
 commit together.
@@ -596,9 +596,9 @@ for a in 0x1c2c0000 0x1c2c000c 0x1c2c002c 0x1c2c004c 0x1c2c0068 0x1c2c0080 \
 #   &dsi0 { status = "okay"; };  &cmu_dpu { status = "okay"; };  &cmu_disp { status = "okay"; };
 # and rebuild kernel + modules + images with KERNEL_OUT=out-display
 tools/phone-ssh 'printf "blacklist gs_dsim_cmd\nblacklist panel_samsung_s6e3hc4\n" \
-  > /etc/modprobe.d/omandroid-display.conf'
+  > /etc/modprobe.d/omamobile-display.conf'
 export KERNEL_OUT=$HOME/android/mainline/out-display
-bin/omandroid modules-push && bin/omandroid push
+bin/omamobile modules-push && bin/omamobile push
 tools/phone-ssh dmesg -w            # second terminal
 tools/phone-ssh 'modprobe gs-dsim-cmd; modprobe panel-samsung-s6e3hc4; ls /sys/class/backlight'
 ```
@@ -641,7 +641,7 @@ Both open questions about ABL's DSIM state are answered in the driver's favour: 
 ## D5: smooth display (2026-10-12, offline; nothing was run on the phone)
 
 Goal: Hyprland with real vsync, tear-free zero-copy flips, then 120 Hz.
-Kernel branch `omandroid-display2` (`~/android/mainline/wt-display2`, out dir
+Kernel branch `omamobile-display2` (`~/android/mainline/wt-display2`, out dir
 `out-display2`), on top of the G0/D1b commits. Abbreviations as in the top
 of this file, plus `DSIM` = `G/exynos_drm_dsim.c`, `DEC` =
 `G/exynos_drm_decon.c`, `BTS` = `G/exynos_drm_bts.c`.
@@ -900,7 +900,7 @@ for the DISP/DPU clock rates ABL left (D5.2 needs ≥ 297 MHz for 120 Hz).
 2. Test DTB: in `gs201-cheetah.dts` set `&decon0 { status = "okay"; };`
    and `&display_pool { status = "okay"; };`, rebuild `images`, and
    blacklist first:
-   `tools/phone-ssh 'echo "blacklist gs_decon" > /etc/modprobe.d/omandroid-decon.conf'`.
+   `tools/phone-ssh 'echo "blacklist gs_decon" > /etc/modprobe.d/omamobile-decon.conf'`.
 3. Boot, then `tools/phone-ssh modprobe gs-decon` (stage 0): it logs 19
    registers. Expect `GLOBAL_CON` 0x133, `TRIG_CON` 0x3061,
    `RDMA_BASEADDR` and `RDMA_BASEADDR*` 0xfac00000, `RDMA_SRC_SIZE`
@@ -932,7 +932,7 @@ for the DISP/DPU clock rates ABL left (D5.2 needs ≥ 297 MHz for 120 Hz).
   then times out after 100 ms: visible in `flip_timeouts`).
 
 **D4a-2: Hyprland on gs-decon.** Options in
-`/etc/modprobe.d/omandroid-decon.conf` (`options gs_decon stage=2`), loaded
+`/etc/modprobe.d/omamobile-decon.conf` (`options gs_decon stage=2`), loaded
 from the initramfs before Plymouth. Pass: Hyprland's `debug:overlay` shows
 60 fps with vsync, no tearing when scrolling, and `hyprctl monitors` shows
 the real 60 Hz mode with vblank. Measure the drop in CPU use against
@@ -966,7 +966,7 @@ idle (the panel's auto mode, `HC4:435-481`) later.
 
 ### D5.5 Built (2026-10-12)
 
-Kernel branch `omandroid-display2`, on `omandroid` @ `e7cb10fe5`:
+Kernel branch `omamobile-display2`, on `omamobile` @ `e7cb10fe5`:
 
 | Commit | What |
 |---|---|
@@ -978,7 +978,7 @@ Kernel branch `omandroid-display2`, on `omandroid` @ `e7cb10fe5`:
 
 - `kernel`, `modules`, `initramfs` and `images` build into `out-display2`
   (logs `logs/*-display2.log`), release
-  `7.3.0-rc6-omandroid-push1-00060-g52ec674f1ef2`; W=1 is clean for `gs-decon.o`,
+  `7.3.0-rc6-omamobile-push1-00060-g52ec674f1ef2`; W=1 is clean for `gs-decon.o`,
   `gs-dsim-cmd.o` and `panel-samsung-s6e3hc4.o`.
 - `dt-doc-validate` passes for the new binding; `dt-validate` of the
   shipped `gs201-cheetah.dtb`, and of a D4 test DTB with `decon0` and
@@ -987,7 +987,7 @@ Kernel branch `omandroid-display2`, on `omandroid` @ `e7cb10fe5`:
 - With the shipped DTB nothing new probes. The one behaviour change on
   today's path: a panel cold init (`prepare`, only reachable from D4b) now
   ends with the feature/rate set.
-- `kernel/configs/omandroid.config` gains `CONFIG_DRM_GS_DECON=m`.
+- `kernel/configs/omamobile.config` gains `CONFIG_DRM_GS_DECON=m`.
   `tools/display-hz` is the D5a tool.
 
 **First step:** D5a, `tools/display-hz --secs 10` on the running phone
@@ -995,7 +995,7 @@ Kernel branch `omandroid-display2`, on `omandroid` @ `e7cb10fe5`:
 
 ## D5d/D6: gs-decon by default, 120 Hz as a KMS mode (2026-10-12, offline; nothing was run on the phone)
 
-Starting point (on the phone, kernel `omandroid-int` `…-00175-g7bee66237c8d`
+Starting point (on the phone, kernel `omamobile-int` `…-00175-g7bee66237c8d`
 with `overlays/display-decon-test.dtso`): D5b and D4a-1/2 pass (60.1 Hz flips,
 no flip timeouts, Hyprland on `card2` with correct colours after `a2a2ee90d`
 and `fa6d7aec8`), and D5c ran 120.02 Hz under Hyprland with the DSIM timers
@@ -1003,11 +1003,11 @@ written by hand. This step makes that the default.
 
 ### D6.1 What changed
 
-Branch `omandroid-display2`, on top of `fa6d7aec8`:
+Branch `omamobile-display2`, on top of `fa6d7aec8`:
 
 | Commit | What |
 |---|---|
-| `bea2c2842` | merge `omandroid-acpm` (identical to the ACPM code in `omandroid-int`): DECON0 needs the ACPM clock provider |
+| `bea2c2842` | merge `omamobile-acpm` (identical to the ACPM code in `omamobile-int`): DECON0 needs the ACPM clock provider |
 | `04cbbeca6` | drm/panel: add an optional refresh rate switch (`drm_panel_set_refresh_rate()`, `funcs->set_refresh_rate`) |
 | `32b4bf0c3` | drm/panel: samsung-s6e3hc4: switch the refresh rate through drm_panel (lists 60 and 120 Hz; the `refresh_rate` sysfs knob and `allow_rate_switch` are gone) |
 | `445d2b4f7` | dt-bindings: DECON and DSIM get an OF graph `port` |
@@ -1016,14 +1016,14 @@ Branch `omandroid-display2`, on top of `fa6d7aec8`:
 | `5081097ac` | arm64: dts: gs201: DECON0 → DSIM0 port, ACPM `mif`/`disp` clocks on DECON0 |
 | `d4b2e68a3` | arm64: dts: gs201-cheetah: enable DECON0 and its pool |
 
-Merging into `omandroid-int` is conflict-free (`git merge-tree` checked).
-Build in `out-display2`: release `7.3.0-rc6-omandroid-push1-00078-gd4b2e68a372c`,
+Merging into `omamobile-int` is conflict-free (`git merge-tree` checked).
+Build in `out-display2`: release `7.3.0-rc6-omamobile-push1-00078-gd4b2e68a372c`,
 logs `logs/{kernel,modules,initramfs,images}-display2-d5d.log`. W=1 is clean
 for `gs-decon.o`, `gs-dsim-cmd.o`, `panel-samsung-s6e3hc4.o` and
 `drm_panel.o`; checkpatch is clean; `dt_binding_check` passes for both
 bindings; `dt-validate` of `gs201-cheetah.dtb` reports only the old `soc_id`
-and `post-init-providers` items. That build is `omandroid-display2` alone
-(no Wi-Fi, Bluetooth, …): for the phone, merge into `omandroid-int` and
+and `post-init-providers` items. That build is `omamobile-display2` alone
+(no Wi-Fi, Bluetooth, …): for the phone, merge into `omamobile-int` and
 build that.
 
 **120 Hz switch (`gs-decon` + `gs-dsim-cmd` + panel).**
@@ -1051,7 +1051,7 @@ build that.
   depend on the rate and stays as ABL left it, as in D5c.
 - 120 Hz is offered only with: the DSIM on DECON0's port, a panel that
   implements `set_refresh_rate`, `gs_dsim_cmd.allow_tx=1` (set by
-  `omandroid-device-cheetah`) and the `mif` clock. Otherwise only 60 Hz.
+  `omamobile-device-cheetah`) and the `mif` clock. Otherwise only 60 Hz.
   `gs_decon.max_refresh=60` turns 120 Hz off.
 - `/sys/bus/platform/devices/1c240000.display-controller/stats` gains
   `refresh_hz`.
@@ -1138,15 +1138,15 @@ phone writes when given a second argument, so never pass one). Exception:
 
 **D6a: merge, build, install.**
 
-1. In `~/android/mainline/wt-int`: `git merge omandroid-display2`; build
+1. In `~/android/mainline/wt-int`: `git merge omamobile-display2`; build
    `out-int` (`kernel`, `modules`, `initramfs`, `images`, with `KERNEL_DIR`
    and `KERNEL_OUT` set). Keep the current images in `known-good` first.
 2. On the phone, remove the D4 test settings: the `gs_decon` line(s) in
-   `/etc/modprobe.d/omandroid-decon.conf` (blacklist, `stage=2`,
+   `/etc/modprobe.d/omamobile-decon.conf` (blacklist, `stage=2`,
    `force_xrgb=1`; the last one would now only log "unknown parameter").
    Remove `overlays/display-decon-test.dtso` from the boot DTB if it was
    applied; the base DTB enables DECON0 and the pool now.
-3. `bin/omandroid modules-push && bin/omandroid push` (reboots into slot B).
+3. `bin/omamobile modules-push && bin/omamobile push` (reboots into slot B).
 
 **D6b: boot.** Watch the screen:
 ABL logo → Omarchy logo → Plymouth animation → Hyprland, with no black frame
@@ -1212,15 +1212,15 @@ wait 5 s, `on`).
 lock screen and Hyprland come back at 120 Hz, with at most a short black
 frame while the old session exits.
 
-**D6h: reboot twice and one kexec** (`bin/omandroid kexec`). Pass: same as
+**D6h: reboot twice and one kexec** (`bin/omamobile kexec`). Pass: same as
 D6b. After the kexec, "link timers for 60 Hz" (shutdown went back to 60).
 
 **Rollback, mildest first:**
 
 1. 60 Hz only: `echo "options gs_decon max_refresh=60" >
-   /etc/modprobe.d/omandroid-decon.conf`, reboot.
+   /etc/modprobe.d/omamobile-decon.conf`, reboot.
 2. No KMS (simpledrm as before, brightness unaffected): `echo "blacklist
-   gs_decon" > /etc/modprobe.d/omandroid-decon.conf`, reboot.
+   gs_decon" > /etc/modprobe.d/omamobile-decon.conf`, reboot.
 3. Console on the panel for debugging: `options gs_decon fbdev=1`.
 4. Previous kernel: `push` the `known-good` images. The old kernel's
    `gs-decon` defaults to stage 0 (logs only), even with this DTB.
@@ -1230,7 +1230,7 @@ D6b. After the kexec, "link timers for 60 Hz" (shutdown went back to 60).
 
 ### D6 result (2026-10-12, on the phone)
 
-Kernel `omandroid-int` `…-00209-gd577cf9b38ce` (int with `omandroid-display2`
+Kernel `omamobile-int` `…-00209-gd577cf9b38ce` (int with `omamobile-display2`
 merged), default DTB, no decon overlay:
 
 - `gs-decon` probed at 4.4 s. It logged "MIF at 2028000000 Hz", "DISP at
@@ -1253,7 +1253,7 @@ Today "screen off" means:
 - the panel is only in display-off (`bl_power` 4), which still costs it
   about 87 mW.
 
-Branch `omandroid-display2`:
+Branch `omamobile-display2`:
 
 | Commit | What |
 |---|---|
@@ -1294,9 +1294,9 @@ written again. What it does **not** do: restart the DSIM or DECON (D4b),
 switch the panel's rails (no S2MPG12/13 regulator driver: they stay on, so
 the panel sits in reset with power), or suspend (D4c).
 
-Build: `out-display2`, release `7.3.0-rc6-omandroid-push1-00082-g172c08f89a2d`,
+Build: `out-display2`, release `7.3.0-rc6-omamobile-push1-00082-g172c08f89a2d`,
 logs `logs/*-display2-d6.log`. W=1 and checkpatch are clean for the three
-files, and it merges into `omandroid-int` without conflicts.
+files, and it merges into `omamobile-int` without conflicts.
 
 ### D3b first try: DPMS off never reached the CRTC (2026-10-12)
 
@@ -1330,12 +1330,12 @@ the drop to 60 Hz and `screen_off`. The CRTC turning off is the
 upstream-standard signal, and a heuristic on the backlight or on flip idle
 would fire on a static screen that is still on.
 
-Build: `out-display2`, release `7.3.0-rc6-omandroid-push1-00083-g7d689978a20e`;
-it merges into `omandroid-int` without conflicts.
+Build: `out-display2`, release `7.3.0-rc6-omamobile-push1-00083-g7d689978a20e`;
+it merges into `omamobile-int` without conflicts.
 
 ### D3b runbook (each step needs the user)
 
-Merge `omandroid-display2` into int, build, `modules-push`, `push`. Then
+Merge `omamobile-display2` into int, build, `modules-push`, `push`. Then
 check that D6b/D6c still pass: `screen_off` is 0, so nothing else changed.
 
 Run `tools/phone-ssh dmesg -w` in a second terminal.
@@ -1446,8 +1446,8 @@ in cycles 2 and 3 a client kept rendering (85 flips in 3 s).
   real commit gets through, and the driver can't tell "off" from "static"
   without it.
 
-Build: `out-display2`, release `7.3.0-rc6-omandroid-push1-00084-g5f4808c32c52`;
-it merges into `omandroid-int` without conflicts.
+Build: `out-display2`, release `7.3.0-rc6-omamobile-push1-00084-g5f4808c32c52`;
+it merges into `omamobile-int` without conflicts.
 
 **D3b-1b: retest with the new kernel (and, once built, the patched
 Hyprland).** Use `screen_off=1`. Keep an app animating (a video or a
@@ -1598,7 +1598,7 @@ Pass: every wake works, and after a reboot or kexec "link timers for 60 Hz"
 appears and the boot shows the splash.
 
 **Then make it the default:** `options gs_decon screen_off=2` in
-`omandroid-device-cheetah`'s `modprobe.d/omandroid-display.conf`, or change
+`omamobile-device-cheetah`'s `modprobe.d/omamobile-display.conf`, or change
 the driver default.
 
 **Rollback:** `echo 0 > $P` at run time (takes effect at the next screen

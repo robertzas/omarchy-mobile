@@ -7,7 +7,7 @@ A built-in home-screen widget, ported from
 by Simon Schubert, in [omarchy-widgets](https://github.com/SimonSchubert/omarchy-widgets),
 the widget store of Simon Schubert's Omalauncher.
 
-**Differences from the original:** There are no Android notifications on Omandroid: it reads Omarchy's notification files in `~/.local/state/omarchy/notifications/` (and `history/`) through `host.run()`, every two minutes and when the title is tapped. Tapping one runs the action Omarchy saved with it (as clicking it in Omarchy does); × only hides it on this card, since the widget doesn't change Omarchy's history. Without notification access to ask for, that message is gone.
+**Differences from the original:** Omarchy Mobile runs no Android, so there are no Android notifications: it reads Omarchy's notification files in `~/.local/state/omarchy/notifications/` (and `history/`) through `host.run()`, every two minutes and when the title is tapped. Tapping one runs the action Omarchy saved with it (as clicking it in Omarchy does); × only hides it on this card, since the widget doesn't change Omarchy's history. Without notification access to ask for, that message is gone.
 
 **Capabilities:** `commands`.
 
@@ -38,4 +38,4 @@ The original is MIT licensed, and so is this port:
     SOFTWARE.
 
 The same text is in `LICENSE-omarchy-widgets` in the home screen's plugin folder
-(`/usr/share/omandroid/shell/plugins/omandroid.home/LICENSE-omarchy-widgets`).
+(`/usr/share/omamobile/shell/plugins/omamobile.home/LICENSE-omarchy-widgets`).

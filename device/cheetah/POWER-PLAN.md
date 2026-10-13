@@ -2,9 +2,9 @@
 # Power plan before suspend: CPU idle C2 and UFS Hibern8 (cheetah / gs201)
 
 Status (2026-10-12): **C2 idle on all cores is on by default.** P0, C1 (the
-MCT) and C2 passed on the phone (section 7), and `omandroid-power-on` @
+MCT) and C2 passed on the phone (section 7), and `omamobile-power-on` @
 `241736cc0` (the MCT and C2 enabled in the default DTB) is merged into
-`omandroid-int`, with `omandroid-power` @ `20bd72c37` (`wt-power`,
+`omamobile-int`, with `omamobile-power` @ `20bd72c37` (`wt-power`,
 `out-power`). Little-cores-only C2 can't work (1.5), and the UFS controller
 has no auto-hibernate, so U1 is skipped. **Next (the cable out):** the B0
 baseline, `power-ab c2` and U2; the 30-minute C2 soak's result is not
@@ -13,11 +13,11 @@ recorded in section 7. Cluster power-down (1.6) is not built; suspend is
 
 Earlier status (historical, superseded by the status above): P0, C1 and C2 pass on the phone (section 7); the C2
 soak and the battery measurements (B0, `power-ab c2`) are pending. Kernel
-branch `omandroid-power` in `wt-power`, built into
+branch `omamobile-power` in `wt-power`, built into
 `~/android/mainline/out-power`: the C2 states and the MCT are
 `status = "disabled"` in the DT and turned on by test overlays; the UFS change
 only removes a mode that Google never uses on this SoC. Branch
-`omandroid-power-on` (`241736cc0`, one commit on top) enables the MCT and C2 by
+`omamobile-power-on` (`241736cc0`, one commit on top) enables the MCT and C2 by
 default; not merged, waiting for the soak.
 
 Goal: cheap power savings while the phone is awake, before real suspend
@@ -27,8 +27,8 @@ Hibern8 when storage is idle, (3) a repeatable way to measure both on battery.
 Path abbreviations:
 
 - `L/` = `/home/raven/android/mainline/wt-power` (our kernel, this branch)
-- `GS/` = `/home/raven/android/omandroid/out-kernel/google/gs-6.1/private/google-modules/soc/gs`
-- `GD/` = `/home/raven/android/omandroid/out-kernel/google/gs-6.1/private/devices/google/gs201/dts`
+- `GS/` = `/home/raven/android/omamobile/out-kernel/google/gs-6.1/private/google-modules/soc/gs`
+- `GD/` = `/home/raven/android/omamobile/out-kernel/google/gs-6.1/private/devices/google/gs201/dts`
 - `R/` = `/home/raven/android/reference/cheetah-stock-cp2a-root` (stock live DT, logs)
 
 Line numbers in `L/` are for the branch head (`20bd72c37`).
@@ -264,7 +264,7 @@ vendor drivers treat the two as exclusive.
 3. **The Hibern8 delay is the knob.** It is already runtime-configurable
    through the core's `clkgate_delay_ms`. Step it down 150 -> 20 -> 4 ms
    (stock) with A/B measurements (gate U2), and only then persist it with a
-   udev rule in `omandroid-device-cheetah` (gate U3), e.g.
+   udev rule in `omamobile-device-cheetah` (gate U3), e.g.
    `ACTION=="add", SUBSYSTEM=="platform", KERNEL=="14700000.ufs", ATTR{clkgate_delay_ms}="4"`.
    Rollback = delete the rule, or write 150 back.
 
@@ -280,7 +280,7 @@ reboot undoes.
 
 ## 3. Builds and checks
 
-- `bin/omandroid kernel`, `modules` and `images` with
+- `bin/omamobile kernel`, `modules` and `images` with
   `KERNEL_DIR=wt-power KERNEL_OUT=out-power`: see "Build result" at the end.
 - No new C: the only C change is one quirk flag.
 - The default DTB has the MCT and the three states present but disabled. The
@@ -318,7 +318,7 @@ Rules for a meaningful number:
 `tools/power-ab` (new) does exactly this on the phone: `power-ab [--detach]
 baseline|c2|ufs-gate|ufs-delay`, default 60 s to unplug, then 4 rounds of
 A/B at 120 s each (20 s settle), 1 Hz samples into
-`/var/lib/omandroid/power/<time>-<test>.csv` and a summary `.txt` with mean
+`/var/lib/omamobile/power/<time>-<test>.csv` and a summary `.txt` with mean
 current and power per phase and B - A. It restores every setting it touched
 at the end (and on SIGTERM). Copy it over with
 `tools/phone-ssh 'cat > /usr/local/bin/power-ab && chmod +x /usr/local/bin/power-ab' < tools/power-ab`.
@@ -365,7 +365,7 @@ be enabled.
 tools/phone-ssh 'cat > /usr/local/bin/power-ab && chmod +x /usr/local/bin/power-ab' < tools/power-ab
 tools/phone-ssh 'power-ab --detach baseline'    # then unplug within 60 s
 # wait ~17 min (4 rounds x 2 x 120 s + 60 s), replug; if USB stays down, reboot
-tools/phone-ssh 'cat /var/lib/omandroid/power/*-baseline.txt'
+tools/phone-ssh 'cat /var/lib/omamobile/power/*-baseline.txt'
 tools/phone-ssh 'power-ab --detach ufs-gate'     # same routine: SW Hibern8 off vs on
 ```
 
@@ -374,12 +374,12 @@ tools/phone-ssh 'power-ab --detach ufs-gate'     # same routine: SW Hibern8 off 
 ### 5.3 C1: MCT only (new kernel, flash)
 
 ```sh
-cd ~/Projects/omandroid
+cd ~/Projects/omarchy-mobile
 cp "$D" "$D.default"
 $O/scripts/dtc/dtc -q -I dts -O dtb -o out/power-mct-test.dtbo device/cheetah/overlays/power-mct-test.dtso
 $O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" out/power-mct-test.dtbo
-KERNEL_DIR=~/android/mainline/wt-power KERNEL_OUT=$O bin/omandroid images > logs/images-power-c1.log 2>&1
-# flash slot B as usual (bin/omandroid flash), boot
+KERNEL_DIR=~/android/mainline/wt-power KERNEL_OUT=$O bin/omamobile images > logs/images-power-c1.log 2>&1
+# flash slot B as usual (bin/omamobile flash), boot
 tools/phone-ssh 'dmesg | grep -iE "mct|clocksource|clockevent"
 cat /sys/devices/system/clockevents/broadcast/current_device   # expect: mct-comp
 cat /sys/devices/system/clocksource/clocksource0/current_clocksource  # expect: arch_sys_counter
@@ -396,7 +396,7 @@ fallback, flash the previous images; MCT error lines -> stop and report.
 ```sh
 $O/scripts/dtc/dtc -q -I dts -O dtb -o out/power-c2-all-test.dtbo device/cheetah/overlays/power-c2-all-test.dtso
 $O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" out/power-mct-test.dtbo out/power-c2-all-test.dtbo
-KERNEL_DIR=~/android/mainline/wt-power KERNEL_OUT=$O bin/omandroid images > logs/images-power-c2.log 2>&1
+KERNEL_DIR=~/android/mainline/wt-power KERNEL_OUT=$O bin/omamobile images > logs/images-power-c2.log 2>&1
 # flash slot B, boot. Then arm the watchdog feeder (tools/wifi-w1-capture --watchdog
 # pattern) so a later hang resets the phone instead of needing a 30 s Power hold:
 tools/phone-ssh 'nohup sh -c "exec 3>/dev/watchdog0; trap \"printf V >&3; exit 0\" TERM
@@ -434,7 +434,7 @@ tools/phone-ssh 'power-ab --detach c2'     # A = C2 off on all CPUs, B = on
 ```
 
 Needs the phone on battery (cable out). **Pass:** B - A clearly above the
-baseline noise. Then merge `omandroid-power-on` (`241736cc0`, drops
+baseline noise. Then merge `omamobile-power-on` (`241736cc0`, drops
 `status = "disabled"` from the MCT and the three states), so default images
 get C2 without overlays.
 
@@ -466,7 +466,7 @@ I/O), so the gain has to show in the numbers.
 ### 5.8 U3: persist
 
 Only after U2 shows a gain with no errors: add the udev rule from 2.3 to
-`omandroid-device-cheetah` (new package version through the repo).
+`omamobile-device-cheetah` (new package version through the repo).
 Rollback: `pacman -U` the previous package, or delete the rule and reboot.
 
 ---
@@ -488,8 +488,8 @@ PMU register outside the CPU_INFORM path upstream already uses.
 
 ## Build result (2026-10-12)
 
-- Kernel `7.3.0-rc6-omandroid-push1-00059-g20bd72c374e7` (branch head
-  `20bd72c37`): `bin/omandroid kernel`, `modules` (1712 modules),
+- Kernel `7.3.0-rc6-omamobile-push1-00059-g20bd72c374e7` (branch head
+  `20bd72c37`): `bin/omamobile kernel`, `modules` (1712 modules),
   `initramfs` and `images` exit 0 (`logs/kernel-power.log`,
   `modules-power.log`, `initramfs-power.log`, `images-power.log`). Images in
   `~/android/mainline/out-power/images`; their DTB has the MCT and the C2

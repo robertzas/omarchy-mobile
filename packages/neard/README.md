@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# neard (Omandroid build)
+# neard (Omarchy Mobile build)
 
 neard 0.20, the Linux NFC daemon, with `nfctool`. Neither Arch Linux nor
 Arch Linux ARM packages it, so the NFC stages in

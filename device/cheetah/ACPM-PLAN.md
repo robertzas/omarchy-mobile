@@ -2,18 +2,18 @@
 
 Status (2026-10-12): **A0-A5 passed on the phone; GPU DVFS through ACPM is
 on by default** (NOTES.md, "everything working so far comes up at boot";
-omandroid-device-cheetah 0.1.13, `39e72a9`). A1 first failed with "Channel 3
+omamobile-device-cheetah 0.1.13, `39e72a9`). A1 first failed with "Channel 3
 queues outside the SRAM" (a type-2 buffer channel in DRAM); the driver now
 skips unusable channels (`0a050ad`: 14 of 15 usable; DVFS on channel 0, PMIC
 2, thermal 9). Panthor idles at 151 MHz, capped at 572 MHz. Kernel:
-`omandroid-acpm` @ `a7a72e9f4` (`wt-acpm`, `out-acpm`), merged into
-`omandroid-int`. The S2MPG12 PMIC core and its RTC on this link have since
+`omamobile-acpm` @ `a7a72e9f4` (`wt-acpm`, `out-acpm`), merged into
+`omamobile-int`. The S2MPG12 PMIC core and its RTC on this link have since
 come up in `SUSPEND-PLAN.md` S3b (`sec_acpm`, not yet loaded at every boot).
 **Next** (section 8): ACPM thermal and the GPU cooling that lifts the cap,
 CPU DVFS, MIF devfreq.
 
 Earlier status (historical, superseded by the status above): kernel side written and built offline, **nothing run on the
-phone yet**. Branch `omandroid-acpm` in `~/android/mainline/wt-acpm`, images in
+phone yet**. Branch `omamobile-acpm` in `~/android/mainline/wt-acpm`, images in
 `~/android/mainline/out-acpm/images`. The runbook is section 7.
 
 **Goal.** The Mali-G710 runs at a fixed 151 MHz (`/sys/class/devfreq/28000000.gpu`
@@ -28,8 +28,8 @@ level. We start capped at 572 MHz until there is a GPU thermal limit.
 
 Path abbreviations (as in `GPU-PLAN.md`):
 
-- `L/` = our kernel, branch `omandroid-acpm` (`~/android/mainline/wt-acpm`)
-- `G/` = `~/android/omandroid/out-kernel/google/gs-6.1/private` (Google's GPL gs201 kernel)
+- `L/` = our kernel, branch `omamobile-acpm` (`~/android/mainline/wt-acpm`)
+- `G/` = `~/android/omamobile/out-kernel/google/gs-6.1/private` (Google's GPL gs201 kernel)
 - `GS/` = `G/google-modules/soc/gs`
 - `R/` = `~/android/reference/cheetah-stock-cp2a-root` (stock live DT and logs)
 - `ECT` = the ECT blob in the phone's own `bl2_a.img` @ `0x60000`
@@ -180,7 +180,7 @@ Rules taken from kbase:
 
 ## 4. What's built
 
-Kernel, `omandroid-acpm` on top of `omandroid` @ `e7cb10fe5` (8 commits):
+Kernel, `omamobile-acpm` on top of `omamobile` @ `e7cb10fe5` (8 commits):
 
 | Commit | What |
 |---|---|
@@ -208,7 +208,7 @@ rounds to 151 MHz while the cap is 0.
 
 Repo: `tools/acpm-stage` (runs one stage, streams `/dev/kmsg` to
 `logs/acpm-*.log` first, optional hardware watchdog, `--pstore`), and
-`packages/omandroid-device-cheetah/vendor/modprobe.d/omandroid-acpm.conf`
+`packages/omamobile-device-cheetah/vendor/modprobe.d/omamobile-acpm.conf`
 (blacklists `exynos_mailbox`, `acpm_protocol`, `clk_acpm`).
 
 Builds: kernel, modules tarball and images in `~/android/mainline/out-acpm`
@@ -265,7 +265,7 @@ changed C files; `dt-validate` clean for the new nodes.
 ## 7. Runbook (gated; run with the user, phone in Arch over USB)
 
 ```sh
-cd ~/Projects/omandroid
+cd ~/Projects/omarchy-mobile
 export KERNEL_OUT=$HOME/android/mainline/out-acpm
 ```
 
@@ -276,11 +276,11 @@ then resets on its own, and `tools/acpm-stage --pstore` saves the console).
 
 ```sh
 # 1. blacklist first, so the new DTB cannot autoload the ACPM modules
-tools/phone-ssh 'cat > /etc/modprobe.d/omandroid-acpm.conf' \
-  < packages/omandroid-device-cheetah/vendor/modprobe.d/omandroid-acpm.conf
+tools/phone-ssh 'cat > /etc/modprobe.d/omamobile-acpm.conf' \
+  < packages/omamobile-device-cheetah/vendor/modprobe.d/omamobile-acpm.conf
 # 2. modules for the new kernel, 3. slot B, reboot
-bin/omandroid modules-push
-bin/omandroid push
+bin/omamobile modules-push
+bin/omamobile push
 tools/phone-ssh 'uname -r; ls /sys/firmware/devicetree/base/firmware/; lsmod | grep -c "acpm\|exynos_mailbox"'
 ```
 
@@ -288,8 +288,8 @@ tools/phone-ssh 'uname -r; ls /sys/firmware/devicetree/base/firmware/; lsmod | g
   **No GPU**: Panthor waits for `clk_acpm` (`/dev/dri` has only simpledrm's
   card), so the session renders on the CPU until A2.
 - **Risk:** none beyond a normal kernel update.
-- **Rollback:** the previous images (`out-gpu` or the current omandroid build)
-  with `bin/omandroid push`, or let ABL fall back to slot A.
+- **Rollback:** the previous images (`out-gpu` or the current omamobile build)
+  with `bin/omamobile push`, or let ABL fall back to slot A.
 
 ### A1. Read-only handshake
 
@@ -378,11 +378,11 @@ tools/acpm-stage --max 848000 --load 60 a4 # full table, only with a temperature
 
 ### A5. Make it the default
 
-When A1–A4 pass: in `omandroid-acpm.conf` replace the three `blacklist`
+When A1–A4 pass: in `omamobile-acpm.conf` replace the three `blacklist`
 lines with `options clk_acpm gs201_gpu_max_khz=572000`, bump the
-`omandroid-device-cheetah` version, publish it to `[omandroid]`
-(`tools/repo-build`, `tools/repo-push`), and merge `omandroid-acpm` into
-`omandroid`. Raise the cap to 848000 when GPU thermal throttling exists.
+`omamobile-device-cheetah` version, publish it to `[omamobile]`
+(`tools/repo-build`, `tools/repo-push`), and merge `omamobile-acpm` into
+`omamobile`. Raise the cap to 848000 when GPU thermal throttling exists.
 
 ## 8. After this
 

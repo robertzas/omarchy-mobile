@@ -4,8 +4,8 @@
 Status: **offline survey, 2026-10-12. Nothing has run on the phone.**
 Update: GNSS and NFC (N1) are built: see GNSS-PLAN.md and section 3.7. One
 kernel piece is built: the HSI1 pin controller that the modem and NFC both
-need (section 6). Kernel branch `omandroid-hsi1` in
-`~/android/mainline/wt-hsi1`, on `omandroid` @ `7b0f8b5d1`, build in
+need (section 6). Kernel branch `omamobile-hsi1` in
+`~/android/mainline/wt-hsi1`, on `omamobile` @ `7b0f8b5d1`, build in
 `~/android/mainline/out-hsi1`. The new node is disabled by default and is
 enabled only by `overlays/hsi1-pinctrl-test.dtso`.
 
@@ -17,15 +17,15 @@ a first stage that only reads.
 
 Path abbreviations:
 
-- `L/` = our kernel, branch `omandroid-hsi1` (`~/android/mainline/wt-hsi1`)
-- `G/` = `~/android/omandroid/out-kernel/google/gs-6.1/private` (Google's GPL gs201 kernel)
+- `L/` = our kernel, branch `omamobile-hsi1` (`~/android/mainline/wt-hsi1`)
+- `G/` = `~/android/omamobile/out-kernel/google/gs-6.1/private` (Google's GPL gs201 kernel)
 - `GS/` = `G/google-modules/soc/gs`
 - `CP/` = `G/google-modules/radio/samsung/s5300` (Google's GPL modem interface driver, CPIF)
 - `PC/` = `GS/drivers/pci/controller/dwc-whi` (the PCIe driver Google builds for gs201)
 - `R/` = `~/android/reference/cheetah-stock-cp2a-root` (stock live DT, dmesg, modules)
-- `V/` = `~/android/omandroid/vendor/google/cheetah/proprietary/vendor` (stock vendor files)
+- `V/` = `~/android/omamobile/vendor/google/cheetah/proprietary/vendor` (stock vendor files)
 - `B/` = `~/android/reference/cheetah-partition-backup-20261011` (raw partition backup, with `SHA256SUMS`)
-- `A/` = `~/android/omandroid/vendor/google/cheetah/proprietary/vendor/apex/com.google.pixel.camera.hal.apex`
+- `A/` = `~/android/omamobile/vendor/google/cheetah/proprietary/vendor/apex/com.google.pixel.camera.hal.apex`
 
 ---
 
@@ -46,7 +46,7 @@ Path abbreviations:
    - S2MPG12/S2MPG13 regulators over ACPM (ACPM-PLAN.md section 6, step 4):
      GNSS LDO9S-11S, camera LDO12S, and later the fingerprint's LDO15S.
    - One vendor-chroot runner for every Android daemon we keep (section 5),
-     grown from `fingerprint/omandroid-fp-chroot`.
+     grown from `fingerprint/omamobile-fp-chroot`.
 2. **GNSS.** Best value for its cost and no new PCIe work.
 3. **Modem, data and SMS first.** It is the most valuable piece but the
    longest, so start its read-only stage (M0) and the PCIe ch0 host now, in
@@ -187,7 +187,7 @@ does **not** reserve the MSI page `0xf6200000` yet; stock reserves it
   - SIT is not public. We need our own client, written from the
     request/response layouts that the stock libraries use.
   - Recommended shape:
-    1. **M4:** a small daemon (`omandroid-modemd`) for attach, data call,
+    1. **M4:** a small daemon (`omamobile-modemd`) for attach, data call,
        SMS and signal.
     2. **Later:** a ModemManager plugin with the same logic, so
        NetworkManager, `mmcli` and any SMS/call UI work unchanged.
@@ -215,9 +215,9 @@ NV. Calls are a later milestone.
 | M1 | Kernel: HSI1 pinctrl merged; `cp_msi_rmem` reserved; CP GPIOs described in DT (disabled); CPIF and the PCIe ch0 host built as modules, blacklisted | offline |
 | M2 | Link only: power the CP with the GPIO sequence, release ch0 PHY isolation, train Gen1, secure ATU SMC, read `144d:` vendor ID; then power everything off. No firmware sent | M1; hang-safe capture tool like `tools/wifi-w1-capture` |
 | M3 | Boot: chroot with private NV, `rfsd` then `cbd`; CP reaches ONLINE (`IOCTL_GET_CP_STATUS`), radio stays off | M2; vendor chroot (section 5) |
-| M4 | Data and SMS: `omandroid-modemd` does initial attach, one data call, `rmnet0` up, one SMS each way | M3; SIT client |
+| M4 | Data and SMS: `omamobile-modemd` does initial attach, one data call, `rmnet0` up, one SMS each way | M3; SIT client |
 | M5 | IMS (VoLTE registration), calls without audio, then with audio | M4; AoC voice path |
-| M6 | Boot integration: hang-safe service like `omandroid-wifi`, suspend with the modem online (CP2AP wake as a wake source) | M4 |
+| M6 | Boot integration: hang-safe service like `omamobile-wifi`, suspend with the modem online (CP2AP wake as a wake source) | M4 |
 
 ### 1.5 Effort, value, risks
 
@@ -262,7 +262,7 @@ NV. Calls are a later milestone.
 
 ### 1.6 Runbook M0 (read-only; current int kernel, no new images)
 
-From the omandroid repo, phone in Arch over USB.
+From the omamobile repo, phone in Arch over USB.
 
 ```sh
 # M0.1  the modem's NV and firmware partitions are untouched: checksums match the backup.
@@ -290,13 +290,13 @@ tools/phone-ssh 'P=/sys/kernel/debug/pinctrl; grep -hE "\((gpa0-[23]|gpa8-[234])
 #   Note the PUD of gpa8-3 (cp2ap_wake_up): stock's DT sets pull-down (1); if ABL left
 #   something else, keep ABL's value in our DT until a test proves the stock one.
 
-# M0.4  HSI1 lines (gph0/gph1). Needs omandroid-hsi1 merged into int, built, and the overlay
+# M0.4  HSI1 lines (gph0/gph1). Needs omamobile-hsi1 merged into int, built, and the overlay
 #       applied with the usual helper (as in AUDIO-PLAN.md, KERNEL_OUT = the int out dir):
 #   O=$KERNEL_OUT D=$O/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb
 #   ov() { cp -n "$D" "$D.default"; local o= n
 #     for n; do $O/scripts/dtc/dtc -q -I dts -O dtb -o out/$n.dtbo device/cheetah/overlays/$n.dtso; o="$o out/$n.dtbo"; done
-#     $O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" $o; bin/omandroid images; }
-#   ov hsi1-pinctrl-test && bin/omandroid push          # reboots
+#     $O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" $o; bin/omamobile images; }
+#   ov hsi1-pinctrl-test && bin/omamobile push          # reboots
 #   pass first: USB/SSH, UFS, touch, Wi-Fi as before; the controller registered
 tools/phone-ssh 'ls /sys/kernel/debug/pinctrl/ | grep 11840000; dmesg | grep -i 11840000'
 tools/phone-ssh 'grep -hE "\((gph0-[0-5]|gph1-[0-6])\)" /sys/kernel/debug/pinctrl/*11840000*/pins'
@@ -399,7 +399,7 @@ thing G1 must find out.
   - Control-plane assistance through `libsitril-gps` needs the modem; skip
     it until M4.
 - **State:** `NvStorageDir=/data/vendor/gps/` must be persistent and
-  private: `/var/lib/omandroid/gnss`, bound into the chroot.
+  private: `/var/lib/omamobile/gnss`, bound into the chroot.
 
 ### 2.4 Minimum path to "works"
 
@@ -446,7 +446,7 @@ tools/phone-ssh 'P=/sys/kernel/debug/pinctrl; grep -hE "\((gph2-[0-5])\)" $P/*14
 tools/phone-ssh 'ls /sys/bus/platform/devices/ | grep -i 10940000; grep -h "gph2-[23]\|gpp4-3\|gpa6-4" /sys/kernel/debug/pinctrl/*/pinmux-pins'
 #   expect: no 10940000 device; pins "(MUX UNCLAIMED)".
 # G0.3  (laptop) the stock files we will need are present in the user's vendor image
-V=~/android/omandroid/vendor/google/cheetah/proprietary/vendor
+V=~/android/omamobile/vendor/google/cheetah/proprietary/vendor
 ls -l $V/bin/hw/lhd $V/bin/hw/gpsd $V/firmware/SensorHub.patch $V/etc/gnss/{lhd.conf,gps.xml,gps.cer}
 readelf -d $V/bin/hw/gpsd | grep NEEDED     # the closure the extract tool must follow
 ```
@@ -485,7 +485,7 @@ No rail, SPI or PMIC access in G0. G1 belongs to the ACPM/PMIC work.
   device for the vendor HAL (ioctls `ST21NFC_*`). We don't need it.
 - **Kernel config:** `CONFIG_NFC_NCI=m`, `CONFIG_NFC_ST_NCI_I2C=m` (N1).
 - **The clock:** mainline had no provider for the PMU's CLKOUT pads on
-  gs201. Built on `omandroid-nfc` (section 3.7): the pads in
+  gs201. Built on `omamobile-nfc` (section 3.7): the pads in
   `clk-exynos-clkout` through the PMU regmap, and an optional clock in
   st-nci that runs while the controller is powered up.
 
@@ -535,15 +535,15 @@ tools/phone-ssh 'ls /sys/bus/i2c/devices/; for d in /sys/bus/i2c/devices/i2c-*; 
 #   expect the haptics bus (10970000.i2c) with only 8-0043 bound. Do NOT run i2cdetect on it.
 # N0.2  IRQ and CLKREQ lines (bound controllers)
 tools/phone-ssh 'P=/sys/kernel/debug/pinctrl; grep -hE "\((gpa9-1)\)" $P/*180d0000*/pins; grep -hE "\((gpp25-3)\)" $P/*10c40000*/pins'
-# N0.3  reset and power-idle (needs omandroid-hsi1 merged + overlay hsi1-pinctrl-test, as M0.4)
+# N0.3  reset and power-idle (needs omamobile-hsi1 merged + overlay hsi1-pinctrl-test, as M0.4)
 tools/phone-ssh 'grep -hE "\((gph0-5|gph1-[45])\)" /sys/kernel/debug/pinctrl/*11840000*/pins'
 #   record: gph1-5 (NFC reset) and gph1-4 (eSE reset) levels. Expect both released (high)
 #   or both held: whatever ABL left is the state N2 must start from.
 ```
 
 
-**N2.4b-N2.6 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00345-g606b84c7a9fd,
-omandroid-nfc 3502821fa merged): passed.** `gs101_pad_en_active_low` N (the
+**N2.4b-N2.6 result (2026-10-12, 7.3.0-rc6-omamobile-push1-00345-g606b84c7a9fd,
+omamobile-nfc 3502821fa merged): passed.** `gs101_pad_en_active_low` N (the
 default polarity). Bind: nfc0, IRQ 127 count 1. `nfctool -d nfc0 -1` rc 0,
 "Powered: Yes", protocols Felica MIFARE Jewel ISO-DEP NFC-DEP ISO-15693; the
 IRQ count rose 1 → 9; two "nci_ntf_packet: unsupported ntf opcode 0xf02"
@@ -555,7 +555,7 @@ them. N3 (a tag's type) waits for the human with a card.
 
 ### 3.7 Built (2026-10-12): stages N1-N3
 
-Kernel branch `omandroid-gnss` (GNSS-PLAN.md section 2), merged into int:
+Kernel branch `omamobile-gnss` (GNSS-PLAN.md section 2), merged into int:
 - `cad9624c0`: `st,st54j-i2c` in the st-nci binding;
 - `ec375b274`: `nfc@8` on `hsi2c_8`, `interrupts-extended = <&gpa9 1
   IRQ_TYPE_LEVEL_HIGH>`, `reset-gpios = <&gph1 5 GPIO_ACTIVE_HIGH>` (st-nci
@@ -565,7 +565,7 @@ Kernel branch `omandroid-gnss` (GNSS-PLAN.md section 2), merged into int:
 - overlay `overlays/nfc-test.dtso`, which enables the HSI1 pin controller
   and the node.
 
-Kernel branch `omandroid-nfc` (worktree `~/android/mainline/wt-nfc`, output
+Kernel branch `omamobile-nfc` (worktree `~/android/mainline/wt-nfc`, output
 `~/android/mainline/out-nfc`), on int `e821a4bec`, head `a6ed1ea8b`:
 - `2f769ea68` dt-bindings: one optional `clocks` entry for st-nci.
 - `40a8b3779` `clk-exynos-clkout`: the gs101/gs201 PMU pads. One gate per
@@ -589,7 +589,7 @@ Kernel branch `omandroid-nfc` (worktree `~/android/mainline/wt-nfc`, output
 - `a6ed1ea8b` cheetah: `clocks = <&pmu_system_controller 1>` on `nfc@8`
   (stock: `clocks = <&clock CLKOUT1>`, `pmu_clk_pad = <0x3e84>`).
 
-Checks (build `7.3.0-rc6-omandroid-push1-00291-ga6ed1ea8b5af` in
+Checks (build `7.3.0-rc6-omamobile-push1-00291-ga6ed1ea8b5af` in
 `out-nfc`): checkpatch clean apart from the missing Signed-off-by (the
 human signs off) and the already undocumented `google,gs201-pmu`; W=1
 clean for the four changed C files; `dt-doc-validate` passes for st,st-nci;
@@ -609,7 +609,7 @@ Userspace:
 - `packages/neard`: neard 0.20 with `nfctool` (Arch Linux and Arch Linux
   ARM don't package it; Omarchy doesn't either). Built without eSE
   support; `neard.service` installed, not enabled.
-- `packages/omandroid-device-cheetah/vendor/modprobe.d/omandroid-nfc.conf`:
+- `packages/omamobile-device-cheetah/vendor/modprobe.d/omamobile-nfc.conf`:
   `blacklist st_nci_i2c`, so the nfc-test DTB never loads the driver at
   boot. The runbook loads it by hand. (Package version bump pending.)
 - Quick settings: the NFC tile runs `rfkill block|unblock nfc`. The NFC
@@ -625,11 +625,11 @@ and never touch gph1-4 (eSE reset).
 
 #### Runbook N2: bind st-nci, NCI power-up
 
-Laptop first. The human merges `omandroid-nfc` into `omandroid-int`.
+Laptop first. The human merges `omamobile-nfc` into `omamobile-int`.
 
 ```sh
 export KERNEL_DIR=~/android/mainline/wt-int KERNEL_OUT=~/android/mainline/out-int
-bin/omandroid kernel && bin/omandroid modules
+bin/omamobile kernel && bin/omamobile modules
 O=$KERNEL_OUT D=$O/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb
 rm -f "$D.default"     # the new base DTB carries the PMU clock provider; refresh ov's copy
 # ov() as in M0.4 (section 1.6)
@@ -637,7 +637,7 @@ rm -f "$D.default"     # the new base DTB carries the PMU clock provider; refres
 
 ```sh
 # N2.1  blacklist and tools on the phone first (risk: none; package installs only)
-tools/phone-install-package packages/omandroid-device-cheetah    # after the version bump
+tools/phone-install-package packages/omamobile-device-cheetah    # after the version bump
 tools/phone-install-package packages/neard
 tools/phone-ssh 'modprobe -c | grep -c "^blacklist st_nci_i2c"; ls /etc/modprobe.d/;
   systemctl is-enabled neard; command -v nfctool'
@@ -646,7 +646,7 @@ tools/phone-ssh 'modprobe -c | grep -c "^blacklist st_nci_i2c"; ls /etc/modprobe
 
 # N2.2  boot with nfc-test (risk: low; the driver stays unloaded)
 #   keep the overlays the phone already boots with, add nfc-test, e.g.:
-ov gnss-pmic-test gnss-test aoc-boot-test nfc-test && bin/omandroid push    # reboots
+ov gnss-pmic-test gnss-test aoc-boot-test nfc-test && bin/omamobile push    # reboots
 tools/phone-ssh 'uname -r; lsmod | grep -c "^st_nci"; dmesg | grep -iE "clkout|st.nci|nfc";
   grep -E "pmu-clkout|oscclk" /sys/kernel/debug/clk/clk_summary;
   grep -hE "\((gph0-5|gph1-[45])\)" /sys/kernel/debug/pinctrl/*11840000*/pins'
@@ -655,7 +655,7 @@ tools/phone-ssh 'uname -r; lsmod | grep -c "^st_nci"; dmesg | grep -iE "clkout|s
 #   record: the hardware-enable column of both pads (ABL's bit 0; a kernel regmap read).
 #   record: gph1-5 output high, gph1-4 output low, gph0-5: as N0 (2026-10-12).
 #   stop: no SSH within 2 minutes (the watchdog resets the phone), or any pin changed.
-#   rollback: cp "$D.default" "$D"; bin/omandroid images && bin/omandroid push
+#   rollback: cp "$D.default" "$D"; bin/omamobile images && bin/omamobile push
 
 # N2.3  bind (risk: low; no NCI traffic: probe only requests reset (already high) and the IRQ)
 tools/phone-ssh 'modprobe st_nci_i2c; sleep 1; dmesg | grep -iE "st.nci|nfc" | tail;
@@ -688,9 +688,9 @@ tools/phone-ssh 'rfkill block nfc; nfctool -d nfc0 -1; echo rc=$?; rfkill unbloc
 #   rollback for N2.3-N2.6: nfctool -d nfc0 -0; modprobe -r st_nci_i2c st_nci
 ```
 
-#### N2 results (2026-10-12, `7.3.0-rc6-omandroid-push1-00306-g60d3ca176c80`)
+#### N2 results (2026-10-12, `7.3.0-rc6-omamobile-push1-00306-g60d3ca176c80`)
 
-int with `omandroid-nfc` `a6ed1ea8b`, overlays including `nfc-test`,
+int with `omamobile-nfc` `a6ed1ea8b`, overlays including `nfc-test`,
 device-cheetah 0.1.23, neard 0.20.
 
 - **N2.1 pass:** blacklist count 1, no NFC file in `/etc/modprobe.d`,
@@ -735,7 +735,7 @@ which stock only watches as an interrupt for power statistics. CLKREQ
 HAL resets with a double pulse (20 ms low, 10 ms high, 20 ms low, high) to
 leave quick boot mode. The plain NCI mode does the same, then waits 80 ms.
 
-#### Fix: `omandroid-nfc` head `3502821fa` (on `a6ed1ea8b`)
+#### Fix: `omamobile-nfc` head `3502821fa` (on `a6ed1ea8b`)
 
 - `d86b6cfae` nfc core: no SE discovery after a failed `dev_up()`.
 - `9e8575465` st-nci: plain NCI link for `st,st54j-i2c` (raw ndlc mode, I2C
@@ -756,11 +756,11 @@ clkout and `net/nfc/core.c`.
 #### Runbook N2.4b: plain NCI power-up, both clock polarities
 
 ```sh
-# laptop: the human merges omandroid-nfc (3502821fa) into omandroid-int
+# laptop: the human merges omamobile-nfc (3502821fa) into omamobile-int
 export KERNEL_DIR=~/android/mainline/wt-int KERNEL_OUT=~/android/mainline/out-int
-bin/omandroid kernel && bin/omandroid modules
+bin/omamobile kernel && bin/omamobile modules
 O=$KERNEL_OUT D=$O/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb; rm -f "$D.default"
-ov <the overlays the phone boots now, nfc-test included> && bin/omandroid push    # reboots
+ov <the overlays the phone boots now, nfc-test included> && bin/omamobile push    # reboots
 #   pass: as N2.2 (boot, USB/SSH, UFS, touch, Wi-Fi, sound; st_nci not loaded).
 
 # N2.4b-0  bind with dynamic debug on (risk: low, as N2.3)
@@ -997,7 +997,7 @@ tools/phone-ssh 'pacman -Qi libcamera 2>/dev/null | head -3; pacman -Si libcamer
 
 ## 5. Shared vendor-chroot runner
 
-`fingerprint/omandroid-fp-chroot` (286 lines) and its preload shim (594
+`fingerprint/omamobile-fp-chroot` (286 lines) and its preload shim (594
 lines) already do the hard parts:
 - a private mount and PID namespace on a tmpfs;
 - the image bound read-only;
@@ -1009,8 +1009,8 @@ Make it one runner with **profiles** instead of three copies:
 
 | Profile | Binaries | binderfs | Device nodes bound in | Writable state | Extra |
 |---|---|---|---|---|---|
-| `fp` | Goodix HAL, KeyMint, Gatekeeper, storageproxyd, apploader, servicemanagers | yes | `trusty-ipc-dev0`, RPMB `sg`, touch event node | `/var/lib/omandroid/fp` | as designed |
-| `gnss` | `lhd`, `gpsd` (Broadcom) | yes (gpsd links binder; lookups must fail fast) | `ttyBCM`, `bbd_control`, `bbd_patch`, `bbd_pwrstat`, the `nstandby` sysfs file | `/var/lib/omandroid/gnss` → `/data/vendor/gps` | NMEA FIFO bound out to the host bridge |
+| `fp` | Goodix HAL, KeyMint, Gatekeeper, storageproxyd, apploader, servicemanagers | yes | `trusty-ipc-dev0`, RPMB `sg`, touch event node | `/var/lib/omamobile/fp` | as designed |
+| `gnss` | `lhd`, `gpsd` (Broadcom) | yes (gpsd links binder; lookups must fail fast) | `ttyBCM`, `bbd_control`, `bbd_patch`, `bbd_pwrstat`, the `nstandby` sysfs file | `/var/lib/omamobile/gnss` → `/data/vendor/gps` | NMEA FIFO bound out to the host bridge |
 | `modem` | `cbd`, `rfsd` | no | `umts_boot0`, `umts_rfs0` (only these) | RAM copies of efs, efs_backup, modem_userdata, persist/modem; nothing persistent until a design says so | firmware partition bound read-only as a **file**; NV checksums verified before start |
 
 **Common rules:**
@@ -1018,7 +1018,7 @@ Make it one runner with **profiles** instead of three copies:
   `rfsd` don't. Data uses host-side `rmnet`.
 - Drop all capabilities and set `no_new_privs`.
 - Real block devices are never visible inside a chroot.
-- Each profile's start script writes a hang marker (the `omandroid-wifi`
+- Each profile's start script writes a hang marker (the `omamobile-wifi`
   pattern), so a hang skips that subsystem on the next boot.
 
 The extract tool becomes `tools/extract-vendor-chroot --profile NAME` (from
@@ -1029,7 +1029,7 @@ profile, never shipped, always built from the user's own factory image.
 
 ## 6. Kernel work done (offline)
 
-Branch `omandroid-hsi1` in `~/android/mainline/wt-hsi1`, off `omandroid` @
+Branch `omamobile-hsi1` in `~/android/mainline/wt-hsi1`, off `omamobile` @
 `7b0f8b5d1`:
 
 | Commit | What |
@@ -1041,17 +1041,17 @@ Notes:
   7 pins, which matches Google's `pinctrl-gs201.c:140-144`.
 - HSI1 has no power domain in the stock DT (no `pd-hsi1` node among the
   `pd-*` nodes), so the block is not power-gated under us.
-- omandroid repo: `device/cheetah/overlays/hsi1-pinctrl-test.dtso` turns it
+- omamobile repo: `device/cheetah/overlays/hsi1-pinctrl-test.dtso` turns it
   on for M0.4/N0.3.
-- **Merge:** into `omandroid-int`, expect trivial conflicts in the
+- **Merge:** into `omamobile-int`, expect trivial conflicts in the
   `aliases` block (`pinctrl4`/`pinctrl7` from the PERIC0 and HSI2 branches)
   and at the end of `gs201-pinctrl.dtsi`. Keep all entries.
-- Build: `KERNEL_DIR=~/android/mainline/wt-hsi1 KERNEL_OUT=~/android/mainline/out-hsi1 bin/omandroid kernel`
+- Build: `KERNEL_DIR=~/android/mainline/wt-hsi1 KERNEL_OUT=~/android/mainline/out-hsi1 bin/omamobile kernel`
   (`logs/kernel-hsi1.log`). The result is in section 6.1.
 
 ### 6.1 Build result
 
-- `bin/omandroid kernel` exits 0, release `7.3.0-rc6-omandroid-push1-00059-gf7a9852f1afd`
+- `bin/omamobile kernel` exits 0, release `7.3.0-rc6-omamobile-push1-00059-gf7a9852f1afd`
   (`logs/kernel-hsi1.log`, Image, DTBs and modules in `out-hsi1`). There are
   no dtc warnings for gs201.
 - `dt-validate` (dtschema 2026.9, schema built from this tree) of the
@@ -1089,5 +1089,5 @@ Notes:
 8. **The camera EEPROM at `hsi2c_15` `0x50`.** Which camera module does it
    belong to?
 9. **C-PHY settings.** Accept generating them on the user's machine from
-   `liblyric_hwl.so`, or limit Omandroid to the two D-PHY cameras until
+   `liblyric_hwl.so`, or limit Omarchy Mobile to the two D-PHY cameras until
    another source appears?

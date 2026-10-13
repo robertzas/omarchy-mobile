@@ -10,22 +10,22 @@ passed; C9a-C9d-6 ran. The everyday level is stage `media` (737/10 on both
 amplifiers, media delta, DRE and noise gate on), about 17 dB below stock;
 stock's 817/17 still trips the coil temperature at once (C9d-3..6).
 **Next (2026-10-13):** the speakers sound thin; the ranked plan and three
-runbooks follow C9d-6: C9g (omandroid-audio 0.4.0's speaker filter, by ear
+runbooks follow C9d-6: C9g (omamobile-audio 0.4.0's speaker filter, by ear
 and measured, risk low), C9d-7/C9d-8 (the V/I feedback stream stock runs
 and the firmware's own impedance reading, for the gain-17 runaway), and
 T3b/T4 in `AOC-TUNING-RESEARCH.md` (stock's Waves processing on the AoC).
-**omandroid-audio 0.4.1** (offline review of 0.4.0, below C9g) fixes a
+**omamobile-audio 0.4.1** (offline review of 0.4.0, below C9g) fixes a
 PipeWire start failure mode and adds bass management, bass harmonics,
 stereo width and orientation, a limiter per speaker and a better
 measurement; **C9h** is the one ordered listening session that installs it
 and goes through C9g, then optionally C9d-7/8 and T3b/T4.
-Kernel: `omandroid-aoc` @ `829fd316a` (`wt-aoc`, `out-aoc`) and
-`omandroid-audio-amp` @ `9fcc941b3` (hibernate, word length, RX6 knob;
-`wt-audio-amp`), both merged into `omandroid-int`. Packages:
-omandroid-device-cheetah 0.1.25 (`omandroid-aoc.service`, start script,
-sensor-rail cycle), omandroid-sensors 0.1.3, omandroid-audio 0.4.1 (not yet
+Kernel: `omamobile-aoc` @ `829fd316a` (`wt-aoc`, `out-aoc`) and
+`omamobile-audio-amp` @ `9fcc941b3` (hibernate, word length, RX6 knob;
+`wt-audio-amp`), both merged into `omamobile-int`. Packages:
+omamobile-device-cheetah 0.1.25 (`omamobile-aoc.service`, start script,
+sensor-rail cycle), omamobile-sensors 0.1.3, omamobile-audio 0.4.1 (not yet
 installed: 0.3.5 runs; 0.4.0 was never installed),
-omandroid-speaker-tuning 0.1.2 (off by default). The "Checkpoint" section
+omamobile-speaker-tuning 0.1.2 (off by default). The "Checkpoint" section
 below is the running log of C5-C9: its first lists are the state before C5,
 and each stage's results follow its runbook.
 
@@ -35,9 +35,9 @@ did not finish** (section 0.2): the GSA accepted `START` but reported state
 setup re-apply, release reset) ran cleanly: the mailbox `START` cannot
 start the firmware (section 0.3). Next is C4t: the same start through
 Trusty's `hwmgr.aoc`, as stock does. Kernel branch
-`omandroid-aoc` in `~/android/mainline/wt-aoc` (out dir
-`~/android/mainline/out-aoc`), on `omandroid` @ `7b0f8b5d1` plus the Trusty
-commits of `omandroid-fingerprint`. Everything new is disabled by default.
+`omamobile-aoc` in `~/android/mainline/wt-aoc` (out dir
+`~/android/mainline/out-aoc`), on `omamobile` @ `7b0f8b5d1` plus the Trusty
+commits of `omamobile-fingerprint`. Everything new is disabled by default.
 The runbook is section 7; stage C2 is next.
 
 The AoC (Always-on Compute) is Google's audio and sensor DSP. On gs201 every
@@ -49,12 +49,12 @@ this plan.
 
 Path abbreviations (as in the other plans):
 
-- `L/` = our kernel, branch `omandroid-aoc` (`~/android/mainline/wt-aoc`)
-- `G/` = `~/android/omandroid/out-kernel/google/gs-6.1/private` (Google's GPL gs201 kernel, the one stock runs)
+- `L/` = our kernel, branch `omamobile-aoc` (`~/android/mainline/wt-aoc`)
+- `G/` = `~/android/omamobile/out-kernel/google/gs-6.1/private` (Google's GPL gs201 kernel, the one stock runs)
 - `GA/` = `G/google-modules/aoc`, `GSA/` = `G/google-modules/soc/gs/drivers/soc/google/gsa`
 - `GS/` = `G/google-modules/soc/gs`
 - `R/` = `~/android/reference/cheetah-stock-cp2a-root` (stock live DT, dmesg)
-- `V/` = `~/android/omandroid/vendor/google/cheetah/proprietary/vendor` (stock vendor blobs)
+- `V/` = `~/android/omamobile/vendor/google/cheetah/proprietary/vendor` (stock vendor blobs)
 
 ---
 
@@ -71,7 +71,7 @@ read: all five off at hand-off), C4a (load), C4t (**AoC firmware online**:
 started through Trusty `hwmgr.aoc`, 82 services, 0 faults). The mailbox
 `START` (cmd 91) is not enough (section 0.3).
 
-**Done offline, built, not run** (kernel `omandroid-aoc` @ `f716b607e`,
+**Done offline, built, not run** (kernel `omamobile-aoc` @ `f716b607e`,
 merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
 
 - `drivers/soc/google/aoc/`: Google's AoC core (aoc.c, aoc_v1.c,
@@ -81,13 +81,13 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
   (`f716b607e`): GSA load + Trusty start, S2MPU open, System MMU windows
   from the header, vendor stubs in aoc-compat.h, restart disabled.
   Config: `CONFIG_GS201_AOC_MBOX`, `CONFIG_GS201_AOC`, `CONFIG_GS201_AOC_CHAR`
-  (=m, in `kernel/configs/omandroid.config`).
+  (=m, in `kernel/configs/omamobile.config`).
 - DT: three mailbox nodes and the AoC node's 48 `mboxes` (disabled).
 - Repo: `overlays/aoc-core-test.dtso` (Trusty, GSA, System MMU, mailboxes,
-  AoC); `omandroid-device-cheetah`: `bin/omandroid-aoc-start` (Trusty → gsa
+  AoC); `omamobile-device-cheetah`: `bin/omamobile-aoc-start` (Trusty → gsa
   → rails → sysmmu → mailboxes → core → channel/char devs → load `aoc.bin`
   → wait for services and `/dev/acd-com.google.usf`, hang marker),
-  `omandroid-aoc.service` (not enabled), `modprobe.d/omandroid-aoc.conf`
+  `omamobile-aoc.service` (not enabled), `modprobe.d/omamobile-aoc.conf`
   (blacklists); package version not bumped. `tools/usf.py` (USF client:
   sensor list, registry load, sampling; `--self-test` passes offline) and
   `USF-PROTOCOL.md`.
@@ -102,7 +102,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
 
 **Next steps, in order:**
 
-1. **C5 (ready to run):** merge `omandroid-aoc` @ `f716b607e` into int,
+1. **C5 (ready to run):** merge `omamobile-aoc` @ `f716b607e` into int,
    build, push with `aoc-core-test` (instead of `aoc-boot-test` and
    `fingerprint-trusty`) plus the usual overlays. Install the device
    package files by hand for now (or bump and publish it), and the
@@ -110,32 +110,32 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    `tools/phone-ssh 'mkdir -p /usr/lib/firmware/updates && cat > /usr/lib/firmware/updates/aoc.bin' < V/firmware/aoc.bin`.
    Then:
    ```sh
-   tools/phone-ssh 'rm -f /var/lib/omandroid/aoc-bringup-started'
-   tools/phone-ssh 'cat > /usr/bin/omandroid-aoc-start && chmod +x /usr/bin/omandroid-aoc-start' < packages/omandroid-device-cheetah/bin/omandroid-aoc-start
-   tools/phone-ssh 'cat > /etc/modprobe.d/omandroid-aoc.conf' < packages/omandroid-device-cheetah/vendor/modprobe.d/omandroid-aoc.conf
-   tools/phone-ssh 'omandroid-aoc-start; dmesg | grep -iE "aoc|gsa|wc-mbox|sysmmu" | tail -40; ls /dev/acd-* | head; head -3 /sys/bus/platform/devices/181d0000.aoc/services'
+   tools/phone-ssh 'rm -f /var/lib/omamobile/aoc-bringup-started'
+   tools/phone-ssh 'cat > /usr/bin/omamobile-aoc-start && chmod +x /usr/bin/omamobile-aoc-start' < packages/omamobile-device-cheetah/bin/omamobile-aoc-start
+   tools/phone-ssh 'cat > /etc/modprobe.d/omamobile-aoc.conf' < packages/omamobile-device-cheetah/vendor/modprobe.d/omamobile-aoc.conf
+   tools/phone-ssh 'omamobile-aoc-start; dmesg | grep -iE "aoc|gsa|wc-mbox|sysmmu" | tail -40; ls /dev/acd-* | head; head -3 /sys/bus/platform/devices/181d0000.aoc/services'
    ```
-   Expect "omandroid-aoc: up: Services : 82", `/dev/acd-com.google.usf`
+   Expect "omamobile-aoc: up: Services : 82", `/dev/acd-com.google.usf`
    and `.non_wake_up`, "firmware version … did become online with 82
    services" from the core. Stop: any abort, "blocked" line, "aoc init no
    respond", or the AoC watchdog. Rollback: reboot (the marker then keeps
-   the AoC off; `omandroid-aoc-start --retry`).
+   the AoC off; `omamobile-aoc-start --retry`).
 2. **C6 first sensor** (after C5 passed in the same boot):
    ```sh
    # Google's registry, from the extracted vendor tree (never commit it)
-   tar -C ~/android/omandroid/vendor/google/cheetah/proprietary/vendor/etc/sensors -c registry |
-     tools/phone-ssh 'mkdir -p /usr/share/omandroid/sensors && tar -C /usr/share/omandroid/sensors -x'
+   tar -C ~/android/omamobile/vendor/google/cheetah/proprietary/vendor/etc/sensors -c registry |
+     tools/phone-ssh 'mkdir -p /usr/share/omamobile/sensors && tar -C /usr/share/omamobile/sensors -x'
    tools/phone-ssh 'for f in product stage major minor variant; do printf "%s=" $f; od -An -tx1 /sys/firmware/devicetree/base/chosen/plat/$f; done'
    # C6a: read-only (sensor list, registry state)
    tools/phone-ssh 'python3 - --check-registry --duration 0' < tools/usf.py
    # C6b: load the registry into the AoC's RAM, then 3 s of accelerometer at 50 Hz
-   tools/phone-ssh 'python3 - --load-registry /usr/share/omandroid/sensors/registry /usr/share/omandroid/sensors/registry/append --duration 3' < tools/usf.py
+   tools/phone-ssh 'python3 - --load-registry /usr/share/omamobile/sensors/registry /usr/share/omamobile/sensors/registry/append --duration 3' < tools/usf.py
    ```
    Expect: `plat` present (stock: product 3, stage 6, major 1, minor 0,
    variant 0); after the load, a sensor list with the LSM6DSV accelerometer
    and samples near (0, 9.8, 0) m/s² with the phone upright. Only the AoC's
    RAM changes; an AoC restart (reboot) undoes it. Stop: an empty list after
-   the load (the rails: `omandroid-aoc-start` turns them on before the
+   the load (the rails: `omamobile-aoc-start` turns them on before the
    firmware, check `dmesg | grep rails`), USF errors.
 
    **C6b result (first run):** the seven `cheetah_*.reg` scripts and the two
@@ -163,53 +163,53 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    two MMC5633, ICP20100, TMD3719, VD6282 and Google's fused ones) and
    samples near (0, 9.8, 0) m/s² upright. If the list stays empty after
    10 s: `dmesg | grep -iE "aoc|usf" | tail -30` and stop. A clean retry is
-   a reboot, `omandroid-aoc-start`, then C6b with the new `usf.py` (it now
+   a reboot, `omamobile-aoc-start`, then C6b with the new `usf.py` (it now
    polls after the load). The persist calibration is not needed for a first
    reading (the service loads it read-only; never copy it into the repo).
 
-   **C6c, auto-rotate** (package `omandroid-sensors`, build it on the phone
+   **C6c, auto-rotate** (package `omamobile-sensors`, build it on the phone
    with makepkg like the others, or copy `lib/` by hand):
    ```sh
-   tools/phone-ssh 'systemctl start omandroid-sensor-proxy; journalctl -u omandroid-sensor-proxy -b --no-pager | tail -5'
+   tools/phone-ssh 'systemctl start omamobile-sensor-proxy; journalctl -u omamobile-sensor-proxy -b --no-pager | tail -5'
    tools/phone-ssh 'timeout 10 monitor-sensor --accel 2>&1 | tail -5'     # iio-sensor-proxy's tool, if installed
-   tools/phone-ssh 'U=$(id -nu 1000); runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start omandroid-autorotate'
+   tools/phone-ssh 'U=$(id -nu 1000); runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start omamobile-autorotate'
    ```
    Expect: "sensors: accel (handle …), light …, proximity …", then turning
    the phone rotates the screen and touch. If a direction is mirrored, the
    transform table in `autorotate.py` needs 1 and 3 swapped (report which).
-   Rollback: `systemctl stop omandroid-sensor-proxy`; the user service
+   Rollback: `systemctl stop omamobile-sensor-proxy`; the user service
    restores nothing by itself, so `hyprctl reload` (or rotate back to
    upright) before stopping it.
 
    **C6c result (first run):** the proxy failed with ENODEV, and every
    `AOCC_CMD_OPEN_CHANNEL` failed with -19. Not a channel leak (channel
-   IDs only ever count up). The proxy unit `Requires=omandroid-aoc.service`.
+   IDs only ever count up). The proxy unit `Requires=omamobile-aoc.service`.
    The AoC had been started by hand, so the unit was inactive and systemd
-   ran `omandroid-aoc-start` again. That wrote `aoc.bin` to a running AoC:
+   ran `omamobile-aoc-start` again. That wrote `aoc.bin` to a running AoC:
    the core took the AoC offline, the GSA refused the image (-16), and the
    AoC stayed down until a reboot. Fixed twice:
-   - `omandroid-aoc-start` (omandroid-device-cheetah 0.1.17) exits 0 when
+   - `omamobile-aoc-start` (omamobile-device-cheetah 0.1.17) exits 0 when
      the AoC is already online, and refuses when an earlier start this boot
      failed;
    - kernel `67abdfab5` refuses a firmware write unless the AoC is offline.
 
    **Clean sequence, next boot** (device-cheetah 0.1.17 and
-   omandroid-sensors 0.1.1 installed; no audio before this passes):
+   omamobile-sensors 0.1.1 installed; no audio before this passes):
    ```sh
-   tools/phone-ssh 'systemctl start omandroid-aoc; journalctl -u omandroid-aoc -b --no-pager | tail -3'
-   tools/phone-ssh 'systemctl start omandroid-sensor-proxy; sleep 3; journalctl -u omandroid-sensor-proxy -b --no-pager | tail -8'
+   tools/phone-ssh 'systemctl start omamobile-aoc; journalctl -u omamobile-aoc -b --no-pager | tail -3'
+   tools/phone-ssh 'systemctl start omamobile-sensor-proxy; sleep 3; journalctl -u omamobile-sensor-proxy -b --no-pager | tail -8'
    tools/phone-ssh 'python3 - --check-registry --list --wait 10' < tools/usf.py
    tools/phone-ssh 'timeout 10 monitor-sensor --accel 2>&1 | tail -5'
-   tools/phone-ssh 'U=$(id -nu 1000); runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start omandroid-autorotate'
+   tools/phone-ssh 'U=$(id -nu 1000); runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start omamobile-autorotate'
    ```
-   Always start the AoC through the unit (`systemctl start omandroid-aoc`),
+   Always start the AoC through the unit (`systemctl start omamobile-aoc`),
    not the script, so units that require it see it active. The proxy loads
    the registry itself (stock scripts, then the factory calibration read
    from persist, read-only) and waits up to 10 s for the sensors. Expect
    "up: Services : 82", then "sensors: accel (handle …), light …,
    proximity …", `loaded=1` and the sensor list, then rotation.
 
-   **C6c result (2026-10-12, 7.3.0-rc6-omandroid-push1-00269-ga874b95ca381,
+   **C6c result (2026-10-12, 7.3.0-rc6-omamobile-push1-00269-ga874b95ca381,
    device-cheetah 0.1.18): passed.** "up: Services : 82", then "sensors:
    accel (handle 30), light (handle 44), proximity (handle 23), compass
    (handle 53)". A claim of the accelerometer read `right-up`/`tilted-up`,
@@ -223,9 +223,9 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      and refused. 0.1.18 blacklists `aoc_alsa_dev`/`aoc_alsa_dev_util`,
      loads the sound card after the services are up, and tracks the
      firmware load with a marker in `/run`.
-   - A copy of `omandroid-aoc.conf` left in `/etc/modprobe.d` from bring-up
+   - A copy of `omamobile-aoc.conf` left in `/etc/modprobe.d` from bring-up
      overrode the package's file of the same name: delete it (and
-     `omandroid-aoc-bringup.conf`).
+     `omamobile-aoc-bringup.conf`).
 
    **Accelerometer missing when the AoC starts at boot** (2026-10-12,
    00283 kernel, device-cheetah 0.1.20): the AoC started at about 4.8 s and
@@ -237,9 +237,9 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    loaded and skipped it), so a probe that fails at that moment stays
    failed until the AoC restarts. The rails were on in both cases. Most
    likely the I3C sensor is probed before the AoC's I3C bus is ready.
-   omandroid-sensors 0.1.3 waits until the AoC's firmware was loaded at
-   least 15 s ago (the start script's `/run/omandroid/aoc-firmware-loaded`;
-   `OMANDROID_AOC_SETTLE_S` overrides it) before loading the registry.
+   omamobile-sensors 0.1.3 waits until the AoC's firmware was loaded at
+   least 15 s ago (the start script's `/run/omamobile/aoc-firmware-loaded`;
+   `OMAMOBILE_AOC_SETTLE_S` overrides it) before loading the registry.
    **Result (00285 kernel): not enough.** The proxy waited 13.8 s and still
    found light, proximity and compass without the accelerometer. The AoC
    log (`/dev/acd-logging` holds everything since AoC boot, 16 KB here)
@@ -249,25 +249,25 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    and `usf.py --load-registry` does not) is what drops the
    accelerometer; C6b-2 (stock scripts only) and C6c (proxy) both found
    it, but on C6c check whether the proxy actually read persist
-   (`journalctl -u omandroid-sensor-proxy -b -N | grep loaded` for that
+   (`journalctl -u omamobile-sensor-proxy -b -N | grep loaded` for that
    boot).
 
    **C6d** (read-only apart from the AoC's registry RAM): before the
-   reboot, `systemctl disable omandroid-sensor-proxy` (the AoC itself still
+   reboot, `systemctl disable omamobile-sensor-proxy` (the AoC itself still
    starts at boot). Two minutes after boot, start the proxy by hand: the same
    load as at boot (stock scripts, then persist), only later:
    ```sh
-   tools/phone-ssh 'systemctl start omandroid-sensor-proxy; sleep 15; journalctl -u omandroid-sensor-proxy -b --no-pager | grep -E "loaded|sensors:"'
+   tools/phone-ssh 'systemctl start omamobile-sensor-proxy; sleep 15; journalctl -u omamobile-sensor-proxy -b --no-pager | grep -E "loaded|sensors:"'
    ```
    - accelerometer listed: boot timing; the fix is a longer settle (the
      log shows how long the AoC had been up);
    - accelerometer missing: the persist calibration is the suspect (C6b-2
      found it with the stock scripts only). On the next boot, with the proxy
      still disabled, load the stock scripts only
-     (`python3 - --load-registry /usr/share/omandroid/sensors/registry /usr/share/omandroid/sensors/registry/append --list --wait 10 < tools/usf.py`)
+     (`python3 - --load-registry /usr/share/omamobile/sensors/registry /usr/share/omamobile/sensors/registry/append --list --wait 10 < tools/usf.py`)
      and send the list, plus the names of the persist files the proxy
      loaded (not their contents).
-   Rollback: `systemctl enable omandroid-sensor-proxy`.
+   Rollback: `systemctl enable omamobile-sensor-proxy`.
 
    **C6d result: neither timing nor calibration.** The proxy started about
    95 s after the AoC and still found no accelerometer, and every boot
@@ -284,10 +284,10 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    LDO7S) for `cycle_ms` (150) ms first; device-cheetah 0.1.22 passes it.
 
    **C6e** (same boot as C7d-6; re-enable the proxy first:
-   `systemctl enable omandroid-sensor-proxy`; warm reboot from a session
+   `systemctl enable omamobile-sensor-proxy`; warm reboot from a session
    where the AoC ran, so the rails start on):
    ```sh
-   tools/phone-ssh 'dmesg | grep gs201-aoc-rails; journalctl -u omandroid-sensor-proxy -b --no-pager | grep -E "settle|sensors:"'
+   tools/phone-ssh 'dmesg | grep gs201-aoc-rails; journalctl -u omamobile-sensor-proxy -b --no-pager | grep -E "settle|sensors:"'
    ```
    Expect "LDO5S prox: was on (ctrl 0xbc), cycled: off for 150 ms", the
    same for LDO7S, then both "enabled", and the proxy's "sensors: accel
@@ -309,10 +309,10 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    With the AoC not online, unloading it left them on the platform bus in
    freed memory. It now always unregisters them and unwinds a failed init.
    Until that kernel is on the phone, still don't `rmmod` these modules.
-3. **C7 audio** (kernel `omandroid-aoc` @ `33b28cee6` or later: the AoC
+3. **C7 audio** (kernel `omamobile-aoc` @ `33b28cee6` or later: the AoC
    sound card, `aoc_alsa_dev`/`aoc_alsa_dev_util`, ported from Google's
    driver, with the speaker limits in code; the amplifier description from
-   `omandroid-audio` merged in). Merging into int has one conflict in
+   `omamobile-audio` merged in). Merging into int has one conflict in
    `gs201.dtsi`: int's `usi5`/`spi_5` (GNSS) and the branch's
    `usi7`/`spi_7` (amplifiers) were added at the same place; keep both,
    `usi5` first. Config: `CONFIG_GS201_AOC_ALSA=m`, `CONFIG_SND_SOC_CS35L41_SPI=m`.
@@ -347,7 +347,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      Logic CS35L41 (35a40), Revision: B2"), and four `aoc_speaker_limits`
      lines ending in `: 0`. **Stop** if any limit line is not `: 0` (the
      control was not found, so the limit is not in force): no sound tests.
-   - **C7c microphones** (rails on: `omandroid-aoc-start` turned them on):
+   - **C7c microphones** (rails on: `omamobile-aoc-start` turned them on):
      ```sh
      tools/phone-ssh 'C=$(awk "/aoc-snd-card/{print \$1; exit}" /proc/asound/cards);
        amixer -c $C cset name="EP1 TX Mixer INTERNAL_MIC_TX" 1;
@@ -409,7 +409,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      nothing drains the ring); it ran but its interrupt does not reach us;
      or the amplifiers never powered up.
 
-   - **C7d-3, diagnosis** (kernel `omandroid-aoc` @ `dee7e2334` for the
+   - **C7d-3, diagnosis** (kernel `omamobile-aoc` @ `dee7e2334` for the
      complete `debugfs aoc/services` listing; the sysfs `services` file
      stops at a page; modules only: `aoc_core.ko`, `aoc_alsa_dev_util.ko`).
      `tools/aoc-audio-diag` sets the C7d mixer (bottom amplifier 0/0, Top
@@ -437,7 +437,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      Stop on anything louder than a tone burst, an amplifier error, or a
      watchdog. Send `logs/c7d3.txt`.
 
-     **C7d-3 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00269-ga874b95ca381):
+     **C7d-3 result (2026-10-12, 7.3.0-rc6-omamobile-push1-00269-ga874b95ca381):
      nothing heard; the AoC never read the ring.**
      - `audio_playback5` Down ring (1 × 4 MiB): Tx 0 before, 4194304
        during and after the mmap run, Rx 0 throughout. The copy run then
@@ -462,7 +462,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      setup, and the AoC never flushed it. Google's HAL plays in copy mode
      (not mmap), so the copy path must work on a fresh ring.
 
-   - **C7d-4** (kernel `omandroid-aoc` @ `24483c36e`, modules only:
+   - **C7d-4** (kernel `omamobile-aoc` @ `24483c36e`, modules only:
      `aoc_core.ko`, `aoc_alsa_dev_util.ko`; a fresh boot, because the
      rings this boot used stay full until the AoC restarts):
      - `2211dd734` leaves a ring alone when its write pointer is already
@@ -488,7 +488,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      an AoC watchdog or a SysMMU line. Rollback: the script sets the route
      and Top Analog back to 0 itself.
 
-     **C7d-4 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00283-gafa4d777403d,
+     **C7d-4 result (2026-10-12, 7.3.0-rc6-omamobile-push1-00283-gafa4d777403d,
      fresh boot): the ring fix works, the AoC still reads nothing.**
      - EP6 (`audio_playback5`, 4 MiB ring), copy mode: "prepared: written 0
        read 0", "started: written 96000 read 0", then "stopping: written
@@ -523,7 +523,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      logs why an entry point does not run. Google's `aocd` forwards that log
      from `/dev/acd-logging`, which our `aoc_char_dev` already exposes.
 
-   - **C7d-5** (kernel `omandroid-aoc` @ `e8929e1b2`, modules only:
+   - **C7d-5** (kernel `omamobile-aoc` @ `e8929e1b2`, modules only:
      `aoc_alsa_dev_util.ko`, which adds `ep_setup2`; fresh boot; C7b and
      the C7d tone step first). `tools/aoc-audio-diag` now also reads the
      AoC's "Audio DSP State", "Audio DSP Mode", "Audio Sink 0 Processing
@@ -554,7 +554,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      watchdog or a SysMMU line. Rollback: the script resets the route and
      Top Analog; `echo 1 > /sys/module/aoc_alsa_dev_util/parameters/ep_setup2`.
 
-     **C7d-5a result (2026-10-12, 7.3.0-rc6-omandroid-push1-00285-ge821a4becdea):
+     **C7d-5a result (2026-10-12, 7.3.0-rc6-omamobile-push1-00285-ge821a4becdea):
      root cause found in the AoC's own log.**
      ```
      F1: ERR: controller_audio_output.cc, 1912: Mode Playback is not supported by Entrypoint 47
@@ -590,7 +590,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
        link id ("… is PCM N, expected PCM M: the card's DAI links are not
        in the stock order"), instead of configuring another entry point.
 
-   - **C7d-6** (kernel `omandroid-aoc` @ `829fd316a`, modules only:
+   - **C7d-6** (kernel `omamobile-aoc` @ `829fd316a`, modules only:
      `aoc_alsa_dev.ko`, `aoc_alsa_dev_util.ko`, `gs201-aoc-rails.ko`; the
      overlay content is unchanged; device-cheetah 0.1.22; one boot together
      with C6e; C7b and the C7d tone step first):
@@ -619,7 +619,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      5. Microphones again (C7c with PCM 8, which is now the AoC record use
         case): expect a 3 s file that is not all zeros.
 
-     **C7d-6 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00290-g66446bf5b725,
+     **C7d-6 result (2026-10-12, 7.3.0-rc6-omamobile-push1-00290-g66446bf5b725,
      device-cheetah 0.1.22): first sound.** PCM 5 is EP6 playback and PCM 8
      EP1 capture. The top speaker played the -20 dB tone (heard); the AoC
      drained the ring (Tx = Rx = 291840, a PCM interrupt every 80 ms, 15360
@@ -655,7 +655,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      IRQ storm, a warm phone. Rollback: the script sets the route and both
      analog gains to 0; the TDM_0 format controls can stay (stock values).
 
-4. **C8 speaker protection, UCM and PipeWire** (package `omandroid-audio`
+4. **C8 speaker protection, UCM and PipeWire** (package `omamobile-audio`
    0.1.0; after C7d-6 passed: stock PCM numbers, the AoC drains EP6). Goal:
    the speaker is "Built-in Audio Speaker" in PipeWire and the microphones
    "Built-in Audio Microphone"; the volume keys and the quick-settings
@@ -665,8 +665,8 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    and again by the service, which refuses to unmute above them or on a
    kernel without them. Stock's gains (analog 17, digital 817) are C9.
 
-   **What the package does** (`packages/omandroid-audio`, `README.md` there):
-   - `omandroid-speaker-protection.service` (not enabled by the package):
+   **What the package does** (`packages/omamobile-audio`, `README.md` there):
+   - `omamobile-speaker-protection.service` (not enabled by the package):
      loads `snd_soc_cs35l41_spi` (now blacklisted, so this is the only way
      the card comes up), waits for the card, **mutes both amplifiers**
      (Digital PCM Volume 0), checks the limits, the firmware and the
@@ -677,10 +677,10 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      path in `V/etc/mixer_paths.xml`), analog 6, and unmutes to 657 last.
      Any failure leaves both muted; a hang leaves a marker, and the next
      boot keeps the driver unloaded (no card at all). It logs no
-     calibration values. `omandroid-speaker-protection status` reports
+     calibration values. `omamobile-speaker-protection status` reports
      the DSP state, `mute` mutes.
    - The calibration: `persist:/audio/speaker.cal`, read with debugfs
-     (read-only; persist is never mounted), copied to `/run/omandroid`
+     (read-only; persist is never mounted), copied to `/run/omamobile`
      (mode 0600). Six LE u32 per amplifier; the service checks status 1,
      checksum = R + status, R < 2^24, ambient ≤ 60 °C. **Record 0 goes
      to Top, record 1 to Bottom.** Evidence: the stock HAL library
@@ -719,14 +719,14 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      bottom amplifier (slot 1) would read the low half of slot 0. The
      profile touches no amplifier control, so PipeWire uses software
      volume and cannot raise the amplifiers.
-   - WirePlumber (`51-omandroid-aoc.conf`, matched on the card name
+   - WirePlumber (`51-omamobile-aoc.conf`, matched on the card name
      `google,aoc-snd-card`): no mmap and 4 periods of 960 frames (stock
      `audio_platform_configuration.xml`: deep buffer and record are
      `mmap="false"`, 4 × 20 ms), and the names "Built-in Audio Speaker" /
      "Built-in Audio Microphone" (the card is a platform device with no
      udev form factor).
 
-   Checked offline: `packages/omandroid-audio/test/all` (alsa-lib parses
+   Checked offline: `packages/omamobile-audio/test/all` (alsa-lib parses
    the profile; the service against stand-ins for amixer, modprobe and
    debugfs: the happy path, record → amplifier mapping, mute first and
    unmute last, refusal and mute for each failed check, the hang marker,
@@ -740,18 +740,18 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      ```sh
      tools/extract-vendor-firmware ~/android/factory/cheetah-<build>/image-cheetah-<build>.zip   # -> out/vendor-firmware
      tar -C out/vendor-firmware -cf - usr/lib/firmware/updates/cirrus | tools/phone-ssh 'tar -C / -xf -'
-     tools/phone-install-package packages/omandroid-audio
-     tools/phone-ssh 'rm -f /etc/modprobe.d/omandroid-audio-bringup.conf; ls /etc/modprobe.d/'
+     tools/phone-install-package packages/omamobile-audio
+     tools/phone-ssh 'rm -f /etc/modprobe.d/omamobile-audio-bringup.conf; ls /etc/modprobe.d/'
      ```
      (the last line drops A3's bring-up blacklist, now in the package.)
-     Expect `omandroid-audio 0.1.0-1` and all `ok` lines from `test/all`
+     Expect `omamobile-audio 0.1.0-1` and all `ok` lines from `test/all`
      in makepkg's check. Then **reboot (ask first)**, so the boot starts
      with the amplifier driver blacklisted and fresh AoC rings.
-     Rollback: `pacman -R omandroid-audio`.
+     Rollback: `pacman -R omamobile-audio`.
    - **C8a read-only** (risk none):
      ```sh
      tools/phone-ssh 'uname -r; ls /usr/lib/firmware/updates/cirrus/; lsmod | grep -c cs35l41; cat /proc/asound/cards;
-       systemctl is-enabled omandroid-speaker-protection;
+       systemctl is-enabled omamobile-speaker-protection;
        d=$(grep -l "^PARTNAME=persist$" /sys/class/block/*/uevent); debugfs -R "stat /audio/speaker.cal" /dev/$(basename ${d%/uevent}) 2>/dev/null | grep -o "Size: [0-9]*"'
      ```
      Expect the three `cs35l41-dsp1-spk-prot-cheetah*` files, `0` (driver
@@ -761,8 +761,8 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    - **C8b the service by hand** (risk low: the amplifiers power up and
      their DSPs load, nothing plays; announce it, a click is possible):
      ```sh
-     tools/phone-ssh 'systemctl start omandroid-speaker-protection; journalctl -u omandroid-speaker-protection -b --no-pager | tail -8;
-       omandroid-speaker-protection status; dmesg | grep -iE "cs35l41|DSP1|aoc_speaker_limits" | tail -25'
+     tools/phone-ssh 'systemctl start omamobile-speaker-protection; journalctl -u omamobile-speaker-protection -b --no-pager | tail -8;
+       omamobile-speaker-protection status; dmesg | grep -iE "cs35l41|DSP1|aoc_speaker_limits" | tail -25'
      ```
      Expect "factory calibration read from persist (read-only): both
      records valid", "calibration written to both DSPs and read back",
@@ -777,7 +777,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      the journal and dmesg lines), the wrong tuning on an amplifier, a
      CS35L41 error or IRQ line, `max` other than 817 / 10. **If the log
      says MUTING FAILED:** `rmmod snd_soc_cs35l41_spi` at once (the amps go
-     into reset). Rollback: `omandroid-speaker-protection mute`.
+     into reset). Rollback: `omamobile-speaker-protection mute`.
    - **C8c protected tone, each speaker alone** (risk medium: the first
      sound through the protection firmware; -20 dBFS 1 kHz for 2 s at the
      C7 levels; announce it):
@@ -794,7 +794,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
        for n in "Chan Four" "Format S32_LE" "Sample Rate SR_48K"; do amixer -q -c $C cset name="TDM_0_RX ${n% *}" "${n##* }"; done;
        amixer -q -c $C cset name="TDM_0_RX Mixer EP6" 1;
        for side in left right; do echo "== $side";
-         (sleep 1; omandroid-speaker-protection status | grep -vE "^(ok|no state)") & timeout 5 aplay -q -D hw:$C,5 /tmp/tone-$side.wav; wait; sleep 1; done;
+         (sleep 1; omamobile-speaker-protection status | grep -vE "^(ok|no state)") & timeout 5 aplay -q -D hw:$C,5 /tmp/tone-$side.wav; wait; sleep 1; done;
        amixer -q -c $C cset name="TDM_0_RX Mixer EP6" 0; dmesg | grep -iE "cs35l41|DSP1" | tail -10'
      ```
      (with PipeWire running and the card new to it, it may already hold
@@ -811,7 +811,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      temperature. **Stop:** sound from the wrong speaker or both, silence
      (send status and dmesg; do not raise any gain), `CAL_SET_STATUS` 1 or
      other, `CSPL_ERRORNO` non-zero, distortion, an amplifier error, a warm
-     phone. Rollback: `omandroid-speaker-protection mute`.
+     phone. Rollback: `omamobile-speaker-protection mute`.
    - **C8d PipeWire, keys, slider, microphones** (risk medium; announce
      it: short sounds at low volume):
      ```sh
@@ -829,37 +829,37 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      that is not all zeros (tap the phone). Then by hand: the volume keys
      move Omarchy's OSD and `pactl get-sink-volume @DEFAULT_SINK@`; the
      quick-settings slider follows them and changes the level; mute works.
-     The amplifier controls do not move (`omandroid-speaker-protection
+     The amplifier controls do not move (`omamobile-speaker-protection
      status` still shows 657 / 6). **Stop:** "Dummy Output" (send
      `journalctl --user -u wireplumber -b | grep -iE "ucm|aoc|alsa"` and
      dmesg's "no backend DAIs" lines), underruns or crackle (try
      `api.alsa.disable-tsched = true` in the WirePlumber rule and report),
      anything louder than C8c at 40 %. Rollback: `wpctl set-mute
-     @DEFAULT_AUDIO_SINK@ 1`; `omandroid-speaker-protection mute`.
+     @DEFAULT_AUDIO_SINK@ 1`; `omamobile-speaker-protection mute`.
    - **C8e at boot** (risk low-medium: boot ordering; ask before the
      reboot):
      ```sh
-     tools/phone-ssh 'systemctl enable omandroid-speaker-protection'
+     tools/phone-ssh 'systemctl enable omamobile-speaker-protection'
      # reboot, then after the login:
-     tools/phone-ssh 'systemd-analyze blame | grep -E "speaker|aoc"; journalctl -u omandroid-speaker-protection -b --no-pager | tail -4; omandroid-speaker-protection status | head -3'
+     tools/phone-ssh 'systemd-analyze blame | grep -E "speaker|aoc"; journalctl -u omamobile-speaker-protection -b --no-pager | tail -4; omamobile-speaker-protection status | head -3'
      ```
-     The unit runs after `omandroid-aoc.service` and before
+     The unit runs after `omamobile-aoc.service` and before
      `systemd-user-sessions.service`, so PipeWire meets the card once,
      already protected. Expect "speaker protection on" before the session
      starts, a few seconds in the blame list, and the C8d sink right after
      login. **Stop:** the login waits on it for long (its timeout is 60 s;
-     `systemctl disable omandroid-speaker-protection` and report), or a
+     `systemctl disable omamobile-speaker-protection` and report), or a
      "did not start" line. If a boot hangs in the service, the next one
      says "the last start … never finished" and leaves the amplifiers off;
-     after reading that boot's log, `omandroid-speaker-protection start
-     --retry`. Rollback: `systemctl disable omandroid-speaker-protection`
+     after reading that boot's log, `omamobile-speaker-protection start
+     --retry`. Rollback: `systemctl disable omamobile-speaker-protection`
      (no card from the next boot on).
 
    Results go here with the date and `uname -r`. Then bump
-   `omandroid-audio` if anything changed, and record the CSPL readings as
+   `omamobile-audio` if anything changed, and record the CSPL readings as
    the baseline C9 compares against.
 
-   **C7d-7 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00290-g66446bf5b725):
+   **C7d-7 result (2026-10-12, 7.3.0-rc6-omamobile-push1-00290-g66446bf5b725):
    passed.** With the stock TDM_0 format set first (Four, S32_LE, SR_48K),
    `AMP=bottom CH=LR` powered the bottom amplifier (0x2014 1, 0x4800
    0x10000; every DAPM widget from "Bottom AMP Playback" to "Main AMP" On),
@@ -869,8 +869,8 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    run used the driver's default TDM_0 format (S16_LE stereo). The UCM
    profile (C8) sets the stock format.
 
-   **C8 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00303-g9086704161a9,
-   omandroid-audio 0.1.1): C8a-C8e passed.**
+   **C8 result (2026-10-12, 7.3.0-rc6-omamobile-push1-00303-g9086704161a9,
+   omamobile-audio 0.1.1): C8a-C8e passed.**
    - C8b first failed on a parser bug (the limits check read the dB line's
      "max=12.00dB" as a second maximum and kept the amplifiers muted),
      fixed in 0.1.1. Then: top "…C10_EVT1p1_top_tune.bin", bottom
@@ -892,8 +892,8 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      quick-settings slider work (confirmed by the human). The runbook's
      `id -nu 1000` was wrong for this phone (the user is uid 1001): find
      the session user instead (below).
-   - C8e: `systemd-analyze blame`: omandroid-speaker-protection 1.168 s,
-     omandroid-aoc 1.072 s; "speaker protection on" at 7.05 s, before
+   - C8e: `systemd-analyze blame`: omamobile-speaker-protection 1.168 s,
+     omamobile-aoc 1.072 s; "speaker protection on" at 7.05 s, before
      login; after login both nodes the defaults; status "ok: protection
      firmware with factory calibration, PCM Source DSP, digital 657,
      analog 6".
@@ -940,7 +940,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      this firmware answers.
 
    Fixes:
-   - Kernel, branch `omandroid-audio-amp` @ `60d3ca176` (worktree
+   - Kernel, branch `omamobile-audio-amp` @ `60d3ca176` (worktree
      `~/android/mainline/wt-audio-amp`, out `out-audio-amp`, on int
      `908670416`): `8c4a74fc3` dt-binding `cirrus,dsp-no-hibernate`,
      `165c2da7b` cs35l41 skips hibernate in runtime suspend and the wake in
@@ -949,24 +949,24 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      checkpatch: only the trailer warnings; the cheetah DTB carries the
      property on both amplifiers. `dt_binding_check` not run (no dtschema
      here).
-   - omandroid-audio 0.2.0 (`7be2246`): holds both amplifiers awake
+   - omamobile-audio 0.2.0 (`7be2246`): holds both amplifiers awake
      (`power/control` on, from a udev rule at bind and checked by the
      service), so it works on kernels without the property too; `start`
      rebinds the amplifiers when the driver is already bound (a chip reset
      and a fresh firmware load: `systemctl restart` is the recovery);
-     a health check before unmute; `omandroid-speaker-watch.service` mutes
+     a health check before unmute; `omamobile-speaker-watch.service` mutes
      on any amplifier failure in the kernel log, an amplifier no longer held
      awake, a level above the ceilings, or a DSP not running the protection
      with its calibration during playback. Its tests cover each case.
 
    **Checkpoint 2026-10-12 (amp hibernate fix / C9; historical, superseded
    by the C8f result and the C9 results below).** Done: the kernel
-   fix (branch above, built), omandroid-audio 0.2.0, extract-vendor-firmware
+   fix (branch above, built), omamobile-audio 0.2.0, extract-vendor-firmware
    with the media deltas (`231936e`). Ready: C8f below. Next: C9 (stock
    gains and balance under verified protection), after C8f passes.
 
    - **C8f the amplifiers across idle** (kernel: int with
-     `omandroid-audio-amp` merged; omandroid-audio 0.2.0; the media deltas
+     `omamobile-audio-amp` merged; omamobile-audio 0.2.0; the media deltas
      are installed by the same firmware step but stay off). The session
      user, for all PipeWire steps from here on:
      ```sh
@@ -976,15 +976,15 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
         ```sh
         tools/extract-vendor-firmware ~/android/factory/cheetah-<build>/image-cheetah-<build>.zip
         tar -C out/vendor-firmware -cf - usr/lib/firmware/updates/cirrus | tools/phone-ssh 'tar -C / -xf -'
-        tools/phone-install-package packages/omandroid-audio
+        tools/phone-install-package packages/omamobile-audio
         tools/phone-ssh 'udevadm control --reload; systemctl daemon-reload'
         ```
-        Expect `omandroid-audio 0.2.0-1` with every test `ok`. Reboot
+        Expect `omamobile-audio 0.2.0-1` with every test `ok`. Reboot
         (ask first).
      2. Read-only after the boot (risk none):
         ```sh
         tools/phone-ssh 'uname -r; for d in /sys/bus/spi/drivers/cs35l41/spi*; do echo ${d##*/} $(cat $d/power/control $d/power/runtime_status) $([ -e $(readlink -f $d/of_node)/cirrus,dsp-no-hibernate ] && echo no-hibernate); done;
-          systemctl is-active omandroid-speaker-protection omandroid-speaker-watch; omandroid-speaker-protection status; omandroid-speaker-protection health'
+          systemctl is-active omamobile-speaker-protection omamobile-speaker-watch; omamobile-speaker-protection status; omamobile-speaker-protection health'
         ```
         Expect both amplifiers "on active no-hibernate", both units active, status "ok: stage c8 … held
         awake", "healthy". Stop: a unit failed or "not healthy" (send the
@@ -992,25 +992,25 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      3. Five cycles of play, stop, idle well past the 3 s autosuspend,
         play again (risk low: C8 levels; announce it, ten short tones):
         ```sh
-        tools/phone-ssh 'omandroid-speaker-protection signal tone /tmp/c8f.wav --level -23 --seconds 2'
+        tools/phone-ssh 'omamobile-speaker-protection signal tone /tmp/c8f.wav --level -23 --seconds 2'
         for i in 1 2 3 4 5; do
           tools/phone-ssh "$U"'; as_user timeout 6 pw-play /tmp/c8f.wav; echo "pw-play $?"; sleep 15;
-            omandroid-speaker-protection health; dmesg | grep -E "cs35l41|DSP1" | tail -3; systemctl is-active omandroid-speaker-watch'
+            omamobile-speaker-protection health; dmesg | grep -E "cs35l41|DSP1" | tail -3; systemctl is-active omamobile-speaker-watch'
         done
-        tools/phone-ssh 'journalctl -u omandroid-speaker-watch -b --no-pager | tail -20; omandroid-speaker-protection status | tail -4'
+        tools/phone-ssh 'journalctl -u omamobile-speaker-watch -b --no-pager | tail -20; omamobile-speaker-protection status | tail -4'
         ```
         Expect each cycle: the tone, `pw-play 0`, "healthy" (notes about
         "Failed to set mailbox cmd 1" are allowed: the pause at stop), the
         watchdog active, no "Wake failed", "CSPL Error", "Timed out" or
         "pm_runtime_get" line. **Stop:** a cycle without sound, any of those
         lines, the watchdog inactive or a "muted: watchdog: …" status (send
-        the journal). Rollback: `omandroid-speaker-protection mute`.
+        the journal). Rollback: `omamobile-speaker-protection mute`.
      4. The same with PipeWire left idle for 60 s between two plays (its
         own suspend closes the PCM after 5 s), then a few minutes of real
         media in Chromium with pauses. Expect the same.
      5. Recovery (risk low): `tools/phone-ssh 'systemctl restart
-        omandroid-speaker-protection; sleep 3; omandroid-speaker-protection
-        status | head -3; systemctl is-active omandroid-speaker-watch'`.
+        omamobile-speaker-protection; sleep 3; omamobile-speaker-protection
+        status | head -3; systemctl is-active omamobile-speaker-watch'`.
         Expect "rebinding both amplifiers", "ok", the watchdog active
         again, and the speaker back in PipeWire within a few seconds (the
         card goes away and comes back). Stop: no card after the rebind
@@ -1020,15 +1020,15 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
         ```sh
         tools/phone-ssh "$U"'; C=$(awk "/\]: aoc-snd-card - /{print \$1; exit}" /proc/asound/cards);
           as_user timeout 6 pw-play /tmp/c8f.wav & sleep 1; amixer -q -c $C cset name="Top PCM Source" ASP; wait; sleep 2;
-          omandroid-speaker-protection status | head -1'
+          omamobile-speaker-protection status | head -1'
         ```
         Expect the watchdog
         to mute both within about 2 s ("muted: watchdog: Top: PCM Source
         is ASP, not DSP"), then `systemctl restart
-        omandroid-speaker-protection` to restore.
+        omamobile-speaker-protection` to restore.
 
-   **C8f result (2026-10-12, 7.3.0-rc6-omandroid-push1-00306-g60d3ca176c80,
-   omandroid-audio 0.2.1): passed.** Both amplifiers "power/control on,
+   **C8f result (2026-10-12, 7.3.0-rc6-omamobile-push1-00306-g60d3ca176c80,
+   omamobile-audio 0.2.1): passed.** Both amplifiers "power/control on,
    active" with `cirrus,dsp-no-hibernate`. 0.2.0's watchdog crashed at boot
    (it failed safe, muted): `AlsaCtl._info` kept the previous control's numid,
    so every read returned the previous control; fixed in 0.2.1 (`2625199`,
@@ -1044,7 +1044,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    reason, instead of the watchdog's own.)
 
 5. **C9 stock media gains and balance under verified protection**
-   (after C8f passed; omandroid-audio 0.2.0 has everything this needs).
+   (after C8f passed; omamobile-audio 0.2.0 has everything this needs).
 
    **What stock does for media on the speaker**, from `V/etc/mixer_paths.xml`,
    `V/etc/audio_platform_configuration.xml`, `V/etc/waves_config.ini` and
@@ -1094,11 +1094,11 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      SPK_OUTPUT_POWER raw / 2^23 × 667.19. States: HALO_STATE 2 = running;
      CSPL_STATE 0 running, 1 error, 2 muted, 3 reiniting, 6 diagnosing;
      CAL_SET_STATUS 2 = calibration applied, 1 = defaults.
-     `omandroid-speaker-protection status` / `monitor` print these decoded.
+     `omamobile-speaker-protection status` / `monitor` print these decoded.
 
    **Rules for every C9 step.** The watchdog is active
-   (`systemctl is-active omandroid-speaker-watch`); `monitor` runs during
-   every sound (`tools/phone-ssh 'omandroid-speaker-protection monitor 15 1'`
+   (`systemctl is-active omamobile-speaker-watch`); `monitor` runs during
+   every sound (`tools/phone-ssh 'omamobile-speaker-protection monitor 15 1'`
    in a second terminal, or as below) and its lines go into the results;
    test signals are the package's multitone (300 Hz-8 kHz, pink, peaks
    below -1 dBFS) or a 1 kHz tone, 10 s at most per burst, 60 s rest
@@ -1110,18 +1110,18 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    rattling or distortion, a warm phone. CSPL_ATTENUATION moving from its
    idle value means the protection is limiting: record it, finish the
    burst, and do not go to a louder step. Rollback for every step:
-   `omandroid-speaker-protection mute`, then the previous
-   `/etc/omandroid/speaker.conf` and `systemctl restart
-   omandroid-speaker-protection`.
+   `omamobile-speaker-protection mute`, then the previous
+   `/etc/omamobile/speaker.conf` and `systemctl restart
+   omamobile-speaker-protection`.
 
    ```sh
    U='U=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}"); I=$(id -u $U); as_user() { runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/$I "$@"; }'
    burst() {  # burst FILE SINK-VOLUME: one burst with the DSPs sampled every second
      tools/phone-ssh "$U"'; as_user wpctl set-volume @DEFAULT_AUDIO_SINK@ '"$2"';
-       (omandroid-speaker-protection monitor 13 1 > /tmp/mon.txt) & sleep 1;
+       (omamobile-speaker-protection monitor 13 1 > /tmp/mon.txt) & sleep 1;
        as_user timeout 12 pw-play '"$1"'; wait; cat /tmp/mon.txt; dmesg | grep -iE "cs35l41|DSP1" | tail -3'
    }
-   tools/phone-ssh 'S=omandroid-speaker-protection;
+   tools/phone-ssh 'S=omamobile-speaker-protection;
      $S signal multitone /tmp/mt20.wav --level -20 --seconds 10; $S signal multitone /tmp/mt10.wav --level -10 --seconds 10;
      $S signal multitone /tmp/mtL.wav --level -20 --seconds 5 --channels left; $S signal multitone /tmp/mtR.wav --level -20 --seconds 5 --channels right'
    ```
@@ -1149,11 +1149,11 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
         coil temperatures to move with the signal (a small rise while it
         plays, back down after), not to sit still. Record the largest rise.
      4. Verify and stamp: start `burst /tmp/mt20.wav 1.0`, and 2 s in:
-        `tools/phone-ssh 'omandroid-speaker-protection verify'`. Expect
+        `tools/phone-ssh 'omamobile-speaker-protection verify'`. Expect
         "verified: … heartbeat moving, coil temperatures …" and "stamp
         written". Stop: "not verified" (send its reason).
-     **C9a result (first run, 2026-10-12, 7.3.0-rc6-omandroid-push1-00306,
-     omandroid-audio 0.2.1): stopped at step 3.**
+     **C9a result (first run, 2026-10-12, 7.3.0-rc6-omamobile-push1-00306,
+     omamobile-audio 0.2.1): stopped at step 3.**
      - Step 1 passed: 0x2018 = 0x3721 (VMON, IMON on), DSP1 RX3-RX7 =
        0x18, 0x19, 0x28, 0x29, 0x3a on both amplifiers.
      - Step 2: state 0, HALO_STATE 2, CAL_SET_STATUS 2, errorno 0,
@@ -1179,20 +1179,20 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
        regmap and the driver reads the DSP while it runs, which is why the
        values moved until the freeze. The fix is the step's command: never
        read past 0x10100 while a DSP runs. Recovery: `systemctl restart
-       omandroid-speaker-protection` (it rebinds the amplifiers, which
+       omamobile-speaker-protection` (it rebinds the amplifiers, which
        resets the chips).
      - **The watchdog did not mute: by our design.** In stage c8 a stuck
        heartbeat was only logged, once. 0.2.2 mutes on it in every stage,
        within about 2 s of the last change (2 s grace at stream start); only
-       `OMANDROID_SPK_HEARTBEAT=0` turns it back into a log line, and not in
+       `OMAMOBILE_SPK_HEARTBEAT=0` turns it back into a log line, and not in
        c9. Its test reproduces C9a's case (moving, then frozen mid-stream).
      - **Power 0** is real resolution, not a decoding error: one count of
        SPK_OUTPUT_POWER is about 80 µW on the stock HAL's scale, and at
        digital 657 / analog 6 with a -20 dBFS signal the output is around
        tens of µW. It should read non-zero from the louder C9d steps.
 
-     **C9a, second run** (omandroid-audio 0.2.2; `systemctl restart
-     omandroid-speaker-protection` first, so both DSPs start fresh): steps
+     **C9a, second run** (omamobile-audio 0.2.2; `systemctl restart
+     omamobile-speaker-protection` first, so both DSPs start fresh): steps
      1 (with the bounded read), 2, 3 and 4 as above, with `monitor` running
      through all three bursts. Expect the heartbeat to keep moving through
      every stream (about 1500 a second, also in the silence PipeWire plays
@@ -1210,10 +1210,10 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
         the top and bottom sound.
      2. Turn it on and restart:
         ```sh
-        tools/phone-ssh 'echo OMANDROID_SPK_MEDIA_DELTA=1 >> /etc/omandroid/speaker.conf; systemctl restart omandroid-speaker-protection; sleep 3; omandroid-speaker-protection status | head -1'
+        tools/phone-ssh 'echo OMAMOBILE_SPK_MEDIA_DELTA=1 >> /etc/omamobile/speaker.conf; systemctl restart omamobile-speaker-protection; sleep 3; omamobile-speaker-protection status | head -1'
         ```
         Then the same bursts. Expect in `journalctl -u
-        omandroid-speaker-watch -b` "Top: stock media delta applied" and the
+        omamobile-speaker-watch -b` "Top: stock media delta applied" and the
         same for Bottom about 2 s into each stream, CSPL_STATE 0 throughout,
         and a change in the top speaker's sound (less "telephone"). Stop: a
         watchdog mute ("no media delta", "CSPL_UPDATE_PARAMS_CONFIG is N
@@ -1223,9 +1223,9 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    - **C9c the kernel's limit for stock gains** (risk low; ask before the
      reboot):
      ```sh
-     tools/phone-ssh 'echo "options aoc_alsa_dev speaker_protection=1" > /etc/modprobe.d/omandroid-audio-c9-bringup.conf'
+     tools/phone-ssh 'echo "options aoc_alsa_dev speaker_protection=1" > /etc/modprobe.d/omamobile-audio-c9-bringup.conf'
      # reboot, then:
-     tools/phone-ssh 'cat /sys/module/aoc_alsa_dev/parameters/speaker_protection; dmesg | grep aoc_speaker_limits; omandroid-speaker-protection status | head -4'
+     tools/phone-ssh 'cat /sys/module/aoc_alsa_dev/parameters/speaker_protection; dmesg | grep aoc_speaker_limits; omamobile-speaker-protection status | head -4'
      ```
      Expect `Y`, the Analog limit lines saying 17, and the service still at
      stage c8 levels (657, top 6, bottom 6). When C9 passes, the option
@@ -1238,8 +1238,8 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      `monitor` lines. Stage c9 needs the stamp from C9a.4 and C9c's `Y`.
      ```sh
      step() {  # step DIGITAL ANALOG
-       tools/phone-ssh "printf 'OMANDROID_SPK_STAGE=c9\nOMANDROID_SPK_MEDIA_DELTA=1\nOMANDROID_SPK_DIGITAL=$1\nOMANDROID_SPK_ANALOG=$2\n' > /etc/omandroid/speaker.conf;
-         systemctl restart omandroid-speaker-protection; sleep 3; omandroid-speaker-protection status | head -1; systemctl is-active omandroid-speaker-watch"
+       tools/phone-ssh "printf 'OMAMOBILE_SPK_STAGE=c9\nOMAMOBILE_SPK_MEDIA_DELTA=1\nOMAMOBILE_SPK_DIGITAL=$1\nOMAMOBILE_SPK_ANALOG=$2\n' > /etc/omamobile/speaker.conf;
+         systemctl restart omamobile-speaker-protection; sleep 3; omamobile-speaker-protection status | head -1; systemctl is-active omamobile-speaker-watch"
      }
      step 657 10;  step 737 10;  step 817 10;  step 817 13;  step 817 17
      ```
@@ -1250,8 +1250,8 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      value at least through -20 dBFS. Stop as in the rules; on a stop,
      go back to the previous step's levels.
 
-     **C9a-C9d results (2026-10-12, 7.3.0-rc6-omandroid-push1-00306,
-     speaker_protection=1, omandroid-audio 0.2.2, media delta on).**
+     **C9a-C9d results (2026-10-12, 7.3.0-rc6-omamobile-push1-00306,
+     speaker_protection=1, omamobile-audio 0.2.2, media delta on).**
      - C9a second run passed: the heartbeats moved through every burst, and
        `verify` wrote the stamp. Real media with pauses gave no false mute.
      - C9b: the delta was applied on both amplifiers, and both speakers play.
@@ -1331,15 +1331,15 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      be the multitone itself, or the protection starting to act on the
      false temperature; C9d-2 checks with a pure tone.
 
-   - **C9d-2 the temperature reading** (omandroid-audio 0.2.3; stage c9;
+   - **C9d-2 the temperature reading** (omamobile-audio 0.2.3; stage c9;
      nothing above 737 digital until this is explained; each burst ≤ 10 s
      with 60 s rest; stop as in the C9 rules, and on any reading above
      45 °C). The order changes one thing at a time; record each burst's
      `monitor` lines, including "R_selected" and "vmon low".
-     1. Install 0.2.3 (`tools/phone-install-package packages/omandroid-audio;
-        tools/phone-ssh 'systemctl restart omandroid-speaker-protection'`).
+     1. Install 0.2.3 (`tools/phone-install-package packages/omamobile-audio;
+        tools/phone-ssh 'systemctl restart omamobile-speaker-protection'`).
         Then a pure tone at C8 levels (657/6), delta on, then delta off
-        (set `OMANDROID_SPK_MEDIA_DELTA=0` and restart). Use `signal tone
+        (set `OMAMOBILE_SPK_MEDIA_DELTA=0` and restart). Use `signal tone
         /tmp/t1k.wav --level -23 --seconds 3`, a -20 dBFS peak. Listen for
         scratchiness. Expect clean in both.
      2. 737/10, delta **off**: `burst /tmp/mt10.wav 1.0`, then a 1 kHz tone
@@ -1358,11 +1358,11 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
         once a burst at 737/17 reads plausibly (within a few °C, rising and
         falling with the signal) with "R_selected=CAL_R yes" on both
         amplifiers.
-     Rollback for every step: `omandroid-speaker-protection mute`, stage c8
-     levels in `/etc/omandroid/speaker.conf`, restart.
+     Rollback for every step: `omamobile-speaker-protection mute`, stage c8
+     levels in `/etc/omamobile/speaker.conf`, restart.
 
-     **C9d-2 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00317-gdea700f6eec2,
-     omandroid-audio 0.2.3, speaker_protection=1).**
+     **C9d-2 result (2026-10-12, 7.3.0-rc6-omamobile-push1-00317-gdea700f6eec2,
+     omamobile-audio 0.2.3, speaker_protection=1).**
      - Step 1: the 1 kHz tone at 657/6, delta on and then off, was clean
        both times (no scratchiness). R_selected=CAL_R yes on both
        amplifiers, vmon low 1 on both, 25.00-25.02 °C, state 0, halo 2,
@@ -1384,7 +1384,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
        analog 17. The calibration is fine (R_selected = CAL_R).
 
      **Everyday level until stock's gains: stage `media`, 737/10 on both,
-     media delta on (omandroid-audio 0.3.0, the new default).**
+     media delta on (omamobile-audio 0.3.0, the new default).**
      - Inside AUDIO-PLAN.md section 4's limits even with the DSP bypassed
        (digital ≤ 817, analog ≤ 10). It is 17 dB below stock's media
        output (817/17.5 dB), about 1/50 of the power.
@@ -1418,21 +1418,21 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      - Stock also runs **DRE** (dynamic range enhancement, "DRE DRE Switch"
        1 at init in `mixer_paths.xml`). DRE lowers the amplifier's noise
        floor on quiet passages; we leave it off.
-     - omandroid-audio 0.3.0 can turn it on (`OMANDROID_SPK_DRE=1`, default
+     - omamobile-audio 0.3.0 can turn it on (`OMAMOBILE_SPK_DRE=1`, default
        off); C9d-3 compares.
      - If static remains at 817/17 with DRE on and real music, it is not
        noise floor. The amplifier's hardware noise gate (stock DT:
        `hw-noise-gate-select = 63`) and the protection's own actions are
        next.
 
-   - **C9d-3 to stock gains with sensing** (omandroid-audio 0.3.0; stage
+   - **C9d-3 to stock gains with sensing** (omamobile-audio 0.3.0; stage
      c9; rules as in C9; stop at any reading above 45 °C, a jump of more
      than 5 °C within a burst, vmon low 1 at analog 17 during a -20 dBFS
      burst on either amplifier, or R_selected NO):
      0. Install and restore the default config (risk low):
         ```sh
-        tools/phone-install-package packages/omandroid-audio
-        tools/phone-ssh 'cp /etc/omandroid/speaker.conf.pacnew /etc/omandroid/speaker.conf 2>/dev/null; grep -v "^#" /etc/omandroid/speaker.conf; systemctl restart omandroid-speaker-protection; omandroid-speaker-protection status | head -1'
+        tools/phone-install-package packages/omamobile-audio
+        tools/phone-ssh 'cp /etc/omamobile/speaker.conf.pacnew /etc/omamobile/speaker.conf 2>/dev/null; grep -v "^#" /etc/omamobile/speaker.conf; systemctl restart omamobile-speaker-protection; omamobile-speaker-protection status | head -1'
         ```
         Expect "ok: stage media … Top 737/10, Bottom 737/10" and, at the
         next stream, "stock media delta applied" twice in the watchdog
@@ -1442,10 +1442,10 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
         Expect vmon low 0 on both amplifiers at least at 737/17, R_selected
         yes, and temperatures that rise by tenths of a degree with the
         signal and fall back after.
-     2. DRE: 737/17 with mt20 and real music, `OMANDROID_SPK_DRE=1` versus
+     2. DRE: 737/17 with mt20 and real music, `OMAMOBILE_SPK_DRE=1` versus
         unset. The human listens for static, and the monitor lines must
         stay as in 1.
-     3. 737/17 with the media delta on (unset `OMANDROID_SPK_MEDIA_DELTA`
+     3. 737/17 with the media delta on (unset `OMAMOBILE_SPK_MEDIA_DELTA`
         or set it to 1). Same expectations.
      4. 817/17, delta on, DRE as chosen in 2: mt20, then mt10, then real
         music at 50/75/100 % sink volume, each ≤ 10 s, 60 s apart, with
@@ -1454,9 +1454,9 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      5. Then C9e (balance) and C9f (real use) at 817/17. If both pass, make
         c9 at 817/17 the package default, and move
         `options aoc_alsa_dev speaker_protection=1` into the package.
-     Rollback for every step: `omandroid-speaker-protection mute`, then the
+     Rollback for every step: `omamobile-speaker-protection mute`, then the
      default config (stage media) and a restart.
-     **C9d-3 step 1 result (2026-10-13, 7.3.0-rc6-omandroid-push1-00375-gc73a652bd07a;
+     **C9d-3 step 1 result (2026-10-13, 7.3.0-rc6-omamobile-push1-00375-gc73a652bd07a;
      stopped):**
      - 657/17, delta off, DRE off: a -20 dBFS multitone burst and a
        -13 dBFS RMS 1 kHz tone read plausibly (top +0.4 °C, bottom
@@ -1476,7 +1476,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
        the ADC and the class-H settings. Use the stock tuning and our own
        register captures. No more listening steps at analog 17 until that
        difference is found. The default stays stage media 737/10.
-     **C9d-4 step 1 (2026-10-13, 7.3.0-rc6-omandroid-push1-00395-g6c0e876bd580;
+     **C9d-4 step 1 (2026-10-13, 7.3.0-rc6-omamobile-push1-00395-g6c0e876bd580;
      stopped):** this tested whether the runaway comes from our post-DSP gain
      differing from stock's. Both amplifiers were at stock's 817/17, with
      the level taken down in the file instead: a -40 dBFS multitone at sink
@@ -1505,7 +1505,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
        DSP"), as designed.
      - **DRE on and the hardware noise gate at 63**, as stock, through the
        DSP at 737/10: clearly cleaner by ear. Both are now the default
-       (omandroid-audio 0.3.2).
+       (omamobile-audio 0.3.2).
      - **817/17 with DRE and the gate on:** a -40 dBFS multitone tripped a
        1 s tripwire (more than 5 °C above the start) within a second: top 25
        → 56 °C. A -40 dBFS 1 kHz tone did the same (top 25 → 55.5 °C). So
@@ -1519,14 +1519,14 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      - **Open:** why the protection's reading runs away at gain 17 on our
        setup. Next suspects are the VMON/IMON scaling the DSP sees and the
        amplifiers held awake.
-     - **Meanwhile:** omandroid-audio 0.3.3 adds a PipeWire loudness filter
+     - **Meanwhile:** omamobile-audio 0.3.3 adds a PipeWire loudness filter
        ahead of the DSP: a 150 Hz high-pass and a limiter with +6 dB and a
        -1 dBFS ceiling. The amplifiers stay at 737/10.
-     **C9d-6 (2026-10-13, 7.3.0-rc6-omandroid-push1-00405-g3bc8d8565645):**
+     **C9d-6 (2026-10-13, 7.3.0-rc6-omamobile-push1-00405-g3bc8d8565645):**
      - **The bottom speaker's static is fixed.** The cause was `SP_RX_WL`
        (0x4840) read back 32, but that field takes 12-24 bits. Mainline
        wrote `params_width()`, while Google's driver caps it at 24.
-       omandroid-audio-amp `cb1ae8c7d` programs the slot width from the
+       omamobile-audio-amp `cb1ae8c7d` programs the slot width from the
        physical width and caps the word length at 24. A right-only multitone
        at 737/10 "sounded much better" to the listener.
      - **The runaway at 817/17 remains.** A -40 dBFS 1 kHz tone with a
@@ -1537,16 +1537,16 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
        parameter took effect without a firmware reload.
      - The first sample already reads about 20 % high, so a scaling
        mismatch is the lead. The default stays 737/10.
-     - omandroid-audio 0.3.5: the watchdog also mutes on a rise of more
-       than 5 °C within a stream (`OMANDROID_SPK_TEMP_JUMP`).
+     - omamobile-audio 0.3.5: the watchdog also mutes on a rise of more
+       than 5 °C within a stream (`OMAMOBILE_SPK_TEMP_JUMP`).
 
    **Why the speakers sound thin, and the plan (2026-10-13, offline;
-   omandroid-audio 0.4.0).** The listener: the speakers work but sound
+   omamobile-audio 0.4.0).** The listener: the speakers work but sound
    tinny next to a stock Pixel. In order of expected effect:
    1. **Stock shapes the speaker signal on the AoC (Waves), and we send
       none of it.** That processing is stock's sound: EQ, bass
       enhancement, loudness. Our path is flat apart from our own filter.
-      The package exists (omandroid-speaker-tuning 0.1.2, off); the next
+      The package exists (omamobile-speaker-tuning 0.1.2, off); the next
       steps are T3b and T4 in `AOC-TUNING-RESEARCH.md`, now at the
       everyday level (737/10) with our filter set flat for the comparison.
       This is the only lever that gives stock's sound itself.
@@ -1560,7 +1560,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
       0.4.0 replaces it (C9g below): a 100 Hz high-pass, a +4 dB low shelf
       at 400 Hz, a -2 dB presence dip at 3.5 kHz, per-channel treble and
       trim, and the same limiter (-3 dBFS, no gain), all adjustable while
-      playing (`omandroid-speaker-eq`). The values are a starting point.
+      playing (`omamobile-speaker-eq`). The values are a starting point.
       C9g measures the speakers with the phone's own microphone and sets
       them by ear.
    4. **Balance.** Stock maps left to the top speaker (the earpiece, small,
@@ -1578,9 +1578,9 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      for capture: 2 channels, 48 kHz, S16_LE, 2 periods of 480 frames. It
      never reads from it. At the end it closes the PCM and resets the path.
      That runs TDM 0's transmit side, so both amplifiers send VMON/IMON to
-     the AoC. omandroid-audio 0.4.0 does the same:
-     `omandroid-speaker-protection feedback start|stop|status`, or the
-     watchdog with every stream when `OMANDROID_SPK_FEEDBACK=1` (default
+     the AoC. omamobile-audio 0.4.0 does the same:
+     `omamobile-speaker-protection feedback start|stop|status`, or the
+     watchdog with every stream when `OMAMOBILE_SPK_FEEDBACK=1` (default
      off). It refuses unless both amplifiers' DT nodes carry disjoint
      `google,tdm-tx-slots` (the aoc-sound-test overlay, stock's 0/2/4/6 and
      1/3/5/7), because the two share one SDOUT line. arecord can't hold
@@ -1594,7 +1594,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      is the coil impedance the firmware measures from its voltage and
      current sense, in CAL_R's units. 0xfffffd and 0xfffffe mean no valid
      measurement, as at a signal too low to measure. Stock keeps the median
-     as a metric only. `omandroid-speaker-protection impedance` does the
+     as a metric only. `omamobile-speaker-protection impedance` does the
      same and prints only Z/CAL_R and the coil rise that ratio means
      (copper, 0.39 %/°C), never a resistance. At gain 17 the first
      temperature sample read about 25 °C high, which matches a Z/CAL_R near
@@ -1605,24 +1605,24 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      ultrasound configuration isn't on cheetah's paths. Hibernate Force
      Wake only controls hibernation, and AMCS is telemetry.
 
-   **C9d-7/C9d-8 runbook** (omandroid-audio 0.4.0; the TX slot overlay in
+   **C9d-7/C9d-8 runbook** (omamobile-audio 0.4.0; the TX slot overlay in
    the DTB; rules as C9d-6: the phone screen up on a table, the human told
    before each burst, `tools/speaker-trip-burst` with RISE 5, 30 s between
    bursts). Stop on TRIPPED, any watchdog mute, R_selected NO, over-counts
    that move, or anything the listener dislikes. Rollback for every step:
-   `omandroid-speaker-protection feedback stop; omandroid-speaker-protection
+   `omamobile-speaker-protection feedback stop; omamobile-speaker-protection
    mute`, then `lvl 737 10 media`.
    ```sh
-   lvl() { tools/phone-ssh "printf 'OMANDROID_SPK_STAGE=${3:-c9}\nOMANDROID_SPK_DIGITAL=$1\nOMANDROID_SPK_ANALOG=$2\nOMANDROID_SPK_TEMP_JUMP=5\nOMANDROID_WATCH_INTERVAL=0.5\n' > /etc/omandroid/speaker.conf; systemctl restart omandroid-speaker-protection; sleep 3; omandroid-speaker-protection status | head -1"; }
+   lvl() { tools/phone-ssh "printf 'OMAMOBILE_SPK_STAGE=${3:-c9}\nOMAMOBILE_SPK_DIGITAL=$1\nOMAMOBILE_SPK_ANALOG=$2\nOMAMOBILE_SPK_TEMP_JUMP=5\nOMAMOBILE_WATCH_INTERVAL=0.5\n' > /etc/omamobile/speaker.conf; systemctl restart omamobile-speaker-protection; sleep 3; omamobile-speaker-protection status | head -1"; }
    tb() { tools/phone-ssh "F=$1 S=${2:-5} VOL=1.0 RISE=5 IMP=${IMP:-0} FB=${FB:-0} bash -s" < tools/speaker-trip-burst | tee -a logs/c9d7.log; }
-   tools/phone-ssh 'S=omandroid-speaker-protection;
+   tools/phone-ssh 'S=omamobile-speaker-protection;
      $S signal tone /tmp/t1k30.wav --level -30 --seconds 3; $S signal tone /tmp/t1k23.wav --level -23 --seconds 3;
      $S signal multitone /tmp/mt20.wav --level -20 --seconds 3'
    ```
    | Step | What | Risk | Pass | Stop |
    | --- | --- | --- | --- | --- |
-   | 0 | **Read-only, no sound:** `tools/phone-ssh 'uname -r; omandroid-speaker-protection feedback status; amixer -c0 controls \| grep -c RTLOG'` | none | "TX slots ok", hostless PCM device 15 (closed); 10 RTLOG controls (5 per amplifier) | TX slots not ok (the overlay is missing: stop, it needs its own boot) |
-   | 1 | **The feedback stream alone, no playback:** `tools/phone-ssh 'S=omandroid-speaker-protection; $S feedback start --seconds 5; sleep 1; $S feedback status; sleep 6; $S feedback status; dmesg \| tail -5'` | low | "holder pid …", PCM "state: RUNNING", then "not running"; no AoC or cs35l41 error | an oops, an AoC or amplifier error, a PCM that stays open |
+   | 0 | **Read-only, no sound:** `tools/phone-ssh 'uname -r; omamobile-speaker-protection feedback status; amixer -c0 controls \| grep -c RTLOG'` | none | "TX slots ok", hostless PCM device 15 (closed); 10 RTLOG controls (5 per amplifier) | TX slots not ok (the overlay is missing: stop, it needs its own boot) |
+   | 1 | **The feedback stream alone, no playback:** `tools/phone-ssh 'S=omamobile-speaker-protection; $S feedback start --seconds 5; sleep 1; $S feedback status; sleep 6; $S feedback status; dmesg \| tail -5'` | low | "holder pid …", PCM "state: RUNNING", then "not running"; no AoC or cs35l41 error | an oops, an AoC or amplifier error, a PCM that stays open |
    | 2 | **The impedance at the everyday level** (737/10, the current default): `IMP=1 tb /tmp/t1k23.wav 3`, then `IMP=1 FB=1 tb /tmp/t1k23.wav 3`. If both say "not measurable", the same with `/tmp/mt20.wav` | low | Z/CAL_R 0.97-1.05 on both, or "not measurable" (record which); CLEAN | Z/CAL_R off by more than 10 % at 737/10 |
    | 3 | **Gain 17, one 1 s burst, feedback off:** `lvl 817 17; IMP=1 tb /tmp/t1k30.wav 1`, then `lvl 737 10 media` | medium | CLEAN, Z/CAL_R near 1.00 | TRIPPED (expected, as in C9d-5/6): record Z/CAL_R or "not measurable" and go on to 4 |
    | 4 | **Gain 17 with the feedback stream:** `lvl 817 17; IMP=1 FB=1 tb /tmp/t1k30.wav 1`, then `lvl 737 10 media` | medium | CLEAN where 3 tripped: C9d-7 is the fix | TRIPPED again: stop listening steps, send the lines |
@@ -1643,33 +1643,33 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    - **Z/CAL_R near 1.00 and the temperature still jumps:** the
      temperature isn't computed from that impedance. Suspect CAL_AMBIENT or
      the calibration's own gain fields.
-   - **4 CLEAN:** set `OMANDROID_SPK_FEEDBACK=1` in
-     `/etc/omandroid/speaker.conf`, then run C9d-3 step 4 (817/17, mt20,
+   - **4 CLEAN:** set `OMAMOBILE_SPK_FEEDBACK=1` in
+     `/etc/omamobile/speaker.conf`, then run C9d-3 step 4 (817/17, mt20,
      then mt10, then music at 50/75/100 %, each burst ≤ 10 s through `tb`,
      `IMP=1`). With the C9 rules met, C9e and C9f follow, and the package
      default changes in its own version bump.
 
-   **C9g: the speaker filter, by ear and measured (omandroid-audio 0.4.0;
+   **C9g: the speaker filter, by ear and measured (omamobile-audio 0.4.0;
    risk low).** The amplifiers stay at stage media (737/10) throughout;
    only the signal into the protection DSP changes. The limiter still caps
-   it at -3 dBFS. `omandroid-speaker-eq` runs as the desktop user:
+   it at -3 dBFS. `omamobile-speaker-eq` runs as the desktop user:
    ```sh
    U='U=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}"); I=$(id -u $U); as_user() { runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/$I "$@"; }'
-   eq() { tools/phone-ssh "$U; as_user omandroid-speaker-eq $*"; }
+   eq() { tools/phone-ssh "$U; as_user omamobile-speaker-eq $*"; }
    ```
    0. Install, then restart the user's PipeWire. Announce it: the sound
       changes, with more low end.
       ```sh
-      tools/phone-install-package packages/omandroid-audio
-      tools/phone-ssh "$U"'; as_user systemctl --user restart pipewire pipewire-pulse wireplumber; sleep 3; as_user omandroid-speaker-eq show'
+      tools/phone-install-package packages/omamobile-audio
+      tools/phone-ssh "$U"'; as_user systemctl --user restart pipewire pipewire-pulse wireplumber; sleep 3; as_user omamobile-speaker-eq show'
       ```
       Expect: the filter's node and the package values (hp 100 Hz, bass
       +4 dB at 400 Hz, dip -2 dB at 3500 Hz, treble 0, trims 0). Stop: "no
-      effect_input.omandroid_speaker_loudness node". Send `journalctl
+      effect_input.omamobile_speaker_loudness node". Send `journalctl
       --user -u pipewire -b | tail` (as the user). Rollback: reinstall
       0.3.5.
    1. **A/B by ear** with music the listener knows, at their normal
-      volume. Run `omandroid-speaker-protection monitor 120 2` in a second
+      volume. Run `omamobile-speaker-protection monitor 120 2` in a second
       terminal. Switch every 15-20 s and tell the listener which is which
       only afterwards: `eq preset flat`, `eq preset default`, and 0.3.5's
       sound `eq set hp=150 bass=0 dip=0`. Then vary one thing at a time:
@@ -1682,7 +1682,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
       100 Hz-16 kHz, one speaker at a time; tell the listener first):
       ```sh
       eq measure right --out /tmp/resp; eq measure left --out /tmp/resp
-      tools/phone-ssh 'python3 -I /usr/lib/omandroid-audio/speaker_response.py suggest /tmp/resp/left-result.json /tmp/resp/right-result.json'
+      tools/phone-ssh 'python3 -I /usr/lib/omamobile-audio/speaker_response.py suggest /tmp/resp/left-result.json /tmp/resp/right-result.json'
       ```
       The filter is flat during the tones and restored afterwards. Record
       the printed responses (a frequency-and-level table, no identifiers),
@@ -1693,7 +1693,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
       source with `wpctl status`).
    3. **Apply the suggestion and A/B it** against `preset default`. Fine-
       tune by ear. With the listener's choice, `eq set … --save` keeps it
-      for them. Record the values here. The next omandroid-audio version
+      for them. Record the values here. The next omamobile-audio version
       takes them as the package's defaults.
    4. **Full volume with the chosen values:** bass-heavy music at 100 %
       sink volume for 30 s, the monitor running. Pass: nothing the
@@ -1706,7 +1706,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    The graph was loaded and run in a private PipeWire 1.6.8 instance on the
    laptop (its own runtime directory, no ALSA, the limiters replaced by
    `copy` because swh-plugins isn't installed there), and
-   `omandroid-speaker-eq` was driven against it.
+   `omamobile-speaker-eq` was driven against it.
    - **Bug: a filter that fails to load stopped PipeWire.** A module in
      `context.modules` without `flags = [ nofail ]` is mandatory, so a
      missing LADSPA plugin or an unknown label would have left the phone
@@ -1760,7 +1760,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      - `width=W` (portrait: both speakers play some of both channels) and
        `swap=0|1`, with `orient` and `follow`: the input matrix follows
        the phone's orientation as stock swaps left and right in landscape
-       (a user unit, `omandroid-speaker-orient`, not enabled). Which
+       (a user unit, `omamobile-speaker-orient`, not enabled). Which
        landscape side swaps (`left-up`, the earpiece on the listener's
        right) is checked by ear in C9h.
      - `drive=DB` (0-6): the limiters' input gain, for loudness at full
@@ -1797,13 +1797,13 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    | C9d-8 / C9d-7 reading | Meaning | Prepared next step |
    | --- | --- | --- |
    | Z/CAL_R near 1.10 at 817/17, near 1.00 at 737/10 | the firmware really measures a higher V/I at gain 17: the sense path's scale depends on the gain on our setup | a read-only register snapshot (the bounded `awk` of C9a step 1, stop at 0x10100) of both amplifiers during the same -30 dBFS tone at 737/10 and at 817/17; diff the two. Anything besides `AMP_GAIN_CTRL` (0x6c04) that differs is the lead. If nothing else differs, the next comparison needs the same snapshot from stock (a slot A boot: fresh NV backups afterwards, AGENTS.md) |
-   | "not measurable" at 817/17 and the reading still jumps | the sense isn't used; the open-loop estimate itself runs away | step 4 (the feedback stream) is the test; if it trips too, repeat C9d-8 at 737/17 with `mt10` (more sense signal): vmon low must go to 0 there; then `OMANDROID_SPK_CAL_ORDER=stock` (0.4.1) and one more 1 s burst |
-   | Z/CAL_R near 1.00 at 817/17 and the reading still jumps | the temperature isn't computed from that impedance; suspect CAL_AMBIENT, which we write first and stock writes last | `OMANDROID_SPK_CAL_ORDER=stock` in `/etc/omandroid/speaker.conf`, `systemctl restart omandroid-speaker-protection`, the same 1 s burst |
+   | "not measurable" at 817/17 and the reading still jumps | the sense isn't used; the open-loop estimate itself runs away | step 4 (the feedback stream) is the test; if it trips too, repeat C9d-8 at 737/17 with `mt10` (more sense signal): vmon low must go to 0 there; then `OMAMOBILE_SPK_CAL_ORDER=stock` (0.4.1) and one more 1 s burst |
+   | Z/CAL_R near 1.00 at 817/17 and the reading still jumps | the temperature isn't computed from that impedance; suspect CAL_AMBIENT, which we write first and stock writes last | `OMAMOBILE_SPK_CAL_ORDER=stock` in `/etc/omamobile/speaker.conf`, `systemctl restart omamobile-speaker-protection`, the same 1 s burst |
    | step 4 CLEAN where step 3 tripped | the V/I stream is what the firmware needs | as written under "Reading 3 and 4" above |
    Whatever the outcome, no step above 1 s at analog 17 until a burst
    reads plausibly, and the default stays stage media.
 
-   **C9h: one listening session for omandroid-audio 0.4.1** (prepared
+   **C9h: one listening session for omamobile-audio 0.4.1** (prepared
    2026-10-13; run by the main session with the human listening). The
    amplifiers stay at stage media (737/10) in sections A-D, so every step
    there is inside the levels proven without protection; only the signal
@@ -1811,20 +1811,20 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    -3 dBFS. Sections E and F are optional and need the human's go
    separately. Rules for every sound: the phone screen up on a table, the
    listener at about 40 cm, told before each sound what it will be;
-   `omandroid-speaker-protection monitor 600 2` running in a second
+   `omamobile-speaker-protection monitor 600 2` running in a second
    terminal; music the listener knows, copied to the phone as `/tmp/m.flac`
    (bass-heavy) and `/tmp/v.flac` (voice). **Stop** (any step): a
    watchdog mute, an over-count that moves, a cs35l41 error in `dmesg`, a
    coil reading more than 1 °C above room at 737/10, buzzing, rattling,
    distortion or anything the listener dislikes. **Rollback** (any step):
    `eq reset` (the package's values); for the filter as a whole
-   `tools/phone-ssh 'mv /usr/share/pipewire/pipewire.conf.d/60-omandroid-speaker-loudness.conf{,.off}'`
+   `tools/phone-ssh 'mv /usr/share/pipewire/pipewire.conf.d/60-omamobile-speaker-loudness.conf{,.off}'`
    and restart the user's PipeWire (unfiltered, as before 0.3.3).
    ```sh
    U='U=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}"); I=$(id -u $U); as_user() { runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/$I "$@"; }'
-   eq() { tools/phone-ssh "$U; as_user omandroid-speaker-eq $*"; }
+   eq() { tools/phone-ssh "$U; as_user omamobile-speaker-eq $*"; }
    play() { tools/phone-ssh "$U; as_user wpctl set-volume @DEFAULT_AUDIO_SINK@ ${2:-0.6}; as_user timeout ${3:-20} pw-play $1"; }
-   R=packages/omandroid-audio/lib/speaker_response.py
+   R=packages/omamobile-audio/lib/speaker_response.py
    lrec() {  # lrec left|right: the phone plays the stimulus, the laptop's microphone records it
      pw-record --rate 48000 --channels 1 --format s16 logs/resp-$1.wav & P=$!; sleep 1
      eq measure $1 --play-only --out /tmp/resp; sleep 1; kill -INT $P; wait $P
@@ -1833,11 +1833,11 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    ```
    | Step | What | Risk | Expect / Pass | Stop / note |
    | --- | --- | --- | --- | --- |
-   | A0 | **Read-only, no sound:** `tools/phone-ssh 'uname -r; pacman -Q omandroid-audio pipewire wireplumber swh-plugins; omandroid-speaker-protection status \| head -1; systemctl is-active omandroid-speaker-watch'` | none | pipewire 1.4 or later (1.6.x expected); "ok: stage media … Top 737/10, Bottom 737/10"; `active` | pipewire older than 1.4 (no builtin `abs`: don't install 0.4.1, report); the stage not media (restore the default config first, C9d-3 step 0) |
-   | A1 | **Install 0.4.1, restart the user's PipeWire** (announce: the sound changes): `tools/phone-install-package packages/omandroid-audio`, then `tools/phone-ssh "$U"'; as_user systemctl --user restart pipewire pipewire-pulse wireplumber; sleep 3; as_user omandroid-speaker-eq show'` | low | the values (hp 100, bass +4 at 400, dip -2 at 3500, width 1, swap 0, bassmono 0, harm 0, drive 0) | "no … node": `as_user journalctl --user -u pipewire -b \| tail` (an unknown label or plugin), then the filter-wide rollback |
-   | A2 | **In the path, and the PCM format,** during a -23 dBFS 1 kHz tone (announce it): `tools/phone-ssh 'omandroid-speaker-protection signal tone /tmp/t1k23.wav --level -23 --seconds 4'; tools/phone-ssh "$U"'; (as_user timeout 5 pw-play /tmp/t1k23.wav &); sleep 2; as_user omandroid-speaker-eq show \| tail -1; cat /proc/asound/card*/pcm5p/sub0/hw_params'` | low | "in the path: plays into alsa_output…Speaker…"; `hw_params` format and rate: record (FLOAT_LE as stock, or S32_LE/S24_LE) | "NOT in the path": record `as_user wpctl status` and the speaker sink's `node.name` (`as_user pw-dump \| grep '"node.name": "alsa_output'`): the target name needs fixing, not a stop for the hardware; S16_LE: record (a later version pins float) |
+   | A0 | **Read-only, no sound:** `tools/phone-ssh 'uname -r; pacman -Q omamobile-audio pipewire wireplumber swh-plugins; omamobile-speaker-protection status \| head -1; systemctl is-active omamobile-speaker-watch'` | none | pipewire 1.4 or later (1.6.x expected); "ok: stage media … Top 737/10, Bottom 737/10"; `active` | pipewire older than 1.4 (no builtin `abs`: don't install 0.4.1, report); the stage not media (restore the default config first, C9d-3 step 0) |
+   | A1 | **Install 0.4.1, restart the user's PipeWire** (announce: the sound changes): `tools/phone-install-package packages/omamobile-audio`, then `tools/phone-ssh "$U"'; as_user systemctl --user restart pipewire pipewire-pulse wireplumber; sleep 3; as_user omamobile-speaker-eq show'` | low | the values (hp 100, bass +4 at 400, dip -2 at 3500, width 1, swap 0, bassmono 0, harm 0, drive 0) | "no … node": `as_user journalctl --user -u pipewire -b \| tail` (an unknown label or plugin), then the filter-wide rollback |
+   | A2 | **In the path, and the PCM format,** during a -23 dBFS 1 kHz tone (announce it): `tools/phone-ssh 'omamobile-speaker-protection signal tone /tmp/t1k23.wav --level -23 --seconds 4'; tools/phone-ssh "$U"'; (as_user timeout 5 pw-play /tmp/t1k23.wav &); sleep 2; as_user omamobile-speaker-eq show \| tail -1; cat /proc/asound/card*/pcm5p/sub0/hw_params'` | low | "in the path: plays into alsa_output…Speaker…"; `hw_params` format and rate: record (FLOAT_LE as stock, or S32_LE/S24_LE) | "NOT in the path": record `as_user wpctl status` and the speaker sink's `node.name` (`as_user pw-dump \| grep '"node.name": "alsa_output'`): the target name needs fixing, not a stop for the hardware; S16_LE: record (a later version pins float) |
    | B1 | **A/B by ear** (C9g step 1), told which only afterwards, 15-20 s each of `/tmp/m.flac` and `/tmp/v.flac` at the listener's volume: `eq preset flat`, `eq preset default`, and 0.3.5's sound `eq set hp=150 bass=0 dip=0` | low | a clear preference; the monitor moves by tenths of a degree | as in the rules |
-   | B2 | **Measure with the phone's microphone** (announce: about 15 s of quiet stepped tones per speaker): `eq measure left --out /tmp/resp; eq measure right --out /tmp/resp; tools/phone-ssh "python3 -I /usr/lib/omandroid-audio/speaker_response.py suggest /tmp/resp/left-result.json /tmp/resp/right-result.json"` | low | two response tables (record them: frequency and level only) and per-speaker corners; the volume line equal for both | "CLIPPED" (again with `--level -40`); "no 1 kHz marker" (the default source: `as_user wpctl status`) |
+   | B2 | **Measure with the phone's microphone** (announce: about 15 s of quiet stepped tones per speaker): `eq measure left --out /tmp/resp; eq measure right --out /tmp/resp; tools/phone-ssh "python3 -I /usr/lib/omamobile-audio/speaker_response.py suggest /tmp/resp/left-result.json /tmp/resp/right-result.json"` | low | two response tables (record them: frequency and level only) and per-speaker corners; the volume line equal for both | "CLIPPED" (again with `--level -40`); "no 1 kHz marker" (the default source: `as_user wpctl status`) |
    | B3 | **Measure at the listening position with the laptop's microphone** (tell the human: the laptop records the room for about 17 s per side; the recordings stay in `logs/`, gitignored, and are deleted after): the laptop at the listener's ear, `lrec left; lrec right; python3 -I $R suggest logs/resp-left.json logs/resp-right.json; rm logs/resp-*.wav` | low | the responses as heard, a balance figure and possibly a trim; compare with B2 (`python3 -I $R compare` one against the other is meaningless across microphones; compare shapes by eye) | the marker not found (the laptop's input muted or too far: closer, or `--level -25` on both sides) |
    | B4 | **Apply the B3 suggestion** (B2's if B3 failed) and A/B against `preset default`; fine-tune one value at a time. Record the values here | low | a preference | as in the rules |
    | C1 | **Bass to the bottom speaker:** `eq set bassmono=1 xover=X` (X from B2/B3's note, else 500), A/B against `bassmono=0` with `/tmp/m.flac` | low | fuller bass, the earpiece cleaner; prefer by ear | rattle on the bottom speaker (`bassmono=0`) |
@@ -1845,7 +1845,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    | C3 | **Width in portrait:** `eq set width=0.6` against `width=1` with `/tmp/m.flac` | low | preference (both speakers carry everything at 0.6) | none |
    | C4 | **Loudness at full volume:** `play /tmp/m.flac 1.0 30` with `drive=0`, then `eq set drive=2`, then `drive=3`; the monitor running | low (peaks stay at -3 dBFS; average power rises a little, far below the C9d-2 levels) | louder without distortion; tenths of a degree | distortion or pumping (`drive=0`; record which step) |
    | C5 | **Full volume with the chosen values** (C9g step 4): bass-heavy music at 1.0 for 30 s | low | as C4 | an over-exc count that moves (lower `bass` or `harm`, repeat) |
-   | D1 | **Orientation:** `tools/phone-ssh "$U"'; as_user systemctl --user enable --now omandroid-speaker-orient'`, auto-rotation on; `tools/phone-ssh 'omandroid-speaker-protection signal multitone /tmp/mtL.wav --level -20 --seconds 5 --channels left'`; for each landscape side `play /tmp/mtL.wav 0.6 6` and ask the listener which side of the phone (as they see it) it comes from; `eq show \| tail -2` each time | low | from the left in both landscape orientations; `swap 1` in one of them | from the right in both: the side is the wrong way round (record it; `SWAPPED` in `omandroid-speaker-eq` becomes `right-up`); rollback `systemctl --user disable --now omandroid-speaker-orient; eq set swap=0` |
+   | D1 | **Orientation:** `tools/phone-ssh "$U"'; as_user systemctl --user enable --now omamobile-speaker-orient'`, auto-rotation on; `tools/phone-ssh 'omamobile-speaker-protection signal multitone /tmp/mtL.wav --level -20 --seconds 5 --channels left'`; for each landscape side `play /tmp/mtL.wav 0.6 6` and ask the listener which side of the phone (as they see it) it comes from; `eq show \| tail -2` each time | low | from the left in both landscape orientations; `swap 1` in one of them | from the right in both: the side is the wrong way round (record it; `SWAPPED` in `omamobile-speaker-eq` becomes `right-up`); rollback `systemctl --user disable --now omamobile-speaker-orient; eq set swap=0` |
    | D2 | **Keep it:** `eq save`; record every chosen value here (no identifiers involved) | none | "saved: …"; the next version takes them as the package defaults | |
    | E | **Optional (medium; the human's separate go): C9d-7/C9d-8** as in their runbook above, with `eq preset flat` first so the bursts match C9d-6's signal, `eq reset` after; read the outcome with the table above | medium | | as in that runbook |
    | F | **Optional (medium; the human's separate go): Waves on the AoC**, T3b then T4 in `AOC-TUNING-RESEARCH.md` (with `eq preset waves`), plus its open-question-8 measurement there | medium | | as there |
@@ -1859,22 +1859,22 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      50 %, 75 % and 100 % sink volume. Stock's amplifiers are equal, so
      equal levels are the target; what stock adds on top is the AoC's
      Waves processing, which we lack. If the top still dominates clearly:
-     from omandroid-audio 0.4.0 lower it in software, `eq set trim_top=-2`
+     from omamobile-audio 0.4.0 lower it in software, `eq set trim_top=-2`
      and so on in 1-2 dB steps (C9g; trims only cut), until the balance
      sounds right, and record the value: a stand-in, not stock, until
      C10-tuning. Try also `eq set bass_top=0`: the earpiece plays little
      below its own resonance, so a bass lift there only adds excursion.
-     The amplifier level `OMANDROID_SPK_TOP_DIGITAL` stays the fallback.
+     The amplifier level `OMAMOBILE_SPK_TOP_DIGITAL` stays the fallback.
      Never raise the bottom above 817/17 to compensate.
    - **C9f real use** (risk medium): 15 minutes of mixed media at the
-     user's normal volume, the watchdog on, then `omandroid-speaker-protection
-     status` and `journalctl -u omandroid-speaker-watch -b`. Expect no
+     user's normal volume, the watchdog on, then `omamobile-speaker-protection
+     status` and `journalctl -u omamobile-speaker-watch -b`. Expect no
      mute, temperatures back near room temperature after, the over-counts
      unchanged (or explained). Then make it the default: bump
-     omandroid-audio with stage c9, the levels from C9d/C9e, the media
+     omamobile-audio with stage c9, the levels from C9d/C9e, the media
      delta on, and `options aoc_alsa_dev speaker_protection=1` in its
-     modprobe file; delete `/etc/modprobe.d/omandroid-audio-c9-bringup.conf`
-     and the test lines in `/etc/omandroid/speaker.conf`.
+     modprobe file; delete `/etc/modprobe.d/omamobile-audio-c9-bringup.conf`
+     and the test lines in `/etc/omamobile/speaker.conf`.
 
    **Microphones:** stock records with 22 dB soft gain (`handset-mic-post`),
    and so do we. Speech close to the phone peaked near 15000 (about -7 dBFS)
@@ -1900,11 +1900,11 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    an `Earpiece` device (lowest priority, never a default sink) whose enable
    and disable sequences `exec` a small request to the protection service
    (a root-owned socket or a polkit-gated `systemctl start
-   omandroid-earpiece@on/off`): the service mutes, sets top ASP / analog ≤ 6,
+   omamobile-earpiece@on/off`): the service mutes, sets top ASP / analog ≤ 6,
    bottom digital 0, and tells the watchdog the mode, so that in earpiece
    mode it expects the bypass on the top amplifier only at analog ≤ 6 and
    the bottom muted, and mutes on anything else. Acoustic shock, as stock:
-   the watchdog claims proximity from omandroid-sensor-proxy during speaker
+   the watchdog claims proximity from omamobile-sensor-proxy during speaker
    playback and mutes the top amplifier (34 ms ramp-down) while the phone
    is at the ear.
 
@@ -1929,7 +1929,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    (`android-gs-raviole-5.10-android12-d1`). But the GSA mailbox also
    carries AoC state commands (command 91), and C1 got an answer: the
    **GSA-direct path** (section 0.1) needs no Trusty. Trusty (already ported
-   on `omandroid-fingerprint`, shared with fingerprint) stays as the
+   on `omamobile-fingerprint`, shared with fingerprint) stays as the
    fallback; `gsa.c` speaks both.
 2. **The bootloader does not leave the AoC running.** Stock's kernel loads and
    starts it 4.07 s into boot and it reports "firmware version
@@ -1984,7 +1984,7 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
 
 ### 0.1 C1 result and the GSA-direct path
 
-C1 on `omandroid-int` `7.3.0-rc6-omandroid-push1-00186-ga0b0c0ebb3f6`
+C1 on `omamobile-int` `7.3.0-rc6-omamobile-push1-00186-ga0b0c0ebb3f6`
 (default DTB + `display-decon-test` + `aoc-gsa-test`):
 
 ```
@@ -2022,7 +2022,7 @@ So the GSA-direct path is: load (90), then 91 `START`; restart = 91
 `SHUTDOWN`, 92, load, 91 `START`. `gsa.c` sends 91/92 when loaded with
 `aoc_cmd_mbox=1`, and the Trusty messages otherwise.
 
-### 0.2 C2-C4 results (omandroid-int 00200, DTB default + display-decon-test + aoc-boot-test)
+### 0.2 C2-C4 results (omamobile-int 00200, DTB default + display-decon-test + aoc-boot-test)
 
 | Stage | Result |
 |---|---|
@@ -2116,7 +2116,7 @@ So the **Trusty path is now the main path**: load with the mailbox (as
 stock), state commands through `hwmgr.aoc`. `gsa.c` already speaks it
 (`CONFIG_GOOGLE_GSA_TRUSTY`, default when `aoc_cmd_mbox=0`), and the Trusty
 driver is the fingerprint port (gate F2 not yet run), already in
-`omandroid-aoc`. It is also the order stock uses (`R/dmesg.txt:5886`, "TZ:
+`omamobile-aoc`. It is also the order stock uses (`R/dmesg.txt:5886`, "TZ:
 com.android.trusty.gsa.hwmgr.aoc connected" right before the AoC comes up).
 
 The rails (all off) stay a separate variable: change one thing at a time,
@@ -2266,7 +2266,7 @@ no Trusty needed, the IOMMU is a static table, and ACPM works.
 | S2MPU registers other than CTRL0 can reset the SoC; any S2MPU register can abort while its block is off | touch only CTRL0, only after the GSA wakelock (`GSA_MB_CMD_WAKELOCK_ACQUIRE` 150) or `aoc_req` acknowledge; never from user space |
 | PMU reads from user space crash the phone (`GPU-PLAN.md` incident) | AoC power state only through the kernel, via `aoc_req + 0x40` or the GSA/Trusty `GET_STATE` |
 | After `LOAD_AOC_FW_IMG` the carve-out body is locked; an AP read faults | never read `0x94000000`-`0x955fffff` after load; the carve-out is already `no-map` (`gs201.dtsi`) |
-| A failed start cannot be retried in the same boot | hang-safe marker as for Wi-Fi: `tools/aoc-stage c4a` writes and syncs `/var/lib/omandroid/aoc-bringup-started` before the load and refuses to run while it exists; `c4b` clears it on success. A clean retry is `unload`, then load and start; after a failure, reboot |
+| A failed start cannot be retried in the same boot | hang-safe marker as for Wi-Fi: `tools/aoc-stage c4a` writes and syncs `/var/lib/omamobile/aoc-bringup-started` before the load and refuses to run while it exists; `c4b` clears it on success. A clean retry is `unload`, then load and start; after a failure, reboot |
 | The AoC writes outside its windows (wrong table, wrong VID) | the System MMU translates VID 0 with only the six windows; anything else faults and is logged ("blocked ... VID n"). Untranslated traffic would reach physical memory directly, so C2 records the VID registers first, and C4b counts "blocked" lines |
 | GSA mailbox command never answered | `gsa.c` times out after 1 s and disables the mailbox until reload (Google's waits forever) |
 | AoC watchdog / IOMMU fault storms | the AoC watchdog IRQ (SPI 116) is not requested by the bring-up driver; System MMU fault lines are rate-limited |
@@ -2281,15 +2281,15 @@ no Trusty needed, the IOMMU is a static table, and ACPM works.
 
 ## 5. Kernel and repo changes made
 
-Kernel branch `omandroid-aoc` (`L/`), on `omandroid` @ `7b0f8b5d1`. It
-merges cleanly into `omandroid-int` @ `741b6ed1d` (`git merge-tree`).
+Kernel branch `omamobile-aoc` (`L/`), on `omamobile` @ `7b0f8b5d1`. It
+merges cleanly into `omamobile-int` @ `741b6ed1d` (`git merge-tree`).
 
 | Commit | What | Default |
 |---|---|---|
 | `58e9fb0a2` dt-bindings: soc: google: add the gs201 GSA mailbox | `google,gs201-gsa` | - |
 | `21aa277d2` soc: google: add a GSA mailbox driver | `drivers/soc/google/gsa.c` (`CONFIG_GOOGLE_GSA`): Google's register protocol, 1 s timeout per command, then the mailbox is refused; debugfs `sjtag_status`, `aoc_state` (`aoc_query=1`) | module |
 | `aed858b94` arm64: dts: exynos: google: gs201: add the GSA mailbox | `gsa@17c90000`, SPI 363 | `disabled` |
-| `372cdfcb5` merge of `omandroid-fingerprint` @ `5a9cf359f` | the Trusty driver commits, shared with fingerprint (same commits, so both branches merge into int together) | modules, node disabled |
+| `372cdfcb5` merge of `omamobile-fingerprint` @ `5a9cf359f` | the Trusty driver commits, shared with fingerprint (same commits, so both branches merge into int together) | modules, node disabled |
 | `477a82e16` arm64: dts: ... gs201: add Trusty | cherry-pick of `0c28d9948` (identical hunk; merges cleanly with fingerprint) | `disabled` |
 | `18c468053` dt-bindings: ... gs201-gsa: add the GSA's S2MPU | optional second range | - |
 | `6b3275d37` soc: google: gsa: load and start AoC firmware | `gsa_load_aoc_fw_image()` (cmd 90 under a GSA wakelock, GSA S2MPU CTRL0 = 0 for the load and restored after, 32-bit DMA mask), `gsa_send_aoc_cmd()` (Trusty `hwmgr.aoc`, or cmd 91 with `aoc_cmd_mbox=1`), `gsa_get_device()`; debugfs `aoc_state_tz`, `s2mpu_ctrl0` (`s2mpu_probe=1`) | - |
@@ -2303,7 +2303,7 @@ merges cleanly into `omandroid-int` @ `741b6ed1d` (`git merge-tree`).
 | `deb7b47bd` gate the PCU read, no lock in read-only views | after the PCU read aborted (C4b-2 first try) | - |
 | `2f785843b`, `615b5188a` unload | `gsa_unload_aoc_fw_image()` (cmd 92 or Trusty `UNLOAD_IMG`); debugfs `unload` (shutdown, unload, System MMU off, as `aoc_take_offline()`) | - |
 
-Build in `out-aoc`: release `7.3.0-rc6-omandroid-push1-00079-g615b5188a148`
+Build in `out-aoc`: release `7.3.0-rc6-omamobile-push1-00079-g615b5188a148`
 (kernel, modules tarball, images). The new C files build with `W=1` and no
 warnings and pass `checkpatch.pl`; the DTB has only the existing framebuffer
 `unit_address_vs_reg` warning; both overlays apply with `fdtoverlay`. Not
@@ -2317,7 +2317,7 @@ nothing and never call into the secure world.
 
 Repo:
 
-- `kernel/configs/omandroid.config`: `CONFIG_GOOGLE_GSA=m`,
+- `kernel/configs/omamobile.config`: `CONFIG_GOOGLE_GSA=m`,
   `CONFIG_GOOGLE_GSA_TRUSTY=y`, `CONFIG_GS201_AOC_SYSMMU=m`,
   `CONFIG_GS201_AOC_BOOT=m`, `CONFIG_GS201_AOC_RAILS=m`.
 - `device/cheetah/overlays/aoc-gsa-test.dtso` (C1), `aoc-boot-test.dtso`
@@ -2359,7 +2359,7 @@ with `gs201_aoc_sysmmu vids=<1<<n>` after a reboot.
 
 ## 7. Runbook
 
-From the omandroid repo, phone in Arch over USB. Overlays as in
+From the omamobile repo, phone in Arch over USB. Overlays as in
 `HAPTICS-TORCH-PLAN.md` 4. **Never use `devmem` for any of this.** The
 phone's `/usr/local/bin/devmem` is our `tools/devmem.c`, with usage
 `devmem ADDRESS [VALUE]`: a second argument WRITES (`devmem ADDR 32` writes
@@ -2374,25 +2374,25 @@ then `cat …/aoc_state`. Results in section 0.1.
 
 ### Build and install for C2-C4
 
-On the integration kernel (merge `omandroid-aoc` again: it now carries the
+On the integration kernel (merge `omamobile-aoc` again: it now carries the
 Trusty commits, the System MMU, boot and rails drivers):
 
 ```sh
 export KERNEL_DIR=$HOME/android/mainline/wt-int KERNEL_OUT=$HOME/android/mainline/out-int
 O=$KERNEL_OUT D=$O/arch/arm64/boot/dts/exynos/google/gs201-cheetah.dtb
-git -C $KERNEL_DIR merge --no-edit omandroid-aoc
-bin/omandroid kernel && bin/omandroid modules && bin/omandroid initramfs && bin/omandroid images
-tools/phone-ssh 'printf "blacklist gsa\nblacklist gs201_aoc_sysmmu\nblacklist gs201_aoc_boot\nblacklist gs201_aoc_rails\n" > /etc/modprobe.d/omandroid-aoc-bringup.conf'
+git -C $KERNEL_DIR merge --no-edit omamobile-aoc
+bin/omamobile kernel && bin/omamobile modules && bin/omamobile initramfs && bin/omamobile images
+tools/phone-ssh 'printf "blacklist gsa\nblacklist gs201_aoc_sysmmu\nblacklist gs201_aoc_boot\nblacklist gs201_aoc_rails\n" > /etc/modprobe.d/omamobile-aoc-bringup.conf'
 cp "$D" "$D.default"
 $O/scripts/dtc/dtc -q -I dts -O dtb -o out/aoc-boot-test.dtbo device/cheetah/overlays/aoc-boot-test.dtso
 $O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" out/aoc-boot-test.dtbo   # add display-decon-test etc. as usual
-bin/omandroid images && bin/omandroid modules-push && bin/omandroid push
+bin/omamobile images && bin/omamobile modules-push && bin/omamobile push
 tools/phone-ssh 'lsmod | grep -cE "^(gsa|gs201_aoc|trusty)"'     # expect 0
 ```
 
 Rollback for every stage below: reboot (nothing persists; the PMIC keeps a
 rail that C6 turns on until a cold boot), or the default DTB:
-`cp "$D.default" "$D"; bin/omandroid images && bin/omandroid push`.
+`cp "$D.default" "$D"; bin/omamobile images && bin/omamobile push`.
 
 ### C2: read-only probes
 
@@ -2474,7 +2474,7 @@ tools/aoc-stage --watchdog c4a
   - a System MMU fault line already now (the AoC is still in reset and must
     not access anything).
   Report the log and reboot. The marker stays, so `c4a` refuses to run again
-  until you have rebooted and removed `/var/lib/omandroid/aoc-bringup-started`.
+  until you have rebooted and removed `/var/lib/omamobile/aoc-bringup-started`.
 - **Never** read the carve-out (`0x94000000`-`0x955fffff`) after this step:
   the GSA has locked it.
 
@@ -2517,11 +2517,11 @@ only with `gs201_aoc_sysmmu dump_faults=1`; read-only views take no lock,
 and optional reads around start run outside it. `blk` and the start
 diagnostics now read only what has already read fine on the phone.
 
-Rebuild int with `omandroid-aoc` @ `deb7b47bd` (merge again) and push as
+Rebuild int with `omamobile-aoc` @ `deb7b47bd` (merge again) and push as
 before, same overlay. Then:
 
 ```sh
-tools/phone-ssh 'rm -f /var/lib/omandroid/aoc-bringup-started'
+tools/phone-ssh 'rm -f /var/lib/omamobile/aoc-bringup-started'
 tools/aoc-stage --watchdog c2
 tools/aoc-stage --watchdog c4a
 tools/aoc-stage diag          # after the load, before the start
@@ -2577,16 +2577,16 @@ Send the logs (`logs/aoc-*-diag.log`, `-c4b.log`, `-ramdump.log`,
 
 ### C4t: start through Trusty (passed 2026-10-12; see the Checkpoint and NOTES.md)
 
-Rebuild int with `omandroid-aoc` @ `7bea582c5` (merge again; adds the
+Rebuild int with `omamobile-aoc` @ `7bea582c5` (merge again; adds the
 mailbox view) and push with **both** overlays, `aoc-boot-test` and
 `fingerprint-trusty` (enables `/trusty`), plus the usual ones. The Trusty
-modules stay blacklisted (`omandroid-fingerprint.conf`, or add
+modules stay blacklisted (`omamobile-fingerprint.conf`, or add
 `blacklist trusty_core/trusty_log/trusty_ipc/trusty_virtio` to
-`omandroid-aoc-bringup.conf`). Note: `modprobe gsa` loads `trusty_core` and
+`omamobile-aoc-bringup.conf`). Note: `modprobe gsa` loads `trusty_core` and
 `trusty_ipc` as dependencies, so load Trusty first, on purpose.
 
 ```sh
-tools/phone-ssh 'rm -f /var/lib/omandroid/aoc-bringup-started'
+tools/phone-ssh 'rm -f /var/lib/omamobile/aoc-bringup-started'
 tools/aoc-stage --watchdog trusty        # FINGERPRINT-RESEARCH.md F2, the first SMCs into Trusty
 tools/aoc-stage --watchdog --trusty c2   # gsa without aoc_cmd_mbox: state via hwmgr.aoc
 tools/aoc-stage mbox                     # baseline: AoC mailboxes, AP side (read-only)
@@ -2623,7 +2623,7 @@ watchdog resets the phone).
 ### C4b-3: rails first (separate boot, if C4t starts the A32 but no control block appears)
 
 ```sh
-tools/phone-ssh 'rm -f /var/lib/omandroid/aoc-bringup-started'
+tools/phone-ssh 'rm -f /var/lib/omamobile/aoc-bringup-started'
 tools/aoc-stage --watchdog trusty
 tools/aoc-stage --watchdog --trusty c2
 tools/aoc-stage rails         # LDO7S, LDO5S and the mic LDOs on, stock voltages
@@ -2640,7 +2640,7 @@ tools/aoc-stage diag; tools/aoc-stage mbox
 
 ```sh
 tools/phone-ssh 'echo 1 > /sys/kernel/debug/aoc/unload; cat /sys/kernel/debug/aoc/info'
-tools/phone-ssh 'rm -f /var/lib/omandroid/aoc-bringup-started'
+tools/phone-ssh 'rm -f /var/lib/omamobile/aoc-bringup-started'
 tools/aoc-stage --watchdog c4a && tools/aoc-stage --watchdog c4b
 ```
 

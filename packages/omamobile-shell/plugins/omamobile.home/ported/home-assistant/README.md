@@ -7,7 +7,7 @@ A built-in home-screen widget, ported from
 by Simon Schubert, in [omarchy-widgets](https://github.com/SimonSchubert/omarchy-widgets),
 the widget store of Simon Schubert's Omalauncher.
 
-**Differences from the original:** The server, token and entities are settings instead of the file `~/.config/omarchy-proot/home-assistant`, and the REST API is called with `XMLHttpRequest` instead of `curl` and `jq`. States refresh every two minutes (the original: every minute) and right after a toggle. The token is stored with the widget's settings in `~/.config/omandroid/home.json`.
+**Differences from the original:** The server, token and entities are settings instead of the file `~/.config/omarchy-proot/home-assistant`, and the REST API is called with `XMLHttpRequest` instead of `curl` and `jq`. States refresh every two minutes (the original: every minute) and right after a toggle. The token is stored with the widget's settings in `~/.config/omamobile/home.json`.
 
 **Capabilities:** `network`.
 
@@ -36,4 +36,4 @@ The original is MIT licensed, and so is this port:
     SOFTWARE.
 
 The same text is in `LICENSE-omarchy-widgets` in the home screen's plugin folder
-(`/usr/share/omandroid/shell/plugins/omandroid.home/LICENSE-omarchy-widgets`).
+(`/usr/share/omamobile/shell/plugins/omamobile.home/LICENSE-omarchy-widgets`).

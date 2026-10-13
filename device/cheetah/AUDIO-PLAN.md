@@ -6,31 +6,31 @@ in other plans.** Working: Bluetooth A2DP (A1, through `BLUETOOTH-PLAN.md`
 BT3), and the built-in speakers and microphones through the AoC (A6, carried
 out as `AOC-PLAN.md` C5-C9): both CS35L41 amplifiers in stereo under
 Google's speaker protection at stage `media`, about 17 dB below stock, and
-the microphones at stock's gain (omandroid-audio 0.3.0). Not done: headset
+the microphones at stock's gain (omamobile-audio 0.3.0). Not done: headset
 calls over HFP/HSP (the BCM4389's SCO routing, A1), USB-C audio (A4, needs
 `USB-C-PLAN.md` B4b and B4c), the UAC2 gadget (A5) and the earpiece path
 (designed in `AOC-PLAN.md`, built with the modem). **Next** is in
-`AOC-PLAN.md` C9 and `AOC-TUNING-RESEARCH.md`. Kernel: `omandroid-audio` @
-`c115ad543` (`wt-audio`, `out-audio`), merged into `omandroid-int`. Section
+`AOC-PLAN.md` C9 and `AOC-TUNING-RESEARCH.md`. Kernel: `omamobile-audio` @
+`c115ad543` (`wt-audio`, `out-audio`), merged into `omamobile-int`. Section
 4's limits still apply.
 
 Earlier status (historical, superseded by the status above): **offline research done, 2026-10-12. Nothing has run on the phone.**
-Kernel branch `omandroid-audio` in `~/android/mainline/wt-audio` (out dir
-`out-audio`), on `omandroid-haptics` @ `ebcd2674f` because it needs the
+Kernel branch `omamobile-audio` in `~/android/mainline/wt-audio` (out dir
+`out-audio`), on `omamobile-haptics` @ `ebcd2674f` because it needs the
 PERIC0 pin controller that branch adds. Two DT commits, everything new
 disabled; the DTB builds W=1 clean and `dt-validate` (base, and base +
 `audio-amps-test`) reports only the existing `soc_id` and simplefb
-`post-init-providers` items. The branch merges into `omandroid-int` with no
+`post-init-providers` items. The branch merges into `omamobile-int` with no
 conflict. Bring-up uses `device/cheetah/overlays/audio-amps-test.dtso` and
 `tools/cs35l41-id`.
 
 Path abbreviations:
 
-- `L/` = our kernel, branch `omandroid-audio` (`~/android/mainline/wt-audio`)
-- `G/` = `~/android/omandroid/out-kernel/google/gs-6.1/private` (Google's GPL gs201 kernel)
+- `L/` = our kernel, branch `omamobile-audio` (`~/android/mainline/wt-audio`)
+- `G/` = `~/android/omamobile/out-kernel/google/gs-6.1/private` (Google's GPL gs201 kernel)
 - `GS/` = `G/google-modules/soc/gs`
 - `R/` = `~/android/reference/cheetah-stock-cp2a-root` (stock live DT, dmesg, modules)
-- `V/` = `~/android/omandroid/vendor/google/cheetah/proprietary/vendor` (stock vendor blobs)
+- `V/` = `~/android/omamobile/vendor/google/cheetah/proprietary/vendor` (stock vendor blobs)
 - `P/` = `~/android/reference/cheetah-partition-backup-20261011` (partition backup)
 
 ---
@@ -155,7 +155,7 @@ auto-rotate and the proximity sensor (needed for in-call earpiece use).
 | Piece | Mainline (v7.3-rc6) | Missing |
 |---|---|---|
 | CS35L41 | `sound/soc/codecs/cs35l41{,-lib,-spi}.c` with `wm_adsp`/`cs_dsp` firmware loading, controls `Digital PCM Volume`, `Analog PCM Volume` (= stock `AMP PCM Gain`), `PCM Source` (ASP/DSP), `DSP RX1/2 Source`, ASP TX sources | only Google extras: fast use case switch, hibernate, runtime boost-peak control, calibration loading (mainline does it only for HDA laptops, from EFI) |
-| USI7 SPI | `spi-s3c64xx` (`google,gs101-spi`), USI, clocks (`CLK_GOUT_PERIC0_USI7_*`, with `CLK_SET_RATE_PARENT`) | the DT nodes: **added on `omandroid-audio`** |
+| USI7 SPI | `spi-s3c64xx` (`google,gs101-spi`), USI, clocks (`CLK_GOUT_PERIC0_USI7_*`, with `CLK_SET_RATE_PARENT`) | the DT nodes: **added on `omamobile-audio`** |
 | AoC | nothing (`grep -r google,aoc` empty) | GSA driver, AoC mailbox, SysMMU v8, AoC core, AoC ALSA, AoC machine driver |
 | ABOX | not applicable (no ABOX on gs201) | |
 | USB audio | `snd-usb-audio`, dwc3 host, xHCI | host mode on this board (USB-C plan B4b/B4c) |
@@ -223,7 +223,7 @@ Confirm before any sound (A7):
 
 ## 5. Kernel and repo changes made
 
-Kernel branch `omandroid-audio` (`L/`), on `omandroid-haptics`:
+Kernel branch `omamobile-audio` (`L/`), on `omamobile-haptics`:
 
 | Commit | What | Default |
 |---|---|---|
@@ -233,9 +233,9 @@ Kernel branch `omandroid-audio` (`L/`), on `omandroid-haptics`:
 Built: `exynos/google/gs201-cheetah.dtb` into `out-audio` (`W=1`: only the
 existing framebuffer warning). Not built yet: kernel image and modules.
 
-Why on `omandroid-haptics`: the PERIC0 pin controller and banks (gpp14,
+Why on `omamobile-haptics`: the PERIC0 pin controller and banks (gpp14,
 gpp17) come from `523b1e0e0` there; basing on it keeps one copy (the BT
-branch adds another, already resolved in `omandroid-int`).
+branch adds another, already resolved in `omamobile-int`).
 
 Repo:
 
@@ -245,7 +245,7 @@ Repo:
   REVID, OTPID, PWR_CTRL1/2, boost control, PCM source, volumes). Every
   transfer carries the read flag; no status/IRQ registers.
 
-Config needed later (not in `kernel/configs/omandroid.config` yet):
+Config needed later (not in `kernel/configs/omamobile.config` yet):
 
 ```
 CONFIG_SND_SOC_CS35L41_SPI=m        # A3
@@ -276,7 +276,7 @@ fails to load instead of loading the other speaker's tuning.
 
 ## 6. Runbook (on the phone; each step has its stop condition and rollback)
 
-From the omandroid repo, phone in Arch over USB, a second terminal running
+From the omamobile repo, phone in Arch over USB, a second terminal running
 `tools/phone-ssh dmesg -w`. Overlays as in `HAPTICS-TORCH-PLAN.md` 4:
 
 ```sh
@@ -286,9 +286,9 @@ ov() {  # ov NAME...: rebuild the DTB from default + overlays, then images
   cp -n "$D" "$D.default"; local o= n
   for n; do $O/scripts/dtc/dtc -q -I dts -O dtb -o out/$n.dtbo device/cheetah/overlays/$n.dtso; o="$o out/$n.dtbo"; done
   $O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" $o
-  bin/omandroid images
+  bin/omamobile images
 }
-# rollback for every overlay step: cp "$D.default" "$D"; bin/omandroid images && bin/omandroid push
+# rollback for every overlay step: cp "$D.default" "$D"; bin/omamobile images && bin/omamobile push
 ```
 
 ### A0 userspace on a loopback card (no hardware)
@@ -338,7 +338,7 @@ hcitool cmd 0x3f 0x1c 0x01 0x02 0x00 0x01 0x01   # Broadcom Write_SCO_PCM_Int_Pa
 `btmgmt` cannot send raw vendor commands.)
 
 To confirm on hardware: the command's status byte is 0 and mSBC/CVSD audio
-flows. If it works, a small unit in `omandroid-device-cheetah` runs it when
+flows. If it works, a small unit in `omamobile-device-cheetah` runs it when
 hci0 comes up. Rollback: power-cycle the controller (`bluetoothctl power off/on`).
 
 ### A2 amplifier bus, read-only IDs
@@ -346,8 +346,8 @@ hci0 comes up. Rollback: power-cycle the controller (`bluetoothctl power off/on`
 Build once from `wt-audio` (no config change needed for A2):
 
 ```sh
-bin/omandroid kernel && bin/omandroid modules && bin/omandroid initramfs && bin/omandroid images
-bin/omandroid modules-push && bin/omandroid push      # A2.0: default DTB
+bin/omamobile kernel && bin/omamobile modules && bin/omamobile initramfs && bin/omamobile images
+bin/omamobile modules-push && bin/omamobile push      # A2.0: default DTB
 ```
 
 **A2.0 pass:** boots as before; `ls /sys/class/regulator/*/name | xargs cat`
@@ -356,7 +356,7 @@ lists `amp-va` and `amp-vp`; nothing else new. Rollback: previous images.
 **A2.1 bus up, pin states (registers read, nothing written):**
 
 ```sh
-ov audio-amps-test && bin/omandroid push
+ov audio-amps-test && bin/omamobile push
 tools/phone-ssh 'ls /sys/bus/platform/devices/ | grep 10960000; for d in /sys/bus/spi/devices/spi*; do echo $d $(readlink -f $d/of_node | sed "s,.*/,,") $(readlink $d/driver); done'
 tools/phone-ssh 'for a in 0x108401c0 0x108401c4 0x10840220 0x10840224 0x10c40040 0x10c40044 0x10c400a0 0x10c400a4 0x180e0000 0x180e0004 0x180e0040 0x180e0044; do printf "%s " $a; devmem $a 32; done'
 ```
@@ -404,8 +404,8 @@ Add `CONFIG_SND_SOC_CS35L41_SPI=m` to the config fragment, rebuild kernel
 and modules, and keep it from loading on its own:
 
 ```sh
-tools/phone-ssh 'echo "blacklist snd_soc_cs35l41_spi" > /etc/modprobe.d/omandroid-audio-bringup.conf'
-bin/omandroid modules-push && bin/omandroid push       # same overlay as A2
+tools/phone-ssh 'echo "blacklist snd_soc_cs35l41_spi" > /etc/modprobe.d/omamobile-audio-bringup.conf'
+bin/omamobile modules-push && bin/omamobile push       # same overlay as A2
 tools/phone-ssh 'modprobe snd-soc-cs35l41-spi; sleep 1; dmesg | grep -iE "cs35l41|10960000"; grep -i cs35l41 /proc/interrupts'
 tools/phone-ssh 'for r in /sys/kernel/debug/regmap/spi*.[01]; do echo $r; head -c 65536 $r/registers | grep -iE "^0*(2014|2018|3800|3804|3808|3810|3814|4c00|6000|6c04):"; done'
 ```
@@ -471,7 +471,7 @@ What the stock kernel does to get audio, in order, and what each needs:
 
 | Step | Stock source (GPL) | Size | Our status |
 |---|---|---|---|
-| ACPM IPC channel 13 (AoC reset/power requests) | `GS/drivers/soc/google/acpm/` | | `ACPM-PLAN.md` (gs201 ACPM IPC on `omandroid-acpm`) |
+| ACPM IPC channel 13 (AoC reset/power requests) | `GS/drivers/soc/google/acpm/` | | `ACPM-PLAN.md` (gs201 ACPM IPC on `omamobile-acpm`) |
 | GSA mailbox: load and authenticate `aoc.bin`, start the AoC | `GS/drivers/soc/google/gsa/` | ~2,500 lines | none |
 | SysMMU v8 for the AoC (`0x1a090000`), install the firmware's IOMMU table | `GS/drivers/iommu/samsung-iommu*.c` | ~3,200 lines (v8) | none; also wanted by display (`DISPLAY-PLAN.md`) and Wi-Fi |
 | SSMT bypass, `aoc_req` handshake, S2MPU state | `G/google-modules/aoc/aoc_v1.c` | 370 | none |
@@ -510,7 +510,7 @@ mainline's `cs-amp-lib` does for HDA laptops), and UCM2.
 - **Volume keys**: our `gpio-keys` emit KEY_VOLUMEUP/DOWN; Omarchy binds
   `XF86AudioRaiseVolume`/`Lower` to `omarchy-audio-output-volume` (pactl on
   the resolved physical sink, plus its OSD). Nothing phone-specific needed.
-- **Quick settings**: `packages/omandroid-shell/plugins/omandroid.quicksettings/QuickSettings.qml`
+- **Quick settings**: `packages/omamobile-shell/plugins/omamobile.quicksettings/QuickSettings.qml`
   already uses `Pipewire.defaultAudioSink`; it lights up with any sink (A0).
 - **Speaker tuning**: Omarchy's `omarchy-speaker-tuning.service` runs a
   filter-chain matched on the DMI product SKU. The phone has no DMI, so a

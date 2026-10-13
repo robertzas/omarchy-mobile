@@ -7,7 +7,7 @@ Path abbreviations used for citations (`file:line`):
 
 | Tag | Path |
 |-----|------|
-| `G`  | `/home/raven/android/omandroid/out-kernel/google/gs-6.1` (Google GPL 6.1 tree) |
+| `G`  | `/home/raven/android/omamobile/out-kernel/google/gs-6.1` (Google GPL 6.1 tree) |
 | `GD` | `G/private/devices/google` (`gs201/dts`, `pantah/dts`, kleaf build files) |
 | `GM` | `G/private/google-modules` (`soc/gs` = SoC drivers, CAL, bindings) |
 | `GO` | `G/out/pantah/dist` (Google build artefacts: `boot.img`, `vendor_kernel_boot.img`, `dtb.img`, `dtbo.img`) |

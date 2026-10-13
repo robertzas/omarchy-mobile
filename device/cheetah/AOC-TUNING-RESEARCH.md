@@ -3,12 +3,12 @@
 
 Status (2026-10-13): **T1 done offline; T2 and T3.1 passed on the phone;
 T3.2 showed the AoC answers, but 0.1.1 discarded its replies.
-omandroid-speaker-tuning 0.1.2 matches replies by command ID and sends only
+omamobile-speaker-tuning 0.1.2 matches replies by command ID and sends only
 during playback; next is T3b, the first exchange during a tone at the
 everyday level.** The listener finds our flat speaker path thin next to
 stock, and this is the lever that gives stock's own sound (`AOC-PLAN.md`,
 "Why the speakers sound thin"). T4 follows T3b at the everyday level
-(737/10), with omandroid-audio 0.4.1's speaker filter set flat (`AOC-PLAN.md`
+(737/10), with omamobile-audio 0.4.1's speaker filter set flat (`AOC-PLAN.md`
 C9h runs T3b/T4 as its optional section F; open question 8 is now answered
 by measurement in T4b, not by decoding the controller). T5 onwards
 (stock's levels) still waits for `AOC-PLAN.md` C9. The package stays
@@ -17,14 +17,14 @@ Sources: static analysis of the stock libraries from the user's own
 factory image (CP2A.260705.006), the AoC firmware's strings and Google's
 GPL AoC driver, the Waves controller run under qemu with a fake sender
 (T1.4), and T2/T3 on the phone. The code is its own package,
-`packages/omandroid-speaker-tuning` (helper, chroot runner, daemon, unit;
+`packages/omamobile-speaker-tuning` (helper, chroot runner, daemon, unit;
 disabled, mode `off`), plus the `waves` profile of
-`tools/extract-vendor-chroot`; `packages/omandroid-audio` is untouched.
+`tools/extract-vendor-chroot`; `packages/omamobile-audio` is untouched.
 Follows `AOC-PLAN.md` C9 ("C10-tuning"), which another agent owns; this
 file does not change it.
 
 Path abbreviations as in `AOC-PLAN.md`: `V/` is the extracted stock vendor
-tree (`~/android/omandroid/vendor/google/cheetah/proprietary/vendor`), `GA/`
+tree (`~/android/omamobile/vendor/google/cheetah/proprietary/vendor`), `GA/`
 Google's GPL AoC driver (`G/google-modules/aoc`), `L/` our kernel
 (`~/android/mainline/wt-aoc`).
 
@@ -342,14 +342,14 @@ is recorded here or anywhere in the repository.
 
 ---
 
-## 3. Design (built in T1: `packages/omandroid-speaker-tuning`)
+## 3. Design (built in T1: `packages/omamobile-speaker-tuning`)
 
 ### 3.1 Pieces
 
 ```
  vendor chroot "waves" (read-only tree from the user's image)        host (Arch)
  ┌──────────────────────────────────────────────┐   stdin/stdout   ┌──────────────────────────────┐
- │ omandroid-waves-host (ours, C, bionic)        │ <──── frames ──> │ omandroid-speaker-tuning     │
+ │ omamobile-waves-host (ours, C, bionic)        │ <──── frames ──> │ omamobile-speaker-tuning     │
  │  dlopen libmahalcontroller.so (Waves)         │                  │ (ours, Python, root, systemd)│
  │   └─ dlopen libAlgFx_HiFi3z.so (Waves)        │                  │  owns /dev/acd-audio_output_ │
  │  reads waves_preset.mps, waves_config.ini     │                  │  tuning, audio_bulk_tx/_rx   │
@@ -357,9 +357,9 @@ is recorded here or anywhere in the repository.
  └──────────────────────────────────────────────┘                  └──────────────────────────────┘
 ```
 
-1. **`omandroid-waves-host`** (`bionic/omandroid-waves-host.c`): a small
+1. **`omamobile-waves-host`** (`bionic/omamobile-waves-host.c`): a small
    bionic program of ours (MIT), built with the NDK
-   (`make -C packages/omandroid-speaker-tuning/bionic NDK=...`; links only
+   (`make -C packages/omamobile-speaker-tuning/bionic NDK=...`; links only
    libc and libdl). It `dlopen`s Waves' controller at run time, creates
    and initialises it with the `.mps`, the `.ini` and its sender, and turns
    line commands from stdin into the API of 2.7: `version NAME`, `begin`
@@ -375,16 +375,16 @@ is recorded here or anywhere in the repository.
    CP2A.260705.006); the profile check refuses a controller without the
    eight entry points or an `.ini` without instance 1 and custom action 258.
    Built on the laptop, installed by hand under
-   `/usr/lib/omandroid-vendor/waves` (like `gnss`). It is run by the
-   package's own runner, `omandroid-waves-host-run`, not by
-   `omandroid-vendor-chroot` (that one supervises daemons; the helper is a
+   `/usr/lib/omamobile-vendor/waves` (like `gnss`). It is run by the
+   package's own runner, `omamobile-waves-host-run`, not by
+   `omamobile-vendor-chroot` (that one supervises daemons; the helper is a
    filter on stdin/stdout): a read-only tmpfs root with the image, the
    helper, `/proc`, a private `/tmp` and a `/dev` holding only `null`,
    `zero` and `urandom`; new mount, PID, network (empty), IPC and UTS
    namespaces; the helper runs as `nobody` with `no_new_privs`, as PID 1
    of its namespace.
-3. **`omandroid-speaker-tuning`** (Python, `BindsTo=` and `After=`
-   `omandroid-speaker-watch.service`, `After=omandroid-aoc.service`):
+3. **`omamobile-speaker-tuning`** (Python, `BindsTo=` and `After=`
+   `omamobile-speaker-watch.service`, `After=omamobile-aoc.service`):
    - the only opener of the three AoC devices (`lib/aoc_tuning.py`);
      implements section 2.2 as stock does (open per exchange, 16 KiB bulk
      buffer, command, 500 ms reply wait matched by command ID, one retry on
@@ -403,28 +403,28 @@ is recorded here or anywhere in the repository.
      `AccelerometerOrientation`; `normal` 0°, `bottom-up` 180°, `left-up`
      and `right-up` 90°/270°, which way round to be checked in T4), with a
      1 s hysteresis, only while playing; AoC restart (the AoC's
-     `restart_count` or the online marker in `/run/omandroid/`) →
+     `restart_count` or the online marker in `/run/omamobile/`) →
      `dsp-wakeup`; PipeWire sink volume → `volume` (phase 2);
-   - **policy** from `/etc/omandroid/speaker.conf` or the package's
-     `/etc/omandroid/speaker-tuning.conf`:
-     `OMANDROID_SPK_TUNING=off|throttle|music` (default `off`: the unit
+   - **policy** from `/etc/omamobile/speaker.conf` or the package's
+     `/etc/omamobile/speaker-tuning.conf`:
+     `OMAMOBILE_SPK_TUNING=off|throttle|music` (default `off`: the unit
      exits at once); `throttle` sends `SPEAKER_MUSIC_THROTTLE` (route 2 0 0),
      `music` sends `SPEAKER_MUSIC` (route 2 0 1);
-     `OMANDROID_SPK_TUNING_VOLUME` (0..1, default 1.0) and
-     `OMANDROID_SPK_TUNING_LEFT_UP` (90 or 270);
-   - **gates**: every exchange needs `omandroid-speaker-watch` active
+     `OMAMOBILE_SPK_TUNING_VOLUME` (0..1, default 1.0) and
+     `OMAMOBILE_SPK_TUNING_LEFT_UP` (90 or 270);
+   - **gates**: every exchange needs `omamobile-speaker-watch` active
      (`systemctl is-active`) and "Audio DSP State" = `Playback` (0.1.2,
      as stock), and `music` also the C9 verification stamp
-     (`/var/lib/omandroid/speaker-protection-verified`); otherwise nothing
+     (`/var/lib/omamobile/speaker-protection-verified`); otherwise nothing
      is sent and the state says `blocked <reason>`;
-   - **state for the watchdog**: writes `/run/omandroid/speaker-tuning`
+   - **state for the watchdog**: writes `/run/omamobile/speaker-tuning`
      (`off`, `idle`, `stream`, `sending`, `active <preset> <angle>`,
      `failed <reason>`, `blocked <reason>`);
    - **logs** the AoC command ID, block, component, the Waves message ID,
      sizes, the first 16 hex digits of SHA-256 and return codes only. An
      optional `--record DIR` keeps the exchanges (directory 0700, files
      0600) for T5's determinism check; use
-     `/var/lib/omandroid/speaker-tuning/`, never `logs/`, never committed;
+     `/var/lib/omamobile/speaker-tuning/`, never `logs/`, never committed;
    - `run --dry-run [--dry-reply RC] [--once] [--mode M] [--angle DEG]`
      starts the helper and the controller but opens no AoC device, logs
      what it would send and answers the controller with RC (default -110);
@@ -436,7 +436,7 @@ is recorded here or anywhere in the repository.
      `test/fake-waves-host` (including one that breaks it), the tuner and
      the triggers.
 4. **Watchdog hooks** (for the package owner to decide): at stream start
-   `omandroid-speaker-watch` reads ASP Mode; `ASP_ON` while the tuning
+   `omamobile-speaker-watch` reads ASP Mode; `ASP_ON` while the tuning
    state is not `active`, or `failed`, is a mute condition. With Waves
    active the watchdog must not apply its own left/right swap.
 
@@ -484,7 +484,7 @@ during every sound (as in C9's rules), the AoC log recorded for any step
 that sends. Results go into this file with the date and `uname -r`.
 
 **Prerequisites.** C8f passed (T0-T4; T2 needs only the AoC up); C9
-passed (T5 onwards); the AoC up through `omandroid-aoc.service`; the
+passed (T5 onwards); the AoC up through `omamobile-aoc.service`; the
 backups are not involved (no NV, radio or Trusty work).
 
 ### T0 read-only facts (risk none; no sound)
@@ -502,7 +502,7 @@ DSP State `Idle`. Pass: all readable, no kernel error. Stop: an AoC error in
 16 KiB write would not fit: re-read section 2.2 before going on). Rollback:
 none needed.
 
-T0b, during a C8-level tone (`omandroid-speaker-protection signal tone … --level -23 --seconds 3`,
+T0b, during a C8-level tone (`omamobile-speaker-protection signal tone … --level -23 --seconds 3`,
 as in C8f): read "Audio DSP State" and ASP Mode again. Expect `Playback`;
 ASP Mode's value with a stream running and no tuning is the baseline.
 
@@ -513,7 +513,7 @@ ASP Mode's value with a stream running and no tuning is the baseline.
    custom action / orientation, DSP wake, version, flush), from its own
    exports and the call sites in `audio_waves_aoc.so`. Record facts in
    our words only.
-2. Write and build `omandroid-waves-host`; checkpatch-style review, `-Wall
+2. Write and build `omamobile-waves-host`; checkpatch-style review, `-Wall
    -Wextra -Werror`.
 3. Add the `waves` profile to `tools/extract-vendor-chroot`; build it from
    the user's factory image; check `MANIFEST`.
@@ -565,33 +565,33 @@ replies "0, no data" unless noted:
 ### T2 helper on the phone, no AoC writes (risk none)
 
 Nothing here opens an AoC device or plays a sound; the package's unit
-stays disabled. Laptop, from the omandroid repo:
+stays disabled. Laptop, from the omamobile repo:
 
 ```sh
-make -C packages/omandroid-speaker-tuning/bionic NDK=$HOME/android/omandroid/out-kernel/google/gs-6.1/prebuilts/ndk-r23
+make -C packages/omamobile-speaker-tuning/bionic NDK=$HOME/android/omamobile/out-kernel/google/gs-6.1/prebuilts/ndk-r23
 tools/extract-vendor-chroot -p waves -o ~/android/vendor-chroot-work/waves \
   ~/android/factory/cheetah-cp2a.260705.006-factory-23d564ad.zip
-packages/omandroid-speaker-tuning/test/all
+packages/omamobile-speaker-tuning/test/all
 ```
 
 1. Install the tree and the package (risk none; installs a disabled unit):
    ```sh
    tar -C ~/android/vendor-chroot-work/waves -cf - root MANIFEST SOURCE |
-     tools/phone-ssh 'mkdir -p /usr/lib/omandroid-vendor/waves && tar --no-same-owner -C /usr/lib/omandroid-vendor/waves -xf -'
-   tools/phone-install-package packages/omandroid-speaker-tuning
-   tools/phone-ssh 'cat /usr/lib/omandroid-vendor/waves/SOURCE; /usr/lib/omandroid-speaker-tuning/omandroid-waves-host-run check;
-     systemctl is-enabled omandroid-speaker-tuning; omandroid-speaker-tuning status'
+     tools/phone-ssh 'mkdir -p /usr/lib/omamobile-vendor/waves && tar --no-same-owner -C /usr/lib/omamobile-vendor/waves -xf -'
+   tools/phone-install-package packages/omamobile-speaker-tuning
+   tools/phone-ssh 'cat /usr/lib/omamobile-vendor/waves/SOURCE; /usr/lib/omamobile-speaker-tuning/omamobile-waves-host-run check;
+     systemctl is-enabled omamobile-speaker-tuning; omamobile-speaker-tuning status'
    ```
    Expect: the CP2A.260705.006 fingerprint, "preconditions met",
    `disabled`, state "not running", mode `off`. Stop: the check fails
    (re-run the extraction; send its output). Rollback:
-   `pacman -R omandroid-speaker-tuning; rm -r /usr/lib/omandroid-vendor/waves`.
+   `pacman -R omamobile-speaker-tuning; rm -r /usr/lib/omamobile-vendor/waves`.
 2. Dry runs (risk none: no AoC device is opened):
    ```sh
    tools/phone-ssh 'uname -r; fuser -v /dev/acd-audio_output_tuning /dev/acd-audio_bulk_tx /dev/acd-audio_bulk_rx 2>&1;
-     export OMANDROID_RUN=/tmp/spk-t2;
-     omandroid-speaker-tuning run --dry-run --dry-reply 0 --once --mode throttle; echo "exit $?";
-     omandroid-speaker-tuning run --dry-run --once --mode music --angle 90; echo "exit $?";
+     export OMAMOBILE_RUN=/tmp/spk-t2;
+     omamobile-speaker-tuning run --dry-run --dry-reply 0 --once --mode throttle; echo "exit $?";
+     omamobile-speaker-tuning run --dry-run --once --mode music --angle 90; echo "exit $?";
      fuser -v /dev/acd-audio_output_tuning /dev/acd-audio_bulk_tx /dev/acd-audio_bulk_rx 2>&1; dmesg | tail -5'
    ```
    Expect, first run: "dry run: no AoC device is opened"; exchange 1
@@ -609,13 +609,13 @@ packages/omandroid-speaker-tuning/test/all
    protocol", an exchange over 16 KiB, any opener of the devices, any AoC
    error in `dmesg`. Rollback: none (each run exits); `rm -r /tmp/spk-t2`.
 3. Stream detection, still dry (risk low: one C8-level tone through the
-   protection stack; announce it). Needs omandroid-speaker-protection and
+   protection stack; announce it). Needs omamobile-speaker-protection and
    its watchdog active, as after C8f:
    ```sh
    U='U=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}"); I=$(id -u $U); as_user() { runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/$I "$@"; }'
-   tools/phone-ssh 'omandroid-speaker-protection signal tone /tmp/t2.wav --level -23 --seconds 3'
-   tools/phone-ssh "$U"'; (OMANDROID_RUN=/tmp/spk-t2 OMANDROID_SPK_TUNING=throttle timeout 15 omandroid-speaker-tuning run --dry-run --dry-reply 0 > /tmp/t2-run.log 2>&1 &);
-     sleep 3; as_user timeout 6 pw-play /tmp/t2.wav; sleep 3; cat /tmp/t2-run.log; omandroid-speaker-protection health'
+   tools/phone-ssh 'omamobile-speaker-protection signal tone /tmp/t2.wav --level -23 --seconds 3'
+   tools/phone-ssh "$U"'; (OMAMOBILE_RUN=/tmp/spk-t2 OMAMOBILE_SPK_TUNING=throttle timeout 15 omamobile-speaker-tuning run --dry-run --dry-reply 0 > /tmp/t2-run.log 2>&1 &);
+     sleep 3; as_user timeout 6 pw-play /tmp/t2.wav; sleep 3; cat /tmp/t2-run.log; omamobile-speaker-protection health'
    ```
    Expect: "state: idle", then at the tone "sending (stream start)" with
    the same two exchanges, "active SPEAKER_MUSIC_THROTTLE 0 (dry run)",
@@ -648,8 +648,8 @@ a log stream to the laptop for `dmesg`. Each step is one change.
    idle the AoC may refuse the upload (stock never sends outside
    playback), which is information, not damage: tuning lives in AoC RAM.
    ```sh
-   tools/phone-ssh 'systemctl is-active omandroid-speaker-watch; mkdir -p -m 0700 /var/lib/omandroid/speaker-tuning;
-     OMANDROID_RUN=/tmp/spk-t3 omandroid-speaker-tuning run --once --mode throttle --record /var/lib/omandroid/speaker-tuning/t3;
+   tools/phone-ssh 'systemctl is-active omamobile-speaker-watch; mkdir -p -m 0700 /var/lib/omamobile/speaker-tuning;
+     OMAMOBILE_RUN=/tmp/spk-t3 omamobile-speaker-tuning run --once --mode throttle --record /var/lib/omamobile/speaker-tuning/t3;
      echo "exit $?"; C=$(awk "/aoc/{print \$1; exit}" /proc/asound/cards);
      amixer -c $C cget name="AoC Speaker Mixer ASP Mode" | tail -1; dmesg | tail -5'
    ```
@@ -665,8 +665,8 @@ a log stream to the laptop for `dmesg`. Each step is one change.
    RAM only).
 3. Superseded by T3b below (0.1.2 refuses to send outside playback).
 
-**T2 and T3 results (2026-10-12, 7.3.0-rc6-omandroid-push1-00361-g32c474a89dd6,
-omandroid-speaker-tuning 0.1.1; run by the human).**
+**T2 and T3 results (2026-10-12, 7.3.0-rc6-omamobile-push1-00361-g32c474a89dd6,
+omamobile-speaker-tuning 0.1.1; run by the human).**
 
 - T2.1 passed: the `waves` tree installed (17 MB), "preconditions met".
   (0.1.1 fixed `test/all` for builds on the phone: it copied the package
@@ -709,19 +709,19 @@ omandroid-speaker-tuning 0.1.1; run by the human).**
 ### T3b first live exchange during a tone (risk low; announce it: one 8 s tone)
 
 Prerequisites as T3; 0.1.2 installed (`tools/phone-install-package
-packages/omandroid-speaker-tuning`), the AoC log recorded. One -23 dBFS tone
+packages/omamobile-speaker-tuning`), the AoC log recorded. One -23 dBFS tone
 at the everyday amplifier level (stage media, 737/10; this step was first
 written for C8's 657/6, and nothing in it depends on the level); the `--once` starts two seconds into it, so Waves (if the AoC takes
 it) changes the sound for the last seconds only.
 
 ```sh
 U='U=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}"); I=$(id -u $U); as_user() { runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/$I "$@"; }'
-tools/phone-ssh 'omandroid-speaker-protection signal tone /tmp/t3b.wav --level -23 --seconds 8'
-tools/phone-ssh "$U"'; systemctl is-active omandroid-speaker-watch; C=$(awk "/aoc/{print \$1; exit}" /proc/asound/cards);
+tools/phone-ssh 'omamobile-speaker-protection signal tone /tmp/t3b.wav --level -23 --seconds 8'
+tools/phone-ssh "$U"'; systemctl is-active omamobile-speaker-watch; C=$(awk "/aoc/{print \$1; exit}" /proc/asound/cards);
   (as_user timeout 10 pw-play /tmp/t3b.wav &); sleep 2; amixer -c $C cget name="Audio DSP State" | tail -1;
-  OMANDROID_RUN=/tmp/spk-t3b omandroid-speaker-tuning run --once --mode throttle --record /var/lib/omandroid/speaker-tuning/t3b;
+  OMAMOBILE_RUN=/tmp/spk-t3b omamobile-speaker-tuning run --once --mode throttle --record /var/lib/omamobile/speaker-tuning/t3b;
   echo "exit $?"; sleep 7; amixer -c $C cget name="AoC Speaker Mixer ASP Mode" | tail -1;
-  omandroid-speaker-protection health; dmesg | tail -5'
+  omamobile-speaker-protection health; dmesg | tail -5'
 ```
 
 Expect: DSP State `Playback` (item 1); "the AoC's reply counter is not
@@ -734,31 +734,31 @@ log's lines around "WAVES", and whether the tone changed audibly at about
 Stop: a negative rc (record it, then the AoC log), an AoC restart or
 crash, "Could not configure WAVES", a watchdog mute, distortion.
 Rollback: `amixer ... cset name="AoC Speaker Mixer ASP Mode" 2`
-(`ASP_BYPASS`, proven in T3.1) or `omandroid-speaker-protection mute`;
+(`ASP_BYPASS`, proven in T3.1) or `omamobile-speaker-protection mute`;
 worst case reboot (AoC RAM only).
 
 ### T4 Waves on, throttle preset, the everyday level (risk medium; announce it)
 
-Updated 2026-10-13 for omandroid-audio 0.4.1: `preset waves` also turns
+Updated 2026-10-13 for omamobile-audio 0.4.1: `preset waves` also turns
 off 0.4.1's bass management, bass harmonics and drive. **Our orientation
 swap must be off while Waves runs**, because Waves does its own (section
-2.5): `systemctl --user disable --now omandroid-speaker-orient` and `eq set
+2.5): `systemctl --user disable --now omamobile-speaker-orient` and `eq set
 swap=0` first, or the two swaps cancel. Otherwise as written for 0.4.0: the
 amplifiers at stage media
 (737 / 10, the everyday default since C9d-2, about 17 dB below stock), the
-watchdog on with `OMANDROID_SPK_TEMP_JUMP=5`, `monitor` in a second
+watchdog on with `OMAMOBILE_SPK_TEMP_JUMP=5`, `monitor` in a second
 terminal, sink volume 40 % to start. T1 showed that `throttle` and `music`
 send the same bytes for the internal speaker, so `throttle` is stock's
-media sound here. omandroid-audio 0.4.0's speaker filter (`AOC-PLAN.md`
+media sound here. omamobile-audio 0.4.0's speaker filter (`AOC-PLAN.md`
 C9g) shapes the signal too, so set it flat for every T4 step
-(`omandroid-speaker-eq preset waves`, as the desktop user): Waves then
+(`omamobile-speaker-eq preset waves`, as the desktop user): Waves then
 gets the full-range signal, and the two don't add up. `eq` is the helper
 from C9g.
 
 1. Baseline: `eq preset waves`; the package's multitone through
    PipeWire for 5 s, tuning `off`; record `monitor` (temperatures,
    `SPK_OUTPUT_POWER`) and the sound.
-2. `OMANDROID_SPK_TUNING=throttle`, restart the tuning unit, the same
+2. `OMAMOBILE_SPK_TUNING=throttle`, restart the tuning unit, the same
    multitone. Expect the daemon's "active SPEAKER_MUSIC_THROTTLE 0",
    reply 0, the AoC log's mixer line for Waves, ASP Mode `ASP_ON` (or
    record what it reads), audibly fuller and louder.
@@ -778,26 +778,26 @@ against the baseline. Waves is meant to raise it; at 737/10 even several
 times the baseline stays far below stock's power at 817/17. Stop: any
 watchdog mute (including the 5 °C jump), audible distortion, a negative
 reply, an AoC log error, an over-exc count that moves. Rollback:
-`ASP_BYPASS` (proven in T3.1) or `omandroid-speaker-protection mute`;
+`ASP_BYPASS` (proven in T3.1) or `omamobile-speaker-protection mute`;
 tuning `off`; `eq preset default`; reboot to be sure (tuning lives in AoC
 RAM only).
 
 ### T4b what Waves does, measured (open question 8; risk low-medium, announce it)
 
 Instead of decoding which modules the preset switches on, measure what the
-chain does to the speaker signal, with omandroid-audio 0.4.1's stepped
-tones (`omandroid-speaker-eq measure … --play-only`, recorded by the
+chain does to the speaker signal, with omamobile-audio 0.4.1's stepped
+tones (`omamobile-speaker-eq measure … --play-only`, recorded by the
 laptop's microphone at the listening position, as in `AOC-PLAN.md` C9h
 B3; the `lrec` helper there). The filter is flat during the tones; only
 Waves differs between runs. Each run is about 17 s of tones at -30 dBFS
 (or -40), far below music.
 
-1. Tuning off (`OMANDROID_SPK_TUNING=off`, or ASP Mode `ASP_BYPASS`):
+1. Tuning off (`OMAMOBILE_SPK_TUNING=off`, or ASP Mode `ASP_BYPASS`):
    `lrec right`, renamed to `logs/off-right.json`; the same at
    `--level -40` (edit `lrec`'s two levels) as `off-right-40.json`.
 2. Tuning on (T4.2's state), the same two runs: `on-right.json`,
    `on-right-40.json`. Then the left speaker the same way if time allows.
-3. Read (`python3 -I packages/omandroid-audio/lib/speaker_response.py
+3. Read (`python3 -I packages/omamobile-audio/lib/speaker_response.py
    compare A B`):
    - `compare off-right on-right`: a difference that is the same at both
      levels is **static EQ** (the parametric and finishing EQs);
@@ -829,13 +829,13 @@ temperature rules.
 
 ### T6 at boot and in real use (risk medium)
 
-Set `OMANDROID_SPK_TUNING` to the T5 result in
-`/etc/omandroid/speaker-tuning.conf` and `systemctl enable --now
-omandroid-speaker-tuning` (it starts and stops with the watchdog); 15
+Set `OMAMOBILE_SPK_TUNING` to the T5 result in
+`/etc/omamobile/speaker-tuning.conf` and `systemctl enable --now
+omamobile-speaker-tuning` (it starts and stops with the watchdog); 15
 minutes of mixed media at normal volume, rotations, an AoC restart (a
 reboot). Pass: `active` after every stream start, no mute, temperatures
 back to ambient after. Then the package's default and the watchdog hooks
-of section 3.1 item 4 are settled with the `omandroid-audio` owner
+of section 3.1 item 4 are settled with the `omamobile-audio` owner
 (version bump; nothing enabled that is not hang-safe).
 
 ---
@@ -870,6 +870,6 @@ of section 3.1 item 4 are settled with the `omandroid-audio` owner
    base64-coded command buffers that haven't been worked out. **Answered by
    measurement instead (T4b, 2026-10-13 design):** static EQ, level-
    dependent dynamics and synthesised bass harmonics each leave a
-   different mark on stepped tones at two levels, which omandroid-audio
+   different mark on stepped tones at two levels, which omamobile-audio
    0.4.1's `measure`/`compare` record. Decoding the command interface
    stays unnecessary unless T4b is ambiguous.

@@ -27,7 +27,7 @@ CAM-M.5j-1 (CAM 664 MHz: no change). Paused there; next options under
 "Where we stopped" (CAM-M.5j-1 result). libcamera 0.7.2-4.6 is
 installed on the phone. CAM7: F.1-F.3 passed (the S5K3J1 answers, link 0's graph is
 up); F.4 next. Kernel branch
-`omandroid-camera` head `d73ed198d` (all in int `7e9131775`);
+`omamobile-camera` head `d73ed198d` (all in int `7e9131775`);
 libcamera 0.7.2-4.6 (patches 0013-0014: the front and
 telephoto sensors, a near-size mode rule) built and checked offline, the
 phone still runs 4.4. Ultrawide quality: CAM5.3, Snapshot CAM5.4, what to
@@ -36,9 +36,9 @@ Earlier status: **K, CAM0 (partly), CAM1, CAM2 and CAM3a passed on the
 phone (the ultrawide answers as a Sony IMX386); CAM3b.3 showed the sensor
 streaming but nothing on links 0 or 1. The ultrawide is on CSIS link 2
 with DC-PHY slaves 2+3 as one four-lane receiver (section 4.4); the link 2
-path is built offline (`omandroid-camera` head `3390774a8`, overlay
-`camera-stream-link2`) and CAM3b.5 is the next phone test.** Kernel branch `omandroid-camera` in `~/android/mainline/wt-camera`
-(output `~/android/mainline/out-camera`); `omandroid-int` 606b84c7a already
+path is built offline (`omamobile-camera` head `3390774a8`, overlay
+`camera-stream-link2`) and CAM3b.5 is the next phone test.** Kernel branch `omamobile-camera` in `~/android/mainline/wt-camera`
+(output `~/android/mainline/out-camera`); `omamobile-int` 606b84c7a already
 has its first part (up to `6cb2be364`). On top, not merged yet (head
 `35295a9ab`): CIS clock rounding, the DC-PHY receiver, the CSIS link + CSIS
 WDMA V4L2 driver, a Sony IMX386 sensor driver and their DT, all disabled or
@@ -65,8 +65,8 @@ be checked on the phone), as CONTRIBUTING.md asks.
 
 Path abbreviations (as in the other plans):
 
-- `L/` = our kernel, `omandroid-int` (`~/android/mainline/wt-int`, release 7.3.0-rc6)
-- `G/` = `~/android/omandroid/out-kernel/google/gs-6.1/private` (Google's GPL gs201 kernel)
+- `L/` = our kernel, `omamobile-int` (`~/android/mainline/wt-int`, release 7.3.0-rc6)
+- `G/` = `~/android/omamobile/out-kernel/google/gs-6.1/private` (Google's GPL gs201 kernel)
 - `GS/` = `G/google-modules/soc/gs`
 - `GD/` = `G/devices/google` (Google's GPL device trees: `gs201/dts/gs201-isp.dtsi`, `pantah/dts/gs201-cheetah-camera.dtsi`, `pantah/dts/gs201-pantah-camera-pmic.dtsi`)
 - `LW/` = `G/google-modules/lwis` (Google's GPL LWIS driver)
@@ -320,7 +320,7 @@ sensor ──MIPI──> DC-PHY slave n ──> CSIS link n ──┬──> CSI
   67-664 MHz in `R/dmesg.txt`). The CSIS clock comes from these domains [I].
   A 12 MP RAW10 stream at 30 fps is about 450 MB/s; the first stages run
   binned or slow modes, and real frame rates wait for ACPM DVFS
-  (`omandroid-acpm`, built, not yet run).
+  (`omamobile-acpm`, built, not yet run).
 - **Bus QoS (BTS):** stock registers the scenario `camera_default`. Without
   it, display and camera DMA share the bus unmanaged; watch for WDMA
   `FIFO_FULL` and link `ERR_OVER` [I].
@@ -376,7 +376,7 @@ sensor ──MIPI──> DC-PHY slave n ──> CSIS link n ──┬──> CSI
 | AF actuators | `ak7375`-style drivers exist | — | identify `0x0c`/`0x0f` parts by ID register |
 | SysMMU v8 | no | no | bypass for now |
 | PD driver | no | no | later (runtime PM) |
-| V4L2 core, `VIDEOBUF2_DMA_CONTIG`, DMA-BUF heaps (system, CMA) | yes | V4L2 modules; heaps built in (`omandroid.config`, built) | `CMA_SIZE_MBYTES=32` is too small: add a reserved pool |
+| V4L2 core, `VIDEOBUF2_DMA_CONTIG`, DMA-BUF heaps (system, CMA) | yes | V4L2 modules; heaps built in (`omamobile.config`, built) | `CMA_SIZE_MBYTES=32` is too small: add a reserved pool |
 | libcamera | simple + soft ISP | Arch `libcamera 0.7.2` | one entry in the simple handler's device table, a sensor helper, a tuning file |
 
 ---
@@ -639,10 +639,10 @@ Offline, on the user's own HAL (sha256 `ce9acaad...`) with
 
 ## 5. Design
 
-### 5.1 Kernel (`omandroid-camera`)
+### 5.1 Kernel (`omamobile-camera`)
 
-Built (2026-10-12), on `omandroid-int` @ `898ab3c1e`, head @ `6cb2be364`
-(release `7.3.0-rc6-omandroid-push1-00331-g6cb2be364f15`):
+Built (2026-10-12), on `omamobile-int` @ `898ab3c1e`, head @ `6cb2be364`
+(release `7.3.0-rc6-omamobile-push1-00331-g6cb2be364f15`):
 
 - `soc: google: add a read-only gs201 camera receiver probe` (CAM1,
   bring-up, `gs201-cam-probe`);
@@ -682,7 +682,7 @@ Checks: see the end of this section. The plan as written:
    `CONFIG_REGULATOR_SLG51002=m` (done, with `GPIO_S2MPG13`, the two
    bring-up modules, the DMA-BUF heaps and `VIDEO_CCS`), sensor modules.
 
-**Checks (laptop, 2026-10-12):** `bin/omandroid kernel` exit 0 into
+**Checks (laptop, 2026-10-12):** `bin/omamobile kernel` exit 0 into
 `out-camera`; `W=1` on `gs201-cam-probe.o`, `gs201-cam-power.o`,
 `gpio-s2mpg13.o`, `slg51002-regulator.o`, `sec-acpm.o`, `sec-common.o`: no
 warnings; the DTB builds `W=1` with only the existing simplefb
@@ -715,7 +715,7 @@ Nothing has run on the phone.
 - `media: i2c: add a Sony IMX386 driver` (`imx386`): standard controls
   (exposure, analogue/digital gain, vblank, hblank, pixel rate, link
   frequency, test pattern, orientation), modes and init from the data file
-  `omandroid/camera/imx386-uw.bin`; power-up in stock's order.
+  `omamobile/camera/imx386-uw.bin`; power-up in stock's order.
 - DT: `sysreg_csis`, `csis_dcphy`, `csis0`/`csis1` (links 0/1, WDMA
   contexts 0/1), the IMX386 with an endpoint to each link, a 64 MiB
   capture pool below 4 GiB. Overlays `camera-stream-link0` and
@@ -723,7 +723,7 @@ Nothing has run on the phone.
   `camera-pwr-test`). (Replaced 2026-10-13, below.)
 
 **Link 2, built 2026-10-13 on top (head `3390774a8`, test build
-`7.3.0-rc6-omandroid-push1-00351-g3390774a8b80` in `out-camera`; not
+`7.3.0-rc6-omamobile-push1-00351-g3390774a8b80` in `out-camera`; not
 merged into int):**
 
 - `d6d2c26a1` `dt-bindings: phy: ... add the slave reset register` and
@@ -751,7 +751,7 @@ merged into int):**
   enables link 2 and keeps links 0 and 1 off; `camera-stream-link0/1`
   are removed (their links no longer have the sensor).
 
-Checks (laptop, 2026-10-13): `bin/omandroid kernel` exit 0; `W=1` on
+Checks (laptop, 2026-10-13): `bin/omamobile kernel` exit 0; `W=1` on
 `gs201-csis.o`, `phy-gs201-mipi-dcphy-rx.o` and the DTB: only the
 existing simplefb warning; checkpatch `--strict` per commit: only the
 trailer-form items; `dt_binding_check` on both changed bindings (dtschema
@@ -761,7 +761,7 @@ trailer-form items; `dt_binding_check` on both changed bindings (dtschema
 `phy@1a4f0000` and `camera-sensor@1a` okay, `csis@1a440000/1a450000`
 disabled.
 
-Checks: `bin/omandroid kernel` exit 0; `W=1` clean on the new objects;
+Checks: `bin/omamobile kernel` exit 0; `W=1` clean on the new objects;
 checkpatch `--strict` clean apart from the usual trailer items;
 `dt-doc-validate` and examples pass for the new bindings; `dt-validate` on
 the default DTB and default + each of the three camera overlays: only the
@@ -769,7 +769,7 @@ existing `soc_id` and framebuffer reports.
 
 **Every PHY setting from the data file; front and telephoto, built
 2026-10-13 on top of `e6fc91e77` (head `c91185280`, test build
-`7.3.0-rc6-omandroid-push1-00382-gc91185280474` in `out-camera`; not
+`7.3.0-rc6-omamobile-push1-00382-gc91185280474` in `out-camera`; not
 merged into int):**
 
 | Commit | |
@@ -790,7 +790,7 @@ merged into int):**
 - **DC-PHY (question 11).** No stock value is left in the driver or the
   DT: the D-PHY bias and lane words, the settle count by rate (the DT's
   `google,hs-settle` is gone) and the skew delay come from
-  `omandroid/camera/gs201-dcphy.bin`, like the C-PHY ones. New format
+  `omamobile/camera/gs201-dcphy.bin`, like the C-PHY ones. New format
   "ODPH" v1 (replaces "OCPH", never installed): per mode a list of
   operations on the bias block, the clock lane (D-PHY) or every data lane
   or trio (write, masked update, or masked update from a rate-table
@@ -833,7 +833,7 @@ merged into int):**
   `SENSOR=s5k3j1|s5kgm5`; device-cheetah 0.1.28 blacklists `sem1215`;
   `CONFIG_VIDEO_SEM1215=m`.
 
-**Checks (laptop, 2026-10-13):** `bin/omandroid kernel` exit 0; `W=1` on
+**Checks (laptop, 2026-10-13):** `bin/omamobile kernel` exit 0; `W=1` on
 `phy-gs201-mipi-dcphy-rx.o`, `gs201-csis.o`, `s5kgn1.o`, `sem1215.o` and
 the DTB: only the existing simplefb warning; checkpatch `--strict` per
 commit: only the trailer form and (new files) MAINTAINERS;
@@ -873,7 +873,7 @@ file); copies in `~/android/reference/` only.
   `HBLANK`, `VBLANK`, `PIXEL_RATE`. Frame-sync events on the CSIS subdev
   keep the soft ISP's exposure updates in step. Our drivers do all of
   this; sensor crop selections and flips are left for later.
-- `omandroid-camera` package: modprobe policy (modules blacklisted until
+- `omamobile-camera` package: modprobe policy (modules blacklisted until
   the start unit loads them, the AoC pattern), a minimal tuning file, udev
   rules for `/dev/video*` and `/dev/media*`.
 - Apps: `cam` for tests, then a PipeWire camera app (GNOME Snapshot) and
@@ -894,7 +894,7 @@ file); copies in `~/android/reference/` only.
   computes each mode's size, frame and line length, pixel rate and link
   frequency from the standard registers in it, and writes our own data
   format (documented in `imx386.c`), which the driver loads with
-  `request_firmware()` from `/usr/lib/firmware/omandroid/camera/`.
+  `request_firmware()` from `/usr/lib/firmware/omamobile/camera/`.
   Checked on this laptop with the user's HAL: 139 init writes, four modes
   of 73 writes each, frame rates 30/60 as the HAL names them. The pixel
   rate assumes four pixels per video-timing clock [I]; the analogue gain
@@ -947,7 +947,7 @@ first raw frame from the ultrawide in **6-9 weeks**, a photo in `cam` and a
 PipeWire app in **8-12 weeks**, video **2-3 weeks** later, all four cameras
 with focus in **4-6 months**. The biggest unknowns are RE2/RE3 (if the WDMA
 needs more than its register table shows, CAM4 doubles) and RE5 (if the
-C-PHY settings can't be recovered, main and tele wait, and Omandroid ships
+C-PHY settings can't be recovered, main and tele wait, and Omarchy Mobile ships
 with the ultrawide and front cameras).
 
 ### 6.1 Risks
@@ -983,7 +983,7 @@ with the ultrawide and front cameras).
 
 ## 7. Runbooks (gated)
 
-Phone in Arch over USB, from the omandroid repo. Run each step only when the
+Phone in Arch over USB, from the omamobile repo. Run each step only when the
 human says go; record the result here with the date and `uname -r`. `ov` is
 the overlay helper from AUDIO-PLAN.md, with `KERNEL_DIR`/`KERNEL_OUT`
 pointing at the kernel being pushed. The staged steps run through
@@ -1015,7 +1015,7 @@ tools/phone-ssh 'pacman -Q libcamera libcamera-tools 2>&1; ls /dev/dma_heap/ /de
 Stop if any read hangs or errors in an unexpected way. Rollback: none (all
 reads). Do **not** dump the `0x50` EEPROM on `hsi2c_15` (section 1.7).
 
-**CAM0 partial result (2026-10-12, 7.3.0-rc6-omandroid-push1-00306-g60d3ca176c80),
+**CAM0 partial result (2026-10-12, 7.3.0-rc6-omamobile-push1-00306-g60d3ca176c80),
 read-only.** `clk_summary`: the CMU's sensor clocks (`mout/gout/dout_cmu_cis_clk5..7`
 seen) are registered at 24.576 MHz, enable count 0, hardware enable Y, so ABL
 leaves them running with no consumer. No `/dev/dma_heap` (CONFIG_DMABUF_HEAPS
@@ -1025,7 +1025,7 @@ yet done: the pin states (CAM0.2, now folded into CAM2.0) and LDO12S, which
 needs the pmic-2 regmap (bound only while the GNSS power stack runs, as
 FINGERPRINT-PLAN FB2 found; CAM2.0 reads it on the camera-pwr-test boot).
 
-**CAM0.3 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00345-g606b84c7a9fd,
+**CAM0.3 result (2026-10-12, 7.3.0-rc6-omamobile-push1-00345-g606b84c7a9fd,
 GNSS running so `pmic-2`'s regmap was bound): LDO12S control (PM 0x37) reads
 0x2c: bit 7 clear, so L12S_CAMIO is off as ABL left it.** The selector is in
 bits 5:0 and LDO12S is in Google's voltage group 6 (0.7 V base, 25 mV
@@ -1048,24 +1048,24 @@ gets. A sensor's ID registers don't depend on the exact MCLK; streaming will
 
 ### K: the camera kernel and the blacklist. Risk: low (K3 flashes)
 
-Everything in `omandroid-camera` is disabled or blacklisted until a step
+Everything in `omamobile-camera` is disabled or blacklisted until a step
 enables it, so K3 should boot exactly like the int kernel it is based on,
 plus `/dev/dma_heap`.
 
 ```sh
-# K0 (laptop) build: the branch, or omandroid-int after the human merges it
+# K0 (laptop) build: the branch, or omamobile-int after the human merges it
 export KERNEL_DIR=$HOME/android/mainline/wt-camera KERNEL_OUT=$HOME/android/mainline/out-camera
-bin/omandroid kernel && bin/omandroid modules && bin/omandroid initramfs
+bin/omamobile kernel && bin/omamobile modules && bin/omamobile initramfs
 # K1 (phone, one file) the camera blacklist, as a bring-up copy until
-#    omandroid-device-cheetah ships modprobe.d/omandroid-camera.conf
-tools/phone-ssh 'cat > /etc/modprobe.d/omandroid-camera-bringup.conf' \
-  < packages/omandroid-device-cheetah/vendor/modprobe.d/omandroid-camera.conf
-tools/phone-ssh 'cat /etc/modprobe.d/omandroid-camera-bringup.conf | grep -c ^blacklist'
+#    omamobile-device-cheetah ships modprobe.d/omamobile-camera.conf
+tools/phone-ssh 'cat > /etc/modprobe.d/omamobile-camera-bringup.conf' \
+  < packages/omamobile-device-cheetah/vendor/modprobe.d/omamobile-camera.conf
+tools/phone-ssh 'cat /etc/modprobe.d/omamobile-camera-bringup.conf | grep -c ^blacklist'
 #   expect: 4
 # K2 (laptop) images with the overlays the phone boots today, no camera overlay yet
 ov <the overlays the phone runs now>          # as in AUDIO-PLAN.md / MODEM-PLAN.md
 # K3 flash slot B and reboot (ASK FIRST)
-bin/omandroid push
+bin/omamobile push
 # K4 read-only check
 tools/camera-stage k
 ```
@@ -1079,8 +1079,8 @@ tools/camera-stage k
 - **Rollback:** push the previous int images (`$D.default` of the int build)
   or let the boot fall back to slot A.
 
-**K result (2026-10-12, 7.3.0-rc6-omandroid-push1-00345-g606b84c7a9fd: int
-606b84c7a with omandroid-camera 6cb2be364 merged, overlays as before, no
+**K result (2026-10-12, 7.3.0-rc6-omamobile-push1-00345-g606b84c7a9fd: int
+606b84c7a with omamobile-camera 6cb2be364 merged, overlays as before, no
 camera-pwr-test, device-cheetah 0.1.25): passed.** All four camera modules
 are present; the package's blacklist is active (`gpio_s2mpg13`,
 `slg51002_regulator`, `gs201_cam_power`, `gs201_cam_probe`), so the
@@ -1165,7 +1165,7 @@ supplies.
 
 ```sh
 # CAM2-K overlay boot (ASK FIRST: flashes and reboots)
-ov <the overlays the phone runs now> camera-pwr-test && bin/omandroid push
+ov <the overlays the phone runs now> camera-pwr-test && bin/omamobile push
 # CAM2.0 read-only: S2MPG13 GPIO block and LDO12S over ACPM, camera pins
 tools/camera-stage r0
 ```
@@ -1181,7 +1181,7 @@ tools/camera-stage r0
   than the output register may own the pin [I]; don't run g1 until that is
   understood. LDO12S's selector not 0x2c: the regulator core will rewrite
   it to 1.8 V when LDO12S registers, so check stock's value first.
-- **Rollback:** `ov <the overlays the phone runs now> && bin/omandroid push`.
+- **Rollback:** `ov <the overlays the phone runs now> && bin/omamobile push`.
 
 ```sh
 # CAM2.1 (this boot) the S2MPG13 GPIO driver. Changes: PP3200_BB_CAM and
@@ -1237,11 +1237,11 @@ tools/camera-stage --watchdog e1
   (camera-stage does it), reboot.
 
 **CAM2 results (2026-10-12, unattended with the human's permission;
-kernels 7.3.0-rc6-omandroid-push1-00345-g606b84c7a9fd for 2.0/2.1 and
--00349-g781b9c3d8523 (int + omandroid-modem 781b9c3d8) for 2.2/2.3;
+kernels 7.3.0-rc6-omamobile-push1-00345-g606b84c7a9fd for 2.0/2.1 and
+-00349-g781b9c3d8523 (int + omamobile-modem 781b9c3d8) for 2.2/2.3;
 overlays as before plus camera-pwr-test, suspend-pmic-test,
 modem-cpif-test). All passed.** `sec_acpm` is blacklisted by the GNSS
-bring-up file (`/etc/modprobe.d/omandroid-g1.conf`) and was loaded by hand
+bring-up file (`/etc/modprobe.d/omamobile-g1.conf`) and was loaded by hand
 before each run so that `pmic-2` binds; `camera-stage` now does that itself
 (and its exit was hardened again: the coordinator still saw it hang after
 a step; the stream group is now killed with TERM then KILL and never
@@ -1327,17 +1327,17 @@ by the real sensor node: never apply `camera-pwr-test` and a
 # CAM3b.0 (laptop, once) the sensor data file, from your own image's
 #   camera HAL APEX (vendor partition, apex/com.google.pixel.camera.hal.apex;
 #   tools/extract-vendor-firmware unpacks the vendor image)
-python3 -m venv ~/.cache/omandroid-venv && ~/.cache/omandroid-venv/bin/pip install unicorn pyelftools
-~/.cache/omandroid-venv/bin/python tools/extract-camera-data --apex <path>/com.google.pixel.camera.hal.apex -o ~/android/reference/imx386-uw.bin
+python3 -m venv ~/.cache/omamobile-venv && ~/.cache/omamobile-venv/bin/pip install unicorn pyelftools
+~/.cache/omamobile-venv/bin/python tools/extract-camera-data --apex <path>/com.google.pixel.camera.hal.apex -o ~/android/reference/imx386-uw.bin
 #   expect: init 139 writes; modes 4032x3016 (30 fps), 4032x2272, 2016x1508,
 #   2016x1136 (60 fps); never commit the file
-tools/phone-ssh 'mkdir -p /usr/lib/firmware/omandroid/camera && cat > /usr/lib/firmware/omandroid/camera/imx386-uw.bin' < ~/android/reference/imx386-uw.bin
+tools/phone-ssh 'mkdir -p /usr/lib/firmware/omamobile/camera && cat > /usr/lib/firmware/omamobile/camera/imx386-uw.bin' < ~/android/reference/imx386-uw.bin
 # CAM3b.K kernel with the capture drivers (head 35295a9ab or int after the
 #   merge) and the blacklist for the three new modules until
-#   omandroid-device-cheetah ships them (ASK FIRST: flashes and reboots)
+#   omamobile-device-cheetah ships them (ASK FIRST: flashes and reboots)
 printf 'blacklist imx386\nblacklist phy_gs201_mipi_dcphy_rx\nblacklist gs201_csis\n' |
-  tools/phone-ssh 'cat > /etc/modprobe.d/omandroid-camera-capture-bringup.conf'
-ov <the overlays the phone runs now> camera-stream-link1 && bin/omandroid push
+  tools/phone-ssh 'cat > /etc/modprobe.d/omamobile-camera-capture-bringup.conf'
+ov <the overlays the phone runs now> camera-stream-link1 && bin/omamobile push
 # CAM3b.1 (this boot) the sensor driver: powers the module in stock's order,
 #   reads the ID, powers off again
 tools/phone-ssh 'modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 1; modprobe imx386; sleep 2; dmesg | grep -iE "imx386|slg51002" | tail'
@@ -1350,7 +1350,7 @@ tools/phone-ssh 'for m in gpio_s2mpg13 slg51002_regulator imx386 phy_gs201_mipi_
 # CAM3b.3 (corrected, 2026-10-12) colour bars on the link, no DMA. Needs the
 #   kernel with 38355918e and the overlays from repo main (each
 #   camera-stream overlay now also disables the other link). Link 0 first:
-ov <the overlays the phone runs now> camera-stream-link0 && bin/omandroid push   # ASK FIRST
+ov <the overlays the phone runs now> camera-stream-link0 && bin/omamobile push   # ASK FIRST
 tools/phone-ssh 'for n in 1a440000 1a450000; do printf "%s %s\n" $n "$(tr -d "\0" < /sys/firmware/devicetree/base/soc@0/csis@$n/status)"; done'
 #   expect: 1a440000 okay, 1a450000 disabled (exactly one link)
 tools/camera-stage --watchdog x --cmd 'LINK=0 DMA=0 bash -s' --script tools/camera-cap-test
@@ -1405,7 +1405,7 @@ assigned, graph `imx386 0-001a` -> `gs201-csis link 1` ->
   diagnostics) and in the overlays (each disables the other link);
   `tools/camera-cap-test` replaces the hand-quoted commands.
 
-**CAM3b.3 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00365-g23c2869425ea:
+**CAM3b.3 result (2026-10-12, 7.3.0-rc6-omamobile-push1-00365-g23c2869425ea:
 int with 38355918e; `camera-stream-link0`, then `-link1`, the other link
 disabled each time; `camera-cap-test LINK=N DMA=0`; logs
 `logs/cam3b3-c.out`, `logs/cam3b3-l1c.out`, private): the sensor streams,
@@ -1447,7 +1447,7 @@ first, stop at the first pass:
 
 ```sh
 # CAM3b.4a link 0 with the reset released (the new default)
-ov <the overlays the phone runs now> camera-stream-link0 && bin/omandroid push   # ASK FIRST
+ov <the overlays the phone runs now> camera-stream-link0 && bin/omamobile push   # ASK FIRST
 tools/camera-stage --watchdog x --cmd 'LINK=0 DMA=0 bash -s' --script tools/camera-cap-test
 # CAM3b.4b the same on link 1 (camera-stream-link1, LINK=1)
 # CAM3b.4c only if neither counted: link 0 again with the 0x488 bit as well
@@ -1473,7 +1473,7 @@ tools/camera-stage --watchdog x --cmd 'LINK=0 DMA=0 CSIS_OPTS=sysreg_link_sel=1 
 
 ### CAM3b.5: link 2 with the PHY pair 2+3 sees the sensor. Risk: medium (no DMA)
 
-Goal: **link 2 sees frames.** Kernel `omandroid-camera` `3390774a8` (the
+Goal: **link 2 sees frames.** Kernel `omamobile-camera` `3390774a8` (the
 human merges it into int, or pushes the `out-camera` build), overlay
 `camera-stream-link2` **instead of** `camera-stream-link0/1`; never with
 `camera-pwr-test`. The blacklist from CAM3b.K stays. PMIC backup check as
@@ -1482,8 +1482,8 @@ the CAM vote.
 
 ```sh
 # CAM3b.5K (laptop) images with the link 2 overlay (ASK FIRST: flashes, reboots)
-ov <the overlays the phone runs now, without camera-stream-link0/1> camera-stream-link2 && bin/omandroid push
-tools/phone-ssh 'uname -r; cat /etc/modprobe.d/omandroid-camera-capture-bringup.conf'
+ov <the overlays the phone runs now, without camera-stream-link0/1> camera-stream-link2 && bin/omamobile push
+tools/phone-ssh 'uname -r; cat /etc/modprobe.d/omamobile-camera-capture-bringup.conf'
 #   expect: the new release; blacklist imx386, phy_gs201_mipi_dcphy_rx, gs201_csis
 # CAM3b.5.1 (read-only) one link in the DT, the drivers bind, the DVFS rates
 tools/phone-ssh 'for n in 1a440000 1a450000 1a460000; do printf "%s %s\n" $n "$(tr -d "\0" < /sys/firmware/devicetree/base/soc@0/csis@$n/status)"; done'
@@ -1543,7 +1543,7 @@ tools/phone-ssh 'cat /sys/kernel/debug/clk/cam/clk_rate'
   `camera-stream-link2`. `cam_khz=0` removes the vote.
 
 **CAM3b.5 results (2026-10-13):**
-- **5.1 (7.3.0-rc6-omandroid-push1-00383-gcc41390828d0): passed.** Only
+- **5.1 (7.3.0-rc6-omamobile-push1-00383-gcc41390828d0): passed.** Only
   `csis@1a460000` is okay. "link 2 -> WDMA context 0, 4 data lanes". The
   sensor first deferred on the S2MPG13 GPIO supplier: load `sec_acpm` by
   hand (blacklisted at boot) before `gpio_s2mpg13`. After that the IMX386
@@ -1561,7 +1561,7 @@ tools/phone-ssh 'cat /sys/kernel/debug/clk/cam/clk_rate'
     0x50c). The reader exited with preemption disabled and the phone froze
     about two minutes later. Fix `f9cbc3f50`: scan reads only the sysreg
     registers the driver programs, and no longer walks the other links.
-- **5b (7.3.0-rc6-omandroid-push1-00385-ga535168af42b, CAM vote 400 MHz):
+- **5b (7.3.0-rc6-omamobile-push1-00385-ga535168af42b, CAM vote 400 MHz):
   frames arrive at 60 fps.**
   - "CAM 400000000 Hz" at link on; the rate was back at 67 MHz after stop.
   - FRM_CNT went 0x9 -> 0x127 in about 4.8 s: 286 frames, 60 fps.
@@ -1622,7 +1622,7 @@ tools/camera-stage --watchdog x --cmd 'LINK=2 DMA=1 CH=0 FRAMES=4 bash -s' --scr
   overlay.
 
 **CAM3b.5b, CAM4.1 and CAM4.3 results (2026-10-13, int
-`7.3.0-rc6-omandroid-push1-00395-g6c0e876bd580`: the link 2 work plus
+`7.3.0-rc6-omamobile-push1-00395-g6c0e876bd580`: the link 2 work plus
 `f9cbc3f50` (scan reads only the programmed sysreg registers) and
 `39afbe857` (clear the per-VC FS/FE sources, which ended an interrupt
 storm); `camera-stream-link2`):**
@@ -1682,7 +1682,7 @@ pattern (one value per channel).
 
 ### CAM4.3b: Bayer order, control readback and the gain model. Risk: medium (DMA as in CAM4.1)
 
-Kernel with `ddf414774` (the human merges `omandroid-camera` into int);
+Kernel with `ddf414774` (the human merges `omamobile-camera` into int);
 the same overlay and module options as CAM4.1 (CAM vote, `int_khz=0`).
 Prop the phone so the camera sees the same lit scene for every run (not a
 lamp straight on), the room lights constant. Laptop side,
@@ -1728,7 +1728,7 @@ done
 - **Rollback:** reboot; `PATTERN=2` and no `CTRLS` is CAM4.1 again.
 
 **CAM4.3b results (2026-10-13, int
-`7.3.0-rc6-omandroid-push1-00397-g94d7b3c9ae7f`, with `ddf414774`):**
+`7.3.0-rc6-omamobile-push1-00397-g94d7b3c9ae7f`, with `ddf414774`):**
 
 - **4.3b-1 passed: the Bayer order is RGGB** (`SRGGB10`, as the driver
   reports). Solid colour R 256, Gr 512, B 768, Gb 1000 read back flat as
@@ -1788,7 +1788,7 @@ focus); a later stage for macro.
 
 ### CAM4.3c: INT vote, the gain model and 30 fps, phone secured. Risk: medium (DMA)
 
-Kernel `omandroid-camera` `49a0a54f4` merged into int (the human), same
+Kernel `omamobile-camera` `49a0a54f4` merged into int (the human), same
 overlay. **The phone fixed in a stand or taped, facing the same lit room,
 screen off or untouched, room lights constant for the whole step.**
 CAM4.3b's stop for DMA runs is lifted only for 4.3c-1 below.
@@ -1867,7 +1867,7 @@ So CAM5.0-5.2 can run after CAM4.3b-1; CAM5.3 and an indoor-usable
 picture wait for the gain model and the 30 fps default.
 
 **CAM5.1/5.2 results (2026-10-13, int
-`7.3.0-rc6-omandroid-push1-00405-g3bc8d8565645` with `49a0a54f4` and the
+`7.3.0-rc6-omamobile-push1-00405-g3bc8d8565645` with `49a0a54f4` and the
 rotation; `packages/libcamera` 0.7.2-4.2):**
 - **CAM5.1 passed:** `cam -l` lists "1: Internal back camera
   (/base/soc@0/usi@109200c0/i2c@10920000/camera-sensor@1a)". Warnings: no
@@ -1885,13 +1885,13 @@ rotation; `packages/libcamera` 0.7.2-4.2):**
   this kernel has no `linux,cma` alias option.)
 
 **Fixes (2026-10-13):**
-- `kernel/configs/omandroid.config` (repo, uncommitted):
+- `kernel/configs/omamobile.config` (repo, uncommitted):
   `CONFIG_CMA_SIZE_MBYTES=192` (reusable; movable pages use it while the
   camera doesn't).
 - `70da6c5a5` `media: i2c: imx386: report the pixel array and each mode's
   analogue crop`: `get_selection` with `CROP` (the mode's analogue crop,
   from its address registers), `NATIVE_SIZE`/`CROP_BOUNDS`/`CROP_DEFAULT`
-  (4032x3016). Build `7.3.0-rc6-omandroid-push1-00357-g70da6c5a5b2f` in
+  (4032x3016). Build `7.3.0-rc6-omamobile-push1-00357-g70da6c5a5b2f` in
   `out-camera` (with the config change).
 - `packages/libcamera` 0.7.2-4.3 (repo, uncommitted):
   `0002-libcamera-Add-the-Sony-IMX386-sensor.patch`: the sensor helper
@@ -1903,7 +1903,7 @@ rotation; `packages/libcamera` 0.7.2-4.2):**
 ### CAM5.2b: libcamera with the CMA area and the helper. Risk: low (userspace; kernel push)
 
 ```sh
-# 5.2b-K kernel: omandroid-camera 70da6c5a5 merged into int, built with the
+# 5.2b-K kernel: omamobile-camera 70da6c5a5 merged into int, built with the
 #   repo's config fragment (CMA 192 MiB) (ASK FIRST: flashes and reboots)
 tools/phone-ssh 'grep -E "CmaTotal|CmaFree" /proc/meminfo; ls /dev/dma_heap'
 #   expect: CmaTotal about 348 MiB (192 + 64 + 92; 188 before); heaps as before
@@ -1926,7 +1926,7 @@ tools/phone-ssh 'cat /tmp/frame000005.ppm' > logs/cam5-frame.ppm
 - **Rollback:** `pacman -U` the 4.2 package; the old kernel images.
 
 **CAM5.2b results (2026-10-13, int
-`7.3.0-rc6-omandroid-push1-00407-g618475741fa7` with `70da6c5a5` and CMA
+`7.3.0-rc6-omamobile-push1-00407-g618475741fa7` with `70da6c5a5` and CMA
 192 MiB: CmaTotal 356352 kB; libcamera 0.7.2-4.2, the helper package not
 built yet):**
 - **Allocation fixed:** no CMA failure.
@@ -1961,17 +1961,17 @@ built yet):**
   `wdma_ctrl=` to try one change per run.
 - **`allow_stream`:** the gate has done its job (raw frames and libcamera
   both ran); `35f679a26` makes streaming the default. The bring-up gate is
-  the camera modules' blacklist (`omandroid-camera.conf`), which stays
+  the camera modules' blacklist (`omamobile-camera.conf`), which stays
   until the package loads the camera at boot (a later, separate step).
   Until the kernel has `35f679a26`:
-  `echo 'options gs201_csis allow_stream=1' > /etc/modprobe.d/omandroid-camera-stream-bringup.conf`.
+  `echo 'options gs201_csis allow_stream=1' > /etc/modprobe.d/omamobile-camera-stream-bringup.conf`.
 - **`ERR_WRONG_CONFIG`** once per frame persists on both modes; harmless
   so far (likely the sensor's embedded-data lines, which channel 0 isn't
   set up for). Not chased yet.
 
 ### CAM5.2c: the binned mode through libcamera, then the full-resolution DMA. Risk: medium (DMA)
 
-Kernel `omandroid-camera` `35f679a26` merged into int (with `70da6c5a5`
+Kernel `omamobile-camera` `35f679a26` merged into int (with `70da6c5a5`
 and the CMA fragment) (ASK FIRST: flashes and reboots). libcamera 4.2 is
 enough; 4.3 (the helper) only when the coordinator says.
 
@@ -2001,7 +2001,7 @@ tools/camera-stage --watchdog x --cmd 'LINK=2 DMA=1 CH=0 W=4032 H=3016 FRAMES=2 
 - **Rollback:** reboot; the parameters are per load.
 
 **CAM4.3c results (2026-10-13, int
-`7.3.0-rc6-omandroid-push1-00407`, phone propped, room lit; INT vote on;
+`7.3.0-rc6-omamobile-push1-00407`, phone propped, room lit; INT vote on;
 libcamera 0.7.2-4.3 with the IMX386 helper):** every run 0 WDMA errors
 (also with the INT vote; the gain-480 LASTDATA of CAM4.3b didn't recur),
 the readback matched, and the 30 fps default works (frame length 3599).
@@ -2165,7 +2165,7 @@ check that the ultrawide is unchanged.
 
 ```sh
 # P.0 (laptop) every data file from your own HAL; never commit them
-~/.cache/omandroid-venv/bin/python tools/extract-camera-data \
+~/.cache/omamobile-venv/bin/python tools/extract-camera-data \
     --apex <vendor>/apex/com.google.pixel.camera.hal.apex -d /tmp/camdata
 #   expect: HAL sha256 ce9acaad...; IMX386 init 139, S5KGN1 init 1565,
 #   S5K3J1 init 366 (5 modes), S5KGM5 init 4047 (4 modes);
@@ -2174,13 +2174,13 @@ check that the ultrawide is unchanged.
 #   3 ranges (1-2147 Msps)", settle 7 at 1802 and 1862
 #   (the same five files are in ~/android/reference/ from this HAL)
 # P.1 (phone, no reboot) install them, and the bring-up blacklist for the new
-#   lens driver until omandroid-device-cheetah 0.1.28 is installed
+#   lens driver until omamobile-device-cheetah 0.1.28 is installed
 for f in imx386-uw s5kgn1-main s5k3j1-front s5kgm5-tele gs201-dcphy; do
-  tools/phone-ssh "cat > /usr/lib/firmware/omandroid/camera/$f.bin" < /tmp/camdata/$f.bin; done
-tools/phone-ssh 'sha256sum /usr/lib/firmware/omandroid/camera/*.bin'
-tools/phone-ssh 'printf "blacklist s5kgn1\nblacklist ak7375\nblacklist sem1215\n" > /etc/modprobe.d/omandroid-camera-bringup.conf'
+  tools/phone-ssh "cat > /usr/lib/firmware/omamobile/camera/$f.bin" < /tmp/camdata/$f.bin; done
+tools/phone-ssh 'sha256sum /usr/lib/firmware/omamobile/camera/*.bin'
+tools/phone-ssh 'printf "blacklist s5kgn1\nblacklist ak7375\nblacklist sem1215\n" > /etc/modprobe.d/omamobile-camera-bringup.conf'
 #   expect: the sums match `sha256sum /tmp/camdata/*.bin`
-# P.K kernel: the human merges omandroid-camera (head c91185280 or later)
+# P.K kernel: the human merges omamobile-camera (head c91185280 or later)
 #   into int; images with the overlays the phone runs today (camera-stream-link2,
 #   camera-uw-lens if it has it), nothing new (ASK FIRST: flashes and reboots)
 # P.2 (this boot) the ultrawide as in CAM5.2: one libcamera capture. The PMIC
@@ -2188,7 +2188,7 @@ tools/phone-ssh 'printf "blacklist s5kgn1\nblacklist ak7375\nblacklist sem1215\n
 #   (regulator-pp3200-bb-cam "can't get GPIO"; cam -l lists nothing): load them first
 tools/phone-ssh 'modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 2'
 tools/phone-ssh 'cam -c1 --capture=30 --file=/tmp/p#.ppm --stream pixelformat=RGB888,width=2008,height=1508 2>&1 | tail -2; dmesg | grep -E "PHY settings|link 2: D-PHY|stopped" | tail -4'
-#   pass: "PHY settings from omandroid/camera/gs201-dcphy.bin: D-PHY 32 writes,
+#   pass: "PHY settings from omamobile/camera/gs201-dcphy.bin: D-PHY 32 writes,
 #   111 rate ranges; C-PHY 20 writes, 3 rate ranges"; "link 2: D-PHY 4 lanes
 #   (with the next link's) at 1548288000 bps, settle 7 ... bias 0x10 0x110
 #   0x3223 0x0 0x200"; WDMA errors 0; the picture as before
@@ -2235,10 +2235,10 @@ tools/phone-ssh 'cam -c1 --capture=30 --file=/tmp/p#.ppm --stream pixelformat=RG
   an AK7375-type at 0x0c; the OIS controller (0x24) and laser AF (0x29)
   are not needed for a picture.
 
-**Built and committed (2026-10-13)** on `omandroid-camera` in
+**Built and committed (2026-10-13)** on `omamobile-camera` in
 `~/android/mainline/wt-camera`, on top of `9af41f2e3`, head `e6fc91e77`
-(not merged into `omandroid-int` yet), built clean as
-`7.3.0-rc6-omandroid-push1-00370-ge6fc91e77693` in `out-camera`:
+(not merged into `omamobile-int` yet), built clean as
+`7.3.0-rc6-omamobile-push1-00370-ge6fc91e77693` in `out-camera`:
 
 | Commit | |
 |---|---|
@@ -2259,7 +2259,7 @@ tools/phone-ssh 'cam -c1 --capture=30 --file=/tmp/p#.ppm --stream pixelformat=RG
   lanes are trios (max 3), one data-lane block each, no clock lane, never
   paired. **The C-PHY values are not in the kernel source** (the human's
   decision, option B): they come from a data file,
-  `omandroid/camera/gs201-cphy.bin`, named by the PHY node's
+  `omamobile/camera/gs201-cphy.bin`, named by the PHY node's
   `firmware-name` and loaded at the first C-PHY power-on (a clear error
   if it's missing; D-PHY never needs it). Format (ours, `"OCPH"` v1): an
   ordered list of writes to the bias block or to every trio's lane
@@ -2297,14 +2297,14 @@ tools/phone-ssh 'cam -c1 --capture=30 --file=/tmp/p#.ppm --stream pixelformat=RG
   `ak7375`). Overlays (repo): `camera-main` (main path + its lens,
   `lens-focus`), `camera-uw-lens` (ultrawide lens), and
   `camera-stream-link2` no longer disables link 1. Blacklist (repo,
-  omandroid-device-cheetah 0.1.27): `s5kgn1`, `ak7375`.
+  omamobile-device-cheetah 0.1.27): `s5kgn1`, `ak7375`.
 - `tools/extract-camera-data --sensor s5kgn1` writes
   `s5kgn1-main.bin` (16 948 bytes) and `gs201-cphy.bin` (188 bytes);
   copies for this phone are in `~/android/reference/`, never committed.
   The IMX386 output is byte-identical to before. `tools/camera-cap-test` takes
   `SENSOR=s5kgn1` (GRBG, `pgAA`, loads `ak7375`).
 
-**Checks (laptop, 2026-10-13):** `bin/omandroid kernel` exit 0; `W=1` on
+**Checks (laptop, 2026-10-13):** `bin/omamobile kernel` exit 0; `W=1` on
 `s5kgn1.o`, `gs201-csis.o`, `phy-gs201-mipi-dcphy-rx.o` and the DTB: only
 the existing simplefb warning (the two intermediate `gs201-csis` commits
 compile clean too); checkpatch `--strict` per commit: only MAINTAINERS and
@@ -2332,7 +2332,7 @@ tools/phone-ssh 'grep -E "gpp2-[012]|gpp9-0" /sys/kernel/debug/pinctrl/*/pins 2>
 # M.K (after P) the same kernel, overlays camera-stream-link2 (camera-uw-lens)
 #   camera-main (ASK FIRST: flashes and reboots)
 KERNEL_DIR=~/android/mainline/wt-camera KERNEL_OUT=~/android/mainline/out-camera \
-    ov camera-stream-link2 camera-main && bin/omandroid push
+    ov camera-stream-link2 camera-main && bin/omamobile push
 tools/phone-ssh 'uname -r; lsmod | grep -cE "s5kgn1|ak7375|gs201_csis"'
 #   expect: the new release, 0 (all blacklisted)
 # M.2 (this boot) the sensor's power-up and chip ID only (no stream)
@@ -2381,14 +2381,14 @@ tools/phone-ssh 'cat /tmp/m000119.ppm' > logs/camm-frame.ppm
   doubles (128 MiB reusable CMA below 4 GiB).
 
 **P and CAM-M results (2026-10-13, int `937d47233` =
-`7.3.0-rc6-omandroid-push1-00446-g937d47233338`: int + `omandroid-camera`
+`7.3.0-rc6-omamobile-push1-00446-g937d47233338`: int + `omamobile-camera`
 `c91185280`; overlays as before + `modem-cpif-pktproc`, + `camera-main`
 from M.K; logs `logs/camera-20261013-14*.log`, `logs/cam-m41c-kmsg.log`):**
 - **P.0/P.1 passed:** the five files byte-identical to the reference
   copies, installed, sums match; device-cheetah 0.1.28 installed.
 - **P.2 passed** once `sec_acpm`, `gpio_s2mpg13` and `slg51002_regulator`
   were loaded by hand (now in the step): "PHY settings from
-  omandroid/camera/gs201-dcphy.bin: D-PHY 32 writes, 111 rate ranges;
+  omamobile/camera/gs201-dcphy.bin: D-PHY 32 writes, 111 rate ranges;
   C-PHY 20 writes, 3 rate ranges"; "link 2: D-PHY 4 lanes ... 1548288000
   bps, settle 7 ... bias 0x10 0x110 0x3223 0x0 0x200"; 30 frames at 29.9
   fps, link errors one a frame (0x8, as always), WDMA errors 0, a normal
@@ -2483,7 +2483,7 @@ tools/camera-stage --watchdog x --cmd 'LINK=1 SENSOR=s5kgn1 W=4080 H=3072 DMA=1 
 - **Rollback:** reboot; all parameters are per load.
 
 **CAM-M.5b results (2026-10-13, int `8070cddd9` =
-`7.3.0-rc6-omandroid-push1-00448-g8070cddd92a6`: `937d47233` + the modem
+`7.3.0-rc6-omamobile-push1-00448-g8070cddd92a6`: `937d47233` + the modem
 PCIe speed fix; `camera-main`; `cb502b561` not in it yet; logs
 `logs/camera-20261013-141*.log`):**
 - **M.5b-0 (2016x1136, link only):** "link 1 on: 2016x1136 DT 0x2b, 3
@@ -2524,7 +2524,7 @@ PCIe speed fix; `camera-main`; `cb502b561` not in it yet; logs
   (resolution mismatches, overflow) is among them.
 - CAM 664 MHz stays the change after this one: an overflow would show
   as `ERR_OVER` (INT0) or `FIFO_FULL`, which the counters will tell.
-- Kernel (on `omandroid-camera`, not merged): `cb502b561` (per-bit error
+- Kernel (on `omamobile-camera`, not merged): `cb502b561` (per-bit error
   counters) and `32e190c83` (`lrte_config=` parameter, 0 = unchanged; the
   first WDMA error's log line adds the link's last packet header, its
   frame counter and the LRTE value). Defaults unchanged: on its own the
@@ -2533,7 +2533,7 @@ PCIe speed fix; `camera-main`; `cb502b561` not in it yet; logs
 ### CAM-M.5c: error bits, then LRTE at its reset value. Risk: medium (DMA in c-2)
 
 ```sh
-# M.5c-K kernel: int + omandroid-camera 32e190c83 (cb502b561, 32e190c83), the
+# M.5c-K kernel: int + omamobile-camera 32e190c83 (cb502b561, 32e190c83), the
 #   same overlays (ASK FIRST: flashes and reboots)
 tools/phone-ssh 'uname -r; modinfo -p gs201_csis | grep -E "lrte_config|wdma_ctrl"'
 # M.5c-0 (this boot, link only) which link errors, at the driver's LRTE (0x7fff)
@@ -2559,7 +2559,7 @@ tools/raw10-stats logs/camm-bars.raw --width 2016 --height 1136 --stride 2560 --
 - **Rollback:** reboot; parameters are per load; the previous int kernel.
 
 **CAM-M.5c results (2026-10-13, int `0470612d2` =
-`7.3.0-rc6-omandroid-push1-00451-g0470612d2158`: `8070cddd9` +
+`7.3.0-rc6-omamobile-push1-00451-g0470612d2158`: `8070cddd9` +
 `cb502b561` + `32e190c83`; same overlays):**
 - **M.5c-0 (link only, LRTE 0x7fff):** FS/FE 144, 26399 link errors,
   **INT0 bit 3 (`ERR_WRONG_CONFIG`) only**: no overflow, no CRC/ECC, no
@@ -2614,7 +2614,7 @@ capture the second stream by itself.
 ### CAM-M.5d: give VC 1 its own channel (and look at the second stream). Risk: medium (DMA in d-3)
 
 ```sh
-# M.5d-K kernel: int + omandroid-camera 8c93e69cb, the same overlays (ASK FIRST)
+# M.5d-K kernel: int + omamobile-camera 8c93e69cb, the same overlays (ASK FIRST)
 tools/phone-ssh 'modinfo -p gs201_csis | grep -E "ch0_vc|ch1_vc"'
 P='modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 1;'
 # M.5d-0 (this boot, link only) the second stream without the colour bars
@@ -2646,7 +2646,7 @@ tools/raw10-stats logs/camm-bars.raw --width 2016 --height 1136 --stride 2560 --
 - CAM7 (front) can run in between as 7.R says.
 
 **CAM-M.5d results (2026-10-13, int `fd0aeb894` (00453) for d-0 to d-3,
-int `dd6026712` = `7.3.0-rc6-omandroid-push1-00455-gdd6026712200` (+ a
+int `dd6026712` = `7.3.0-rc6-omamobile-push1-00455-gdd6026712200` (+ a
 modem fix, camera unchanged) for d-4; logs `logs/camera-20261013-14*.log`):**
 - **d-0 (link only, `PATTERN=0`):** FS/FE 143, INT0 b3 x29282 only: the
   VC 1 stream doesn't depend on the colour bars.
@@ -2689,7 +2689,7 @@ modem fix, camera unchanged) for d-4; logs `logs/camera-20261013-14*.log`):**
 ### CAM-M.5e: how many lines is the VC 0 frame? Risk: medium (DMA)
 
 ```sh
-# M.5e-K kernel: int + omandroid-camera 48e1ba5e0, the same overlays (ASK FIRST)
+# M.5e-K kernel: int + omamobile-camera 48e1ba5e0, the same overlays (ASK FIRST)
 tools/phone-ssh 'modinfo -p gs201_csis | grep extra_lines'
 P='modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 1;'
 # M.5e-1 (this, fresh, boot) VC 0 into a double-height buffer, colour bars, VC 1 parked
@@ -2721,7 +2721,7 @@ PY
 - **Rollback:** reboot; parameters per load.
 
 **CAM-M.5e result (2026-10-13, int `aca2c8163` =
-`7.3.0-rc6-omandroid-push1-00457-gaca2c816302f`, + `48e1ba5e0`; fresh
+`7.3.0-rc6-omamobile-push1-00457-gaca2c816302f`, + `48e1ba5e0`; fresh
 boot; log `logs/camera-20261013-144957-x.log`):** DMA, 2016x1136, bars,
 `extra_lines=1136` (WDMA height 2272, RESOL 0x08e007e0, 5 816 320 bytes a
 buffer), VC 1 parked: **`LASTADDR` again, in the first frame** ("link
@@ -2779,7 +2779,7 @@ tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=4080 H=3072 DMA
 **The front camera (CAM7) can go now, in parallel** (independent link,
 PHY, bus, sensor and supplies; the int kernel the phone runs has it):
 1. F.1 (read-only, this boot).
-2. F.K: `ov <the overlays the phone boots now> camera-front && bin/omandroid
+2. F.K: `ov <the overlays the phone boots now> camera-front && bin/omamobile
    push` with `KERNEL_DIR`/`KERNEL_OUT` of the current int build (one change:
    the overlay; ASK FIRST). F.2 and F.3 on that boot.
 3. F.4 (link only) on a later fresh boot; F.5 (first DMA) on its own fresh
@@ -2823,7 +2823,7 @@ PHY, bus, sensor and supplies; the int kernel the phone runs has it):
 ### CAM-M.5g: whose frame syncs reach the WDMA. Risk: medium (DMA)
 
 ```sh
-# M.5g-K kernel: int + omandroid-camera bcc97af77, the same overlays (ASK FIRST)
+# M.5g-K kernel: int + omamobile-camera bcc97af77, the same overlays (ASK FIRST)
 P='modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 1;'
 # M.5g-0 (this boot, link only) the link's frame syncs by VC
 tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=0 bash -s" --script tools/camera-cap-test
@@ -2848,7 +2848,7 @@ tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA
 - **Rollback:** reboot; parameters per load.
 
 **CAM-M.5g results (2026-10-13, int `a56ad74dc` =
-`7.3.0-rc6-omandroid-push1-00459-ga56ad74dc41f`, + `bcc97af77`; fresh
+`7.3.0-rc6-omamobile-push1-00459-ga56ad74dc41f`, + `bcc97af77`; fresh
 boot; F.1 passed earlier: gpp4-0/1/2 and gpp5-0 function 0):**
 - **M.5g-0 (link only):** FS/FE 143; link FS bits: b0 x143, FE bits: b0
   x143, nothing else; INT0 b3 x25823. The per-VC source registers show
@@ -2979,7 +2979,7 @@ tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA
 - **Rollback:** reboot; parameters per load.
 
 **CAM-M.5i results (2026-10-13, int `7e9131775` =
-`7.3.0-rc6-omandroid-push1-00463-g7e9131775953`, + `d73ed198d` and a
+`7.3.0-rc6-omamobile-push1-00463-g7e9131775953`, + `d73ed198d` and a
 modem fix; fresh boot; libcamera 0.7.2-4.6 installed, not used yet; logs
 `logs/camera-20261013-153*.log`):**
 - **i-1 (link only, 2016x1136):** `pixel_mode=1` (dual): FS/FE 144, INT0
@@ -3084,7 +3084,7 @@ after M.5g-2):
 tools/phone-ssh 'grep -E "gpp4-[012]|gpp5-0" /sys/kernel/debug/pinctrl/*/pins 2>/dev/null | head'
 # F.K images: the int build the phone runs plus camera-front (ASK FIRST: flashes, reboots)
 KERNEL_DIR=~/android/mainline/wt-int KERNEL_OUT=~/android/mainline/out-int \
-    ov <the overlays of the current int images> camera-front && bin/omandroid push
+    ov <the overlays of the current int images> camera-front && bin/omamobile push
 # F.2 (that boot) power-up and chip ID
 tools/camera-stage --watchdog x --cmd 'modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; modprobe s5kgn1; sleep 1; dmesg | grep -E "s5kgn1|slg51002" | tail -6; grep -E "ldo12s|vddd_main_front|cam_sw4" /sys/kernel/debug/regulator/regulator_summary'
 #   pass: "s5kgn1 N-0010: S5K3J1, model 0x30a1" (and the main camera's line as before);
@@ -3133,11 +3133,11 @@ runtime PM tied to streaming in the ak7375 driver or in libcamera.
    `rotation` reaches libcamera as `Rotation`); the first frames are dark
    until the AGC settles.
 2. When it lists and previews: move `snapshot` (and `pipewire-libcamera`)
-   from `optdepends` to `depends` in `omandroid-apps` (bump its version).
+   from `optdepends` to `depends` in `omamobile-apps` (bump its version).
 3. Loading at boot (after CAM-M, CAM7 and CAM-T pass and the overlays
    move into the default DT): drop `imx386`, `s5kgn1`, `ak7375`, `sem1215`,
    `phy_gs201_mipi_dcphy_rx`, `gs201_csis` (and the PMIC modules they need)
-   from `omandroid-camera.conf` in a new device-cheetah version, or load
+   from `omamobile-camera.conf` in a new device-cheetah version, or load
    them from a oneshot unit ordered after the regulators, as the AoC unit
    does. Nothing powers a sensor until a stream starts, except the lens
    (above) and each sensor's chip-ID read at probe.
@@ -3171,7 +3171,7 @@ tools/phone-ssh 'grep -E "gpp4-[012]|gpp5-0" /sys/kernel/debug/pinctrl/*/pins 2>
 # F.K (after P; CAM-M first if it's running) images with camera-front added
 #   to the overlays the phone runs (ASK FIRST: flashes and reboots)
 KERNEL_DIR=~/android/mainline/wt-camera KERNEL_OUT=~/android/mainline/out-camera \
-    ov camera-stream-link2 camera-uw-lens camera-main camera-front && bin/omandroid push
+    ov camera-stream-link2 camera-uw-lens camera-main camera-front && bin/omamobile push
 # F.2 (this boot) power-up and chip ID only
 tools/camera-stage --watchdog x --cmd 'modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; modprobe s5kgn1; sleep 1; dmesg | grep -E "s5kgn1|slg51002" | tail -6; grep -E "ldo12s|vddd_main_front|cam_sw4" /sys/kernel/debug/regulator/regulator_summary'
 #   pass: "s5kgn1 N-0010: S5K3J1, model 0x30a1"; LDO8 and switch 4 off again afterwards
@@ -3237,7 +3237,7 @@ tools/phone-ssh 'grep -E "gpp8-[012]|gpp6-2|gpp7-0" /sys/kernel/debug/pinctrl/*/
 #   expect: gpp8-0/1, gpp6-2, gpp7-0 inputs; gpp8-2 as the torch driver set it
 # T.K (after P, one overlay per boot) images with camera-tele added (ASK FIRST)
 KERNEL_DIR=~/android/mainline/wt-camera KERNEL_OUT=~/android/mainline/out-camera \
-    ov camera-stream-link2 camera-uw-lens camera-main camera-front camera-tele && bin/omandroid push
+    ov camera-stream-link2 camera-uw-lens camera-main camera-front camera-tele && bin/omamobile push
 # T.2 (this boot) sensor power-up and chip ID
 tools/camera-stage --watchdog x --cmd 'modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; modprobe s5kgn1; sleep 1; dmesg | grep -E "s5kgn1|slg51002" | tail -6; grep -E "ldo12s|vddd_tele|vdda_tele" /sys/kernel/debug/regulator/regulator_summary'
 #   pass: "s5kgn1 N-002d: S5KGM5, model 0x08d5, vertical flip"; LDO7 and LDO3 off again

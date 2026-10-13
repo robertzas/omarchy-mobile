@@ -1,11 +1,11 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Pixel 7 Pro (cheetah) fingerprint on Omandroid: plan
+# Pixel 7 Pro (cheetah) fingerprint on Omarchy Mobile: plan
 
 Status (2026-10-12): research and design. **The current status and the
 runbook are in [FINGERPRINT-PLAN.md](FINGERPRINT-PLAN.md)**, which supersedes
 section 7 below (Trusty now runs on int through the AoC work; the branch was
 brought up to int; the bridge, the libfprint driver and the package exist).
-Kernel branch `omandroid-fingerprint` in `~/android/mainline/wt-fingerprint`,
+Kernel branch `omamobile-fingerprint` in `~/android/mainline/wt-fingerprint`,
 build in `~/android/mainline/out-fingerprint`.
 
 **Goal.** Enroll a finger and unlock Omarchy's lock screen with it. Omarchy's
@@ -40,8 +40,8 @@ Trusty driver needs care with **CPU hotplug** (section 3.2).
 
 Path abbreviations:
 
-- `L/` = our kernel, branch `omandroid-fingerprint` (`~/android/mainline/wt-fingerprint`)
-- `G/` = `~/android/omandroid/out-kernel/google/gs-6.1/private` (Google's GPL gs201 kernel)
+- `L/` = our kernel, branch `omamobile-fingerprint` (`~/android/mainline/wt-fingerprint`)
+- `G/` = `~/android/omamobile/out-kernel/google/gs-6.1/private` (Google's GPL gs201 kernel)
 - `R/` = `~/android/reference/cheetah-stock-cp2a-root` (stock live DT, dmesg)
 - `V/` = the vendor partition of the factory image (CP2A.260705.006)
 
@@ -81,13 +81,13 @@ through `ipi-range = <8 15 8>` (`R/live.dts:346-360`).
 
 ```
  Omarchy lock (PAM omarchy-lock-fingerprint)
-   -> fprintd -> libfprint driver "omandroid_udfps"      (host, glibc)
-        | Unix socket /run/omandroid-fp/bridge.sock
+   -> fprintd -> libfprint driver "omamobile_udfps"      (host, glibc)
+        | Unix socket /run/omamobile-fp/bridge.sock
  ---------------------------- chroot (private mount + PID namespace,
- |  omandroid-fp-bridge  (bionic, libbinder_ndk)          own binderfs,
+ |  omamobile-fp-bridge  (bionic, libbinder_ndk)          own binderfs,
  |    | AIDL IFingerprint v3 / IGatekeeper / ISharedSecret  host netns)
  |  Goodix HAL   Gatekeeper HAL   KeyMint HAL   storageproxyd   servicemanager x2
- |    all with LD_PRELOAD=omandroid-fp-shim.so
+ |    all with LD_PRELOAD=omamobile-fp-shim.so
  ----------------------------
         | /dev/trusty-ipc-dev0   /dev/goodix_fp + netlink 25   /dev/sg (RPMB)
  kernel: trusty_core/log/ipc/virtio, goodix_fp, sg, panel local_hbm_mode
@@ -103,23 +103,23 @@ LHBM, because the HAL's touch and illumination inputs come from its client
 
 ## 3. Kernel (built, all disabled by default)
 
-Branch `omandroid-fingerprint` on `omandroid` @ `e7cb10fe5`, one commit per
+Branch `omamobile-fingerprint` on `omamobile` @ `e7cb10fe5`, one commit per
 subsystem: `d50eb73ae` kthread export, `0fa5efc32` vendor prefix `android`,
 `210377ee6` Trusty binding, `edae3bf75` Trusty driver, `5a9cf359f` Trusty CPU
 hotplug, `35dc73b3e` Goodix binding, `f43b95ea4` Goodix driver, `40c4e1090`
 panel LHBM, `0c28d9948` gs201 Trusty node, `4d4c7bef5` PERIC0 pinctrl,
-`0c81eda5b` cheetah fingerprint node. Built with `bin/omandroid kernel`,
+`0c81eda5b` cheetah fingerprint node. Built with `bin/omamobile kernel`,
 `modules` and `images` (`logs/fingerprint-*.log`, all exit 0): release
-`7.3.0-rc6-omandroid-push1-00066-g0c81eda5bfde`, 1717 modules, images in
+`7.3.0-rc6-omamobile-push1-00066-g0c81eda5bfde`, 1717 modules, images in
 `~/android/mainline/out-fingerprint/images`.
 The new C builds with `W=1` and no warnings; the bindings pass
 `dt-doc-validate` and yamllint; `dt-validate` (dtschema 2026.9) of the default
 DTB and of the DTB with both fingerprint overlays reports only the existing
 `soc_id` and framebuffer `post-init-providers`.
-Config: `kernel/configs/omandroid.config` (`TRUSTY=m`, `TRUSTY_LOG=m`,
+Config: `kernel/configs/omamobile.config` (`TRUSTY=m`, `TRUSTY_LOG=m`,
 `TRUSTY_VIRTIO=m`, `TRUSTY_VIRTIO_IPC=m`, `GOODIX_FP=m`, `CHR_DEV_SG=m`;
-binder and binderfs were already built in). `omandroid-device-cheetah` gains
-`modprobe.d/omandroid-fingerprint.conf`, which blacklists every one of these
+binder and binderfs were already built in). `omamobile-device-cheetah` gains
+`modprobe.d/omamobile-fingerprint.conf`, which blacklists every one of these
 modules from autoload (and orders `trusty_ipc` before `trusty_virtio`, as
 stock loads them).
 
@@ -167,7 +167,7 @@ hits this; Linux userspace (power tuning, screen-off hooks) can. Two commits:
   Suspend, hibernation (`cpuhp_tasks_frozen`), shutdown, reboot and kexec
   (`system_state != SYSTEM_RUNNING`) and driver removal still take CPUs down.
 
-Anything in Omandroid that wants to offline CPUs for power must instead use
+Anything in Omarchy Mobile that wants to offline CPUs for power must instead use
 cpufreq/idle states, or set `allow_cpu_offline=1` and accept that
 fingerprint can hang.
 
@@ -243,27 +243,27 @@ package, the HAL is the G7 one, the image is for cheetah.
 Not needed: `hwservicemanager` (without it, HIDL lookups fail at once), the
 Titan M2 (citadel) KeyMint, secretkeeper, `trusty_metricsd`, the face TA.
 
-### 4.2 The chroot: `omandroid-fp-chroot` (`packages/omandroid-fingerprint/lib/`)
+### 4.2 The chroot: `omamobile-fp-chroot` (`packages/omamobile-fingerprint/lib/`)
 
-Installed as `/usr/lib/omandroid-fp/` (image, shim, `props.conf`); state in
-`/var/lib/omandroid-fp` (0700). `start` re-executes itself under
+Installed as `/usr/lib/omamobile-fp/` (image, shim, `props.conf`); state in
+`/var/lib/omamobile-fp` (0700). `start` re-executes itself under
 `unshare --mount --pid --fork --kill-child` (a private mount and PID
 namespace; **not** a network namespace) and builds, on a tmpfs at
-`/run/omandroid-fp/root`:
+`/run/omamobile-fp/root`:
 
 | Path in chroot | What |
 |---|---|
 | `/system`, `/vendor`, `/apex` | the extracted image, bind-mounted read-only |
-| `/omandroid/omandroid-fp-shim.so` | the preload shim, read-only |
+| `/omamobile/omamobile-fp-shim.so` | the preload shim, read-only |
 | `/dev` | tmpfs: `null zero full random urandom kmsg`, `trusty-ipc-dev0`, `trusty-log0`, `goodix_fp`, `sg-rpmb` (the RPMB LUN's sg node only, found by its SCSI address `*:49476`) |
 | `/dev/binderfs` | a **private binderfs instance**; `/dev/binder`, `/dev/hwbinder`, `/dev/vndbinder` link into it |
-| `/dev/__omandroid_props__` | tmpfs property store (section 4.4) |
-| `/dev/block/by-name/mfg_data` | a read-only bind of `/var/lib/omandroid-fp/mfg_data.img`, a copy made once; the HAL never sees the partition |
+| `/dev/__omamobile_props__` | tmpfs property store (section 4.4) |
+| `/dev/block/by-name/mfg_data` | a read-only bind of `/var/lib/omamobile-fp/mfg_data.img`, a copy made once; the HAL never sees the partition |
 | `/sys` | tmpfs skeleton, read-only: `devices/system/cpu`, `firmware/devicetree`, `class/thermal` (read-only binds), `module/trusty_core`, `module/trusty_virtio`, a fake `devices/platform/exynos-drm/primary-panel/panel_name` = `sdc-s6e3hc4` (the stock `exynos_drm.panel_name`, `R/dmesg.txt:111`), and `class/backlight/panel0-backlight/` with our real `local_hbm_mode` and `local_hbm_max_timeout` bound in |
 | `/proc` | a new proc for the PID namespace |
-| `/data` | `/var/lib/omandroid-fp/data`: `vendor/ss` (Trusty TD files), `vendor/ss/persist` (TDP files, section 5), `vendor_de/0/fpdata`, `vendor/fingerprint` |
+| `/data` | `/var/lib/omamobile-fp/data`: `vendor/ss` (Trusty TD files), `vendor/ss/persist` (TDP files, section 5), `vendor_de/0/fpdata`, `vendor/fingerprint` |
 
-Each Android process runs as `env -i LD_LIBRARY_PATH=... LD_PRELOAD=/omandroid/omandroid-fp-shim.so chroot ROOT ...`
+Each Android process runs as `env -i LD_LIBRARY_PATH=... LD_PRELOAD=/omamobile/omamobile-fp-shim.so chroot ROOT ...`
 with `LD_LIBRARY_PATH` `/vendor/lib64:/vendor/lib64/hw:/system/lib64` for
 vendor binaries and `/system/lib64:/vendor/lib64` for system ones (there is no
 linkerconfig, so the linker uses one namespace and this search order). Output
@@ -292,7 +292,7 @@ around line 3366). The shim makes that ioctl fail, and libbinder falls back to
 the plain `BINDER_SET_CONTEXT_MGR`; it also turns `setRequestingSid()` into a
 no-op. (The same issue will meet Waydroid.)
 
-### 4.4 The preload shim: `fingerprint/shim/omandroid-fp-shim.c`
+### 4.4 The preload shim: `fingerprint/shim/omamobile-fp-shim.c`
 
 Ours, MIT, about 600 lines of C, built for bionic with the NDK
 (`fingerprint/Makefile`; it builds warning-free with `-Wall -Wextra -Werror`
@@ -302,11 +302,11 @@ would provide:
 - **Properties:** `__system_property_{find,get,read,read_callback,serial,area_serial,foreach,set,wait,wait_any}`
   on a directory with one file per property, shared by every process in the
   chroot. The runner fills it from both `build.prop` files, then
-  `lib/props.conf`, then `/var/lib/omandroid-fp/props.conf`.
+  `lib/props.conf`, then `/var/lib/omamobile-fp/props.conf`.
   `ro.*` properties are write-once. `storageproxyd`'s `fs_ready` goes through
   it, which is how the runner knows storage is up.
 - **Logging:** liblog's entry points print `P tag[tid]: message` to stderr,
-  filtered by `OMANDROID_FP_LOGLEVEL`.
+  filtered by `OMAMOBILE_FP_LOGLEVEL`.
 - **SELinux:** fixed context, every check allowed (`getcon`, `getpidcon`,
   `selinux_check_access`, `selabel_lookup`, the `selinux_android_*_handle`
   calls, `selinux_status_*`). The chroot is the trust boundary.
@@ -315,10 +315,10 @@ would provide:
   `isDeclared` return nothing at once for power, Pixel power, sensors, stats,
   vold, suspend, thermal and Pixel display (otherwise each lookup waits about
   5 s, and the HAL's ambient-light path waits forever). More prefixes in
-  `OMANDROID_FP_NO_SERVICES`.
+  `OMAMOBILE_FP_NO_SERVICES`.
 - **Wake locks:** accepted and dropped.
 
-`packages/omandroid-fingerprint/lib/props.conf` sets what makes the HAL fit:
+`packages/omamobile-fingerprint/lib/props.conf` sets what makes the HAL fit:
 `persist.vendor.udfps.lhbm_controlled_in_hal_supported=false` (the HAL then
 reports `halControlsIllumination=false` and never asks for the display HAL),
 `als_feed_forward_supported=false` and `sensor_listener_supported=false` (no
@@ -345,7 +345,7 @@ has run. So before enrolling, the bridge does what keystore2 does on Android:
    then `computeSharedSecret([params])`. Only Trusty takes part; StrongBox
    (Titan M2) is not needed.
 2. `IGatekeeper/default`: `enroll(uid 0, -, -, secret)` once, keeping the
-   password handle in `/var/lib/omandroid-fp/gatekeeper` (0600). The secret is
+   password handle in `/var/lib/omamobile-fp/gatekeeper` (0600). The secret is
    32 random bytes kept next to it; it is not the user's password. fprintd's
    own polkit check (the user's password) is what guards enrollment.
 3. Per enrollment: `ISession.generateChallenge()` ->
@@ -354,7 +354,7 @@ has run. So before enrolling, the bridge does what keystore2 does on Android:
 
 ### 4.7 The bridge and fprintd (written: `fingerprint/bridge/`, `packages/libfprint/`; the protocol in FINGERPRINT-PLAN.md replaces the one below)
 
-**`omandroid-fp-bridge`** (ours, C, bionic, in the chroot, links the image's
+**`omamobile-fp-bridge`** (ours, C, bionic, in the chroot, links the image's
 `libbinder_ndk.so`). It speaks the frozen AIDL directly
 (`hardware/interfaces/biometrics/fingerprint/aidl/aidl_api/.../3`, hash
 `637371b53fb7faf9bd43aa51b72c23852d6e6d96`), with no generated code:
@@ -375,7 +375,7 @@ has run. So before enrolling, the bridge does what keystore2 does on Android:
 The HAL allows **one session at a time**; the bridge owns it for its whole
 life and serializes requests. At start it reads `getSensorProps()` (sensor
 centre and radius; expected near (720, 2360) and 120 px) and writes them to
-`/run/omandroid-fp/sensor` for the lock screen to draw the target.
+`/run/omamobile-fp/sensor` for the lock screen to draw the target.
 
 During enroll and verify the bridge reads the touchscreen
 (`/dev/input/by-path/...-event`, bound into the chroot): when a finger lands
@@ -384,8 +384,8 @@ to be on the panel (a few frames; tuned in F8), calls `onPointerDown` and
 `onUiReady`; on lift, `onPointerUp` and `local_hbm_mode=0`. LHBM is never
 left on: the panel driver's 3 s cap is the backstop.
 
-Socket protocol (`/run/omandroid-fp/bridge.sock`, bound into the chroot as
-`/dev/socket/omandroid-fp`, SOCK_SEQPACKET, root and the `fprintd` user
+Socket protocol (`/run/omamobile-fp/bridge.sock`, bound into the chroot as
+`/dev/socket/omamobile-fp`, SOCK_SEQPACKET, root and the `fprintd` user
 only), one text message per packet:
 
 ```
@@ -394,7 +394,7 @@ only), one text message per packet:
    MATCH <id> | NOMATCH | LIST <id>... | DELETED <id> | ERROR <code> | LOCKOUT <ms>
 ```
 
-**libfprint driver `omandroid_udfps`** (in our libfprint package, like our
+**libfprint driver `omamobile_udfps`** (in our libfprint package, like our
 Mesa): a virtual-type device enabled when the bridge socket exists, features
 VERIFY, IDENTIFY, STORAGE (list and delete). The print's driver data is the
 HAL's enrollment id. Enroll stages map to the HAL's `remaining` count.
@@ -402,12 +402,12 @@ fprintd, `pam_fprintd` and `/etc/pam.d/omarchy-lock-fingerprint` are then
 used unchanged. The password stays as the fallback.
 
 Lock screen: draw a target at the sensor while waiting for a finger
-(Omandroid's lock plugin). The screen must be lit (LHBM works only on a lit
+(Omarchy Mobile's lock plugin). The screen must be lit (LHBM works only on a lit
 panel), so unlock is "wake, then touch".
 
 ### 4.8 systemd
 
-`omandroid-fp.service` (`ExecStart=/usr/lib/omandroid-fp/omandroid-fp-chroot start hal`,
+`omamobile-fp.service` (`ExecStart=/usr/lib/omamobile-fp/omamobile-fp-chroot start hal`,
 `Restart=on-failure`, after the modules are loaded and `/dev/trusty-ipc-dev0`
 exists) and fprintd's normal activation. Not enabled until stage F10.
 
@@ -427,7 +427,7 @@ exists) and fprintd's normal activation. Not enabled until stage F10.
 - **TDP (stock: `persist/ss`).** The `persist` partition stays read-only (the
   initramfs storage guard; the README's ground rules). At setup the runner's
   operator copies `persist/ss` once, read-only, into
-  `/var/lib/omandroid-fp/persist-ss`, and Trusty then uses the copy. The copy
+  `/var/lib/omamobile-fp/persist-ss`, and Trusty then uses the copy. The copy
   and the RPMB stay consistent for Linux; the real `persist/ss` becomes
   stale, so a later Android may see its TDP state as rolled back. The
   alternative is to let Linux write the real `persist/ss` (add `persist` to
@@ -475,22 +475,22 @@ them in order; stop at the first surprise. `$O` = `~/android/mainline/out-finger
 ### F0 (laptop, offline)
 
 ```sh
-cd ~/Projects/omandroid
-KERNEL_DIR=~/android/mainline/wt-fingerprint KERNEL_OUT=$O bin/omandroid kernel   > logs/fp-kernel.log 2>&1
-KERNEL_DIR=~/android/mainline/wt-fingerprint KERNEL_OUT=$O bin/omandroid modules  > logs/fp-modules.log 2>&1
-KERNEL_DIR=~/android/mainline/wt-fingerprint KERNEL_OUT=$O bin/omandroid initramfs > logs/fp-initramfs.log 2>&1
-KERNEL_DIR=~/android/mainline/wt-fingerprint KERNEL_OUT=$O bin/omandroid images   > logs/fp-images.log 2>&1
+cd ~/Projects/omarchy-mobile
+KERNEL_DIR=~/android/mainline/wt-fingerprint KERNEL_OUT=$O bin/omamobile kernel   > logs/fp-kernel.log 2>&1
+KERNEL_DIR=~/android/mainline/wt-fingerprint KERNEL_OUT=$O bin/omamobile modules  > logs/fp-modules.log 2>&1
+KERNEL_DIR=~/android/mainline/wt-fingerprint KERNEL_OUT=$O bin/omamobile initramfs > logs/fp-initramfs.log 2>&1
+KERNEL_DIR=~/android/mainline/wt-fingerprint KERNEL_OUT=$O bin/omamobile images   > logs/fp-images.log 2>&1
 tools/extract-fingerprint-vendor -o out/fingerprint-vendor ~/android/factory/cheetah-*/image-cheetah-*.zip
 make -C fingerprint NDK=/opt/android-ndk OUT=$PWD/out/fingerprint
 ```
 
-Install the device package with `omandroid-fingerprint.conf` (blacklist) first.
+Install the device package with `omamobile-fingerprint.conf` (blacklist) first.
 No risk to the phone.
 
 ### F1: new kernel, default DTB (all fingerprint nodes disabled)
 
 ```sh
-KERNEL_DIR=... KERNEL_OUT=$O bin/omandroid modules-push && KERNEL_DIR=... KERNEL_OUT=$O bin/omandroid push
+KERNEL_DIR=... KERNEL_OUT=$O bin/omamobile modules-push && KERNEL_DIR=... KERNEL_OUT=$O bin/omamobile push
 tools/phone-ssh 'uname -r; lsmod | grep -cE "^(trusty|goodix_fp|sg) "; ls /sys/class/backlight/*/local_hbm_mode; cat /sys/class/backlight/*/local_hbm_mode'
 ```
 
@@ -507,7 +507,7 @@ out dir's images.
 cp "$D" "$D.default"
 $O/scripts/dtc/dtc -q -I dts -O dtb -o out/fingerprint-trusty.dtbo device/cheetah/overlays/fingerprint-trusty.dtso
 $O/scripts/dtc/fdtoverlay -i "$D.default" -o "$D" out/fingerprint-trusty.dtbo
-bin/omandroid images && bin/omandroid push         # with KERNEL_DIR/KERNEL_OUT as above
+bin/omamobile images && bin/omamobile push         # with KERNEL_DIR/KERNEL_OUT as above
 tools/fingerprint-capture --watchdog trusty-core
 tools/fingerprint-capture trusty-log
 tools/fingerprint-capture trusty-ipc
@@ -528,9 +528,9 @@ watchdog. Rollback: reboot (modules stay blacklisted), or
 
 ```sh
 tools/fingerprint-capture sg
-tools/phone-ssh 'dd if=/dev/disk/by-partlabel/mfg_data of=/var/lib/omandroid-fp/mfg_data.img bs=1M status=none;
+tools/phone-ssh 'dd if=/dev/disk/by-partlabel/mfg_data of=/var/lib/omamobile-fp/mfg_data.img bs=1M status=none;
   mkdir -p /mnt/persist-ro && mount -o ro /dev/disk/by-partlabel/persist /mnt/persist-ro &&
-  mkdir -p /var/lib/omandroid-fp/persist-ss && cp -a /mnt/persist-ro/ss/. /var/lib/omandroid-fp/persist-ss/;
+  mkdir -p /var/lib/omamobile-fp/persist-ss && cp -a /mnt/persist-ro/ss/. /var/lib/omamobile-fp/persist-ss/;
   umount /mnt/persist-ro'
 tools/phone-ssh 'cat /dev/disk/by-partlabel/persist' > ~/android/reference/cheetah-persist-$(date +%F).img
 ```
@@ -544,26 +544,26 @@ Rollback: `modprobe -r sg`.
 
 ```sh
 tar -C out/fingerprint-vendor -cf - root MANIFEST SOURCE |
-  tools/phone-ssh 'install -d /usr/lib/omandroid-fp && tar -C /usr/lib/omandroid-fp -xf -'
-for f in out/fingerprint/omandroid-fp-shim.so fingerprint/props.conf fingerprint/omandroid-fp-chroot; do
-  tools/phone-ssh "cat > /usr/lib/omandroid-fp/${f##*/}" < "$f"; done
-tools/phone-ssh 'chmod 755 /usr/lib/omandroid-fp/omandroid-fp-chroot; /usr/lib/omandroid-fp/omandroid-fp-chroot check'
-tools/phone-ssh 'systemd-run --unit=omandroid-fp -p KillMode=control-group /usr/lib/omandroid-fp/omandroid-fp-chroot start storage'
-tools/phone-ssh 'journalctl -u omandroid-fp -b --no-pager | tail -40; dmesg | grep -i trusty | tail -20'
+  tools/phone-ssh 'install -d /usr/lib/omamobile-fp && tar -C /usr/lib/omamobile-fp -xf -'
+for f in out/fingerprint/omamobile-fp-shim.so fingerprint/props.conf fingerprint/omamobile-fp-chroot; do
+  tools/phone-ssh "cat > /usr/lib/omamobile-fp/${f##*/}" < "$f"; done
+tools/phone-ssh 'chmod 755 /usr/lib/omamobile-fp/omamobile-fp-chroot; /usr/lib/omamobile-fp/omamobile-fp-chroot check'
+tools/phone-ssh 'systemd-run --unit=omamobile-fp -p KillMode=control-group /usr/lib/omamobile-fp/omamobile-fp-chroot start storage'
+tools/phone-ssh 'journalctl -u omamobile-fp -b --no-pager | tail -40; dmesg | grep -i trusty | tail -20'
 ```
 
 Expect: `[servicemanager]` and `[vndservicemanager]` start; `[storageproxyd]`
 connects, handles RPMB requests, sets `ro.vendor.trusty.storage.fs_ready=1`;
 "secure storage ready". Trusty's log shows the storage service mounting
-TP/TD/TDP; files appear in `/var/lib/omandroid-fp/data/vendor/ss`.
+TP/TD/TDP; files appear in `/var/lib/omamobile-fp/data/vendor/ss`.
 Risk: section 5: this is the point of no return for the RPMB. A failure here
 (e.g. storageproxyd rejecting the sg node) writes nothing.
-Rollback: `systemctl stop omandroid-fp`. RPMB contents cannot be rolled back.
+Rollback: `systemctl stop omamobile-fp`. RPMB contents cannot be rolled back.
 
 ### F5: the TA loads
 
 ```sh
-tools/phone-ssh 'systemctl stop omandroid-fp; systemd-run --unit=omandroid-fp /usr/lib/omandroid-fp/omandroid-fp-chroot start apploader'
+tools/phone-ssh 'systemctl stop omamobile-fp; systemd-run --unit=omamobile-fp /usr/lib/omamobile-fp/omamobile-fp-chroot start apploader'
 ```
 
 Expect: "loading g7.app", the apploader exits 0 in about a second
@@ -575,10 +575,10 @@ the app. Risk: apploader blocks if storage is not up (the runner times out at
 
 ```sh
 # with the ACPM regulator driver merged and vdd-supply = <&ldo15s> added to the node
-$O/scripts/dtc/fdtoverlay -i "$D" -o "$D" out/fingerprint-sensor.dtbo && bin/omandroid images && bin/omandroid push
+$O/scripts/dtc/fdtoverlay -i "$D" -o "$D" out/fingerprint-sensor.dtbo && bin/omamobile images && bin/omamobile push
 tools/phone-ssh 'grep -i ldo15 /sys/kernel/debug/regulator/regulator_summary; ls /sys/firmware/devicetree/base/chosen/plat'
 tools/fingerprint-capture --watchdog goodix
-tools/phone-ssh 'systemctl stop omandroid-fp; systemd-run --unit=omandroid-fp /usr/lib/omandroid-fp/omandroid-fp-chroot start hal'
+tools/phone-ssh 'systemctl stop omamobile-fp; systemd-run --unit=omamobile-fp /usr/lib/omamobile-fp/omamobile-fp-chroot start hal'
 ```
 
 Expect: `gpp0`-`gpp19` GPIO chips; "goodix-fp ... irq N, supply switched";
@@ -609,7 +609,7 @@ Keep `allow_lhbm=1` only from here on (device package `modprobe.d`).
 ### F8: enroll (needs the bridge)
 
 ```sh
-omandroid-fp-bridge --enroll        # in the chroot, until fprintd is wired
+omamobile-fp-bridge --enroll        # in the chroot, until fprintd is wired
 ```
 
 Expect: shared secret computed; Gatekeeper enroll returns a handle; challenge,
@@ -628,10 +628,10 @@ Rollback: `fprintd-delete $USER`.
 
 ### F10: PAM unlock
 
-Enable `omandroid-fp.service` and fprintd. Lock, wake the screen, touch the
+Enable `omamobile-fp.service` and fprintd. Lock, wake the screen, touch the
 target: unlocks. The password still unlocks; with the service stopped the
 lock falls back to the password.
-Rollback: `systemctl disable --now omandroid-fp`.
+Rollback: `systemctl disable --now omamobile-fp`.
 
 ---
 
@@ -644,12 +644,12 @@ Rollback: `systemctl disable --now omandroid-fp`.
 | `L/drivers/gpu/drm/panel/panel-samsung-s6e3hc4.c` | LHBM attributes |
 | `L/arch/arm64/boot/dts/exynos/google/gs201.dtsi`, `gs201-pinctrl.dtsi`, `gs201-cheetah.dts` | trusty, PERIC0 pinctrl, fingerprint nodes (disabled) |
 | `L/Documentation/devicetree/bindings/firmware/android,trusty-smc-v1.yaml`, `misc/goodix,g7-udfps.yaml` | bindings |
-| `kernel/configs/omandroid.config` | the six options |
-| `packages/omandroid-device-cheetah/vendor/modprobe.d/omandroid-fingerprint.conf` | blacklist |
+| `kernel/configs/omamobile.config` | the six options |
+| `packages/omamobile-device-cheetah/vendor/modprobe.d/omamobile-fingerprint.conf` | blacklist |
 | `device/cheetah/overlays/fingerprint-{trusty,sensor}.dtso` | gate overlays |
 | `tools/extract-fingerprint-vendor` | vendor files from the factory image |
 | `tools/fingerprint-capture` | gates F2-F6 with log streaming and watchdog |
-| `packages/omandroid-fingerprint/lib/` | the chroot runner, props, `omandroid-tipc-probe`, `omandroid-fp-ctl` |
-| `fingerprint/bridge/omandroid-fp-bridge.c` | the HAL client fprintd's driver talks to |
-| `packages/libfprint/` | libfprint with the `omandroid_udfps` driver |
-| `fingerprint/shim/omandroid-fp-shim.c`, `fingerprint/Makefile` | the preload shim |
+| `packages/omamobile-fingerprint/lib/` | the chroot runner, props, `omamobile-tipc-probe`, `omamobile-fp-ctl` |
+| `fingerprint/bridge/omamobile-fp-bridge.c` | the HAL client fprintd's driver talks to |
+| `packages/libfprint/` | libfprint with the `omamobile_udfps` driver |
+| `fingerprint/shim/omamobile-fp-shim.c`, `fingerprint/Makefile` | the preload shim |

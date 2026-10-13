@@ -18,7 +18,7 @@ the widget store of Simon Schubert's Omalauncher.
 
 **Differences from the original:** the original reads the phone from
 Android (`android.device`, `android.system`, `android.battery`) and Arch from
-a command; Omandroid has no Android, so everything comes from Linux:
+a command; Omarchy Mobile runs no Android, so everything comes from Linux:
 `fetch.py` reads `/proc`, `/sys`, `/etc/os-release`, `pacman`, the pacman
 log and `hyprctl monitors`, and the battery level comes from UPower. The
 Android-only lines (Android version, security patch, Android apps, the
@@ -57,4 +57,4 @@ The original is MIT licensed, and so is this port:
     SOFTWARE.
 
 The same text is in `LICENSE-omarchy-widgets` in the home screen's plugin folder
-(`/usr/share/omandroid/shell/plugins/omandroid.home/LICENSE-omarchy-widgets`).
+(`/usr/share/omamobile/shell/plugins/omamobile.home/LICENSE-omarchy-widgets`).

@@ -4,15 +4,15 @@ Status (2026-10-12): **Hyprland renders on the Mali-G710 by default, with
 frequency scaling.** G0-G3 passed ("G2 result" at the end): Panthor
 autoloads at boot, and patched Mesa (`packages/mesa` 26.2.4-1.1) gives
 OpenGL ES 3.1 and PanVK Vulkan 1.4. DVFS runs through ACPM (`ACPM-PLAN.md`
-A1-A5, omandroid-device-cheetah 0.1.13+): 151 MHz idle, capped at 572 MHz
+A1-A5, omamobile-device-cheetah 0.1.13+): 151 MHz idle, capped at 572 MHz
 until there is a GPU thermal limit. Scan-out is now gs-decon
-(`DISPLAY-PLAN.md` D6), not simpledrm. Kernel: `omandroid-gpu` @ `1f1b44ac6`
-(`wt-gpu`), merged into `omandroid-int`. **Next:** G4 (a real G3D power
-domain; the GPU stays powered through `20-omandroid-gpu-always-on.rules`),
+(`DISPLAY-PLAN.md` D6), not simpledrm. Kernel: `omamobile-gpu` @ `1f1b44ac6`
+(`wt-gpu`), merged into `omamobile-int`. **Next:** G4 (a real G3D power
+domain; the GPU stays powered through `20-omamobile-gpu-always-on.rules`),
 the thermal limit that lifts the cap, and upstreaming the G710 Mesa entry.
 
 Earlier status (historical, superseded by the status above): G0, G1 and G2 done (2026-10-11). Hyprland renders on the Mali-G710; see "G2 result" at the end. Written 2026-10-11 against
-`omandroid` @ `cbde67d76` (Linux 7.3-rc6), Arch `mesa 1:26.2.4-1`,
+`omamobile` @ `cbde67d76` (Linux 7.3-rc6), Arch `mesa 1:26.2.4-1`,
 `linux-firmware-other 20260916-1`.
 
 Goal: Hyprland renders on the GPU through Mesa Panfrost (GL/GLES) and PanVK
@@ -22,7 +22,7 @@ Goal: Hyprland renders on the GPU through Mesa Panfrost (GL/GLES) and PanVK
 Path abbreviations used below:
 
 - `L/` = `/home/raven/android/mainline/linux` (our kernel)
-- `G/` = `/home/raven/android/omandroid/out-kernel/google/gs-6.1/private`
+- `G/` = `/home/raven/android/omamobile/out-kernel/google/gs-6.1/private`
   (Google's GPL gs201 kernel)
 - `GS/` = `G/google-modules/soc/gs`
 - `R/` = `/home/raven/android/reference/cheetah-stock-cp2a-root`
@@ -419,9 +419,9 @@ node, so kmsro fails. Expect the GPU to be picked up automatically once
 
 How to ship:
 
-1. **Now:** a patched `mesa` in the Omandroid repo. Take Arch's
+1. **Now:** a patched `mesa` in the Omarchy Mobile repo. Take Arch's
    `mesa 1:26.2.4` PKGBUILD, add `0001-panfrost-add-Mali-G710.patch`, bump
-   `pkgrel` to `…-1.1omandroid`, and build in the aarch64 docker
+   `pkgrel` to `…-1.1omamobile`, and build in the aarch64 docker
    (`docker/Dockerfile`). Ship `vulkan-panfrost` from the same build; it is
    not installed today. Pin the package with `IgnorePkg` or a higher epoch in
    our repo so `pacman -Syu` does not replace it.
@@ -436,7 +436,7 @@ How to ship:
 Rules for every step:
 
 - The panthor module is **blacklisted from autoload**
-  (`/etc/modprobe.d/omandroid-panthor.conf: blacklist panthor`) and only loaded by
+  (`/etc/modprobe.d/omamobile-panthor.conf: blacklist panthor`) and only loaded by
   hand over SSH, so a failure costs at most one reboot.
 - `panic=10` and ABL A/B fallback are the recovery path
   (`device/cheetah/NOTES.md`).
@@ -570,7 +570,7 @@ power management takes another 2–3 weeks.
 > **Historical.** Superseded by the G2 result below, `ACPM-PLAN.md` and the
 > status at the top.
 
-### Kernel: `omandroid-gpu` in `wt-gpu`, rebased onto `omandroid` @ `1f151cd80` (touch included)
+### Kernel: `omamobile-gpu` in `wt-gpu`, rebased onto `omamobile` @ `1f151cd80` (touch included)
 
 - `b7b9b8bf3` dt-bindings: gpu: mali-valhall-csf: add the `google,gs201-mali` compatible.
   No SoC-specific constraints. `dt-doc-validate` passes.
@@ -609,19 +609,19 @@ assume 151 MHz.
 The parser script is not in the repo. It is about 50 lines of Python
 following `ect_parser.c`; rewrite it if it's needed again.
 
-### Userspace and tooling (omandroid repo)
+### Userspace and tooling (omamobile repo)
 
-- `device/cheetah/rootfs/etc/modprobe.d/omandroid-panthor.conf`: `blacklist panthor`.
+- `device/cheetah/rootfs/etc/modprobe.d/omamobile-panthor.conf`: `blacklist panthor`.
   This stops udev's modalias autoload. An explicit `modprobe panthor` still
   works.
-- `bin/omandroid modules`: runs `modules_install` with `INSTALL_MOD_STRIP=1`
+- `bin/omamobile modules`: runs `modules_install` with `INSTALL_MOD_STRIP=1`
   and packs the result as `$KERNEL_OUT/modules-<release>.tar.zst` (paths
   `<release>/…`, 1680 modules, 16 MB). The container has no depmod, so
   `depmod` runs on the phone.
-- `bin/omandroid modules-push`: streams that tarball into
+- `bin/omamobile modules-push`: streams that tarball into
   `/usr/lib/modules/<release>` over SSH, swapping the tree atomically, then
   runs `depmod -a <release>`. Written but **not run yet**.
-- Fixed `omandroid images`: `grep -q` under `pipefail` SIGPIPEd dtc once
+- Fixed `omamobile images`: `grep -q` under `pipefail` SIGPIPEd dtc once
   the DTB grew, and that produced a false "soc_id rewrite failed".
 - `packages/mesa/`: the G710 patch, a trimmed aarch64 PKGBUILD from Arch
   `1-26.2.4-1`, plus `README.md` and `UPSTREAM.md`. Verified so far:
@@ -632,19 +632,19 @@ following `ect_parser.c`; rewrite it if it's needed again.
   It has **not been built**; the build happens natively on the phone.
 
 Images for G1 are built in `~/android/mainline/out-gpu/images`. Kernel
-release: `7.3.0-rc6-omandroid-push1-00032-g1f1b44ac61b9`.
+release: `7.3.0-rc6-omamobile-push1-00032-g1f1b44ac61b9`.
 
-### G1 runbook (run from the omandroid repo, phone in Arch over USB)
+### G1 runbook (run from the omamobile repo, phone in Arch over USB)
 
 ```sh
 export KERNEL_OUT=$HOME/android/mainline/out-gpu
 # 1. blacklist first, so the new DTB cannot autoload panthor
-tools/phone-ssh 'mkdir -p /etc/modprobe.d && cat > /etc/modprobe.d/omandroid-panthor.conf' \
-  < device/cheetah/rootfs/etc/modprobe.d/omandroid-panthor.conf
+tools/phone-ssh 'mkdir -p /etc/modprobe.d && cat > /etc/modprobe.d/omamobile-panthor.conf' \
+  < device/cheetah/rootfs/etc/modprobe.d/omamobile-panthor.conf
 # 2. modules for the new kernel (installed alongside the running one)
-bin/omandroid modules-push
+bin/omamobile modules-push
 # 3. write slot B and reboot into it
-bin/omandroid push
+bin/omamobile push
 # 4. G0 pass check
 tools/phone-ssh 'uname -r; ls -d /sys/bus/platform/devices/28000000.gpu; \
   lsmod | grep -c panthor; ls -l /usr/lib/firmware/arm/mali/arch10.8/'
@@ -680,7 +680,7 @@ For the upstream Mesa MR, record the `core_features` low byte (the Mesa
   and scans out on simpledrm.
 - The panthor blacklist is gone: udev autoloads the module at boot, before SDDM
   starts Hyprland. The GPU stays powered through
-  `20-omandroid-gpu-always-on.rules` (G3D cannot be powered back up yet).
+  `20-omamobile-gpu-always-on.rules` (G3D cannot be powered back up yet).
 - Still open: `_opp_set_regulators: no regulator (mali)` at probe (harmless,
   fixed OPP at 151 MHz); DVFS and a real power-domain driver; upstream the G710
   Mesa entry.

@@ -11,7 +11,7 @@ decompiled code or disassembly is reproduced here: layouts are given as field
 tables in our own words, with the function that shows them.
 
 **2026-10-13:** the client we ship is no longer the one built from this
-spec: `packages/omandroid-modem-sit` 0.2.0 is a port of a SIT stack that
+spec: `packages/omamobile-modem-sit` 0.2.0 is a port of a SIT stack that
 registered, called, texted and carried data on this phone model, and its
 hardware-tested layouts win where they differ from the tables below (the
 data call is the 983-byte version-2 request, SET_INITIAL_ATTACH_APN is
@@ -22,7 +22,7 @@ the do-not-send list here are still used.
 
 Inputs (never committed; outside the repo):
 
-- `V/` = `~/android/omandroid/vendor/google/cheetah/proprietary/vendor` (CP2A
+- `V/` = `~/android/omamobile/vendor/google/cheetah/proprietary/vendor` (CP2A
   vendor tree): `lib64/libsitril.so` (the RIL), `lib64/libril_sitril.so` (the
   AIDL/HIDL front end), `bin/hw/rild_exynos`, and the protocol codec
   `lib64/vendor.radio.protocol.sit.{base,stream,json}.so`.
@@ -382,7 +382,7 @@ or a shim daemon that speaks one of those three: 3-4 weeks. That keeps
 MODEM-PLAN's estimate (3-6 weeks to data and SMS, then the front end).
 
 **Built offline (2026-10-12), replaced 2026-10-13:** steps 1-11 above
-were `omandroid-sitd` 0.1. Version 0.2.0 replaces it with the
+were `omamobile-sitd` 0.1. Version 0.2.0 replaces it with the
 hardware-tested sequence (MODEM-CLIENT.md 1.1); the do-not-send list is
 still enforced behind its allow-list, and `tools/sit-sim` now speaks the
 0.2 layouts.

@@ -5,7 +5,7 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
 ## 2026-10-12: first sound from the built-in speaker; accelerometer at every boot
 
 - **The top speaker plays** (AOC-PLAN C7d-6, kernel
-  7.3.0-rc6-omandroid-push1-00290-g66446bf5b725): a -20 dBFS 1 kHz tone
+  7.3.0-rc6-omamobile-push1-00290-g66446bf5b725): a -20 dBFS 1 kHz tone
   through AoC EP6 (PCM 5) in copy mode, heard by the human. The AoC drained
   the ring (Tx = Rx = 291840 bytes) with a PCM interrupt every 80 ms. A
   second stream in the same boot drained too.
@@ -25,7 +25,7 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
 
 ## 2026-10-11: hardware buttons (gpio-keys)
 
-- **All three buttons are plain GPIOs**, so one `gpio-keys` node covers them (kernel branch `omandroid-buttons`): Volume Down `gpa10-1` (pull-up), Volume Up `gpa8-5` (FAR_ALIVE, no pull), Power `gpa10-0` (pull-up). All active low, all `wakeup-source`. They appear as `/dev/input/by-path/platform-gpio-keys-event` with KEY_VOLUMEDOWN/UP/POWER.
+- **All three buttons are plain GPIOs**, so one `gpio-keys` node covers them (kernel branch `omamobile-buttons`): Volume Down `gpa10-1` (pull-up), Volume Up `gpa8-5` (FAR_ALIVE, no pull), Power `gpa10-0` (pull-up). All active low, all `wakeup-source`. They appear as `/dev/input/by-path/platform-gpio-keys-event` with KEY_VOLUMEDOWN/UP/POWER.
 - **Power is `PMIC_PWRON_OD_L`** (Google's `gs201-common.dtsi`): the S2MPG12 PWRONB line is also routed to the SoC. Stock configures the pin but reports the key through `s2mpg12-keys` over ACPM instead. Upstream gs101 Pixels use the GPIO (`gpa10-1` there), so we do the same. Reading the line doesn't affect the PMIC's own long-press reset.
 - **Needed the ALIVE pin controller** (`0x180d0000`, banks gpa0-5, 9, 10; alias `pinctrl0`). The driver data was already there; the DT node wasn't. Wake-up interrupts are direct, one GIC SPI per pin (gpa10 = SPI 42/43), from the stock DT.
 - **Test:** `evtest --grab /dev/input/by-path/platform-gpio-keys-event`. `--grab` keeps logind and Hyprland from also acting on the key.
@@ -33,7 +33,7 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
 
 ## 2026-10-11: touchscreen (Synaptics S3908 on SPI)
 
-- **Works with our own driver** (`drivers/input/touchscreen/synaptics_tcm.c`, kernel branch `omandroid-touch`): TouchComm v1, message CRC off, firmware `S3908GA1B0-15.0` build 4104960, 1440x3120, 10 objects. Hyprland lists it under Touch; the panel is portrait with transform 0, so no axis swap or flip.
+- **Works with our own driver** (`drivers/input/touchscreen/synaptics_tcm.c`, kernel branch `omamobile-touch`): TouchComm v1, message CRC off, firmware `S3908GA1B0-15.0` build 4104960, 1440x3120, 10 objects. Hyprland lists it under Touch; the panel is portrait with transform 0, so no axis swap or flip.
 - **Wiring:** PERIC1 USI0 SPI at 0x10d10000 (GIC SPI 690), mode 0, 10 MHz; CS on gpp20-3 as a GPIO; ATTN gpa7-0 (FAR_ALIVE, GIC SPI 52, level low); reset gpp23-2 (active low).
 - **ABL holds the controller in reset** (gpp23-2 driven low) but leaves both supplies (S2MPG12 LDO25M 1.8 V, LDO26M 3.3 V) on. Releasing reset by hand with devmem made ATTN fall, which proved power before any driver existed.
 - **gs201 EINT numbering skips EINT19**, so from EINT20 on the GIC SPI is the EINT number minus one (gpa7-0 = EINT53 = SPI 52; gs101 uses 53).
@@ -45,7 +45,7 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
 - **ABL keeps the slot state in the first 128 bytes of `devinfo`** (8 KiB, not slotted), not in `misc` and not in GPT attributes. Source: Google's boot HAL, `device/google/gs-common` `bootctrl/aidl/` (Apache-2.0, tag android-14.0.0_r75), the one that builds `android.hardware.boot-service.default-pixel`. It uses GPT attributes only if devinfo is invalid. `misc` holds only the bootloader message and, at 32 KiB, the virtual A/B merge status.
 - **Layout:** magic `DEVI` (0x49564544), version u16 3 . u16 15, then 4 bytes per slot at 0x30 (a) and 0x34 (b): retry count, then flags bit0 unbootable, bit1 successful, bit2 active, bit3 fastboot-ok. No CRC. Every other header byte is ABL's own; bytes from 0x80 hold factory records (serials, IMEI).
 - **The 11 October backup decodes exactly to `getvar all`:** a: active, successful, retry 2, fastboot-ok. b: successful, unbootable, retry 2.
-- **`omandroid-bootctl`** (in the initramfs, not called by init yet) dumps it and can `mark-successful` / `set-active` behind `--i-understand`. On the backup, `set-active b` then `mark-successful b` changes only 0x31, 0x34 and 0x35. The HAL's `set-active` also writes the UFS `bBootLunEn` attribute, which the tool does not do.
+- **`omamobile-bootctl`** (in the initramfs, not called by init yet) dumps it and can `mark-successful` / `set-active` behind `--i-understand`. On the backup, `set-active b` then `mark-successful b` changes only 0x31, 0x34 and 0x35. The HAL's `set-active` also writes the UFS `bBootLunEn` attribute, which the tool does not do.
 
 ## 2026-10-11: lost USB for an hour (our bug, not hardware)
 
@@ -93,11 +93,11 @@ Mainline v7.3-rc6 boots from slot B, with all 8 CPUs, 11.5 GB of RAM, USB networ
 
 ### Host setup
 
-- **NetworkManager profile `omandroid-phone`** gives `172.16.42.2/24` on any `enp0s20f0u*` gadget link. Without it, NM tears the link down after DHCP fails.
+- **NetworkManager profile `omamobile-phone`** gives `172.16.42.2/24` on any `enp0s20f0u*` gadget link. Without it, NM tears the link down after DHCP fails.
 - **`tools/phone-ssh`** runs commands on the phone. dropbear has no scp/sftp server, so stream files with `ssh 'cat > file' < file`.
 
 ## 2026-10-12: firewall (Omarchy's ufw)
-- **Kernel:** Arch's iptables is iptables-nft, so ufw needs nf_tables plus the xtables matches its rules use through `nft_compat`: conntrack, state, owner, limit, recent, addrtype, hl, multiport, comment, LOG, REJECT (v4 and v6), and IPv6 `rt`. These are in `kernel/configs/omandroid.config`. The legacy filter tables (`iptable_filter`) are not needed.
+- **Kernel:** Arch's iptables is iptables-nft, so ufw needs nf_tables plus the xtables matches its rules use through `nft_compat`: conntrack, state, owner, limit, recent, addrtype, hl, multiport, comment, LOG, REJECT (v4 and v6), and IPv6 `rt`. These are in `kernel/configs/omamobile.config`. The legacy filter tables (`iptable_filter`) are not needed.
 - **Phone:** Omarchy's `install/config/firewall.sh`, plus `ufw allow in on usb0 to any port 22 proto tcp` so SSH over the USB link keeps working. ufw is on at boot (`ENABLED=yes`, `ufw.service`): incoming is denied, outgoing allowed.
 - **Testing a change safely:** arm `systemd-run --unit=fw-deadman --on-active=90 /usr/bin/ufw disable` first, check that a *fresh* SSH connection opens, then stop the timer.
 - **To do:** the image build should run the same steps. Should SSH-over-USB stay open on user builds? It is a developer feature.
@@ -111,58 +111,58 @@ Mainline v7.3-rc6 boots from slot B, with all 8 CPUs, 11.5 GB of RAM, USB networ
 Made on the development laptop to give the phone internet over USB. Revert when no longer needed:
 
 - **ufw forwarding for the phone's USB link** (added 2026-10-11): `sudo ufw route allow in on enp0s20f0u2`. Undo with `sudo ufw route delete allow in on enp0s20f0u2`.
-- **NetworkManager profile `omandroid-phone`** set to `ipv4.method shared` (NAT for the phone). Undo with `nmcli con modify omandroid-phone ipv4.method manual`, or remove the profile: `nmcli con delete omandroid-phone`.
+- **NetworkManager profile `omamobile-phone`** set to `ipv4.method shared` (NAT for the phone). Undo with `nmcli con modify omamobile-phone ipv4.method manual`, or remove the profile: `nmcli con delete omamobile-phone`.
 
 ## Phone UX to-dos
 
-- **First-run notifications are desktop-oriented.** "Learn Keybindings (Super + K…)" makes no sense on a touch phone, and "Setup Wi-Fi" needs to open the phone's Wi-Fi settings. Find how Omarchy's first run triggers them (`install/user/first-run`) and how omarchy-mac adapts them for its platform, then do the same in the Omandroid package. No local hacks.
+- **First-run notifications are desktop-oriented.** "Learn Keybindings (Super + K…)" makes no sense on a touch phone, and "Setup Wi-Fi" needs to open the phone's Wi-Fi settings. Find how Omarchy's first run triggers them (`install/user/first-run`) and how omarchy-mac adapts them for its platform, then do the same in the Omarchy Mobile package. No local hacks.
 - **Make `omarchy update` the update path on the phone.** Omarchy installs a pacman hook that blocks direct `pacman -Syu` and points to `omarchy update` (snapshots, keyrings, migrations, restarts). On the phone this needs `sudo` for the user and decisions about snapshots (no snapper/btrfs here, since the root is ext4). The `[omarchy]` repo must come **before** `[core]` in pacman.conf on aarch64, so Omarchy's own builds (quickshell 0.3.2-4, hyprland 0.56.2-5) win over Arch Linux ARM's. With ALARM's quickshell 0.3.2-1 on Qt 6.12, the shell's theme colours didn't resolve.
 - **Agent choice in onboarding.** The launcher's "Ask Claude" is hardcoded. Use Omarchy's standard default-agent mechanism (`omarchy-default-agent` and its settings, which Omalauncher also follows) for the launcher's agent, and let the user pick their agent during first-run onboarding, as Omarchy does. Claude stays Derek's choice, not the default.
 - **Temporary patch on the phone's Omarchy shell (2026-10-11).** Qt 6.12 (already in Arch Linux ARM) adds `QtQuick/Color`, which shadows Omarchy's `Commons.Color`, so every palette colour was undefined. Upstream fixed this in omacom/omarchy b83d3df084 (#14553, after v4.0.4) by importing `qs.Commons as Commons` and qualifying `Commons.Color`. We applied the same transformation to the installed v4.0.4 shell (54 files; original backed up at `/root/omarchy-shell-4.0.4-orig.tar.gz` on the phone). The next Omarchy release replaces those files with upstream's fix. Our phone plugins now follow the same rule.
 - **Done (2026-10-11): first-run keybindings toast and agent choice.**
   - The launcher reads Omarchy's default agent (`~/.config/omarchy/defaults/agent`, set by `omarchy-default-agent`). It prompts through `omarchy-agent-prompt`, or opens Omarchy's picker (`omarchy menu summon setup.default.agent`) when none is chosen.
-  - `omandroid-setup-user` marks `welcome-keybindings-not-applicable`, which the upstream change honours: submitted as omacom/omarchy#15075 (https://github.com/omacom/omarchy/pull/15075). The patch in `patches/omarchy/0001-*` is applied on the phone as a bridge until it ships.
-  - The setup script will become Omandroid's `setup-user` entrypoint in Omarchy's lifecycle-dispatch contract once a release includes it.
-- **Done: UTF-8 locale and timezone** via `omandroid-setup-system` (en_US.UTF-8; timezone from the host; NTP synced).
+  - `omamobile-setup-user` marks `welcome-keybindings-not-applicable`, which the upstream change honours: submitted as omacom/omarchy#15075 (https://github.com/omacom/omarchy/pull/15075). The patch in `patches/omarchy/0001-*` is applied on the phone as a bridge until it ships.
+  - The setup script will become Omarchy Mobile's `setup-user` entrypoint in Omarchy's lifecycle-dispatch contract once a release includes it.
+- **Done: UTF-8 locale and timezone** via `omamobile-setup-system` (en_US.UTF-8; timezone from the host; NTP synced).
 - **USB doesn't reconnect after unplugging (2026-10-11).** The USB PHY forces VBUS valid at boot (no Type-C / MAX77759 TCPC driver yet), so the gadget never sees detach or attach. After an unplug, the link stays down until the next boot. Fixed properly by the MAX77759 TCPC + dwc3 role-switch work (plan: USB-C row).
-- **Done (2026-10-11): apps open off-screen.** Omarchy floats its terminal, btop and dialogs at desktop sizes (875 x 600) through a `floating-window` tag, so on a 480 px wide screen they landed mostly off-screen (seen when installing an agent). `packages/omandroid-shell/hypr/phone.lua` drops the tag and maximizes every window, Android-style; it's loaded from the user's `looknfeel.lua`.
-- **Done (2026-10-11): on-screen keyboard.** squeekboard, with Omarchy's fcitx5 masked for the user and Wayland text-input selected (`20-omandroid-osk.conf`). The drawer uses on-demand focus: Hyprland routes no touch to other layers while one holds exclusive keyboard focus. Size follows the panel's real millimetres, now in the device tree.
+- **Done (2026-10-11): apps open off-screen.** Omarchy floats its terminal, btop and dialogs at desktop sizes (875 x 600) through a `floating-window` tag, so on a 480 px wide screen they landed mostly off-screen (seen when installing an agent). `packages/omamobile-shell/hypr/phone.lua` drops the tag and maximizes every window, Android-style; it's loaded from the user's `looknfeel.lua`.
+- **Done (2026-10-11): on-screen keyboard.** squeekboard, with Omarchy's fcitx5 masked for the user and Wayland text-input selected (`20-omamobile-osk.conf`). The drawer uses on-demand focus: Hyprland routes no touch to other layers while one holds exclusive keyboard focus. Size follows the panel's real millimetres, now in the device tree.
 - **Done (2026-10-11): power button menu.** Omarchy already binds XF86PowerOff to the system menu, so our extra binding toggled it twice; removed. Omarchy's menu drew its card at the top for one frame while its window still had a placeholder size (`patches/omarchy/0002-*`, applied on the phone, to send upstream). Suspend is hidden with Omarchy's `suspend-off` toggle until the kernel can suspend; later, short press = screen off + suspend, long press = menu, like Android.
 - **Screensaver isn't phone-shaped.** It runs in a terminal, so focusing it pops up the on-screen keyboard. Its art (`~/.config/omarchy/branding/screensaver.txt`) is one ~80-column line of lettering, too wide for portrait. On exit it sets `cursor:invisible false`, which brings back the pointer we hide. Needs a portrait art file, no keyboard, and the phone's cursor setting kept.
 - **Lock screen and PIN.** Wanted: Omarchy's lock after boot (autologin, then lock) and after the screensaver, unlocked with a PIN/password or fingerprint. Omarchy's lock (shell `lock` plugin, PAM) hides every other surface while locked, including the on-screen keyboard, so the phone needs a PIN pad inside the lock view. The PIN is the user's password, so `sudo` and the lock agree.
 - **Fingerprint.** Omarchy's lock already supports fprintd. The plan (Google's HAL and Trusty TA in a minimal chroot, Trusty driver port, panel LHBM, staged runbook) is in `FINGERPRINT-RESEARCH.md`.
 - **Omarchy's per-user install never fully ran on the phone (2026-10-11).** Example: no default keyring, so the first app to use the keyring (Chromium, during an agent login) popped up a desktop-sized "create a keyring password" prompt. Fixed by hand with Omarchy's own `install/user/default-keyring.sh`. The phone image must run Omarchy's user install (`install/user/all.sh`), not a hand-picked subset; audit the other steps (theme, chromium, git, xcompose, mise) too.
-- **Chromium's first-run dialogs don't fit.** Its "Additional Terms of Service" page (blank text in open-source builds) put Accept off-screen and blocked an OAuth login. `omandroid-setup-user` adds `--no-first-run` to `~/.config/chromium-flags.conf`.
+- **Chromium's first-run dialogs don't fit.** Its "Additional Terms of Service" page (blank text in open-source builds) put Accept off-screen and blocked an OAuth login. `omamobile-setup-user` adds `--no-first-run` to `~/.config/chromium-flags.conf`.
 - **System dialogs aren't phone-shaped.** gcr-prompter (keyring), polkit and portal dialogs are GTK windows sized for desktops. Now that every window is maximized they fit the width, but they'll want a phone-friendly look.
-- **Stale `/usr/local/bin/omandroid-setup-user` (fixed 2026-10-11).** An early hand-copied version shadowed the packaged `/usr/bin` one on PATH, so newly added setup steps were silently skipped when the script ran by name. Removed. Since then both packages are installed with pacman (below).
+- **Stale `/usr/local/bin/omamobile-setup-user` (fixed 2026-10-11).** An early hand-copied version shadowed the packaged `/usr/bin` one on PATH, so newly added setup steps were silently skipped when the script ran by name. Removed. Since then both packages are installed with pacman (below).
 - **Shell plugin development gotchas (2026-10-11).**
   - Omarchy's live plugin reload ("Local plugin changed, reloading") can keep running the old code. After changing a plugin's QML, restart the shell (`omarchy-restart-shell`) before testing.
   - A Qt pointer handler (DragHandler, TapHandler) declared directly on a Quickshell window gets no events. Put it on an Item inside the window.
   - A plugin may only summon panels it owns (`_summon` checks `pluginOwnsTarget`). To open another plugin, run `omarchy-shell shell summon <id>`, as Omarchy's background does.
   - To debug touch, `console.log` is hard to read back (binary `log.qslog`, needs `qs log`). Appending to a file through `Quickshell.execDetached` gave a clear trace.
-- **Packaged (2026-10-11).** `omandroid-shell` and `omandroid-device-cheetah` are built natively on the phone with makepkg and installed with pacman. Hand-copied files in `/etc`, `/usr/local/bin` and `/usr/share/omandroid/phone` are gone; the user's config points at `/usr/share/omandroid/shell`. The MAX77759 blacklist moved from the rootfs overlay into the device package (`/usr/lib/modprobe.d`). Still to do: a package repository so `omarchy update` (pacman -Syu) picks up new versions, instead of `pacman -U`.
+- **Packaged (2026-10-11).** `omamobile-shell` and `omamobile-device-cheetah` are built natively on the phone with makepkg and installed with pacman. Hand-copied files in `/etc`, `/usr/local/bin` and `/usr/share/omamobile/phone` are gone; the user's config points at `/usr/share/omamobile/shell`. The MAX77759 blacklist moved from the rootfs overlay into the device package (`/usr/lib/modprobe.d`). Still to do: a package repository so `omarchy update` (pacman -Syu) picks up new versions, instead of `pacman -U`.
 - **Omarchy per-user install audit (2026-10-11).** Against `install/user/all.sh`: theme, Chromium extensions and the keyring are in place; `mise-work.sh` (`~/Work`, node) and `xcompose.sh` were run by hand. Still open: git identity (`git.sh` needs the user's name and email) and `mise.sh` (Omarchy installs about 11 agent CLIs; only Claude is installed). The image build must run Omarchy's whole user install instead.
-- **Package repository (2026-10-11).** `[omandroid]` is in the phone's pacman.conf, before `[omarchy]`, through `/etc/pacman.d/omandroid-mirrorlist` (from `omandroid-device-cheetah`). Packages and the database are signed with the Omandroid key (`keys/`, never committed; public half in `omandroid-keyring`). While the project is private the repository lives on the phone at `/var/lib/omandroid/repo`: `tools/repo-build` builds (on the phone), signs and indexes it, `tools/repo-push` copies it over, and `pacman -Syu` / `omarchy update` installs new versions. Bootstrap on a new phone: `pacman-key --add` and `--lsign-key` the key once, then install `omandroid-keyring`. Our Mesa is tracked from `[omandroid]`, so Arch's can't replace it (we must keep it current with Arch's Mesa). `omarchy update` needs sudo, which asks for the PIN, so it runs in a terminal like on a computer.
+- **Package repository (2026-10-11).** `[omamobile]` is in the phone's pacman.conf, before `[omarchy]`, through `/etc/pacman.d/omamobile-mirrorlist` (from `omamobile-device-cheetah`). Packages and the database are signed with the Omarchy Mobile key (`keys/`, never committed; public half in `omamobile-keyring`). While the project is private the repository lives on the phone at `/var/lib/omamobile/repo`: `tools/repo-build` builds (on the phone), signs and indexes it, `tools/repo-push` copies it over, and `pacman -Syu` / `omarchy update` installs new versions. Bootstrap on a new phone: `pacman-key --add` and `--lsign-key` the key once, then install `omamobile-keyring`. Our Mesa is tracked from `[omamobile]`, so Arch's can't replace it (we must keep it current with Arch's Mesa). `omarchy update` needs sudo, which asks for the PIN, so it runs in a terminal like on a computer.
 - **Reserved memory audit (2026-10-11).** Firmware writing into memory the kernel thinks is free corrupts data, so every stock `reserved-memory` node was checked against `/proc/iomem`. Five were plain System RAM in our kernel: `seclog` (0xc3000000, written by the secure world at runtime), the modem's `cp_rmem`/`cp_rmem_1` (0xea400000, 0xe8000000), AoC's `xhci_dma` (0x97000000) and `ect_binary` (0x90000000). All are now `no-map` in gs201.dtsi (kernel e7cb10fe5). The regions they named, 0xd8100000 and 0xdc210000, were already inside our `dss` reservation.
-- **Battery model works (2026-10-12, gate B1b).** With the gauge in POR (Status 0x0002, DesignCap 0x0bb8, TaskPeriod 0x1680, Config 0x2354 with TEx set, so Temp stuck at 22.0 °C), the new loader wrote stock's 1 kΩ-ID ModelGauge m5 model at probe ("battery model loaded (DesignCap 0x9c5, TaskPeriod 0x2d00)"). Every register then matched the expected table in WIFI-BATTERY-PLAN.md B1b; charge_full 5000 mAh (design 5002), temp 35.0 °C from the thermistor, UPower 22.25 Wh. After a reboot POR stays clear and the model is kept without reloading. Merged into the main kernel (`omandroid`).
+- **Battery model works (2026-10-12, gate B1b).** With the gauge in POR (Status 0x0002, DesignCap 0x0bb8, TaskPeriod 0x1680, Config 0x2354 with TEx set, so Temp stuck at 22.0 °C), the new loader wrote stock's 1 kΩ-ID ModelGauge m5 model at probe ("battery model loaded (DesignCap 0x9c5, TaskPeriod 0x2d00)"). Every register then matched the expected table in WIFI-BATTERY-PLAN.md B1b; charge_full 5000 mAh (design 5002), temp 35.0 °C from the thermistor, UPower 22.25 Wh. After a reboot POR stays clear and the model is kept without reloading. Merged into the main kernel (`omamobile`).
 
 ## 2026-10-12: Wi-Fi connects (W3)
 
-- Kernel omandroid-int `7.3.0-rc6-omandroid-push1-00131-g03266d3c4a3e` (pcie `e1c6379cf`): WPA2 association to a home AP on 5 GHz (ch 48), DHCP, 0% ping loss.
+- Kernel omamobile-int `7.3.0-rc6-omamobile-push1-00131-g03266d3c4a3e` (pcie `e1c6379cf`): WPA2 association to a home AP on 5 GHz (ch 48), DHCP, 0% ping loss.
 - 50 MB download over Wi-Fi: 18.97 MB/s (about 152 Mbit/s), no control timeouts, no firmware trap, no "poll: mailboxint" catches in that run.
 - Fixes that got it there (WIFI-BATTERY-PLAN 9.13-9.16): host ready rung once, FLR on probe and remove, versioned join parameters (JOIN_V1), host-built 802.3/LLC TX headers (HOST_SFHLLC), and re-polling the D2H rings after each INTx.
-- The interface uses the bootloader's MAC (omandroid-device-cheetah 0.1.5); NetworkManager randomises it only while scanning.
+- The interface uses the bootloader's MAC (omamobile-device-cheetah 0.1.5); NetworkManager randomises it only while scanning.
 - Still a test setup: Wi-Fi stays blacklisted at boot and is loaded by hand until W4 (S2MPU confinement). No long transfers before W4.
 - **W4 decision (2026-10-12): Wi-Fi ships with the restricted DMA pool only.**
   - The HSI2 System MMU (and the S2MPU) select by VID, and the negative tests showed the PCIe master (AxID 0x0) and UFS (AxID 0x2) both arrive on VID 0. Translating VID 0 starved storage and wedged the phone. So neither block can confine the chip, and the firewall driver now refuses VID 0.
   - The pool keeps every buffer the kernel gives the chip in 16 MiB below 4 GiB. That contains driver bugs and stray pointers, not hostile firmware, which appears to be no worse than stock: stock's VID-1 SysMMU maps every buffer 1:1.
   - The default DTB enables `pcie_1`, its PHY and the pool, and the SysMMU node stays disabled.
-  - omandroid-device-cheetah 0.1.12 enables `omandroid-wifi.service`. The modules stay blacklisted for autoload, so only the hang-safe script loads them.
+  - omamobile-device-cheetah 0.1.12 enables `omamobile-wifi.service`. The modules stay blacklisted for autoload, so only the hang-safe script loads them.
   - 6 GHz chanspecs now decode without the "Invalid chanspec 0x5001" warning; 6 GHz itself is not enabled yet.
 
 ## 2026-10-12: Bluetooth, haptics and torch bring-up (BT1.1-1.3, H1-H3, T1-T3)
 
-Kernel omandroid-int `7.3.0-rc6-omandroid-push1-00145-ga868e7333752` with the bring-up overlays (bt-cmu-test, bt-uart-test, haptics-i2c, haptics, torch-i2c, torch).
+Kernel omamobile-int `7.3.0-rc6-omamobile-push1-00145-ga868e7333752` with the bring-up overlays (bt-cmu-test, bt-uart-test, haptics-i2c, haptics, torch-i2c, torch).
 
 - **BT1.1:** `dout_apm_usi1_uart` 197 MHz from `pll_alv_div2_apm` (394 MHz). UART gates 0x180020ac/0x180020b0/0x18002100 read 0x00200000: bit 21 (the gate bit the driver uses) set, manual mode off, so the clocks run.
 - **BT1.2:** UART loopback passes at 115200 and 3000000 baud.
@@ -174,30 +174,30 @@ Kernel omandroid-int `7.3.0-rc6-omandroid-push1-00145-ga868e7333752` with the br
 - **H3:** buzzes at 300 ms / 40% and 600 ms / 70% felt by hand, no mailbox errors.
 - **T1/T2:** LM3644TT (ID 0x04), 17 torch steps, 2550-49110 uA per channel; the camera EEPROM at 0x50 answers on the same bus.
 - **T3:** brightness 1 and 9 for 2 s each, both seen, no fault flags.
-- Shutdown hangs now end in a watchdog reset after a minute (`RebootWatchdogSec=1min`, omandroid-device-cheetah 0.1.6).
+- Shutdown hangs now end in a watchdog reset after a minute (`RebootWatchdogSec=1min`, omamobile-device-cheetah 0.1.6).
 
 ## 2026-10-12: everything working so far comes up at boot
 
-Kernel omandroid-int `7.3.0-rc6-omandroid-push1-00171-g907128673cba` with the **default DTB, no test overlays**, and omandroid-device-cheetah 0.1.13. Two reboots in a row (a push, then `systemctl reboot`) gave the same result:
+Kernel omamobile-int `7.3.0-rc6-omamobile-push1-00171-g907128673cba` with the **default DTB, no test overlays**, and omamobile-device-cheetah 0.1.13. Two reboots in a row (a push, then `systemctl reboot`) gave the same result:
 
 - **GPU:** Panthor bound with frequency scaling through ACPM (A1-A5): 151 MHz idle, capped at 572 MHz, Hyprland idle at 0% CPU.
   - ACPM A1 first failed with "Channel 3 queues outside the SRAM": a type-2 buffer channel in DRAM at 0xa8200080. The driver now skips unusable channels (14 of 15 usable; DVFS uses channel 0, PMIC 2, thermal 9).
-  - A stale `/etc/modprobe.d/omandroid-acpm.conf` blacklist from A0 overrode the package's options and left the GPU unbound; remove it when moving from a bring-up stage to the package.
-- **Wi-Fi:** omandroid-wifi.service (hang-safe marker), restricted DMA pool, no SysMMU (W4 decision, WIFI-BATTERY-PLAN 9.20/9.21). Autoconnects to the saved network; no "Invalid chanspec" warnings. One download measured 11 MB/s; the earlier ones were 19-21.
-- **Bluetooth:** powered at boot with the bootloader's address. omandroid-bt-addr now powers the controller on before setting the address; set on a never-powered controller, the kernel withdrew the index for good.
+  - A stale `/etc/modprobe.d/omamobile-acpm.conf` blacklist from A0 overrode the package's options and left the GPU unbound; remove it when moving from a bring-up stage to the package.
+- **Wi-Fi:** omamobile-wifi.service (hang-safe marker), restricted DMA pool, no SysMMU (W4 decision, WIFI-BATTERY-PLAN 9.20/9.21). Autoconnects to the saved network; no "Invalid chanspec" warnings. One download measured 11 MB/s; the earlier ones were 19-21.
+- **Bluetooth:** powered at boot with the bootloader's address. omamobile-bt-addr now powers the controller on before setting the address; set on a never-powered controller, the kernel withdrew the index for good.
 - **Haptics and torch:** load at boot (DT default-on).
 - **No failed units.**
 - **On-screen keyboard:** stopped appearing once because `org.gnome.desktop.a11y.applications screen-keyboard-enabled` read false. Set back to true; what cleared it is not known yet.
 
 ## 2026-10-12: first sound, Bluetooth pairing, charging (BT3, B3.3)
 
-- **Bluetooth pairing (BT3):** Pixel Buds Pro paired, trusted and connected from the shell's new Bluetooth panel (shell 0.1.11, `omandroid-bt-agent` as the BlueZ pairing agent).
-- **First sound:** A2DP to the earbuds through PipeWire, a 440/660 Hz tone heard. The phone was missing PipeWire's BlueZ plugin (`pipewire-audio`) and `pipewire-pulse`; omandroid-shell 0.1.12 depends on them.
+- **Bluetooth pairing (BT3):** Pixel Buds Pro paired, trusted and connected from the shell's new Bluetooth panel (shell 0.1.11, `omamobile-bt-agent` as the BlueZ pairing agent).
+- **First sound:** A2DP to the earbuds through PipeWire, a 440/660 Hz tone heard. The phone was missing PipeWire's BlueZ plugin (`pipewire-audio`) and `pipewire-pulse`; omamobile-shell 0.1.12 depends on them.
 - **Charging (B3.3):** max77759-charger at 500 mA input, float voltage 4450 mV (stock fv-max), fast charge 1467 mA.
   - Over 10 minutes: 93 -> 96 % (the bootloader stops at 93 % with 4350 mV), 34.9 -> 35.2 °C (peak 35.5), and the gauge current fell from 1.02 to 0.62 A as it went into CV.
   - The gauge current is above what a 500 mA input allows. NO_AUTOIBUS is 0, so the chip's automatic input limit may have raised it on this laptop port (open question).
   - **Not default yet:** it needs the temperature guard (USB-C-PLAN B3) first. At boot the charger driver stays blacklisted and the bootloader's settings apply.
-- Bug: `omandroid-bt-agent` doesn't exit when stdin reaches EOF, which hung a scripted `omandroid-bt-agent </dev/null`. The panel keeps stdin open, so this doesn't affect normal use.
+- Bug: `omamobile-bt-agent` doesn't exit when stdin reaches EOF, which hung a scripted `omamobile-bt-agent </dev/null`. The panel keeps stdin open, so this doesn't affect normal use.
 
 ## 2026-10-12: our own display driver at 120 Hz, by default (D4a, D5, D6)
 
@@ -210,7 +210,7 @@ Kernel omandroid-int `7.3.0-rc6-omandroid-push1-00171-g907128673cba` with the **
 
 ## 2026-10-12: the AoC (audio and sensor DSP) boots under Linux; Trusty runs
 
-On omandroid-int `7.3.0-rc6-omandroid-push1-00247-gc779a9f42a1d`, with the aoc-boot-test and fingerprint-trusty overlays:
+On omamobile-int `7.3.0-rc6-omamobile-push1-00247-gc779a9f42a1d`, with the aoc-boot-test and fingerprint-trusty overlays:
 
 - **Trusty** comes up from Linux: "trusty_ipc virtio0: is online", `/dev/trusty-ipc-dev0`. This is fingerprint gate F2 as well.
 - **Load:** the GSA authenticates and loads Google's `aoc.bin` (mailbox command 90): state 1, loaded.
@@ -223,7 +223,7 @@ On omandroid-int `7.3.0-rc6-omandroid-push1-00247-gc779a9f42a1d`, with the aoc-b
 
 ## 2026-10-12: GNSS runs Google's stack, NMEA flowing (G3d)
 
-On omandroid-int `7.3.0-rc6-omandroid-push1-00253-g48b42df9b5c7` with the gnss-pmic-test and gnss-test overlays, plus the vendor-chroot gnss profile:
+On omamobile-int `7.3.0-rc6-omamobile-push1-00253-g48b42df9b5c7` with the gnss-pmic-test and gnss-test overlays, plus the vendor-chroot gnss profile:
 
 - **Daemons:** stock `servicemanager`, `lhd` and `gpsd` run in the vendor chroot.
 - **Chip bring-up:** lhd powers the BCM4776 within about 1.5 s. Driver events show "nstandby <- 1", "power on", "ttyBCM opened by lhd", then the SensorHub.patch download (TX frames of 943-2834 bytes). lhd reports **ESW:READY**.

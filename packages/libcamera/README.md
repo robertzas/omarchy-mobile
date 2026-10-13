@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# libcamera (Omandroid build)
+# libcamera (Omarchy Mobile build)
 
 This is Arch Linux's libcamera 0.7.2-4, rebuilt for the Pixel 7 Pro. The main
 change: the simple pipeline handler learns the `gs201-csis` camera receiver,

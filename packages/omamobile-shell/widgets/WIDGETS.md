@@ -1,10 +1,10 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Omandroid home-screen widgets
+# Omarchy Mobile home-screen widgets
 
-This is the contract for writing your own widgets for Omandroid's home
+This is the contract for writing your own widgets for Omarchy Mobile's home
 screens, by hand or with a coding agent. It is installed as
-`/usr/share/omandroid/shell/WIDGETS.md` and linked from
-`~/.config/omandroid/widgets/WIDGETS.md`.
+`/usr/share/omamobile/shell/WIDGETS.md` and linked from
+`~/.config/omamobile/widgets/WIDGETS.md`.
 
 A widget is a folder with a `manifest.json` and a QML file, like an Omarchy
 shell plugin. It draws inside a card on the home screen, takes its colours
@@ -16,17 +16,17 @@ Work only inside that folder: don't create, change or delete files anywhere
 else, don't run `sudo` or any other root tool, don't install packages, and
 don't fetch widget code from the network. You run unattended (Omarchy starts
 agents with their "don't ask" flags), so these limits are yours to keep.
-Keep the manifest's `id`. When you are done, run `omandroid-widget check .`
+Keep the manifest's `id`. When you are done, run `omamobile-widget check .`
 and fix every error it reports. The home screen applies the same checks.
 
 ## Where widgets live
 
 | Path | What |
 | --- | --- |
-| `~/.config/omandroid/widgets/<id>/` | Your widgets, one folder each; the folder name is the manifest's `id` |
-| `/usr/share/omandroid/shell/widget-examples/<id>/` | Installed examples. They aren't loaded from there: placing one copies it into your widgets |
-| `/usr/share/omandroid/shell/widget-template/` | The starter that **Create a widget with AI** copies |
-| `~/.local/share/omandroid/removed-widgets/` | Where **Remove** moves a widget folder (nothing is deleted) |
+| `~/.config/omamobile/widgets/<id>/` | Your widgets, one folder each; the folder name is the manifest's `id` |
+| `/usr/share/omamobile/shell/widget-examples/<id>/` | Installed examples. They aren't loaded from there: placing one copies it into your widgets |
+| `/usr/share/omamobile/shell/widget-template/` | The starter that **Create a widget with AI** copies |
+| `~/.local/share/omamobile/removed-widgets/` | Where **Remove** moves a widget folder (nothing is deleted) |
 
 The home screen watches your widgets folder (the way Omarchy's shell watches
 `~/.config/omarchy/plugins`) and reloads a widget a moment after any of its
@@ -38,7 +38,7 @@ loaded from anywhere else.
 In edit mode (long-press the home screen), **Widgets**, then **Create a
 widget with AI**. Describe the widget and tap **Create**. The phone then:
 
-1. makes `~/.config/omandroid/widgets/<you>.<words>/` from the template and
+1. makes `~/.config/omamobile/widgets/<you>.<words>/` from the template and
    places it on the page (it shows "Hello" until the agent changes it);
 2. starts the coding agent you chose in Omarchy's menu (**Setup > Default
    agent**, `omarchy-default-agent`) through Omarchy's own launcher
@@ -89,7 +89,7 @@ The manifest is Omarchy's plugin manifest (`schemaVersion`, `id`, `name`,
 | Field | Rules |
 | --- | --- |
 | `schemaVersion` | `1` |
-| `id` | Lower-case letters, digits, `-`, `_` and dots, at most 64 characters, the same as the folder name. `omarchy.` and `omandroid.` are reserved. New widgets get `<your user name>.<name>`, Omarchy's convention for plugins you make |
+| `id` | Lower-case letters, digits, `-`, `_` and dots, at most 64 characters, the same as the folder name. `omarchy.` and `omamobile.` are reserved. New widgets get `<your user name>.<name>`, Omarchy's convention for plugins you make |
 | `name` | Shown in the Widgets sheet and on error cards (at most 40 characters) |
 | `version`, `author`, `description` | Free text; `version` is required, as in Omarchy |
 | `kinds` | Must include `"home-widget"` |
@@ -103,7 +103,7 @@ The manifest is Omarchy's plugin manifest (`schemaVersion`, `id`, `name`,
 Settings types: `string`, `path`, `integer`, `number`, `boolean`, `enum`.
 The settings sheet shows a field for each, and the values arrive in the
 widget's `settings` with those types. Settings are stored per placed widget
-in `~/.config/omandroid/home.json`, so the same widget placed twice has two
+in `~/.config/omamobile/home.json`, so the same widget placed twice has two
 sets of settings.
 
 ## Widget.qml
@@ -226,7 +226,7 @@ apps. Keep a widget cheap when nothing changes:
 * `Image` with `sourceSize` set to the size it is drawn at, and
   `asynchronous: true`.
 
-`omandroid-widget check` warns about effects, fast timers and endless
+`omamobile-widget check` warns about effects, fast timers and endless
 animations.
 
 ## Running commands
@@ -268,7 +268,7 @@ doesn't fetch again. Widget code itself is never fetched: no QML, JS or
 
 ## What is checked
 
-`omandroid-widget scan` (the home screen) and `omandroid-widget check .`
+`omamobile-widget scan` (the home screen) and `omamobile-widget check .`
 (you) apply the same checks before a new or changed widget is loaded:
 
 * the manifest is valid (above);
@@ -288,8 +288,8 @@ widgets carry on, and a fixed file loads again on its own. Ask the running
 home screen what it thinks of a widget:
 
 ```sh
-omarchy-shell shell call omandroid.home widgetStatus <id>
-omarchy-shell shell call omandroid.home widgets ''
+omarchy-shell shell call omamobile.home widgetStatus <id>
+omarchy-shell shell call omamobile.home widgets ''
 ```
 
 These checks are guard rails, not a sandbox: a widget runs inside the
@@ -301,7 +301,7 @@ widgets you didn't write to ones you have read.
 Copy one from the Widgets sheet (**Examples**), or by hand:
 
 ```sh
-cp -r /usr/share/omandroid/shell/widget-examples/countdown ~/.config/omandroid/widgets/
+cp -r /usr/share/omamobile/shell/widget-examples/countdown ~/.config/omamobile/widgets/
 ```
 
 | Example | Shows |

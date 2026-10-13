@@ -1,4 +1,4 @@
-# Omandroid
+# Omarchy Mobile
 
 Native Omarchy on Google Pixel phones: Arch Linux ARM, Hyprland and Omarchy's own packages running directly on the phone with a mainline kernel, with Android apps in Waydroid as a later goal. First device: Pixel 7 Pro (cheetah, gs201).
 
@@ -10,14 +10,14 @@ Plan: https://claude.ai/code/artifact/060038bc-beff-497e-9643-4f322318b2be
 
 | Path | What it is |
 | --- | --- |
-| `bin/omandroid` | Build and flash tooling: `capture`, `kernel`, `modules`, `initramfs`, `images`, `flash`, `push`, `kexec`, `fastboot` |
+| `bin/omamobile` | Build and flash tooling: `capture`, `kernel`, `modules`, `initramfs`, `images`, `flash`, `push`, `kexec`, `fastboot` |
 | `tools/` | Staged bring-up and capture tools, on-phone probes, firmware extraction from the user's factory image, package and repository helpers |
-| `packages/` | pacman packages: `omandroid-shell` (the phone profile for Omarchy's shell), `omandroid-apps` (the mobile apps desktop Omarchy lacks: Maps, NFC), `omandroid-device-cheetah` (Pixel 7 Pro support), `omandroid-sensors` (sensors and auto-rotate through the AoC), `omandroid-gnss` (location on demand), `omandroid-mirror` (the phone's screen and input on a computer over USB, VNC), `omandroid-audio` (PipeWire and speaker protection), `omandroid-speaker-tuning` (stock's speaker tuning, off by default), `omandroid-fingerprint` with a patched `libfprint`, `omandroid-modem` (the modem's vendor chroot profile), `omandroid-modem-sit` (the SIT client daemon, not yet run on the phone), `neard`, `omandroid-keyring` (the `[omandroid]` repository's signing key), patched `mesa` and `hyprland`. `tools/phone-install-package` builds one on the phone and installs it |
+| `packages/` | pacman packages: `omamobile-shell` (the phone profile for Omarchy's shell), `omamobile-apps` (the mobile apps desktop Omarchy lacks: Maps, NFC), `omamobile-device-cheetah` (Pixel 7 Pro support), `omamobile-sensors` (sensors and auto-rotate through the AoC), `omamobile-gnss` (location on demand), `omamobile-mirror` (the phone's screen and input on a computer over USB, VNC), `omamobile-audio` (PipeWire and speaker protection), `omamobile-speaker-tuning` (stock's speaker tuning, off by default), `omamobile-fingerprint` with a patched `libfprint`, `omamobile-modem` (the modem's vendor chroot profile), `omamobile-modem-sit` (the SIT client daemon, not yet run on the phone), `neard`, `omamobile-keyring` (the `[omamobile]` repository's signing key), patched `mesa` and `hyprland`. `tools/phone-install-package` builds one on the phone and installs it |
 | `patches/omarchy/` | Changes to Omarchy for touch devices, to send upstream (`bridge-*` ones are stopgaps for the phone's older Omarchy) |
 | `bin/lineage-ref` | Builds LineageOS for the phone. Used as a rooted reference Android (M0) and, later, for Waydroid images |
 | `kernel/configs/` | Our kernel config fragment, merged on top of arm64 `defconfig` |
 | `device/cheetah/` | Pixel 7 Pro bring-up notes, one plan per subsystem, overlays, the initramfs and the device descriptor (`device.conf`) |
-| `omandroid.conf` | Shared settings (source dir, jobs, container image). Override in `omandroid.local.conf` |
+| `omamobile.conf` | Shared settings (source dir, jobs, container image). Override in `omamobile.local.conf` |
 | `docker/` | Ubuntu 24.04 build environment |
 | `docs/DEVICES.md` | Supported-devices matrix |
 | `docs/ROADMAP.md` | Where things stand and the plan to a working phone |
@@ -27,8 +27,8 @@ Large trees live outside the repo, under `~/android/`:
 
 | Path | Contents |
 | --- | --- |
-| `~/android/omandroid` | LineageOS 24.0 source. Includes Google's GPL Pixel 7 kernel at `out-kernel/google/gs-6.1` |
-| `~/android/mainline/linux` | Our kernel repo: branch `omandroid` on mainline v7.3-rc6 (remote `upstream` is Linus's tree), one commit per subsystem so patches can go upstream. Published to [derekross/linux-omandroid](https://github.com/derekross/linux-omandroid) by `tools/publish-kernel` (a squashed upstream base, our commits unchanged on top) |
+| `~/android/omamobile` | LineageOS 24.0 source. Includes Google's GPL Pixel 7 kernel at `out-kernel/google/gs-6.1` |
+| `~/android/mainline/linux` | Our kernel repo: branch `omamobile` on mainline v7.3-rc6 (remote `upstream` is Linus's tree), one commit per subsystem so patches can go upstream. Published to [derekross/linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile) by `tools/publish-kernel` (a squashed upstream base, our commits unchanged on top) |
 | `~/android/mainline/pmos-tensor` | postmarketOS Tensor kernel, for reference |
 | `~/android/reference` | Captures from the phone. Contains serial numbers and partition backups: never commit |
 | `~/android/factory` | Verified stock factory images, used to restore the phone |
@@ -36,7 +36,7 @@ Large trees live outside the repo, under `~/android/`:
 ## Ground rules
 
 - We only ever flash the boot images and userdata. Never `bootloader`, `radio`, `devinfo`, `persist` or calibration partitions.
-- **Licensing:** this repository is MIT ([LICENSE](LICENSE)) except where a file's SPDX header says otherwise. Kernel patches (and the board dtbo source) are GPL-2.0. The port of Google's Apache-2.0 boot-control code keeps that licence and Google's notice (`packages/omandroid-device-cheetah/src/omandroid-bootctl.c`). Every file we write carries an SPDX header.
+- **Licensing:** this repository is MIT ([LICENSE](LICENSE)) except where a file's SPDX header says otherwise. Kernel patches (and the board dtbo source) are GPL-2.0. The port of Google's Apache-2.0 boot-control code keeps that licence and Google's notice (`packages/omamobile-device-cheetah/src/omamobile-bootctl.c`). Every file we write carries an SPDX header.
 - Google's proprietary firmware and binaries are never committed: our scripts extract them from the user's own factory image.
 - No code from unlicensed sources. Google's GPL kernel, upstream Linux, postmarketOS and Mesa are fine.
 

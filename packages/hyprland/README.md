@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# hyprland (Omandroid build)
+# hyprland (Omarchy Mobile build)
 
 This is Omarchy's aarch64 Hyprland 0.56.2-5 (`hyprland` and `hyprpm`),
 rebuilt with one change. Hyprland gave up on a refused DPMS commit after a
@@ -12,7 +12,7 @@ screen off, but the CRTC never turned off. See
 | --- | --- |
 | `PKGBUILD` | Omarchy's `pkgbuilds/hyprland/PKGBUILD` at `3a0d01876fc9` (omacom-io/omarchy-pkgs), changes in its header |
 | `software-renderer.patch` | Omarchy's backport of hyprwm/Hyprland#16343, unchanged (sha256 `380bb6d6…`) |
-| `0001-dpms-keep-retrying-a-refused-dpms-commit.patch` | The Omandroid change to `src/output/Monitor.cpp` |
+| `0001-dpms-keep-retrying-a-refused-dpms-commit.patch` | The Omarchy Mobile change to `src/output/Monitor.cpp` |
 
 ## What differs from Omarchy's `hyprland` 0.56.2-5
 
@@ -61,7 +61,7 @@ Hyprland is C++ with heavy templates (glaze, hyprutils). Estimate for the phone 
   -j4 and about 7 GB at -j6. -j8 (makepkg's `nproc` default in upstream's
   Makefile) leaves too little for a running session.
 
-Build as the `omandroid` user, which `tools/phone-install-package` and
+Build as the `omamobile` user, which `tools/phone-install-package` and
 `tools/repo-build` also use. Use `MAKEFLAGS=-j4` with the session running, or
 `-j6` with the session stopped (`systemctl stop sddm`).
 
@@ -72,7 +72,7 @@ sudo pacman -S --needed base-devel cmake glaze hyprland-protocols hyprwayland-sc
 
 Then pick one of these:
 
-1. **Into the [omandroid] repository** (the pinned way). Run on the laptop:
+1. **Into the [omamobile] repository** (the pinned way). Run on the laptop:
 
    ```sh
    tools/repo-build packages/hyprland   # signs and indexes it with the rest of out/repo
@@ -91,10 +91,10 @@ Then pick one of these:
    the two files.
 
    ```sh
-   tools/phone-ssh 'rm -rf /home/omandroid/build/pkgs/hyprland && mkdir -p /home/omandroid/build/pkgs'
-   tar cf - -C packages ./hyprland | tools/phone-ssh 'tar xf - -C /home/omandroid/build/pkgs --no-same-owner && chown -R omandroid: /home/omandroid/build/pkgs/hyprland'
-   tools/phone-ssh "su - omandroid -c 'cd build/pkgs/hyprland && MAKEFLAGS=-j4 makepkg -f --noconfirm' 2>&1 | tail -3"
-   tools/phone-ssh 'OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U --noconfirm $(ls /home/omandroid/build/pkgs/hyprland/hyprland-0.56.2-5.1-aarch64.pkg.tar.* | grep -v "\.sig$")'
+   tools/phone-ssh 'rm -rf /home/omamobile/build/pkgs/hyprland && mkdir -p /home/omamobile/build/pkgs'
+   tar cf - -C packages ./hyprland | tools/phone-ssh 'tar xf - -C /home/omamobile/build/pkgs --no-same-owner && chown -R omamobile: /home/omamobile/build/pkgs/hyprland'
+   tools/phone-ssh "su - omamobile -c 'cd build/pkgs/hyprland && MAKEFLAGS=-j4 makepkg -f --noconfirm' 2>&1 | tail -3"
+   tools/phone-ssh 'OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U --noconfirm $(ls /home/omamobile/build/pkgs/hyprland/hyprland-0.56.2-5.1-aarch64.pkg.tar.* | grep -v "\.sig$")'
    ```
 
    (`tools/phone-install-package packages/hyprland` also works. It
@@ -108,9 +108,9 @@ If `hyprpm` is installed, upgrade it too:
 
 ## Pinning
 
-`[omandroid]` comes before `[omarchy]` in the phone's `pacman.conf`
-(`omandroid-device-cheetah`). pacman takes a package from the first
-repository that has it, so with `hyprland` in `[omandroid]`, `omarchy update`
+`[omamobile]` comes before `[omarchy]` in the phone's `pacman.conf`
+(`omamobile-device-cheetah`). pacman takes a package from the first
+repository that has it, so with `hyprland` in `[omamobile]`, `omarchy update`
 won't replace it, even when Omarchy ships a higher release. That means we
 have to follow Omarchy's updates ourselves:
 
