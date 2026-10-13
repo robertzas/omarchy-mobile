@@ -14,8 +14,9 @@ logical at scale 3).
 | Plugin | Kind | What it is |
 | --- | --- | --- |
 | `omandroid.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings |
-| `omandroid.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: eight toggle tiles, brightness and volume; Wi-Fi picker and Bluetooth panel |
+| `omandroid.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: nine tiles, brightness and volume; Wi-Fi picker and Bluetooth panel |
 | `omandroid.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
+| `omandroid.fingerprint` | `panel` (keepLoaded) | Fingerprint target over the sensor during verification, desktop guard, and the enrollment screen |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
 
 ## Enabling
@@ -78,7 +79,7 @@ hardware keys:
 
 A sheet that slides down from the top edge over the status bar, styled as an
 Omarchy popup (popups background and border). It has a clock and date header,
-eight toggle tiles in two columns, then brightness and volume sliders. Tap the
+nine tiles in two columns, then brightness and volume sliders. Tap the
 scrim, swipe the sheet up, or press Escape to close it.
 
 | Tile | Backend |
@@ -91,6 +92,7 @@ scrim, swipe the sheet up, or press Escape to close it.
 | Rotation lock | `omandroid-autorotate` (omandroid-sensors): locked by `~/.local/state/omandroid/rotation-lock`; unlocking also enables the service. "No sensor" while the sensor proxy has no accelerometer |
 | Torch | **Stub**: the flash LED has no mainline driver; once a `*:flash`/`*:torch` LED appears in `/sys/class/leds`, drive it with `brightnessctl -d` |
 | Do not disturb | The notification service's `notifications` IPC target on this shell instance |
+| Fingerprint | Opens fingerprint setup (`omandroid.fingerprint`); the status counts this user's fingerprints through fprintd (`omandroid-fp-enroll list`); "No sensor" without fprintd or its device |
 | Brightness slider | `brightnessctl --class=backlight` (the panel backlight; dimmed when there is none) |
 | Volume slider | PipeWire default sink; tap the speaker glyph to mute |
 
@@ -189,7 +191,7 @@ IPC:
 | `omarchy-shell shell summon omandroid.quicksettings '{"page":"bluetooth"}'` | Open the Bluetooth panel |
 | `omarchy-shell shell call omandroid.quicksettings openBluetooth ''` | The same; returns the panel's state, or `unavailable` |
 | `omarchy-shell shell call omandroid.quicksettings bluetoothPanel ''` | JSON: panel open, adapter name, power, discovering, visible, helper, paired, available (with RSSI and type), unnamed count, action, failure, sheet, pairing phase |
-| `omarchy-shell shell call omandroid.quicksettings toggleTile <name>` | Same as tapping a tile. Names: `wifi`, `bluetooth`, `mobile-data`, `rotation-lock`, `location`, `nfc`, `torch`, `dnd`. Returns the new state, `unavailable` or `unknown` |
+| `omarchy-shell shell call omandroid.quicksettings toggleTile <name>` | Same as tapping a tile. Names: `wifi`, `bluetooth`, `mobile-data`, `rotation-lock`, `location`, `nfc`, `torch`, `dnd`, `fingerprint`. Returns the new state, `unavailable` or `unknown` |
 
 ## omandroid.launcher
 
@@ -240,6 +242,101 @@ IPC:
 | `omarchy-shell shell call omandroid.launcher ask <prompt>` | Ask the agent directly |
 | `omarchy-shell shell call omandroid.launcher state ''` | JSON: open state, query, mode, app count, agent argv |
 
+## omandroid.fingerprint
+
+The under-display fingerprint sensor in the shell, after Android. Three
+surfaces, all driven by `omandroid-fp-bridge` (omandroid-fingerprint):
+
+* **Target.** While an enrollment or a verification runs (`fprintd-verify`,
+  the lock screen's fingerprint conversation, `pam_fprintd` for sudo or
+  polkit), a faint fingerprint in a ring sits exactly over the sensor. Its
+  window's input region is the circle the bridge reacts to (1.5 sensor
+  radii), so a finger there reaches nothing in the shell. When no operation
+  runs, nothing is mapped.
+* **Desktop guard.** While any operation runs, a transparent surface on the
+  bottom layer (just above the wallpaper, in the area the bar and dock leave
+  free) takes the touches that would reach the desktop, so its long-press
+  menu can't open. Windows, the bar, the dock and panels sit above it. After
+  an operation ends it stays until the touch that reached the sensor lifts
+  (the bridge's `contact`) plus 500 ms, at most 10 s: the finger that
+  unlocked the phone is often still down when the lock goes away.
+* **Enrollment.** A full-screen flow on the overlay layer: an intro (how
+  many fingerprints are added, Delete all), then "Touch the sensor" with the
+  glyph breathing at the sensor, a progress ring around it, the stage's
+  words ("Lift, then touch again"; past half, "Now place the edges of your
+  finger"), the HAL's hint for the last touch, and "Fingerprint added" (Add
+  another, Done) or a readable error (Try again). Cancel stops it. Opened
+  from the Fingerprint tile in quick settings, Omarchy's Setup > Security >
+  Fingerprint (`omandroid-setup-user` points it here), or
+  `omarchy-shell shell summon omandroid.fingerprint '{"page":"enroll"}'`.
+
+Data. The bridge serves one client, fprintd, which keeps each user's prints
+(an enrollment made straight through the bridge is invisible to fprintd and
+the lock). So enrollment goes through fprintd's D-Bus API:
+`bin/omandroid-fp-enroll` claims the default device (polkit asks first),
+reports `claimed` once polkit is answered (until then the enrollment
+screen is unmapped, so Omarchy's password prompt and the on-screen keyboard,
+which draws under overlay layers, stay usable; the same for Delete all),
+picks the next free finger (index fingers, then thumbs, ...), runs
+`EnrollStart` and reports `EnrollStatus` as JSON lines; `list` and
+`delete-all` do the rest. What fprintd doesn't carry comes from the bridge's
+state file, `/run/omandroid-fp-ui/state.json` (world-readable, replaced with
+`rename(2)`, removed when the stack stops):
+
+```json
+{"op":"enroll","finger":false,"x":717,"y":2360,"r":121,"w":1440,"h":3120,
+ "seq":7,"acquired":1,"remaining":24,"error":0,"last":"none"}
+```
+
+`op` is `idle`, `enroll` or `auth`; the circle is in panel pixels of the
+portrait `w`x`h` panel; `acquired`, `remaining` and `error` are the HAL's last
+AcquiredInfo, samples left and Error of the current or last operation, `seq`
+counts them. The ring follows `remaining` (the HAL needs about 15 samples,
+two counts each); without it, fprintd's stages (20, from our driver) stand
+in. Hints follow `acquired` (PARTIAL/INSUFFICIENT: press your whole finger;
+SENSOR_DIRTY: clean the screen; IMMOBILE: move your finger slightly; ...),
+else fprintd's retry results. Errors use the HAL's code when this
+enrollment produced one (TIMEOUT: "Time's up"), else fprintd's result. The
+pure logic is in `SensorModel.js` (`test/sensor-model.js`), the helper's in
+`test/fp-enroll.py`.
+
+Placement. Panel pixels scale by the screen's logical size (480/1440 at
+scale 3) and follow Hyprland's transform for the panel (0-3, as
+`omandroid-autorotate` sets them); a flipped transform or a screen of another
+shape hides the target. Before the bridge has written its file once, the
+enrollment screen uses stock cheetah's sensor (717, 2360, radius 121).
+
+On-screen keyboard. While squeekboard's `osk` layer is up, the target hides
+(it would sit on the keys) and the plugin keeps
+`/run/omandroid-fp-ui/inhibit/osk-<user>` fresh (every 5 s; removed when the
+keyboard hides), so the bridge takes no key over the sensor for a finger: no
+LHBM, no capture, no failed attempt. The bridge ignores files older than
+15 s.
+
+Finger down. The panel lights its own circle (LHBM) under the finger, so
+the glyph fades out; that follows the bridge's touch state, not LHBM, and
+works the same with `allow_lhbm=0`.
+
+Lock screen. Hyprland draws layer surfaces above a session lock only with
+the `above_lock` layer rule; `hypr/phone.lua` sets it to 1 for the target's
+namespace `omandroid-fingerprint`: drawn above the lock, but without input
+there (2 would also take input). It needs none: the bridge reads the
+touchscreen itself, and Omarchy's PIN pad (`patches/omarchy/0003`) keeps the
+lower third of the screen clear once fingerprints are set up, with "Touch the
+fingerprint sensor or enter your PIN" above the field. A touch on the sensor
+lands on the lock's background, which only wakes the screen.
+
+IPC:
+
+| Call | Effect |
+| --- | --- |
+| `omarchy-shell shell summon omandroid.fingerprint '{"page":"enroll"}'` | Open enrollment |
+| `omarchy-shell shell call omandroid.fingerprint state ''` | JSON: bridge op, finger, placed sensor, transform, target/guard shown, enrollment page, progress, hint, fingers |
+
+The desktop harness can fake the bridge: `OMANDROID_FP_UI_STATE=<file>`
+points the plugin at another state file, and a stub `omandroid-fp-enroll`
+earlier in `PATH` stands in for fprintd.
+
 ## Testing in the desktop harness
 
 `phone/dev/run-desktop` copies the shell and runs it in a nested Hyprland, so
@@ -264,6 +361,15 @@ Hot reload is not enough for every change. Relaunch the harness after:
 * editing `phone/profile/shell.json` (it is copied at launch).
 
 ## Plugin API limits found
+
+### Lock screen input: PIN or password
+
+Omarchy's lock now takes a PIN on its number pad or a password on the
+on-screen keyboard, with an ABC/123 switch (`patches/omarchy/0003`, `0011`);
+`omandroid-set-pin` records the user's choice and sets Omarchy's
+`credential-password` toggle. The polkit prompt follows the same choice
+(`0010`, `0011`). The rest of this section is the history of why the lock
+input lives in Omarchy rather than in a plugin.
 
 ### Lock screen PIN pad
 

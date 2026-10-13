@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # First-run setup for a phone, the part Omarchy's installer asks on a computer:
 # your name and email (git identity and XCompose, through Omarchy's own
-# install/user/git.sh and xcompose.sh), then a PIN if there isn't one.
+# install/user/git.sh and xcompose.sh), then a PIN or password if there isn't
+# one (omandroid-set-pin asks which).
 #
 #   omandroid-onboarding           open a terminal and run it
 #   omandroid-onboarding --nudge   at login: if anything is missing, say so
@@ -22,7 +23,7 @@ case "${1:-}" in
   --nudge)
     has_identity && has_pin && exit 0
     omarchy-notification-send -u critical "Finish setting up your phone" \
-      "Add your name and email, and a PIN to lock it. Tap to start." \
+      "Add your name and email, and a PIN or password to lock it. Tap to start." \
       --exec omandroid-onboarding
     ;;
   --inner)
@@ -37,7 +38,7 @@ case "${1:-}" in
     fi
     echo
     if has_pin; then
-      echo "Your phone already has a PIN (change it any time in System > PIN)."
+      echo "Your phone already has a $(omandroid-set-pin --type) (change it, or switch between a PIN and a password, in System > PIN)."
     else
       omandroid-set-pin --inner
     fi

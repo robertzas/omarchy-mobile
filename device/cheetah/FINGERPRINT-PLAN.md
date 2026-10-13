@@ -774,6 +774,69 @@ no keyboard shows above the lock in password mode (the `osk` layer rule:
 `.pre-f16` files, the previous omandroid-shell; `rm
 ~/.local/state/omarchy/toggles/credential-password` returns to the pad.
 
+### F17: keys of the on-screen keyboard are not a finger (omandroid-fingerprint 0.1.5, omandroid-shell 0.1.38; risk low)
+
+Found on the phone with F16: typing a password on squeekboard over the lock
+lit the LHBM circle. The keyboard covers the sensor and the bridge reads the
+touchscreen itself, so a key there was a finger: LHBM, onPointerDown,
+onUiReady, a capture, and a failed attempt toward the lockout.
+
+Now, while squeekboard's `osk` layer is up (Hyprland's layer events),
+`omandroid.fingerprint` keeps `/run/omandroid-fp-ui/inhibit/osk-<user>`
+fresh (touched every 5 s, removed when the keyboard hides). The runner makes
+`inhibit/` sticky and world-writable like `/tmp` and passes it to the bridge
+(`--inhibit`); a contact that starts on the sensor while a regular file
+there is under 15 s old is ignored for its whole length: no LHBM, no pointer
+events, so no capture or attempt (`touch on the sensor ignored: the
+on-screen keyboard is up` in the journal). Stale files (a dead shell) count
+for nothing, and anyone who can write there can only turn captures off,
+never on; the PIN still unlocks. Host-tested (`inhibited()`: empty, fresh,
+stale, symlink) and in the harness with a fake `osk` layer (file made,
+refreshed, removed; the target hides). The bridge builds warning-free.
+
+```sh
+tools/phone-install-package packages/omandroid-fingerprint      # rebuilt bridge
+tools/phone-ssh 'systemctl restart omandroid-fp; sleep 20; ls -ld /run/omandroid-fp-ui/inhibit'   # drwxrwxrwt root
+tools/phone-install-package packages/omandroid-shell
+tools/phone-ssh 'su - <user> -c omarchy-restart-shell'
+```
+
+Then lock, ABC, type keys over the sensor: no circle, the journal shows the
+"ignored" line, `omandroid-fp-ctl status` shows no lockout; close the
+keyboard (123): a finger unlocks. **Stop** if a finger no longer works with
+the keyboard hidden (`ls -l --time-style=full-iso /run/omandroid-fp-ui/inhibit`:
+a file younger than 15 s means the shell still thinks the keyboard is up).
+Rollback: the previous packages.
+
+### F18: the unlocking touch does not become a long press (omandroid-fingerprint 0.1.6, omandroid-shell 0.1.39; risk low)
+
+Found on the phone: after a fingerprint unlock the finger is often still
+down when the lock goes away, and the same touch went on as a long press on
+the wallpaper (the desktop menu). The bridge's `finger` turns false when the
+operation ends, finger lifted or not, so the shell could not tell. The
+bridge now also publishes `contact`: a touch that reached the sensor is
+still down, captured or not, until it lifts. `omandroid.fingerprint` keeps
+its desktop guard (a transparent bottom-layer surface over the wallpaper,
+already up for the whole operation, so in place when the lock unmaps) after
+any operation ends until `contact` is false, plus 500 ms; with an older
+bridge that does not report it, 2 s after the end; never longer than 10 s,
+and released when the state file goes away. Harness with a fake bridge:
+guard up during auth with the finger down, still up 3 s after the match
+with the finger down, down 0.5-1.2 s after the lift, released at 10 s with a
+stuck contact, released when the file is removed.
+
+```sh
+tools/phone-install-package packages/omandroid-fingerprint      # rebuilt bridge
+tools/phone-ssh 'systemctl restart omandroid-fp'
+tools/phone-install-package packages/omandroid-shell
+tools/phone-ssh 'su - <user> -c omarchy-restart-shell'
+```
+
+Then lock, unlock with a finger and keep it on the screen for a few
+seconds: no desktop menu; lift, then a long press on the wallpaper opens the
+menu again. `omarchy-shell shell call omandroid.fingerprint state ''` shows
+`contact` and `holdGuard`. Rollback: the previous packages.
+
 ## 7. Results
 
 | Step | Date | `uname -r` | Result |

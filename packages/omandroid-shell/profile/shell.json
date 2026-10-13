@@ -22,6 +22,9 @@
     },
     {
       "id": "omandroid.switcher"
+    },
+    {
+      "id": "omandroid.fingerprint"
     }
   ]
 }

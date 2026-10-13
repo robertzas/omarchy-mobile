@@ -9,6 +9,7 @@ url="https://github.com/derekross/omandroid"
 license=(MIT)
 depends=(omarchy omandroid-apps bash squeekboard bluez python python-dbus python-gobject
          pipewire-audio pipewire-pulse pipewire-alsa wireplumber)
+optdepends=('fprintd: fingerprint setup and unlock (with omandroid-fingerprint)')
 install=omandroid-shell.install
 
 package() {

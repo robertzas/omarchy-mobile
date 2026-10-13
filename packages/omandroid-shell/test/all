@@ -40,6 +40,7 @@ if command -v node >/dev/null; then
   done
   node test/wifi-model.js || fail "Wi-Fi model"
   node test/bluetooth-model.js || fail "Bluetooth model"
+  node test/sensor-model.js || fail "fingerprint sensor model"
 else
   pass "Wi-Fi and Bluetooth models # SKIP no node"
 fi
@@ -48,12 +49,39 @@ fi
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omandroid-bt-agent || fail "omandroid-bt-agent parses"
 python3 -B test/bt-agent.py || fail "omandroid-bt-agent helpers"
 
+# The fingerprint enrollment helper likewise (fprintd over D-Bus).
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omandroid-fp-enroll || fail "omandroid-fp-enroll parses"
+python3 -B test/fp-enroll.py || fail "omandroid-fp-enroll helpers"
+
 # The Wi-Fi password and Bluetooth PINs go over D-Bus or a helper's stdin,
 # never argv or the log.
 if grep -nE 'console\.(log|info|warn|debug|error)\([^)]*(psk|password|secret|pin|passkey|codeField)' plugins/omandroid.quicksettings/*.qml; then
   fail "passwords and PINs are never logged"
 fi
 pass "passwords and PINs are never logged"
+
+# The fingerprint target: the layer rule that lifts it above the lock must
+# match the window's namespace, and stay render-only there (above_lock 1).
+grep -c 'WlrLayershell.namespace: "omandroid-fingerprint"' plugins/omandroid.fingerprint/Fingerprint.qml >/dev/null \
+  || fail "fingerprint target namespace"
+grep -c 'namespace = "^omandroid-fingerprint\$" }, above_lock = 1' hypr/phone.lua >/dev/null \
+  || fail "fingerprint target is drawn above the lock, without input"
+python3 -c 'import json; assert {"id": "omandroid.fingerprint"} in json.load(open("profile/shell.json"))["plugins"]' \
+  || fail "the phone profile enables the fingerprint target"
+grep -c 'omandroid.fingerprint' plugins/omandroid.quicksettings/QuickSettings.qml >/dev/null \
+  || fail "quick settings opens fingerprint setup"
+pass "fingerprint target wiring"
+
+# PIN or password: the choice is recorded per user, never the secret, and
+# mirrored to Omarchy's credential-password toggle.
+bash -n bin/omandroid-set-pin || fail "omandroid-set-pin parses"
+fake=$(mktemp -d)
+[[ $(HOME=$fake bash bin/omandroid-set-pin --type) == pin ]] || fail "a phone without a record counts as PIN"
+mkdir -p "$fake/.config/omandroid"; echo password >"$fake/.config/omandroid/credential"
+[[ $(HOME=$fake bash bin/omandroid-set-pin --type) == password ]] || fail "a password user reads as password"
+rm -rf "$fake"
+grep -c 'namespace = "^osk\$" }, above_lock = 2' hypr/phone.lua >/dev/null || fail "the on-screen keyboard works above the lock"
+pass "PIN or password"
 
 bash -n bin/omandroid-setup-user || fail "omandroid-setup-user parses"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT

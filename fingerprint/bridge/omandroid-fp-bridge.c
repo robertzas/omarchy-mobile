@@ -47,11 +47,12 @@
  *
  *   {"op":"idle|enroll|auth","finger":false,"x":717,"y":2360,"r":121,
  *    "w":1440,"h":3120,"seq":7,"acquired":1,"remaining":24,"error":0,
- *    "last":"none|enrolled|match|nomatch|lockout|error"}
+ *    "last":"none|enrolled|match|nomatch|lockout|error","contact":false}
  *
  * acquired, remaining and error are the last ACQUIRED code, PROGRESS
  * remaining (-1: none yet) and ERROR code of the current or last ENROLL or
- * AUTH; seq counts those events.
+ * AUTH; seq counts those events. contact: a touch that reached the sensor
+ * is still down (captured or not).
  *
  * Plain C on libbinder_ndk, without generated code: parcels are written as
  * the NDK backend writes them (a parcelable is a non-null marker, its size,
@@ -62,6 +63,7 @@
  * arguments to __libc_init() as bionic's crtbegin does. fingerprint/Makefile
  * builds it against the extracted chroot's libc and libbinder_ndk.
  */
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -220,6 +222,10 @@ static const char *state_dir = "/data/vendor/omandroid-fp";
 static const char *touch_path = "/dev/input/touchscreen";
 static const char *lhbm_path = "/sys/class/backlight/panel0-backlight/local_hbm_mode";
 static const char *ui_state_path;	/* --ui-state: off unless given */
+static const char *inhibit_dir;		/* --inhibit: off unless given */
+/* An inhibit file counts while its mtime is this fresh (the shell touches
+ * it every few seconds while the on-screen keyboard is up). */
+#define INHIBIT_FRESH_S	15
 /* The panel takes the circle at its next frame; a frame and a half at 60 Hz
  * would do, an idle panel may run at 10 Hz. Tuned in FINGERPRINT-PLAN F8. */
 static int lhbm_settle_ms = 120;
@@ -903,6 +909,11 @@ static void reply(const char *format, ...)
 
 static int touch_fd = -1;
 static int32_t touch_x = -1, touch_y = -1, touch_slot, touch_tracking = -1;
+static int32_t ignored_tracking = -1;	/* a contact that began while inhibited */
+/* A contact that has been on the sensor and is not lifted yet, captured or
+ * not: published, so the desktop can keep a touch that unlocked the phone
+ * from going on as a long press on the wallpaper. */
+static bool sensor_contact;
 static bool finger;		/* the HAL was told a finger is down */
 static int64_t finger_since, lhbm_at;
 static bool lhbm_lit;
@@ -944,6 +955,52 @@ static void pointer(bool down)
 	finger = down;
 }
 
+/*
+ * The desktop's on-screen keyboard can cover the sensor (on the lock screen
+ * a password is typed while the fingerprint conversation runs): its keys
+ * there are not a finger on the sensor. While it is up the shell keeps a
+ * file fresh in --inhibit DIR (omandroid-shell, osk-<user>); touches that
+ * start then get no LHBM, no pointer events and so no capture or failed
+ * attempt. A file older than INHIBIT_FRESH_S is stale (a shell that died).
+ * Anyone who can write DIR can only turn fingerprint captures off, never
+ * on: the PIN still unlocks.
+ */
+static bool inhibited(void)
+{
+	static int64_t checked_at = -1000;
+	static bool cached;
+	int64_t now_check = now_ms();
+	struct dirent *entry;
+	struct stat st;
+	time_t now;
+	DIR *dir;
+
+	if (!inhibit_dir)
+		return false;
+	if (now_check - checked_at < 250)
+		return cached;
+	checked_at = now_check;
+	cached = false;
+	dir = opendir(inhibit_dir);
+	if (!dir)
+		return false;
+	now = time(NULL);
+	while ((entry = readdir(dir))) {
+		if (entry->d_name[0] == '.')
+			continue;
+		if (fstatat(dirfd(dir), entry->d_name, &st, AT_SYMLINK_NOFOLLOW) ||
+		    !S_ISREG(st.st_mode))
+			continue;
+		if (st.st_mtime <= now + INHIBIT_FRESH_S &&
+		    now - st.st_mtime <= INHIBIT_FRESH_S) {
+			cached = true;
+			break;
+		}
+	}
+	closedir(dir);
+	return cached;
+}
+
 /* evdev, multitouch protocol B; slot 0's finger only. */
 struct input_event_ {
 	int64_t sec, usec;
@@ -978,9 +1035,19 @@ static void touch_events(bool capturing)
 		} else if (ev[i].type == EV_SYN_ && ev[i].code == 0) {
 			int64_t dx = touch_x - sensor_x, dy = touch_y - sensor_y;
 			int64_t r = sensor_r * 3 / 2;	/* some slack at the rim */
-			bool on = capturing && touch_tracking >= 0 &&
-				  dx * dx + dy * dy <= r * r;
+			bool inside = dx * dx + dy * dy <= r * r;
+			bool on = capturing && touch_tracking >= 0 && inside;
 
+			sensor_contact = touch_tracking >= 0 && (sensor_contact || inside);
+
+			/* the whole contact is a key on the on-screen keyboard */
+			if (on && touch_tracking == ignored_tracking)
+				on = false;
+			if (on && !finger && inhibited()) {
+				say("touch on the sensor ignored: the on-screen keyboard is up");
+				ignored_tracking = touch_tracking;
+				on = false;
+			}
 			if (on != finger)
 				pointer(on);
 		}
@@ -1022,10 +1089,11 @@ static void publish(void)
 	n = snprintf(line, sizeof(line),
 		     "{\"op\":\"%s\",\"finger\":%s,\"x\":%d,\"y\":%d,\"r\":%d,"
 		     "\"w\":%d,\"h\":%d,\"seq\":%u,\"acquired\":%d,\"remaining\":%d,"
-		     "\"error\":%d,\"last\":\"%s\"}\n",
+		     "\"error\":%d,\"last\":\"%s\",\"contact\":%s}\n",
 		     what, finger && capturing() ? "true" : "false",
 		     sensor_x, sensor_y, sensor_r, PANEL_W, PANEL_H,
-		     ui_seq, ui_acquired, ui_remaining, ui_error, ui_last);
+		     ui_seq, ui_acquired, ui_remaining, ui_error, ui_last,
+		     sensor_contact ? "true" : "false");
 	if (n < 0 || n >= (int)sizeof(line) || !strcmp(line, last))
 		return;
 	snprintf(tmp, sizeof(tmp), "%s.new", ui_state_path);
@@ -1354,7 +1422,8 @@ static int open_listener(void)
 static void usage(void)
 {
 	say("usage: omandroid-fp-bridge [--socket PATH] [--state DIR] [--touch EVDEV]\n"
-	    "                           [--lhbm PATH] [--settle MS] [--ui-state PATH]");
+	    "                           [--lhbm PATH] [--settle MS] [--ui-state PATH]\n"
+	    "                           [--inhibit DIR]");
 	exit(2);
 }
 
@@ -1378,6 +1447,8 @@ int main(int argc, char **argv, char **envp)
 			lhbm_settle_ms = atoi(v);
 		else if (!strcmp(argv[i], "--ui-state"))
 			ui_state_path = v;
+		else if (!strcmp(argv[i], "--inhibit"))
+			inhibit_dir = v;
 		else
 			usage();
 	}

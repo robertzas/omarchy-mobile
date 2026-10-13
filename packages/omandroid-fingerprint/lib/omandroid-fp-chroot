@@ -48,6 +48,11 @@ SOCKDIR=$RUN/sock
 # world-readable, unlike everything else here. In the chroot it is
 # /dev/socket/omandroid-fp-ui.
 UIDIR=/run/omandroid-fp-ui
+# The shell keeps a file fresh in here while the on-screen keyboard is up
+# (its keys can cover the sensor); the bridge then ignores touches on the
+# sensor. Sticky and world-writable like /tmp: a user can only turn
+# fingerprint captures off with it, and cannot touch another user's file.
+INHIBITDIR=$UIDIR/inhibit
 
 say() { printf 'omandroid-fp: %s\n' "$*" >&2; }
 die() { say "error: $*"; exit 1; }
@@ -181,6 +186,7 @@ setup_dev() {
   bind "$SOCKDIR" "$dev/socket/omandroid-fp"
   install -d -m 0755 "$UIDIR"
   rm -f "$UIDIR/state.json" "$UIDIR/state.json.new"
+  install -d -m 1777 "$INHIBITDIR"
   bind "$UIDIR" "$dev/socket/omandroid-fp-ui"
   # A private binder instance: binder, hwbinder and vndbinder are created at
   # mount (CONFIG_ANDROID_BINDER_DEVICES).
@@ -344,6 +350,7 @@ start() {
     spawn bridge vendor /omandroid/omandroid-fp-bridge \
       --socket /dev/socket/omandroid-fp/bridge.sock --touch /dev/input/touchscreen \
       --ui-state /dev/socket/omandroid-fp-ui/state.json \
+      --inhibit /dev/socket/omandroid-fp-ui/inhibit \
       ${OMANDROID_FP_LHBM_SETTLE_MS:+--settle "$OMANDROID_FP_LHBM_SETTLE_MS"}
   fi
 

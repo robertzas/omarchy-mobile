@@ -49,3 +49,15 @@ o.launch_on_start("gsettings set org.gnome.desktop.a11y.applications screen-keyb
 -- With Omarchy's key_press_enables_dpms, the press itself lit the screen and
 -- the release then turned it off again. Touch still wakes it.
 hl.config({ misc = { key_press_enables_dpms = false } })
+
+-- The fingerprint target (omandroid.fingerprint) is drawn above the lock
+-- screen too, where the lock runs its fingerprint conversation. 1, not 2: on
+-- the lock it needs no touches (the bridge reads the touchscreen itself),
+-- and the lock's PIN pad keeps clear of the sensor (patches/omarchy/0003).
+hl.layer_rule({ match = { namespace = "^omandroid-fingerprint$" }, above_lock = 1, no_anim = true })
+
+-- The on-screen keyboard (squeekboard, namespace "osk") above the lock screen
+-- too, taking touches (2): a password user's lock opens on the text field
+-- (patches/omarchy/0011), and a session lock otherwise hides every other
+-- surface, keyboards included.
+hl.layer_rule({ match = { namespace = "^osk$" }, above_lock = 2 })

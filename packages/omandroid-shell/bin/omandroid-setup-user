@@ -24,6 +24,40 @@ if omarchy-done ensure omandroid-shell-profile; then
   cp "$share/profile/shell.json" "$config/shell.json"
 fi
 
+# Plugins added after a profile was seeded: switched on once each, in the
+# user's shell.json (a user who removes one later keeps it off).
+add_plugin() {
+  python3 - "$config/shell.json" "$1" <<'PY'
+import json, sys
+path, plugin = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as f:
+        config = json.load(f)
+except FileNotFoundError:
+    sys.exit(0)
+plugins = config.setdefault("plugins", [])
+if not any(isinstance(p, dict) and p.get("id") == plugin for p in plugins):
+    plugins.append({"id": plugin})
+    with open(path + ".new", "w") as f:
+        json.dump(config, f, indent=2)
+        f.write("\n")
+    import os
+    os.replace(path + ".new", path)
+PY
+}
+if omarchy-done ensure omandroid-fingerprint-plugin; then
+  add_plugin omandroid.fingerprint
+fi
+
+# PIN or password (omandroid-set-pin records it): phones set up before the
+# choice existed used a PIN with the lock's number pad, so record that, once.
+if omarchy-done ensure omandroid-credential-type; then
+  if [[ ! -f ~/.config/omandroid/credential ]]; then
+    mkdir -p ~/.config/omandroid
+    echo pin >~/.config/omandroid/credential
+  fi
+fi
+
 # Phone scale: 1440x3120 at 3 is 480x1040 logical, seeded once
 if omarchy-done ensure omandroid-monitor-scale; then
   sed -i 's/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = 3/' ~/.config/hypr/monitors.lua
@@ -127,6 +161,19 @@ if omarchy-done ensure omandroid-menu-hide-unlock; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
   if [[ -f $extension ]] && ! grep -q '"style.unlock"' "$extension"; then
     sed -i '0,/^{/s//{\n  \/\/ Omandroid: no disk-unlock screen on the phone\n  "style.unlock": {"when": "false"},/' "$extension"
+  fi
+fi
+
+# Omarchy's Setup > Security > Fingerprint looks for a USB reader and installs
+# libfprint-git. On the phone it opens Omandroid's enrollment screen instead
+# (omandroid.fingerprint, through fprintd), once, through the same menu
+# extension file (a reused id replaces the entry).
+if omarchy-done ensure omandroid-menu-fingerprint; then
+  extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
+  mkdir -p "$(dirname "$extension")"
+  [[ -s $extension ]] || printf '{\n}\n' >"$extension"
+  if ! grep -q '"setup.security.fingerprint"' "$extension"; then
+    sed -i '0,/^{/s//{\n  \/\/ Omandroid: fingerprint setup on the screen, through fprintd\n  "setup.security.fingerprint": {"icon": "\xf3\xb0\x88\xb7", "label": "Fingerprint", "when": "test -x \/usr\/lib\/omandroid-fp\/omandroid-fp-chroot", "action": "omarchy-shell shell summon omandroid.fingerprint '"'"'{\\"page\\":\\"enroll\\"}'"'"'"},/' "$extension"
   fi
 fi
 

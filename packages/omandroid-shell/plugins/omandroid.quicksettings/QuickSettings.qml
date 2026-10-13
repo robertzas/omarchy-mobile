@@ -54,6 +54,7 @@ Item {
     rotationLock.refresh()
     location.refresh()
     nfc.refresh()
+    fingerprint.refresh()
     clockFormatRead.running = true
   }
 
@@ -113,7 +114,7 @@ Item {
     var tilesByName = {
       "wifi": wifi, "bluetooth": bluetooth, "mobile-data": mobileData,
       "rotation-lock": rotationLock, "torch": torch, "dnd": dnd, "location": location,
-      "nfc": nfc
+      "nfc": nfc, "fingerprint": fingerprint
     }
     var target = tilesByName[String(name || "")]
     if (!target) return "unknown"
@@ -448,6 +449,48 @@ Item {
   Process {
     id: nfcWrite
     onExited: nfc.refresh()
+  }
+
+  // Fingerprint unlock (omandroid-fingerprint + fprintd): the tile opens the
+  // enrollment screen of omandroid.fingerprint; its status counts this
+  // user's fingerprints through fprintd (omandroid-fp-enroll list).
+  QtObject {
+    id: fingerprint
+
+    property bool available: false
+    property int count: 0
+    readonly property bool enabled: available && count > 0
+    readonly property string status: !available ? "No sensor"
+      : count === 0 ? "Set up" : count === 1 ? "1 added" : count + " added"
+
+    function refresh() {
+      if (!fingerprintRead.running) fingerprintRead.running = true
+    }
+
+    function toggle() {
+      if (!available) return
+      root.dismiss()
+      // Through the CLI, like the launcher's switcher: a plugin may only
+      // summon panels it owns.
+      Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omandroid.fingerprint", "{\"page\":\"enroll\"}"])
+    }
+  }
+
+  Process {
+    id: fingerprintRead
+    command: ["omandroid-fp-enroll", "list"]
+    stdout: SplitParser {
+      onRead: function(line) {
+        try {
+          var ev = JSON.parse(line)
+          if (ev && ev.event === "fingers") {
+            fingerprint.available = true
+            fingerprint.count = Array.isArray(ev.fingers) ? ev.fingers.length : 0
+          }
+        } catch (error) {}
+      }
+    }
+    onExited: function(exitCode) { if (exitCode !== 0) fingerprint.available = false }
   }
 
   // The rear flash LED in torch mode (leds-lm3644, white:torch). "100%" is
@@ -798,6 +841,16 @@ Item {
             active: dnd.enabled
             available: dnd.available
             onClicked: dnd.toggle()
+          }
+
+          Tile {
+            width: tiles.tileWidth
+            icon: "󰈷"
+            label: "Fingerprint"
+            status: fingerprint.status
+            active: fingerprint.enabled
+            available: fingerprint.available
+            onClicked: fingerprint.toggle()
           }
         }
 
