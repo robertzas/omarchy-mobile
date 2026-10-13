@@ -83,3 +83,14 @@ out=$(RUN=$t CBD_ATTEMPTS=1 bash -c '
   fail "cbd stopped after one failed boot: $out"
 [[ ! -e $t/cbd.pid ]] || fail "cbd pid file removed"
 pass "cbd stopped after its first failed boot"
+
+# The board id is required (M4.1g/h): the check refuses a missing or empty
+# ro.boot.cdt_hwid and a persist copy that differs. Made-up values only.
+cdt() { bash -c 'say() { :; }; eval "$(sed -n "/^modem_cdt_check() {/,/^}/p" profiles/modem.conf)"; modem_cdt_check "$1"' _ "$1"; }
+: > "$t/p0"; cdt "$t/p0" && fail "no props file content is refused"
+printf 'ro.boot.cdt_hwid=\n' > "$t/p1"; cdt "$t/p1" && fail "an empty board id is refused"
+printf 'ro.boot.cdt_hwid=TESTID\npersist.vendor.modem.cdt_hwid=OTHER\n' > "$t/p2"; cdt "$t/p2" && fail "a differing persist copy is refused"
+printf 'ro.boot.cdt_hwid=TESTID\npersist.vendor.modem.cdt_hwid=TESTID\n' > "$t/p3"; cdt "$t/p3" || fail "a board id is accepted"
+printf 'ro.boot.cdt_hwid=TESTID\n' > "$t/p4"; cdt "$t/p4" || fail "the persist copy is optional"
+cdt "$t/missing" && fail "a missing props file is refused"
+pass "board id required"
