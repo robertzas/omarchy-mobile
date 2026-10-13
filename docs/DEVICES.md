@@ -58,9 +58,9 @@ Devices we'd like to support, with the closest starting point. Open an issue to 
 | Pixel 7a | lynx | gs201 | as panther |
 | Pixel Fold | felix | gs201 | as panther, with two panels |
 | Pixel Tablet | tangorpro | gs201 | as panther; no modem |
-| Pixel 6 | oriole | gs101 | upstream mainline `gs101-oriole.dts` |
-| Pixel 6 Pro | raven | gs101 | upstream mainline `gs101-raven.dts` |
-| Pixel 6a | bluejay | gs101 | upstream `gs101.dtsi`; a new board DTS |
-| Pixel 8, 8 Pro, 8a | shiba, husky, akita | zuma (Tensor G3) | not started |
+| Pixel 6 | oriole | gs101 | **WIP, community port: [#2](https://github.com/derekross/omandroid/issues/2)**; our preferred second device. Upstream mainline `gs101-oriole.dts` |
+| Pixel 6 Pro | raven | gs101 | upstream mainline `gs101-raven.dts`; shares oriole's port ([#2](https://github.com/derekross/omandroid/issues/2)) |
+| Pixel 6a | bluejay | gs101 | upstream `gs101.dtsi`; a new board DTS; shares oriole's port ([#2](https://github.com/derekross/omandroid/issues/2)) |
+| Pixel 8, 8 Pro, 8a | shiba, husky, akita | zuma (Tensor G3) | **8a (akita): hardware and help offered, [#1](https://github.com/derekross/omandroid/issues/1)**; a new SoC for us, a longer road than gs101 |
 | Pixel 9 family | tokay, caiman, komodo, comet, tegu | zumapro (Tensor G4) | not started |
 | Pixel 10 family | | laguna (Tensor G5) | not started |

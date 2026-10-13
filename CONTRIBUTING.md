@@ -248,7 +248,7 @@ Findings that matter beyond one subsystem go into `device/<codename>/NOTES.md`, 
 
 | Change | Repository | Branch or path |
 | --- | --- | --- |
-| Kernel: drivers, bindings, DTS | [derekross/linux-omandroid](https://github.com/derekross/linux-omandroid) | a topic branch off `omandroid`, one subsystem per branch (`omandroid-<subsystem>`) |
+| Kernel: drivers, bindings, DTS | [derekross/linux-omandroid](https://github.com/derekross/linux-omandroid) | fork it, branch off `omandroid`, one subsystem per branch (`omandroid-<subsystem>`, e.g. `omandroid-gs101-oriole-dts`), and open a pull request against `omandroid` |
 | Device notes, plans, descriptor, bring-up overlays | this repository | `device/<codename>/` (descriptor `device.conf`), overlays in `device/<codename>/overlays/` |
 | Device support package | this repository | `packages/omandroid-device-<codename>/` |
 | Shell, sensors, GNSS, Mesa, Hyprland | this repository | `packages/<name>/` |
@@ -281,7 +281,7 @@ Findings that matter beyond one subsystem go into `device/<codename>/NOTES.md`, 
 - **Every file has an SPDX header** (§7).
 - **Packages** follow the existing layout: `PKGBUILD`, `install`, `version`, `README.md`, and `test/all`, which must pass. Device packages are named `omandroid-device-<codename>`. Nothing in them is enabled unless it's safe at boot, with hang markers where needed.
 - **Keep identifying data out.** No Wi-Fi names, MAC or Bluetooth addresses, serial numbers, IMEIs, account names or captures: use placeholders such as `<SSID>`. Screenshots must not show any of these either.
-- **Open a PR** with what you ran on the phone, the kernel release, and the plan section it follows.
+- **Open a PR** with what you ran on the phone, the kernel release, and the plan section it follows. Kernel PRs go to your fork's topic branch against linux-omandroid's `omandroid`; everything else to this repository's `main`. A new device's first PR here is usually its `device/<codename>/device.conf` and notes (§5).
 
 ### 6.4 Adding your device to the matrix
 
