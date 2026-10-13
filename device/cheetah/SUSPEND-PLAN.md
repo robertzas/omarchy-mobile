@@ -777,6 +777,18 @@ tools/phone-ssh 'cat /var/lib/omandroid/suspend/s4-loop-*.log; cat /sys/power/su
 - **Stop:** any failed cycle stops the loop by itself; read why.
 - **Risk:** low once S3b passed.
 
+
+**S4 loop result (2026-10-12, same boot as S3b, unattended): passed.** 20
+cycles of `rtcwake -m freeze -s 20` with Wi-Fi unloaded and the AoC, sensor
+proxy and speaker protection running: all `rc=0`, every wake on
+`pm_wakeup_irq` 128 (s2mpg12-pmic, the RTC alarm's parent). 18 slept 21 s;
+cycles 8 and 12 woke after 13 s, also on the PMIC interrupt (some other
+PMIC event: worth reading the PMIC's interrupt status if it recurs). UFS
+error handler count 0 throughout, no I/O or ext4 errors, no key-interrupt
+wakes (the Volume Up question saw no spurious wake in 20 cycles). Wi-Fi,
+AoC and the speaker services fine afterwards. The C2 counter part of S4
+was not run.
+
 ### S5: Wi-Fi across sleep (flash: `omandroid-wifi-d3`)
 
 `omandroid-wifi-d3` (`812288601`) sits on top of `omandroid-int` `60d3ca176`.
