@@ -28,6 +28,10 @@ Item {
 
   property var component: null
   property string builtUrl: ""
+  // Set when the home screen rebuilds this cell (a layout change), so no
+  // late compile result is applied to a Loader that is going away.
+  property bool gone: false
+  Component.onDestruction: gone = true
 
   onUrlChanged: build()
   Component.onCompleted: build()
@@ -41,9 +45,12 @@ Item {
     builtUrl = url
     if (!url) return
     var wanted = url
-    var c = Qt.createComponent(url, Component.Asynchronous)
+    // Compiled synchronously: a widget is one small local file, and an
+    // asynchronous compile that finished after this cell was rebuilt
+    // called setSource on a destroyed Loader and crashed the shell.
+    var c = Qt.createComponent(url)
     var finish = function() {
-      if (frame.builtUrl !== wanted) return
+      if (frame.gone || frame.builtUrl !== wanted) return
       if (c.status === Component.Ready) {
         frame.component = c
         content.setSource(wanted, {
