@@ -30,7 +30,8 @@ pass "helper source"
 
 # Staged layout, with a stand-in for the helper binary if it isn't built.
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-cp -a . "$tmp/src"
+mkdir -p "$tmp/src"
+tar -C . --exclude=./pkg --exclude=./src --exclude="./*.pkg.tar.*" -cf - . | tar -C "$tmp/src" -xf -   # makepkg's own work dirs (pkg/ is not readable)
 if [[ ! -f $tmp/src/bionic/prebuilt/omandroid-waves-host ]]; then
   mkdir -p "$tmp/src/bionic/prebuilt"; : > "$tmp/src/bionic/prebuilt/omandroid-waves-host"
 fi
