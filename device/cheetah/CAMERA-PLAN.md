@@ -1,9 +1,12 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Camera plan (cheetah / gs201): raw capture first, then libcamera
 
-Status (2026-10-12): **K, CAM0 (partly), CAM1, CAM2 and CAM3a passed on the
-phone (the ultrawide answers as a Sony IMX386); the CAM3b-CAM5 capture
-path is built offline.** Kernel branch `omandroid-camera` in `~/android/mainline/wt-camera`
+Status (2026-10-13): **K, CAM0 (partly), CAM1, CAM2 and CAM3a passed on the
+phone (the ultrawide answers as a Sony IMX386); CAM3b.3 showed the sensor
+streaming but nothing on links 0 or 1. The ultrawide is on CSIS link 2
+with DC-PHY slaves 2+3 as one four-lane receiver (section 4.4); the link 2
+path is built offline (`omandroid-camera` head `3390774a8`, overlay
+`camera-stream-link2`) and CAM3b.5 is the next phone test.** Kernel branch `omandroid-camera` in `~/android/mainline/wt-camera`
 (output `~/android/mainline/out-camera`); `omandroid-int` 606b84c7a already
 has its first part (up to `6cb2be364`). On top, not merged yet (head
 `35295a9ab`): CIS clock rounding, the DC-PHY receiver, the CSIS link + CSIS
@@ -445,8 +448,9 @@ Facts in our own words:
   external-clock setting is 24.574 MHz: **stock feeds it the 24.576 MHz
   oscillator**, not a PLL tap. **Which CSIS link it uses is not found**:
   the link index arrives in a copied per-camera config (Cheetah-specific
-  setup code not decoded). Only links 0 and 1 have four lanes, so CAM3b
-  tries those two.
+  setup code not decoded). Only links 0 and 1 have four lanes of their
+  own, so CAM3b tried those two; both saw nothing. Superseded by 4.4: it
+  is link 2 with the PHY pair 2+3.
 - **RE2, CSIS link** (version 0x05040000 on the phone, CAM1.2). Same
   layout as `imx-mipi-csis` for the enable bit, the lane-count field
   (bits 9:8), the data-type field of the channel config (7:2), its pixel
@@ -481,6 +485,55 @@ Facts in our own words:
   settings, different analog trims (now in our PHY driver), and an HS
   settle count looked up by lane rate from a table; at 1548 Mbps it is 7
   with the fast settle clock [V], which our DT gives for links 0 and 1.
+
+### 4.4 Findings from probing the path with the sensor streaming (2026-10-13)
+
+Facts from bring-up on another Pixel 7 Pro running mainline with this
+same camera block, found by setting up one DC-PHY bank at a time with each
+sensor streaming and reading the link and WDMA status registers. **Not yet
+reproduced on our phone** (CAM3b.5 and CAM4 check them); in our own words:
+
+- **Links and PHYs per camera.** Ultrawide (IMX386, D-PHY, 4 lanes):
+  **CSIS link 2 with DC-PHY slaves 2 and 3 as one four-lane receiver**:
+  slave 2's clock lane and two data lanes, then slave 3's two data lanes
+  (`0x1a4f2300` clock, `0x2400-0x2700` data; slave 3's clock lane unused).
+  Front: link 0 / slave 0, D-PHY 4 lanes. Main: link 1 / slave 1, C-PHY.
+  Tele: link 4 / slave 4, C-PHY. So CAM3b.3's silence on links 0 and 1 was
+  the wrong link, not a missing step.
+- **PHY reset.** Each slave's bit in CSIS sysreg `0x500` (Google's GPL DT
+  `samsung,reset-sysreg`) must be **set before any access to that slave's
+  lane registers**: a slave held in reset hangs the bus. For the pair both
+  bits 2 and 3. (Our `f32305542` set the link's bit only after the PHY was
+  programmed; for links 0 and 1 that didn't hang, so ABL may leave those
+  bits set; CAM3b.5 logs the register before and after.)
+- **Isolation**: PMU `0x3ebc` bit 0, as our PHY driver already does through
+  the kernel's PMU regmap.
+- **DVFS.** CAM (ACPM DVFS domain 10) boots at 67 MHz; there a four-lane
+  link at about 1.5 Gbps per lane reports ECC, CRC and overflow errors and
+  resolution mismatches. At **400 MHz** it runs clean. The WDMA needs INT
+  (domain 1) at **400 MHz** under load (at the default 200 MHz it missed
+  frame ends with the GPU busy: context `OVERLAP`).
+- **Routing for the WDMA.** `0x430` (+ 4 x slot) = the link; with
+  `SC_CON0-2` (`0x408`/`0x40c`/`0x410`, the stock software's "PDP mux") at
+  0 the WDMA gets frame and line syncs but **no pixel data** (`LASTDATA`/
+  `LASTADDR` errors); any non-zero value (1) lets it through. The EBUF
+  (`0x1a4c0000`, bit 0 of its control) **bypassed**; programming it as stock
+  does stalled before the first frame start. `0x488` has no effect.
+- **Link and WDMA setup that works:** link soft reset first; 4 lanes,
+  interleave 3, quad pixel mode, VC 0 RAW10 on channel 0, channels 1-3
+  with data type 0x3f **parked on VC 15** (on VC 1 a sensor's second
+  stream cut channel 0 to 8 bits); debug option bit 23 (pixel align) set;
+  DMA common page reset, then IP processing; WDMA context 0, channel 0,
+  format 7 (MIPI RAW10 as on the bus), width and height in the resolution
+  register, **line stride rounded to 64 bytes** (2560 for 2016 pixels),
+  one address slot rewritten per frame.
+- **Values we did not take.** The lane analog values and settle count
+  stay ours (RE5; settle 7 at 1548 Mbps agrees). Their bias block writes
+  `M_BIAS_CON0-3` as well (`0x10, 0x110, 0x3223, 0`), replayed from the
+  stock HAL; we write only `CON4` as RE5 found and log `CON0-4` at power-on
+  instead: if CAM3b.5 shows SOT or ECC errors at 400 MHz and different
+  `CON0-3`, that is the next single change. We keep stock's WDMA start
+  value `0xf83` (they use `0x3`) and the HAL's `0x7fff` line-rate default.
 
 ### 4.2 Work items
 
@@ -576,7 +629,46 @@ Nothing has run on the phone.
   contexts 0/1), the IMX386 with an endpoint to each link, a 64 MiB
   capture pool below 4 GiB. Overlays `camera-stream-link0` and
   `camera-stream-link1` enable one link each (never together with
-  `camera-pwr-test`).
+  `camera-pwr-test`). (Replaced 2026-10-13, below.)
+
+**Link 2, built 2026-10-13 on top (head `3390774a8`, test build
+`7.3.0-rc6-omandroid-push1-00351-g3390774a8b80` in `out-camera`; not
+merged into int):**
+
+- `d6d2c26a1` `dt-bindings: phy: ... add the slave reset register` and
+  `aa6681da9` `phy: samsung: gs201-mipi-dcphy-rx: release the slave
+  resets, and four-lane pairs`: links 2, 4, 6 accept four lanes and claim
+  the odd partner; the reset bits of every slave in use are set before the
+  first lane access and cleared after the lanes are off
+  (`google,reset-sysreg = <&sysreg_csis 0x500>`); the power-on line now
+  also logs the reset register and bias `CON0-4`.
+- `e371c4675` `dt-bindings: media: ... add the EBUF and the DVFS clocks`
+  and `280c409a7` `media: gs201-csis: DVFS votes, WDMA routing with the
+  EBUF bypassed, PHY reset to the PHY`: optional `cam`/`int` clocks (ACPM
+  DVFS 10 and 1) voted to 400 MHz while streaming (INT only with the
+  WDMA on), restored at stop; parameters `cam_khz`, `int_khz` (0 = no
+  vote). Routing: `SC_CON0-2` = 1, `0x430` = link, EBUF bypass, all put
+  back at stop; the `0x414` write is gone. Channels 1-3 on VC 15, link
+  soft reset, DMA common reset, WDMA height. `link_reset_release` is gone
+  (the PHY owns `0x500`); `sysreg_link_sel` stays as an experiment.
+- `3390774a8` `media: gs201-csis: align the WDMA line stride to 64 bytes`
+  (2016 pixels: 2560 bytes a line, 3 860 480 a frame).
+- `11ca65d94` (gs201: `csis2` at `0x1a460000`, SPI 191, WDMA context 0
+  SPI 197, EBUF range, CAM/INT clocks; the PHY reset register) and
+  `680d47604` (cheetah: one sensor endpoint, to link 2; capture pool on
+  `csis2`; settle 7 for link 2). Overlay `camera-stream-link2` (repo)
+  enables link 2 and keeps links 0 and 1 off; `camera-stream-link0/1`
+  are removed (their links no longer have the sensor).
+
+Checks (laptop, 2026-10-13): `bin/omandroid kernel` exit 0; `W=1` on
+`gs201-csis.o`, `phy-gs201-mipi-dcphy-rx.o` and the DTB: only the
+existing simplefb warning; checkpatch `--strict` per commit: only the
+trailer-form items; `dt_binding_check` on both changed bindings (dtschema
+2026.9) clean; `dt-validate` on the default DTB and on default +
+`camera-stream-link2` (applied with `fdtoverlay`): only the existing
+`soc_id` and framebuffer reports; the overlay leaves `csis@1a460000`,
+`phy@1a4f0000` and `camera-sensor@1a` okay, `csis@1a440000/1a450000`
+disabled.
 
 Checks: `bin/omandroid kernel` exit 0; `W=1` clean on the new objects;
 checkpatch `--strict` clean apart from the usual trailer items;
@@ -1160,6 +1252,10 @@ human's go, and a fresh partition backup after it).
 
 ### CAM3b.4: link reset released, then the 0x488 bit. Risk: medium (no DMA)
 
+**Superseded (2026-10-13) by CAM3b.5; don't run.** The ultrawide isn't on
+link 0 or 1 (section 4.4), and `link_reset_release` no longer exists: the
+PHY driver releases the slave reset before programming the lanes.
+
 Kernel from `f32305542` (or int after the merge). One run per boot, link 0
 first, stop at the first pass:
 
@@ -1189,6 +1285,114 @@ tools/camera-stage --watchdog x --cmd 'LINK=0 DMA=0 CSIS_OPTS=sysreg_link_sel=1 
 - **Rollback:** reboot (the bit is cleared at stop and lost at reset);
   `link_reset_release=0` restores the CAM3b.3 behaviour.
 
+### CAM3b.5: link 2 with the PHY pair 2+3 sees the sensor. Risk: medium (no DMA)
+
+Goal: **link 2 sees frames.** Kernel `omandroid-camera` `3390774a8` (the
+human merges it into int, or pushes the `out-camera` build), overlay
+`camera-stream-link2` **instead of** `camera-stream-link0/1`; never with
+`camera-pwr-test`. The blacklist from CAM3b.K stays. PMIC backup check as
+CAM2 first. One change per boot: 5.1/5a without any DVFS vote, 5b adds
+the CAM vote.
+
+```sh
+# CAM3b.5K (laptop) images with the link 2 overlay (ASK FIRST: flashes, reboots)
+ov <the overlays the phone runs now, without camera-stream-link0/1> camera-stream-link2 && bin/omandroid push
+tools/phone-ssh 'uname -r; cat /etc/modprobe.d/omandroid-camera-capture-bringup.conf'
+#   expect: the new release; blacklist imx386, phy_gs201_mipi_dcphy_rx, gs201_csis
+# CAM3b.5.1 (read-only) one link in the DT, the drivers bind, the DVFS rates
+tools/phone-ssh 'for n in 1a440000 1a450000 1a460000; do printf "%s %s\n" $n "$(tr -d "\0" < /sys/firmware/devicetree/base/soc@0/csis@$n/status)"; done'
+#   expect: 1a440000 disabled, 1a450000 disabled, 1a460000 okay
+tools/phone-ssh 'for m in gpio_s2mpg13 slg51002_regulator imx386 phy_gs201_mipi_dcphy_rx gs201_csis; do modprobe $m; sleep 1; done; dmesg | grep -iE "gs201-csis|dcphy" | tail -5; media-ctl -d /dev/media0 -p | grep -E "entity|->"'
+#   expect: "link 2 -> WDMA context 0, 4 data lanes"; imx386 0-001a -> "gs201-csis link 2" -> gs201-csis-wdma0
+tools/phone-ssh 'mount -t debugfs none /sys/kernel/debug 2>/dev/null; for c in cam int intcam; do echo "$c $(cat /sys/kernel/debug/clk/$c/clk_rate)"; done'
+#   expect: cam about 67000000, int about 200000000 (FREQ_GET only, nothing set)
+# CAM3b.5a (same boot) colour bars on link 2, no DMA, no DVFS vote
+tools/camera-stage --watchdog x --cmd 'LINK=2 DMA=0 CSIS_OPTS="cam_khz=0 int_khz=0" bash -s' --script tools/camera-cap-test
+# CAM3b.5b (next boot; only after 5a passed or showed data with errors)
+#   the CAM DVFS vote at 400 MHz (the driver's default), still no DMA
+tools/camera-stage --watchdog x --cmd 'LINK=2 DMA=0 CSIS_OPTS="int_khz=0" bash -s' --script tools/camera-cap-test
+tools/phone-ssh 'cat /sys/kernel/debug/clk/cam/clk_rate'
+#   expect: back at the boot rate after the stop
+```
+
+- **Expect (5a):** `cap-test: media ...: 'imx386 0-001a' -> 'gs201-csis
+  link 2' -> /dev/videoN; sensor->CSIS links: 1`; bytes per line **2560**;
+  `sysreg 0x488 = ..., 0x500 = ... before start` (record both: ABL's
+  values); `dcphy ...: link 2: 4 lanes (with the next link's) at
+  1548288000 bps, settle 7; PMU 0x3ebc = 0x1, reset 0x...` with **bits 2
+  and 3 set**, `clock lane GNR_CON0 0x1` (or 3), `bias ...` (record
+  `CON0-4`); `imx386 0-001a: streaming 2016x1508: mode_select 1,
+  frame_count a -> b`; `link 2 on: ... CAM 67... Hz`; mid-stream the
+  `stats` and `scan` (link 2's `FRM_CNT`, all eight links) and the PHY
+  `regs` (link 2 clock and d0-d3, d2/d3 at `0x2600`/`0x2700`); at stop
+  `link 2 off: FRM_CNT ...` and `stopped: FS ... FE ...`, `0x500` back
+  without bits 2 and 3.
+- **Pass (5a):** link 2's `FRM_CNT` or `frame_start`/`frame_end` rising,
+  about 60/s. **Errors are allowed here**: at 67 MHz ECC/CRC (INT0) and
+  `ERR_OVER` or resolution mismatches (INT1 bits 5-6) are what the
+  slow clock is expected to cause; they still prove the data reaches
+  link 2. Record `last_link_err`.
+- **Pass (5b):** `link 2 on: ... CAM 400000000 Hz`; `FRM_CNT` and
+  `frame_start`/`frame_end` rising together at about 60/s, `link_errors`
+  0; the CAM rate back at its boot value after the stop. Then CAM4 can
+  follow on link 2.
+- **Reading a failure:**
+  - nothing at all (`FRM_CNT`, SRC0/1, FS/FE 0) with bits 2+3 set and the
+    sensor counting: compare the PHY `regs` dump with the values the
+    driver writes (lanes enabled?); then the bias `CON0-3` difference
+    (section 4.4) is the next single change, on its own boot;
+  - SOT/SOT-sync bits (INT0 16-23) at 400 MHz: PHY settings or settle;
+    stop, no DMA;
+  - `link 2: link 3 is in use` or `-EBUSY`: something else powered link 3
+    (shouldn't exist); stop;
+  - 5b: `CAM DVFS to 400000 kHz: <err>` or an ACPM timeout in dmesg: the
+    first CAM DVFS request on our kernel failed; stop, stay on
+    `cam_khz=0`, look at `ACPM-PLAN.md`.
+- **Stop:** any hang (the watchdog resets; save pstore with
+  `tools/camera-stage --pstore`), the bus hanging at the first lane access
+  (= the reset wasn't released: don't retry), errors that don't drop at
+  400 MHz, anything odd on the other camera blocks or the display.
+- **Rollback:** reboot (the PHY reset bits are cleared at stop and lost at
+  reset; DVFS rates restored at stop and reset at reboot); images without
+  `camera-stream-link2`. `cam_khz=0` removes the vote.
+
+**CAM3b.5 results (2026-10-13):**
+- **5.1 (7.3.0-rc6-omandroid-push1-00383-gcc41390828d0): passed.** Only
+  `csis@1a460000` is okay. "link 2 -> WDMA context 0, 4 data lanes". The
+  sensor first deferred on the S2MPG13 GPIO supplier: load `sec_acpm` by
+  hand (blacklisted at boot) before `gpio_s2mpg13`. After that the IMX386
+  probed (model 0x0386) and the graph is imx386 0-001a -> "gs201-csis
+  link 2" -> gs201-csis-wdma0. Rates cam 67 MHz, int 200 MHz, intcam 67 MHz.
+- **5a (same boot): data reaches link 2 (passed), then a crash.**
+  - 0x500 was 0 before start and 0xc after (bits 2+3, the PHY pair).
+  - The PHY line read "4 lanes (with the next link's) at 1548288000 bps,
+    settle 7; PMU 0x3ebc = 0x1", with bias CON0-3 all 0 and CON4 0x200.
+  - Mid-stream, frame_start was 267654 and link_errors 266903 (last
+    0x40000011: ERR_ID, ERR_OVER, plus INT1 bits), which is per-line errors
+    at 67 MHz, as expected.
+  - Then debugfs `scan` took a synchronous external abort in
+    `regmap_read` on the CSIS sysreg (it read every word from 0x400 to
+    0x50c). The reader exited with preemption disabled and the phone froze
+    about two minutes later. Fix `f9cbc3f50`: scan reads only the sysreg
+    registers the driver programs, and no longer walks the other links.
+- **5b (7.3.0-rc6-omandroid-push1-00385-ga535168af42b, CAM vote 400 MHz):
+  frames arrive at 60 fps.**
+  - "CAM 400000000 Hz" at link on; the rate was back at 67 MHz after stop.
+  - FRM_CNT went 0x9 -> 0x127 in about 4.8 s: 286 frames, 60 fps.
+  - link_errors 294, about one per frame, last 0x8 = INT0 ERR_WRONG_CONFIG
+    (bit names from Google's GPL gs201 LWIS bindings). This is most likely
+    the sensor's embedded-data lines arriving in a data type the channel
+    isn't set up for. Check it at CAM4: if the frame is complete, ignore
+    it or mask it.
+  - **An interrupt storm:** 817794 link interrupts for 286 frames, with FS/FE
+    0x1/0x1 still set at stop. The per-VC FS/FE sources were never cleared,
+    so INT1's summary refired. Fix `39afbe857`.
+  - The scan with the fix read safely. The sysreg routing registers
+    (0x408-0x410, 0x430) read 0 with DMA off, as expected (they're set only
+    with DMA on).
+  - Next: CAM4 on a kernel with `39afbe857`. Expect about 60 link
+    interrupts a second.
+
 ### CAM4: the CSIS WDMA writes frames. Risk: high (first DMA)
 
 The WDMA writes to the buffer address it is given, with its SysMMU in
@@ -1197,23 +1401,33 @@ own. So: the test pattern first, at the smallest mode, into the camera
 pool only (the driver refuses buffers above 4 GiB), with the watchdog and
 the log stream on, and nothing else running that matters.
 
+Only after CAM3b.5b passed (link 2 clean at CAM 400 MHz). Same kernel and
+overlay. Link 2 feeds **WDMA context 0, channel 0** (`csis2`), routed by
+`0x430` = 2 and `SC_CON0-2` = 1 with the EBUF bypassed (section 4.4), all
+restored at stop.
+
 ```sh
-# CAM4.1 (next boot) colour bars through the WDMA, channel 0, EBUF = context,
-#   on the link CAM3b found (LINK=N, its overlay)
-tools/camera-stage --watchdog x --cmd 'LINK=N DMA=1 CH=0 FRAMES=4 bash -s' --script tools/camera-cap-test
+# CAM4.0 (laptop) the camera pool really is below 4 GiB on this boot
+tools/phone-ssh 'dmesg | grep -i "camera-pool\|camera_pool"'
+#   expect: a reserved 64 MiB region inside 0x80000000-0xffffffff
+# CAM4.1 (next boot) colour bars through the WDMA: channel 0, CAM vote on,
+#   no INT vote yet (one change: the DMA and its routing)
+tools/camera-stage --watchdog x --cmd 'LINK=2 DMA=1 CH=0 FRAMES=4 CSIS_OPTS="int_khz=0" bash -s' --script tools/camera-cap-test
 tools/phone-ssh 'cat /tmp/cam-2016x1508.raw' > logs/cam4-bars.raw
-# CAM4.2-4 (one per boot, only while 4.1 fails without errors):
-#   CH=2 (stock's RAW channel); then google,ebuf variations through a DT
-#   property change (the WDMA input value is the open question)
-# CAM4.5 a real picture: test_pattern=0, then 4032x3016
+# CAM4.2 (next boot) the same with the INT vote (the driver's default)
+tools/camera-stage --watchdog x --cmd 'LINK=2 DMA=1 CH=0 FRAMES=4 bash -s' --script tools/camera-cap-test
+# CAM4.3 a real picture: PATTERN=0 (then 4032x3016 at 30 fps, W=4032 H=3016)
 ```
 
-- **Pass (4.1):** `wdma_done` = 4, `wdma_errors` 0, `bars.raw` is 4 x
-  2016 x 1508 x 10 / 8 bytes per line rounded to 16 (2528 bytes per line);
-  unpacked on the laptop it shows eight vertical colour bars (a small
-  python unpacker into a PNG; no debayer needed for bars).
+- **Pass (4.1):** `wdma_done` = 4, `wdma_errors` 0, the file is exactly
+  4 x 2560 x 1508 = 15 441 920 bytes; unpacked on the laptop (MIPI RAW10,
+  2560-byte lines) it shows eight vertical colour bars (a small python
+  unpacker into a PNG; no debayer needed for bars).
 - **Not routed:** `wdma_done` 0, no WDMA errors, link counters running:
-  the input mux value is wrong; try the next variant on the next boot.
+  the routing didn't take (read `sysreg+0x408..0x410` and `+0x430` in the
+  `scan` output while streaming); stop and look before another variant.
+- **Syncs but no data** (`LASTDATA`/`LASTADDR` errors, frame start and end
+  on time): `SC_CON0-2` still 0 or the EBUF not bypassed: stop.
 - **Stop:** `LASTADDR`/`LASTDATA`/`FIFO_FULL` errors, a picture shifted or
   torn, or anything else misbehaving after the run (a write landed
   elsewhere): stop and reboot at once, don't retry before the address
@@ -1245,8 +1459,9 @@ tools/phone-ssh 'cam -c1 --capture=3 --file=/tmp/frame#.ppm --stream pixelformat
 ## 8. Open questions
 
 1. Which link does each camera use? The ultrawide is D-PHY, four lanes,
-   1548 Mbps (4.3); its link is 0 or 1 (CAM3b finds out). The other
-   three are still open.
+   1548 Mbps (4.3), on link 2 with the PHY pair 2+3 (4.4; CAM3b.5
+   confirms it on our phone). Front link 0, main link 1 (C-PHY), tele
+   link 4 (C-PHY) per 4.4, unconfirmed here.
 2. Does our kernel still see `pd-csis` on (CAM1.1)? If not, the gs201 PD
    driver (shared with `GPU-PLAN.md` G4c) comes first.
 3. Are `sysmmu_csis0/1` in bypass and `s2mpu_csis0/1` allow-all after

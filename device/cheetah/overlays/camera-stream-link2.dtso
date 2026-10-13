@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 /*
- * Bring-up only (CAMERA-PLAN.md, stages CAM3b/CAM4): the ultrawide capture
- * path with the sensor on CSIS link 0 (one of the two four-lane links; which
- * one the board uses is what CAM3b finds out). Enables the camera power
- * path as camera-pwr-test does, but with the real sensor node (sony,imx386)
- * instead of the power test nodes, the DC-PHY receiver and CSIS link 0 with
- * WDMA context 0. Never apply it together with camera-pwr-test or the other
- * camera-stream overlay: both describe the device at 0x1a.
+ * Bring-up only (CAMERA-PLAN.md, stages CAM3b.5/CAM4): the ultrawide
+ * capture path with the sensor on CSIS link 2, whose DC-PHY slave takes link
+ * 3's data lanes as one four-lane receiver. Enables the camera power path as
+ * camera-pwr-test does, but with the real sensor node (sony,imx386) instead
+ * of the power test nodes, the DC-PHY receiver and CSIS link 2 with WDMA
+ * context 0. Never apply it together with camera-pwr-test: both describe
+ * the device at 0x1a.
  *
  * Nothing binds at boot: gpio_s2mpg13, slg51002_regulator, imx386,
  * phy_gs201_mipi_dcphy_rx and gs201_csis are blacklisted, and gs201_csis
@@ -51,11 +51,18 @@
 	status = "okay";
 };
 
-&{/soc@0/csis@1a440000} {
+&{/soc@0/csis@1a460000} {
 	status = "okay";
 };
 
-/* Never both links: keep the other one off even if an earlier DTB had it. */
+/*
+ * One link only: links 0 and 1 no longer have the sensor, and link 0 shares
+ * WDMA context 0. Keep them off even if an earlier DTB had them on.
+ */
+&{/soc@0/csis@1a440000} {
+	status = "disabled";
+};
+
 &{/soc@0/csis@1a450000} {
 	status = "disabled";
 };

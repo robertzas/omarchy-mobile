@@ -5,10 +5,11 @@
 # section 7). Run it from the laptop under the stage tool's log stream and
 # watchdog:
 #
-#   tools/camera-stage --watchdog x --cmd 'LINK=0 DMA=0 bash -s' --script tools/camera-cap-test
+#   tools/camera-stage --watchdog x --cmd 'LINK=2 DMA=0 bash -s' --script tools/camera-cap-test
 #
 # Environment:
-#   LINK=0|1     the CSIS link the overlay enabled (camera-stream-link0/1)
+#   LINK=n       the CSIS link the overlay enabled (2: camera-stream-link2;
+#                the video node is the link's WDMA context, found by name)
 #   W=, H=       sensor mode (default 2016x1508, binned 60 fps)
 #   DMA=0|1      0: link_only (no DMA, CAM3b); 1: the WDMA writes frames (CAM4)
 #   CH=0..3      WDMA channel (CAM4; default 0)
@@ -16,10 +17,11 @@
 #   FRAMES=n     frames to capture with DMA=1 (default 4), saved to
 #                /tmp/cam-<W>x<H>.raw
 #   SECS=n       how long to stream (default 5)
-#   CSIS_OPTS=   extra gs201_csis parameters for a CAM3b.4 experiment, e.g.
-#                "sysreg_link_sel=1" or "link_reset_release=0" (one per boot)
+#   CSIS_OPTS=   extra gs201_csis parameters for one experiment, e.g.
+#                "cam_khz=0" (no CAM DVFS vote: CAM3b.5a), "int_khz=0" or
+#                "sysreg_link_sel=1" (one per boot)
 set -u
-LINK=${LINK:?LINK=0 or 1} W=${W:-2016} H=${H:-1508} DMA=${DMA:-0} CH=${CH:-0}
+LINK=${LINK:?LINK=2, the link the overlay enabled} W=${W:-2016} H=${H:-1508} DMA=${DMA:-0} CH=${CH:-0}
 PATTERN=${PATTERN:-2} FRAMES=${FRAMES:-4} SECS=${SECS:-5} CSIS_OPTS=${CSIS_OPTS:-}
 say() { echo "cap-test: $*"; echo "cap-test: $*" > /dev/kmsg; }
 
@@ -44,7 +46,9 @@ done
 SENSOR=$(media-ctl -d "$MD" -p | grep -o 'imx386 [0-9]*-001a' | head -1)
 [ -n "$SENSOR" ] || { say "no imx386 entity in $MD"; exit 1; }
 CSIS="gs201-csis link $LINK"
-VIDEO=$(media-ctl -d "$MD" -e "gs201-csis-wdma$LINK")
+WDMA=$(media-ctl -d "$MD" -p | grep -o 'gs201-csis-wdma[0-9]' | head -1)
+[ -n "$WDMA" ] || { say "no gs201-csis-wdma entity in $MD"; exit 1; }
+VIDEO=$(media-ctl -d "$MD" -e "$WDMA")
 SUBDEV=$(media-ctl -d "$MD" -e "$SENSOR")
 NLINKS=$(media-ctl -d "$MD" -p | grep -c -- "-> \"$CSIS\":0")
 say "media $MD: '$SENSOR' -> '$CSIS' -> $VIDEO; sensor->CSIS links: $NLINKS"
@@ -69,10 +73,10 @@ else
 	timeout "$SECS" v4l2-ctl -d "$VIDEO" --stream-mmap --stream-count=1000 >/dev/null &
 	sleep 2
 	say "mid-stream state"
-	[ -n "$DBG" ] && cat "$DBG/scan"
+	[ -n "$DBG" ] && cat "$DBG/stats" "$DBG/scan"
 	cat /sys/kernel/debug/*.phy/regs 2>/dev/null
 	wait
 fi
 echo "rc=$?"
 [ -n "$DBG" ] && cat "$DBG/stats"
-dmesg | grep -E "gs201-csis|dcphy|imx386|cap-test" | tail -12
+dmesg | grep -E "gs201-csis|dcphy|imx386|cap-test" | tail -14
