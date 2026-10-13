@@ -1,15 +1,19 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Camera plan (cheetah / gs201): raw capture first, then libcamera
 
-Status (2026-10-12): **CAM1-CAM3a built offline, nothing new has run on the
-phone.** Kernel branch `omandroid-camera` in `~/android/mainline/wt-camera`
-(output `~/android/mainline/out-camera`), on `omandroid-int` @ `898ab3c1e`
-(it needs the S2MPG13 regulators from `omandroid-gnss` and the ACPM link):
-the read-only CSIS probe (CAM1), the S2MPG13 GPIO driver, the SLG51002
-camera-PMIC regulator driver, `hsi2c_3` and a bring-up power/ID driver for
-the ultrawide module (CAM2, CAM3a), all disabled or blacklisted until the
-`camera-pwr-test` overlay and the runbook in section 7. CAM0 is partly run.
-Nothing streams yet.
+Status (2026-10-12): **K, CAM0 (partly) and CAM1 passed on the phone; CAM2
+and CAM3a are built and waiting; the CAM3b-CAM5 capture path is built
+offline.** Kernel branch `omandroid-camera` in `~/android/mainline/wt-camera`
+(output `~/android/mainline/out-camera`); `omandroid-int` 606b84c7a already
+has its first part (up to `6cb2be364`). On top, not merged yet (head
+`35295a9ab`): CIS clock rounding, the DC-PHY receiver, the CSIS link + CSIS
+WDMA V4L2 driver, a Sony IMX386 sensor driver and their DT, all disabled or
+blacklisted. The sensor's manufacturer settings come from
+`tools/extract-camera-data`, run on the user's machine; libcamera 0.7.2 with
+our simple-pipeline entry is in `packages/libcamera` (not built yet). Two
+facts are still unknown and are what CAM3b/CAM4 find out on the phone:
+which four-lane CSIS link the ultrawide is wired to, and the WDMA input
+value for a direct link-to-WDMA route (section 4.3). Nothing streams yet.
 
 This plan replaces section 4 of `RADIOS-CAMERA-PLAN.md`, which was the
 starting survey. It corrects two of its facts (section 1.7).
@@ -83,7 +87,7 @@ Path abbreviations (as in the other plans):
 |---|---|---|---|---|---|---|
 | Main | `sensor-nagual` | Samsung GN1, 50 MP [I] | `hsi2c_1` (`0x10900000`), `0x3d` | 16/16 | gpp2-2 | `CIS_CLK3`, gpp9-0 (`sensor_mclk4`), 26 MHz |
 | Front | `sensor-dokkaebi` | Samsung 3J1 [I] | `hsi2c_2` (`0x10910000`), `0x10` | 16/16 | gpp4-2 | `CIS_CLK1`, gpp5-0 (`sensor_mclk2`), 24 MHz |
-| Ultrawide | `sensor-sandworm` | Sony IMX386 [I] | `hsi2c_3` (`0x10920000`), `0x1a` | 16/8 | gpp6-3 | `CIS_CLK0`, gpp3-0 (`sensor_mclk1`), 24 MHz |
+| Ultrawide | `sensor-sandworm` | Sony IMX386 [V: HAL model ID 0x0386] | `hsi2c_3` (`0x10920000`), `0x1a` | 16/8 | gpp6-3 | `CIS_CLK0`, gpp3-0 (`sensor_mclk1`), 24 MHz |
 | Tele | `sensor-kraken` | Samsung GM5 [I] | `hsi2c_4` (`0x10930000`), `0x2d` | 16/16 | gpp6-2 | `CIS_CLK2`, gpp7-0 (`sensor_mclk3`), 24 MHz |
 
 Evidence **[V]**: `GD/pantah/dts/gs201-cheetah-camera.dtsi` (nodes "REAR
@@ -428,15 +432,65 @@ facts in our own words.
 - **The per-camera link, PHY type and lane count are not yet known.**
   RADIOS-CAMERA-PLAN's "main and tele are C-PHY" is unproven [I].
 
+### 4.3 Findings, second pass (2026-10-12)
+
+Offline, on the user's own HAL (`liblyric_hwl.so`); REA's Hopper provider
+didn't come up on the 20 MB library, so the evidence is disassembly
+addresses in the private notes (`~/android/reference/`-style, off-repo).
+Facts in our own words:
+
+- **RE1, ultrawide.** The HAL's sandworm driver expects model ID 0x0386:
+  **Sony IMX386** [V]. It runs four D-PHY lanes, RAW10, at **1548 Mbps per
+  lane** (link frequency 774.144 MHz) in its standard modes, and its own
+  external-clock setting is 24.574 MHz: **stock feeds it the 24.576 MHz
+  oscillator**, not a PLL tap. **Which CSIS link it uses is not found**:
+  the link index arrives in a copied per-camera config (Cheetah-specific
+  setup code not decoded). Only links 0 and 1 have four lanes, so CAM3b
+  tries those two.
+- **RE2, CSIS link** (version 0x05040000 on the phone, CAM1.2). Same
+  layout as `imx-mipi-csis` for the enable bit, the lane-count field
+  (bits 9:8), the data-type field of the channel config (7:2), its pixel
+  mode field (13:12, stock uses quad) and the size register. New: a
+  virtual-channel field in the channel config (20:16), a two-bit
+  interleave field (11:10, stock 3), a separate shadow-update register at
+  0xc (stock writes all four channels), the D-PHY common control at 0x704
+  (stock 0x1f), a C-PHY bit (21), a debug option bit at 0x690 and a
+  line-rate register at 0x600 left at its default. Unused channels get
+  data type 0x3f. Stock writes the common control (with enable) last.
+- **RE3, CSIS WDMA.** Each context has four channels at 0x100 apart (the
+  stock RAW path writes channel 2). Per channel: control (bit 0 enable;
+  stock writes 0xf83 to start and 0xf82 to stop), format (code 7 = RAW10
+  packed as on the CSI-2 bus, 6 = 16-bit container, 0 = 8-bit; **no packed
+  RAW12**), skip, 32 address slots (plain 32-bit values), width (height
+  left 0), stride in bytes and a slot mask. The interrupt bits are the
+  GPL ones. The common page gets four constant writes once. Stock's
+  flush: data control 0, control 1, format 7, control 0.
+- **Routing, in the CSIS sysreg** (`0x1a420000`): an EBUF input mux
+  (0x430 + 4 x EBUF = link) and a WDMA input mux (0x414 + 4 x context =
+  source); sources 8-10 are the PDP channels, and the value for an EBUF
+  is **not** found ([I] 0-3 = EBUF 0-3). There is also a PDP mux stock
+  sets that a RAW-only path doesn't need [I].
+- **RE4, ultrawide settings.** Two init lists (139 writes without phase
+  detection, 212 with), and three mode-list builders; the default one
+  gives 4032x3016 at 30 fps, a 4032x2272 crop (at a different link
+  rate, 794.6 MHz), and 2x2-binned 2016x1508 and 2016x1136 at 60 fps.
+  Mode lists use the standard CCS registers for PLL, frame/line length,
+  crop, output size and binning; the init lists are manufacturer
+  registers. `tools/extract-camera-data` regenerates them (section 5.3).
+- **RE5, DC-PHY.** Same registers and timing logic as Google's GPL
+  settings, different analog trims (now in our PHY driver), and an HS
+  settle count looked up by lane rate from a table; at 1548 Mbps it is 7
+  with the fast settle clock [V], which our DT gives for links 0 and 1.
+
 ### 4.2 Work items
 
 | Item | Question | How |
 |---|---|---|
-| RE1 | link, PHY type, lanes, MIPI rate per camera | find the `ModuleDescriptor` values per sensor; cross-check on the phone by which link counts frames (CAM5) |
-| RE2 | CSIS link control: enable, lane count, data type and virtual channel per channel, `ISP_CONFIG` fields | the code that fills `csis_cmn_ctrl`, `isp_config_ch0` (compare with `imx-mipi-csis` bit fields) |
-| RE3 | CSIS WDMA: format codes for RAW10/RAW8/RAW16, packing, stride rules, address slot use, enable/abort, link routing | the code around the context-0 control and format registers and the common DMA config register |
-| RE4 | ultrawide mode tables: one binned or 1080p-class mode, its PLL, line length, frame length | the sandworm sensor driver; express as CCS-standard registers where they are standard |
-| RE5 | C-PHY settings (main/tele, if C-PHY) | the PHY write sequence for `use_cphy` |
+| RE1 | link, PHY type, lanes, MIPI rate per camera (ultrawide: all but the link answered, 4.3) | find the `ModuleDescriptor` values per sensor; cross-check on the phone by which link counts frames (CAM5) |
+| RE2 | (answered, 4.3) CSIS link control: enable, lane count, data type and virtual channel per channel, `ISP_CONFIG` fields | the code that fills `csis_cmn_ctrl`, `isp_config_ch0` (compare with `imx-mipi-csis` bit fields) |
+| RE3 | (answered except the WDMA input value, 4.3) CSIS WDMA: format codes for RAW10/RAW8/RAW16, packing, stride rules, address slot use, enable/abort, link routing | the code around the context-0 control and format registers and the common DMA config register |
+| RE4 | (answered; extract tool built) ultrawide mode tables: one binned or 1080p-class mode, its PLL, line length, frame length | the sandworm sensor driver; express as CCS-standard registers where they are standard |
+| RE5 | C-PHY settings (main/tele, if C-PHY; D-PHY answered, 4.3) | the PHY write sequence for `use_cphy` |
 
 ---
 
@@ -498,12 +552,62 @@ only the existing `soc_id` and framebuffer `post-init-providers` reports.
 The overlay applies with `fdtoverlay` and turns on the nine nodes it names.
 Nothing has run on the phone.
 
-### 5.2 Userspace (not yet built)
+**Capture path, built 2026-10-12 on top (head `35295a9ab`, test build in
+`out-camera`):**
 
-- libcamera: a patch adding our driver to the simple pipeline handler's
-  supported-device table with the software ISP, a `CameraSensorHelper`
-  for the gain model, and a sensor properties entry (unit cell size). Ship
-  as a package patch until upstream; send upstream.
+- `clk: samsung: gs201: round the camera master clock dividers to the
+  closest rate`: a 24 MHz request on the oscillator gives 24.576 MHz, as
+  stock, instead of 12.288 MHz.
+- `dt-bindings: phy` + `phy: samsung: add the gs201 MIPI DC-PHY receiver`
+  + `use the board's analog settings` (`phy-gs201-mipi-dcphy-rx`, D-PHY,
+  settle per link from DT).
+- `dt-bindings: media` + `media: samsung: add the gs201 CSIS receiver and
+  CSIS WDMA driver` (`gs201-csis`): one link + one WDMA context per node,
+  media graph sensor -> CSIS subdev -> video node, RAW8/RAW10, frame-sync
+  events. Bring-up parameters: `allow_stream` (default off),
+  `link_only` (run PHY, link and sensor without the WDMA: no DMA),
+  `wdma_channel` (0-3, default 0). Debugfs `stats` and `regs` (registers
+  only while streaming).
+- `media: i2c: add a Sony IMX386 driver` (`imx386`): standard controls
+  (exposure, analogue/digital gain, vblank, hblank, pixel rate, link
+  frequency, test pattern, orientation), modes and init from the data file
+  `omandroid/camera/imx386-uw.bin`; power-up in stock's order.
+- DT: `sysreg_csis`, `csis_dcphy`, `csis0`/`csis1` (links 0/1, WDMA
+  contexts 0/1), the IMX386 with an endpoint to each link, a 64 MiB
+  capture pool below 4 GiB. Overlays `camera-stream-link0` and
+  `camera-stream-link1` enable one link each (never together with
+  `camera-pwr-test`).
+
+Checks: `bin/omandroid kernel` exit 0; `W=1` clean on the new objects;
+checkpatch `--strict` clean apart from the usual trailer items;
+`dt-doc-validate` and examples pass for the new bindings; `dt-validate` on
+the default DTB and default + each of the three camera overlays: only the
+existing `soc_id` and framebuffer reports.
+
+### 5.2 Userspace
+
+- libcamera: Arch Linux ARM ships 0.7.2-4 (= upstream's latest release)
+  with the simple pipeline and the software ISP already built, but the
+  simple handler matches only media devices whose driver name is in a
+  fixed table, and a configuration file can't add one. So
+  `packages/libcamera` (built 2026-10-12, not yet built for the phone) is
+  Arch's PKGBUILD with one patch adding `gs201-csis` with the software ISP
+  on, simple and uvcvideo pipelines only, the GPU debayer enabled (it
+  falls back to the CPU; `LIBCAMERA_SOFTISP_MODE=cpu` forces it), pkgrel
+  4.1. No IMX386 `CameraSensorHelper` or sensor-properties entry: without
+  them libcamera treats the gain code as linear and has no unit cell size,
+  which is enough for a first picture; the gain formula and pixel size
+  have no citable public source yet.
+- What libcamera needs from the kernel (checked against 0.7.2's simple
+  handler): media driver name `gs201-csis`; a `CAM_SENSOR` entity with one
+  source pad; a path sensor -> CSIS -> video node; the CSIS keeps the
+  sink format on its source pad unchanged (so it must not align widths);
+  a video node with `IO_MC`, `ENUM_FMT` by media bus code,
+  `ENUM_FRAMESIZES`, exact `S_FMT`, MMAP/DMABUF/EXPBUF; a DMA-BUF heap
+  (present since K); and on the sensor `ANALOGUE_GAIN`, `EXPOSURE`,
+  `HBLANK`, `VBLANK`, `PIXEL_RATE`. Frame-sync events on the CSIS subdev
+  keep the soft ISP's exposure updates in step. Our drivers do all of
+  this; sensor crop selections and flips are left for later.
 - `omandroid-camera` package: modprobe policy (modules blacklisted until
   the start unit loads them, the AoC pattern), a minimal tuning file, udev
   rules for `/dev/video*` and `/dev/media*`.
@@ -517,13 +621,26 @@ Nothing has run on the phone.
   binning `0x0900`, test pattern `0x0600`) and mainline drivers of the
   same family (`imx258`, `imx319`, `imx355` for Sony; `s5k3m5`, `s5kjn1`
   for Samsung).
-- Manufacturer-specific "global" settings that only the HAL has are
-  generated on the user's machine by a new `tools/extract-camera-data`
-  (like `tools/extract-vendor-firmware`) and loaded with `request_firmware()`
-  from `/usr/lib/firmware/omandroid/camera/`. Check whether mainline's
-  `ccs` driver with CCS *static data* (its documented firmware format for
-  manufacturer-specific registers and limits) can drive the ultrawide; if
-  so, the sensor needs no new driver at all.
+- **Built: `tools/extract-camera-data`.** It finds the IMX386 functions in
+  the user's own `liblyric_hwl.so` by a byte pattern (the model-ID
+  function and the mode dispatcher next to it) and by the shape of the
+  init-list builders, runs them in the unicorn AArch64 emulator (PLT calls
+  and imported data stubbed), reads back the register lists they build,
+  computes each mode's size, frame and line length, pixel rate and link
+  frequency from the standard registers in it, and writes our own data
+  format (documented in `imx386.c`), which the driver loads with
+  `request_firmware()` from `/usr/lib/firmware/omandroid/camera/`.
+  Checked on this laptop with the user's HAL: 139 init writes, four modes
+  of 73 writes each, frame rates 30/60 as the HAL names them. The pixel
+  rate assumes four pixels per video-timing clock [I]; the analogue gain
+  range 0-480 and the exposure margin of 10 lines are [I] too. The output
+  is per-phone and never committed; it needs `pip install unicorn
+  pyelftools` in a virtual environment.
+- Mainline `ccs` with CCS static data was the other candidate. It needs
+  the sensor's limit registers or a full set of limits in the static data,
+  neither of which we have for the IMX386; a small driver with the
+  extracted lists is the more certain route. `ccs` stays worth a try once
+  the sensor streams (an identify + limits read is harmless).
 - Upstream may object to a driver that can't stream without a vendor data
   file. That is the honest trade-off; record it in the cover letter.
 
@@ -538,9 +655,9 @@ Nothing has run on the phone.
 | CAM2 | Rails, one per boot: S2MPG13 GPIOs and the fixed supplies; GPIO 0 → SLG51002 chip ID; LDO12S → ultrawide EEPROM answers | buses, S2MPG13 GPIO, SLG51002 (built) | 1 week |
 | CAM3a | Full ultrawide sequence → sensor chip ID, read-only; then front, tele, main | `gs201-cam-power` (built) | 0.5-1 week |
 | RE1-RE4 | Offline HAL analysis (section 4) | REA | 2-3 weeks, in parallel with CAM2 |
-| CAM3b | Ultrawide streams a test pattern; DC-PHY RX up; the link counts frames, no errors | PHY driver, sensor driver, RE1, RE4 | 2 weeks |
-| CAM4 | CSIS WDMA writes the test pattern, then a real image, to a file (`v4l2-ctl`) | CSIS/WDMA driver, RE2, RE3 | 2-3 weeks |
-| CAM5 | libcamera `cam` photo; PipeWire app preview | libcamera patch | 1 week |
+| CAM3b | Ultrawide streams a test pattern; DC-PHY RX up; find the link (0 or 1) whose frame counter runs, no errors; no DMA | built: PHY, CSIS (`link_only`), IMX386, data file | 2-4 boots |
+| CAM4 | CSIS WDMA writes the test pattern, then a real image, to a file (`v4l2-ctl`); find the WDMA input value and channel | built: CSIS/WDMA | 3-6 boots |
+| CAM5 | libcamera `cam` photo; PipeWire app preview | built: `packages/libcamera` | 1 week |
 | CAM6 | Video: 1080p30 preview, recording (software encode), ACPM CAM DVFS | ACPM merged | 2-3 weeks |
 | CAM7 | Front camera (fixed focus) | CAM5 | 1-2 weeks |
 | CAM8 | Main and tele (C-PHY if RE1 says so; GN1/GM5 binned modes) | RE5, C-PHY PHY code | 4-8 weeks |
@@ -629,6 +746,21 @@ and the system/CMA heaps are off in our config), CMA 124 MiB total, about
 yet done: the pin states (CAM0.2, now folded into CAM2.0) and LDO12S, which
 needs the pmic-2 regmap (bound only while the GNSS power stack runs, as
 FINGERPRINT-PLAN FB2 found; CAM2.0 reads it on the camera-pwr-test boot).
+
+**CAM0.3 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00345-g606b84c7a9fd,
+GNSS running so `pmic-2`'s regmap was bound): LDO12S control (PM 0x37) reads
+0x2c: bit 7 clear, so L12S_CAMIO is off as ABL left it.** The selector is in
+bits 5:0 and LDO12S is in Google's voltage group 6 (0.7 V base, 25 mV
+steps; `s2mpg13-regulator.c` `REG_DESC("LDO12S", ..., 6, ...)`, our
+`regulator_desc_s2mpg13_ldo_own(12, 6, ...)`): 0.7 V + 44 x 25 mV =
+**1.8 V**, stock's camera I/O voltage. (Group 7, 1.8 V base, would make
+0x2c read 2.9 V; LDO12S isn't in it.) The GNSS rails read as the same
+formulas predict: 0x34 (LDO9S, group 5, 0.725 V + 12.5 mV steps) 0xa6 = on,
+1.2 V; 0x35/0x36 (LDO10S/LDO11S, group 6) 0xac = on, 1.8 V. So describing
+`ldo12s` with stock's fixed 1.8 V in `camera-pwr-test` finds the selector
+already at 1.8 V and writes no voltage; the regulator core only switches
+bit 7 when a consumer enables it. CAM2.0 confirms the value again on that
+boot.
 
 **Note on the MCLK rate.** CIS_CLK0's divider parent is the 24.576 MHz
 oscillator, and the divider rounds down, so asking for stock's 24 MHz would
@@ -865,33 +997,129 @@ tools/camera-stage --watchdog --regs "0x0000 0x0001 0x0002 0x0003" u1
   (new test nodes on buses 2, 4, 1 with their own stock sequences), each
   its own boot.
 
-### CAM3b-CAM5 (outline; runbooks written when the drivers exist)
+### CAM3b: the ultrawide streams to the CSIS link, no DMA. Risk: medium
 
-- **CAM3b:** ultrawide in its test-pattern mode streaming on the link
-  RE1 names; pass = link frame counter rising and INT0 errors at 0. If RE1
-  is unknown, enable the PHY and link one candidate per boot. Needs the
-  24 MHz MCLK parent (CAM0 note).
-- **CAM4:** WDMA context 0 into the reserved pool: test pattern first
-  (compare against the expected bars), then a real image saved with
-  `v4l2-ctl --stream-mmap --stream-count=1 --stream-to=`; pass = a
-  recognisable picture after an offline debayer on the laptop.
-- **CAM5:** `cam -c1 --capture=1 --file=` through the simple handler and
-  the soft ISP, then GNOME Snapshot through PipeWire. Check the app on the
-  phone with a screenshot before calling it done.
+Needs CAM2 and CAM3a passed (chip ID 0x0386 read with the bring-up
+driver). From here on the bring-up nodes of `camera-pwr-test` are replaced
+by the real sensor node: never apply `camera-pwr-test` and a
+`camera-stream-*` overlay together. Same PMIC backup check as CAM2 first.
+
+```sh
+# CAM3b.0 (laptop, once) the sensor data file, from your own image's
+#   camera HAL APEX (vendor partition, apex/com.google.pixel.camera.hal.apex;
+#   tools/extract-vendor-firmware unpacks the vendor image)
+python3 -m venv ~/.cache/omandroid-venv && ~/.cache/omandroid-venv/bin/pip install unicorn pyelftools
+~/.cache/omandroid-venv/bin/python tools/extract-camera-data --apex <path>/com.google.pixel.camera.hal.apex -o ~/android/reference/imx386-uw.bin
+#   expect: init 139 writes; modes 4032x3016 (30 fps), 4032x2272, 2016x1508,
+#   2016x1136 (60 fps); never commit the file
+tools/phone-ssh 'mkdir -p /usr/lib/firmware/omandroid/camera && cat > /usr/lib/firmware/omandroid/camera/imx386-uw.bin' < ~/android/reference/imx386-uw.bin
+# CAM3b.K kernel with the capture drivers (head 35295a9ab or int after the
+#   merge) and the blacklist for the three new modules until
+#   omandroid-device-cheetah ships them (ASK FIRST: flashes and reboots)
+printf 'blacklist imx386\nblacklist phy_gs201_mipi_dcphy_rx\nblacklist gs201_csis\n' |
+  tools/phone-ssh 'cat > /etc/modprobe.d/omandroid-camera-capture-bringup.conf'
+ov <the overlays the phone runs now> camera-stream-link1 && bin/omandroid push
+# CAM3b.1 (this boot) the sensor driver: powers the module in stock's order,
+#   reads the ID, powers off again
+tools/phone-ssh 'modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 1; modprobe imx386; sleep 2; dmesg | grep -iE "imx386|slg51002" | tail'
+#   expect: no error; /sys/bus/i2c/drivers/imx386/*-001a bound;
+#   the camera supplies off again in the regulator summary
+# CAM3b.2 (next boot) PHY and CSIS drivers bound, nothing started
+tools/phone-ssh 'for m in gpio_s2mpg13 slg51002_regulator imx386 phy_gs201_mipi_dcphy_rx gs201_csis; do modprobe $m; sleep 1; done; dmesg | grep -iE "gs201-csis|dcphy" | tail; media-ctl -d /dev/media0 -p'
+#   expect: "link 1 -> WDMA context 1, 4 data lanes"; graph imx386 3-001a ->
+#   gs201-csis link 1 -> gs201-csis-wdma1; PMU 0x3ebc still 0 (gs201_cam_probe step=pmu)
+# CAM3b.3 (next boot) colour bars on the link, no DMA, under the stage
+#   tool's kmsg stream and watchdog (tools/camera-stage --watchdog x --cmd '...')
+tools/camera-stage --watchdog x --cmd 'for m in gpio_s2mpg13 slg51002_regulator imx386 phy_gs201_mipi_dcphy_rx; do modprobe $m; done; modprobe gs201_csis allow_stream=1 link_only=1; sleep 1
+  media-ctl -d /dev/media0 -V "\"imx386 3-001a\":0[fmt:SRGGB10_1X10/2016x1508]" -V "\"gs201-csis link 1\":0[fmt:SRGGB10_1X10/2016x1508]"
+  S=$(media-ctl -d /dev/media0 -e "imx386 3-001a"); v4l2-ctl -d $S --set-ctrl test_pattern=2
+  V=$(media-ctl -d /dev/media0 -e gs201-csis-wdma1); v4l2-ctl -d $V --set-fmt-video=width=2016,height=1508,pixelformat=pRAA
+  timeout 5 v4l2-ctl -d $V --stream-mmap --stream-count=1; cat /sys/kernel/debug/*.csis/stats'
+```
+
+- **Pass (3b.3):** `frame_start` and `frame_end` rising by about 60 per
+  second (300 in the 5 s), `link_errors` 0, `wdma_done` 0 (no DMA). The
+  `stopped:` line in dmesg gives the same counters.
+- **Not this link:** counters stay 0 with no errors: next boot, the same
+  with `camera-stream-link0` (`csis0`, `gs201-csis link 0`,
+  `gs201-csis-wdma0`). If neither counts, check the sensor started
+  (`0x0100` read back through `i2ctransfer` is out of scope while the
+  driver owns it; instead re-run with dyndbg on imx386) and stop.
+- **Stop:** link errors (SOT, CRC, ECC in `last_link_err`): the PHY
+  settings or settle are wrong for this link: stop, don't try DMA. Any
+  hang: the watchdog resets; save pstore.
+- **Rollback:** `rmmod gs201_csis imx386` (powers the module down), reboot;
+  images without the overlay.
+
+### CAM4: the CSIS WDMA writes frames. Risk: high (first DMA)
+
+The WDMA writes to the buffer address it is given, with its SysMMU in
+bypass: a wrong route or a misread address field writes memory we don't
+own. So: the test pattern first, at the smallest mode, into the camera
+pool only (the driver refuses buffers above 4 GiB), with the watchdog and
+the log stream on, and nothing else running that matters.
+
+```sh
+# CAM4.1 (next boot) one frame of colour bars, WDMA channel 0, EBUF = context
+tools/camera-stage --watchdog x --cmd '...as CAM3b.3 but: modprobe gs201_csis allow_stream=1 wdma_channel=0
+  timeout 5 v4l2-ctl -d $V --stream-mmap --stream-count=4 --stream-to=/tmp/bars.raw
+  cat /sys/kernel/debug/*.csis/stats; cat /sys/kernel/debug/*.csis/regs'
+tools/phone-ssh 'cat /tmp/bars.raw' > logs/cam4-bars.raw
+# CAM4.2-4 (one per boot, only while 4.1 fails without errors):
+#   wdma_channel=2 (stock's RAW channel); then google,ebuf variations through
+#   a DT property change (the WDMA input value is the open question)
+# CAM4.5 a real picture: test_pattern=0, then 4032x3016
+```
+
+- **Pass (4.1):** `wdma_done` = 4, `wdma_errors` 0, `bars.raw` is 4 x
+  2016 x 1508 x 10 / 8 bytes per line rounded to 16 (2528 bytes per line);
+  unpacked on the laptop it shows eight vertical colour bars (a small
+  python unpacker into a PNG; no debayer needed for bars).
+- **Not routed:** `wdma_done` 0, no WDMA errors, link counters running:
+  the input mux value is wrong; try the next variant on the next boot.
+- **Stop:** `LASTADDR`/`LASTDATA`/`FIFO_FULL` errors, a picture shifted or
+  torn, or anything else misbehaving after the run (a write landed
+  elsewhere): stop and reboot at once, don't retry before the address
+  format is understood. A hang: watchdog, pstore.
+- **Rollback:** reboot (DMA stops with the module); images without the
+  overlay.
+
+### CAM5: libcamera. Risk: low (userspace)
+
+```sh
+# CAM5.0 (laptop) build packages/libcamera on the phone
+tools/phone-install-package packages/libcamera
+# CAM5.1 the camera is listed
+tools/phone-ssh 'cam -l'
+#   expect: one camera, "imx386 3-001a"; soft ISP created (log: SoftwareIsp)
+# CAM5.2 one picture
+tools/phone-ssh 'cam -c1 --capture=3 --file=/tmp/frame#.ppm --stream pixelformat=RGB888,width=2016,height=1508'
+# CAM5.3 GNOME Snapshot through PipeWire; check with a screenshot
+```
+
+- **Pass:** a recognisable image (colours off is fine: no tuning yet).
+- **Stop:** `cam -l` empty: check `media-ctl -p` and the libcamera log
+  (`LIBCAMERA_LOG_LEVELS=SimplePipeline:0`).
+- **Rollback:** `pacman -S libcamera` (Arch Linux ARM's build).
 
 ---
 
 ## 8. Open questions
 
-1. Which link, PHY type and lane count does each camera use (RE1)? Is the
-   ultrawide really D-PHY?
+1. Which link does each camera use? The ultrawide is D-PHY, four lanes,
+   1548 Mbps (4.3); its link is 0 or 1 (CAM3b finds out). The other
+   three are still open.
 2. Does our kernel still see `pd-csis` on (CAM1.1)? If not, the gs201 PD
    driver (shared with `GPU-PLAN.md` G4c) comes first.
 3. Are `sysmmu_csis0/1` in bypass and `s2mpu_csis0/1` allow-all after
    ABL, as `s2mpu_hsi0` is?
-4. Does the CSIS WDMA take 32-bit physical addresses directly, or a
-   shifted address (more than 4 GiB reachable)?
+4. Does the CSIS WDMA take 32-bit byte addresses (stock loads plain
+   32-bit values, IOVAs there)? And which WDMA input value selects an
+   EBUF, and which channel does a plain capture use (CAM4)?
 5. Can mainline `ccs` with static data drive the ultrawide (section 5.3)?
+   Not needed now; the IMX386 driver uses the extracted lists.
+9. The IMX386's analogue gain formula, black level and pixel size, for a
+   libcamera sensor helper and properties entry (no citable source yet).
 6. ~~Is the SLG51002 revision AA?~~ No: revision AB (`0xb13103`, stock
    dmesg), no trim needed (section 1.2). CAM2.2 confirms it on our kernel.
 7. For the main and tele: if they are C-PHY, can the sensor run a D-PHY

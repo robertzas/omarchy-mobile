@@ -1,0 +1,56 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (CAMERA-PLAN.md, stages CAM3b/CAM4): the ultrawide capture
+ * path with the sensor on CSIS link 0 (one of the two four-lane links; which
+ * one the board uses is what CAM3b finds out). Enables the camera power
+ * path as camera-pwr-test does, but with the real sensor node (sony,imx386)
+ * instead of the power test nodes, the DC-PHY receiver and CSIS link 0 with
+ * WDMA context 0. Never apply it together with camera-pwr-test or the other
+ * camera-stream overlay: both describe the device at 0x1a.
+ *
+ * Nothing binds at boot: gpio_s2mpg13, slg51002_regulator, imx386,
+ * phy_gs201_mipi_dcphy_rx and gs201_csis are blacklisted, and gs201_csis
+ * refuses to stream without allow_stream=1. Paths, not labels.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/firmware/power-management/pmic-2} {
+	status = "okay";
+};
+
+&{/firmware/power-management/pmic-2/regulators/ldo12s} {
+	status = "okay";
+};
+
+&{/regulator-pp3200-bb-cam} {
+	status = "okay";
+};
+
+&{/regulator-pp1300-cam} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109700c0/i2c@10970000/pmic@75} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109200c0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109200c0/i2c@10920000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109200c0/i2c@10920000/camera-sensor@1a} {
+	status = "okay";
+};
+
+&{/soc@0/phy@1a4f0000} {
+	status = "okay";
+};
+
+&{/soc@0/csis@1a440000} {
+	status = "okay";
+};

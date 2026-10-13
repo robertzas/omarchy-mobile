@@ -30,6 +30,8 @@
 #   u1     CAM3a.1: the ultrawide sensor's stock power-up sequence, then
 #          --regs (default 0x0016 0x0017), one read each; power-down
 #   off    power both test devices down
+#   x      CAM3b/CAM4: run --cmd on the phone under the same log stream and
+#          watchdog (the capture steps in CAMERA-PLAN.md section 7)
 #
 # Options:
 #   --watchdog   arm the hardware watchdog (s3c2410, about 15 s) with a feeder
@@ -38,13 +40,14 @@
 #   --reg NAME   p2: link0..link7, wdma or phybias (default link0)
 #   --regs LIST  u1: sensor registers to read, one at a time (default
 #                "0x0016 0x0017"; only those in the DT's allowlist are read)
+#   --cmd CMD    x: the shell command to run on the phone
 #   --pstore     after a watchdog reset: save /sys/fs/pstore
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SSH="$ROOT/tools/phone-ssh"
 LOGDIR="$ROOT/logs"
 CP=/sys/kernel/debug/gs201-cam-power
-watchdog=0 stage= pstore=0 reg=link0 regs="0x0016 0x0017"
+watchdog=0 stage= pstore=0 reg=link0 regs="0x0016 0x0017" cmd=
 usage() { sed -n '/^# Usage:/,/^#   --pstore/p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 warn() { printf '\e[33m==> %s\e[0m\n' "$*"; }
@@ -55,9 +58,10 @@ while (($#)); do
     --watchdog) watchdog=1 ;;
     --reg) reg="${2:?}"; shift ;;
     --regs) regs="${2:?}"; shift ;;
+    --cmd) cmd="${2:?}"; shift ;;
     --pstore) pstore=1 ;;
     -h|--help) usage ;;
-    k|p1|p2|r0|g1|s1|e1|u1|off) stage="$1" ;;
+    k|p1|p2|r0|g1|s1|e1|u1|off|x) stage="$1" ;;
     *) usage 1 ;;
   esac
   shift
@@ -221,6 +225,12 @@ case "$stage" in
     phone 'd=$(ls -d '"$CP"'/*-001a | head -1); echo 0 > $d/power; echo "power=$(cat $d/power)"' | tee -a "$log" || result=fail
     phone "$regulators" | tee -a "$log"
     ;;
+  x)
+    [[ -n "$cmd" ]] || die "x needs --cmd"
+    mark "about to run a capture step (see the log for the command)"
+    printf '# command: %s\n' "$cmd" >> "$log"
+    timeout 120 "$SSH" -o ServerAliveInterval=2 -o ServerAliveCountMax=3 "$cmd" </dev/null 2>&1 | tee -a "$log" || result=fail
+    ;;
   off)
     mark "about to power the camera test devices down"
     phone 'for d in '"$CP"'/*; do [ -e $d/power ] && echo 0 > $d/power && echo "$d power=$(cat $d/power)"; done; true' | tee -a "$log" || result=fail
@@ -254,5 +264,5 @@ trap - EXIT INT TERM
 echo
 say "summary ($log): $result"
 sed -n "/camera-stage: start $stage/,\$p" "$log" |
-  grep -E 'camera-stage|cam_probe|cam-power|slg51002|s2mpg13|sec-pmic|regulator|i2c|modprobe-exit|Unable|abort|SError' |
+  grep -E 'camera-stage|cam_probe|cam-power|slg51002|s2mpg13|sec-pmic|regulator|i2c|imx386|csis|dcphy|modprobe-exit|Unable|abort|SError' |
   sed -E 's/^([0-9:.]+) [0-9]+,[0-9]+,[0-9]+,[^;]*;/\1 /' | tail -30

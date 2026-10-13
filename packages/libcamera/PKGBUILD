@@ -1,0 +1,242 @@
+# SPDX-License-Identifier: 0BSD
+#
+# Omandroid build of libcamera for the Pixel 7 Pro (gs201 CSIS receiver).
+#
+# Derived from Arch Linux's libcamera PKGBUILD, tag 0.7.2-4
+# (https://gitlab.archlinux.org/archlinux/packaging/packages/libcamera, 0BSD),
+# which Arch Linux ARM builds unchanged for aarch64. Omandroid changes:
+#  - 0001-pipeline-simple-Add-the-Google-gs201-CSIS-receiver.patch: one
+#    entry in the simple pipeline handler's supportedDevices table, so a
+#    media device whose driver is "gs201-csis" is matched, with the software
+#    ISP on (device/cheetah/CAMERA-PLAN.md, 5.2). Send upstream together
+#    with the kernel driver; drop it once libcamera ships the entry.
+#  - aarch64 only. Pipelines simple and uvcvideo (USB cameras through
+#    USB-C), IPA simple only: none of the other aarch64 pipelines (rkisp1,
+#    rpi/*, imx8-isi, mali-c55) can match on this phone, and a smaller
+#    native build.
+#  - softisp-gpu forced on, so a missing EGL fails the build instead of
+#    silently leaving the GPU debayer out. At runtime the GPU path is
+#    tried first and falls back to the CPU; LIBCAMERA_SOFTISP_MODE=cpu
+#    forces the CPU path.
+#  - No documentation (no libcamera-docs split, no Doxygen, Sphinx or
+#    TeX Live in the build) and no test suite (test=false, no check()).
+#  - pkgrel 4.1, so it sorts above Arch Linux ARM's 0.7.2-4.
+#
+# Maintainers of the original: David Runge, Carl Smedstad.
+
+pkgbase=libcamera
+pkgname=(
+  libcamera
+  libcamera-ipa
+  libcamera-tools
+  gst-plugin-libcamera
+  python-libcamera
+)
+pkgver=0.7.2
+pkgrel=4.1
+pkgdesc="A complex camera support library for Linux, Android, and ChromeOS (Omandroid: gs201 CSIS)"
+arch=(aarch64)
+url="https://libcamera.org/"
+_url=https://git.libcamera.org/libcamera/libcamera.git
+makedepends=(
+  cmake
+  git
+  glib2
+  gst-plugins-base
+  gtest
+  libdrm
+  libgcc
+  libglvnd
+  libjpeg-turbo
+  libstdc++
+  libtiff
+  libyaml
+  libyuv
+  meson
+  pybind11
+  python-jinja
+  python-ply
+  python-pyyaml
+  qt6-base
+  qt6-tools
+  sdl2
+  systemd
+)
+source=(
+  "git+$_url#tag=v$pkgver"
+  "$pkgbase-fix-python3.14-macro-redefinition.patch"
+  0001-pipeline-simple-Add-the-Google-gs201-CSIS-receiver.patch
+)
+sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd8847f7bec755c753c72f6b065df76de53c15f9af2e5901e83e7a144a2ddcd'
+            '8b54cbdf6ed767ae8d52a14480a4653f4f3a1c2187c4ccf7ceb65eaa60c819cce514122591d6e0c2dfc39d7482739f8fdd4090dbaf63701445510eefc88fb19f'
+            'b2ce83a9124699c850f20b0b68046b4b1fab4bfad94c485c7638a1c996d075dc911be9a53b65e3bb719e77dcab97ef169f8661b4312f24a1d320fce3f37e9d61')
+b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc58494400e69feeec99a77894252d582f0d8f183508e5d1b8220e70f3d5'
+        '4a0e24feed22d32b83b0ec49c9a7616b77deb26cae82c17a38b54a81a0468e982852147bc2d5e3b611ba014ddbd7647acfe2e68591542420da73945ba1c0d6c2'
+        'cba8b638543a16bf80c2ae7dc0737f3874476fd1ff694639b459184725848e193518778d0336eef3d55ba4329d9bc63981d0aa8d8d9b5507c9ade4f17f7f407d')
+
+_pick() {
+  local p="$1" f d; shift
+  for f; do
+    d="$srcdir/$p/${f#$pkgdir/}"
+    mkdir -p "$(dirname "$d")"
+    mv "$f" "$d"
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$f")"
+  done
+}
+
+prepare() {
+  cd $pkgbase
+  patch -Np1 < ../$pkgbase-fix-python3.14-macro-redefinition.patch
+  patch -Np1 < ../0001-pipeline-simple-Add-the-Google-gs201-CSIS-receiver.patch
+
+  # add version, so that utils/gen-version.sh may rely on it
+  printf "%s\n" "$pkgver" > .tarball-version
+}
+
+build() {
+  local meson_options=(
+    -D pipelines=simple,uvcvideo
+    -D ipas=simple
+    -D softisp-gpu=enabled
+    -D documentation=disabled
+    -D v4l2=enabled
+    -D tracing=disabled
+    -D test=false
+  )
+
+  arch-meson $pkgbase build "${meson_options[@]}"
+  meson compile -C build
+}
+
+package_libcamera() {
+  license=(
+    Apache-2.0
+    CC0-1.0
+    'GPL-2.0-only WITH Linux-syscall-note'
+    GPL-2.0-or-later
+    LGPL-2.1-or-later
+    'GPL-2.0-or-later WITH Linux-syscall-note OR BSD-3-Clause'
+    'GPL-2.0-or-later WITH Linux-syscall-note OR MIT'
+  )
+  depends=(
+    glibc
+    gnutls
+    libcamera-ipa
+    libelf
+    libgcc
+    libglvnd
+    libstdc++
+    libunwind
+    libyaml
+    libyuv
+    sh
+    systemd-libs libudev.so
+  )
+  optdepends=(
+    'gst-plugin-libcamera: GStreamer plugin'
+    'libcamera-tools: for applications'
+  )
+  provides=(libcamera.so libcamera-base.so)
+
+  meson install -C build --destdir "$pkgdir"
+  install -vDm 644 $pkgbase/LICENSES/{BSD-3-Clause,Linux-syscall-note,MIT}.txt -t "$pkgdir/usr/share/licenses/$pkgname/"
+
+  (
+    cd "$pkgdir"
+    _pick $pkgbase-ipa usr/lib/libcamera/
+    _pick $pkgbase-tools usr/bin/{cam,libcamera-bug-report,lc-compliance,qcam}
+    _pick gst-plugin-$pkgbase usr/lib/gstreamer-*
+    _pick python-$pkgbase usr/lib/python*
+  )
+}
+
+package_libcamera-ipa() {
+  pkgdesc+=" - signed IPA"
+  license=(
+    BSD-2-Clause
+    CC-BY-SA-4.0
+    CC0-1.0
+    GPL-2.0-or-later
+    LGPL-2.1-or-later
+  )
+  depends=(
+    glibc
+    libcamera libcamera.so libcamera-base.so
+    libgcc
+    libstdc++
+  )
+  # stripping requires re-signing of IPA libs, so we do it manually
+  options=(!strip)
+
+  strip $pkgname/usr/lib/libcamera/*{.so,proxy}
+  for _lib in $pkgname/usr/lib/libcamera/*.so; do
+    $pkgbase/src/ipa/ipa-sign.sh "$(find build -type f -iname "*ipa-priv-key.pem")" "$_lib" "$_lib.sign"
+  done
+  mv -v $pkgname/* "$pkgdir"
+  install -vDm 644 $pkgbase/LICENSES/BSD-2-Clause.txt -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+package_libcamera-tools() {
+  pkgdesc+=" - tools"
+  license=(
+    BSD-2-Clause
+    CC0-1.0
+    GPL-2.0-or-later
+    LGPL-2.1-or-later
+  )
+  depends=(
+    glibc
+    gtest
+    libcamera libcamera.so libcamera-base.so
+    libdrm
+    libevent libevent-2.1.so libevent_pthreads-2.1.so
+    libgcc
+    libjpeg-turbo libjpeg.so
+    libstdc++
+    libtiff libtiff.so
+    libyaml
+    qt6-base
+    sdl2
+  )
+  conflicts=("$pkgbase-tests<0.0.1-2")
+  replaces=("$pkgbase-tests<0.0.1-2")
+
+  mv -v $pkgname/* "$pkgdir"
+  install -vDm 644 $pkgbase/LICENSES/BSD-2-Clause.txt -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
+
+package_gst-plugin-libcamera() {
+  pkgdesc="Multimedia graph framework - libcamera plugin"
+  license=(
+    CC0-1.0
+    LGPL-2.1-or-later
+  )
+  depends=(
+    glib2 libg{lib,object}-2.0.so
+    glibc
+    gst-plugins-base-libs
+    gstreamer
+    libcamera libcamera.so libcamera-base.so
+    libgcc
+    libstdc++
+  )
+
+  mv -v $pkgname/* "$pkgdir"
+}
+
+package_python-libcamera() {
+  pkgdesc+=" - Python integration"
+  license=(
+    CC0-1.0
+    LGPL-2.1-or-later
+  )
+  depends=(
+    glibc
+    libcamera
+    libgcc
+    libstdc++
+    python
+  )
+
+  mv -v $pkgname/* "$pkgdir"
+}

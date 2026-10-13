@@ -1,0 +1,33 @@
+From fca11d4d80d9b6e9131444d511c4bb36182dd679 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Mon, 12 Oct 2026 19:55:11 -0400
+Subject: [PATCH] pipeline: simple: Add the Google gs201 CSIS receiver
+
+The Google Tensor G2 (gs201) SoC captures raw Bayer frames from its
+MIPI CSI-2 receivers (CSIS) through a write DMA engine straight to
+memory. The camera ISP is not used, so frames have to be debayered in
+software.
+
+The gs201-csis driver registers a media device with the camera sensor,
+a CSIS subdev (one sink and one source pad) and the WDMA capture video
+node, which matches the simple pipeline handler's model. Add it to the
+list of supported devices with the software ISP enabled.
+---
+ src/libcamera/pipeline/simple/simple.cpp | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/libcamera/pipeline/simple/simple.cpp b/src/libcamera/pipeline/simple/simple.cpp
+index e26f438d9..5598587bb 100644
+--- a/src/libcamera/pipeline/simple/simple.cpp
++++ b/src/libcamera/pipeline/simple/simple.cpp
+@@ -257,6 +257,7 @@ namespace {
+ 
+ static const SimplePipelineInfo supportedDevices[] = {
+ 	{ "dcmipp", {}, false },
++	{ "gs201-csis", {}, true },
+ 	{ "imx7-csi", { { "pxp", 1 } }, true },
+ 	{ "intel-ipu6", {}, true },
+ 	{ "intel-ipu7", {}, true },
+-- 
+2.55.0
+
