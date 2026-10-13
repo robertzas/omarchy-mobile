@@ -8,10 +8,13 @@ the phone: main (Samsung S5KGN1, C-PHY, link 1; runbook CAM-M), front
 C-PHY, link 4, SEM1215SA focus; CAM-T). Question 11 is done: every DC-PHY
 setting, D-PHY included, now comes from the per-phone data file
 `gs201-dcphy.bin`, so the ultrawide needs that file before it runs a
-kernel from this branch: runbook P comes first.** Kernel branch
-`omandroid-camera` head `c91185280` (built as
-`7.3.0-rc6-omandroid-push1-00382-gc91185280474`, not merged into
-`omandroid-int`); libcamera 0.7.2-4.6 (patches 0013-0014: the front and
+kernel from this branch: runbook P comes first.** On the phone (2026-10-13): P passed (the ultrawide unchanged with the
+PHY file), CAM-M passed M.1-M.4 (the S5KGN1 answers, its C-PHY link
+counts 30 fps), M.5's first DMA in the 2032x1536 mode stopped with
+`LASTADDR`; next CAM-M.5b (the 2016x1136 mode). Kernel branch
+`omandroid-camera` head `cb502b561` (error-bit counters on top of
+`c91185280`, which int `937d47233` has; `cb502b561` is not merged);
+libcamera 0.7.2-4.6 (patches 0013-0014: the front and
 telephoto sensors, a near-size mode rule) built and checked offline, the
 phone still runs 4.4. Ultrawide quality: CAM5.3, Snapshot CAM5.4, what to
 expect and what needs captures: 7.Q. Order on the phone: section 7.R.
@@ -2166,7 +2169,10 @@ tools/phone-ssh 'printf "blacklist s5kgn1\nblacklist ak7375\nblacklist sem1215\n
 # P.K kernel: the human merges omandroid-camera (head c91185280 or later)
 #   into int; images with the overlays the phone runs today (camera-stream-link2,
 #   camera-uw-lens if it has it), nothing new (ASK FIRST: flashes and reboots)
-# P.2 (this boot) the ultrawide as in CAM5.2: one libcamera capture
+# P.2 (this boot) the ultrawide as in CAM5.2: one libcamera capture. The PMIC
+#   modules are blacklisted at boot and the sensor defers without them
+#   (regulator-pp3200-bb-cam "can't get GPIO"; cam -l lists nothing): load them first
+tools/phone-ssh 'modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 2'
 tools/phone-ssh 'cam -c1 --capture=30 --file=/tmp/p#.ppm --stream pixelformat=RGB888,width=2008,height=1508 2>&1 | tail -2; dmesg | grep -E "PHY settings|link 2: D-PHY|stopped" | tail -4'
 #   pass: "PHY settings from omandroid/camera/gs201-dcphy.bin: D-PHY 32 writes,
 #   111 rate ranges; C-PHY 20 writes, 3 rate ranges"; "link 2: D-PHY 4 lanes
@@ -2359,6 +2365,108 @@ tools/phone-ssh 'cat /tmp/m000119.ppm' > logs/camm-frame.ppm
   unpowered (stock powers it from SLG switches 1 and 2): the lens floats
   in its OIS suspension and may rattle; harmless. The capture pool
   doubles (128 MiB reusable CMA below 4 GiB).
+
+**P and CAM-M results (2026-10-13, int `937d47233` =
+`7.3.0-rc6-omandroid-push1-00446-g937d47233338`: int + `omandroid-camera`
+`c91185280`; overlays as before + `modem-cpif-pktproc`, + `camera-main`
+from M.K; logs `logs/camera-20261013-14*.log`, `logs/cam-m41c-kmsg.log`):**
+- **P.0/P.1 passed:** the five files byte-identical to the reference
+  copies, installed, sums match; device-cheetah 0.1.28 installed.
+- **P.2 passed** once `sec_acpm`, `gpio_s2mpg13` and `slg51002_regulator`
+  were loaded by hand (now in the step): "PHY settings from
+  omandroid/camera/gs201-dcphy.bin: D-PHY 32 writes, 111 rate ranges;
+  C-PHY 20 writes, 3 rate ranges"; "link 2: D-PHY 4 lanes ... 1548288000
+  bps, settle 7 ... bias 0x10 0x110 0x3223 0x0 0x200"; 30 frames at 29.9
+  fps, link errors one a frame (0x8, as always), WDMA errors 0, a normal
+  picture. **The ultrawide is unchanged with stock's bias words.**
+- **M.1 passed** (gpp2-0/1/2, gpp9-0 function 0, unclaimed). **M.2
+  passed:** "s5kgn1 0-003d: S5KGN1, model 0x08e1", rails off afterwards.
+  **M.3 passed:** link 1 <- `s5kgn1 0-003d`, the `ak7375 0-000c` entity
+  present, "link 1 -> WDMA context 0, 3 C-PHY trios", link 2's graph
+  unchanged; `cam -l` lists both cameras.
+- **M.4 (fresh boot), link only at 2032x1536: frames arrive, with a link
+  error in every interrupt.** "link 1: C-PHY 3 trios at 1862459936 sps,
+  settle 7 ... bias 0x10 0x110 0x3223 0x0 0x40"; "link 1 on: 2032x1536
+  DT 0x2b, 3 C-PHY trios; CMN_CTRL 0x00204e01 PHY_CMN 0x0000001f ...
+  CAM 533000000 Hz"; FS 144 FE 144 in 4.7 s (30 fps, FRM_CNT_CH0 counts
+  them too); 31139 link interrupts, every one with an error (about 216 a
+  frame), the last 0x8 (`ERR_WRONG_CONFIG`); only the last word was
+  kept, so the mix is unknown. The channel registers read as programmed:
+  channel 0 0x20ac (RAW10, quad, VC 0), resolution 0x060007f0; channels
+  1-3 0x000f20fc (VC 15, data type 0x3f). One difference from the
+  ultrawide's scan: link+0x6a0 reads 0x00014100 (link 2: 0), an unnamed
+  register.
+- **M.5 (fresh boot), first DMA: stopped.** At the first frame "WDMA
+  error 0x00008000 (`LASTADDR`): CTRL 0x00000001 FMT 0x00000007 ADDR1
+  0xee600000 RESOL 0x060007f0 STRIDE 0x00000a00, 2032x1536, 2560 bytes a
+  line, 3932160 a frame"; at stop FS 144 FE 144, link errors 35403 (last
+  0x8), WDMA done 0, errors 340 (all `LASTADDR` as far as recorded), the
+  file 0 bytes. INT 400 MHz, CAM 533 MHz.
+
+**Why (offline, 2026-10-13):**
+- `LASTADDR` means the WDMA reached the end of the frame it was told to
+  write before the frame ended: more data arrived on channel 0 than
+  2032 x 1536 RAW10. Everything we program matches what the bring-up in
+  section 4.4 used to capture whole GN1 frames (533 MHz CAM, 400 MHz INT,
+  channels 1-3 on VC 15, interleave 3, the C-PHY bit, EBUF bypass, format
+  7, 64-byte line padding) except two things: the **mode** (that bring-up
+  used the 2016x1136 and 4080x3072 modes, never 2032x1536) and the WDMA
+  **start value** (0xf83, stock's, against their 0x3; 0xf83 works for the
+  ultrawide's binned mode).
+- **The 2032x1536 mode is the odd one out in the data file:** comparing
+  its register list with the other three, besides size, crop and frame
+  length it clears two manufacturer registers (0x0c02, 0x0c06) that
+  2016x1136, 4080x2288 and 4080x3072 all set, one of them to a value that
+  scales with the output height (a quarter of it). That reads like the
+  phase-detection output's set-up [I]: in this mode the phase data
+  likely leaves in another form, possibly on VC 0 as extra lines, which
+  would overrun the WDMA, and would also fit a link error on nearly every
+  line. The 2032x1536 mode is the one stock uses for its 4:3 preview with
+  its own ISP, which takes whatever the sensor sends.
+- The line burst is the same in every GN1 mode (one pixel clock, 3000
+  clocks a line in the binned modes), so the bus can't explain one mode
+  failing where 2016x1136 works elsewhere.
+- `cb502b561` `media: gs201-csis: count each error bit` (on top of
+  `c91185280`, built W=1 clean; comes with the next kernel push, not
+  needed for M.5b): debugfs `stats` gets `int0_bits`/`int1_bits`/
+  `wdma_bits` lines and the stop line a per-bit summary, so the next run
+  says which link errors those are.
+
+### CAM-M.5b: the 2016x1136 mode, then the WDMA start value. Risk: medium (DMA)
+
+One change per step; the current kernel (`937d47233`) and overlays.
+Don't use 2032x1536 (or a libcamera size that picks it, such as
+2024x1536) until this is understood.
+
+```sh
+# M.5b-0 (this boot, link only, no DMA) the 2016x1136 mode's link behaviour
+tools/camera-stage --watchdog x --cmd 'LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=0 bash -s' --script tools/camera-cap-test
+#   record: link_irqs / frame_start against M.4's ~216 a frame, and link1+0x6a0 in the scan
+#   pass: FS/FE ~30/s, no hang
+# M.5b-1 (next boot) first DMA in the 2016x1136 mode: colour bars
+tools/camera-stage --watchdog x --cmd 'LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=1 FRAMES=4 bash -s' --script tools/camera-cap-test
+tools/phone-ssh 'cat /tmp/cam-2016x1136.raw' > logs/camm-bars.raw
+tools/raw10-stats logs/camm-bars.raw --width 2016 --height 1136 --stride 2560 --bars 8
+#   pass: wdma_done 4, wdma_errors 0, file 4 x 2560 x 1136 = 11 632 640 bytes, eight bars
+#   then, same boot, a real picture (as M.5, W=2016 H=1136 PATTERN=0 CTRLS=analogue_gain=256)
+#   stop: LASTADDR again (go to M.5b-2), any other WDMA error, a hang
+# M.5b-2 (next boot, only if M.5b-1 gave LASTADDR) the start value another bring-up uses
+tools/camera-stage --watchdog x --cmd 'LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=1 FRAMES=4 CSIS_OPTS=wdma_ctrl=3 bash -s' --script tools/camera-cap-test
+#   pass as M.5b-1; stop: LASTADDR again: record and stop (next: CAM 664 MHz,
+#   CSIS_OPTS=cam_khz_cphy=664000, one boot later)
+# M.5b-3 (next boot, only after M.5b-1 or -2 passed) the stills mode, same settings
+tools/camera-stage --watchdog x --cmd 'LINK=1 SENSOR=s5kgn1 W=4080 H=3072 DMA=1 FRAMES=2 bash -s' --script tools/camera-cap-test
+#   pass: wdma_done 2, errors 0, 2 x 5120 x 3072 bytes
+```
+
+- **If 2016x1136 passes and 2032x1536 doesn't:** the 4:3 preview mode
+  goes out of the driver's list (the data file keeps it; the driver skips
+  a mode the board can't take, by a list in the DT or by its size) and
+  libcamera previews from 4080x3072 or 2016x1136; or, later, its extra
+  data is found and parked. M.6 (gain) and M.7 (libcamera, with
+  `width=2008,height=1136` or `width=4072,height=3072`) follow on the
+  passing mode.
+- **Rollback:** reboot; all parameters are per load.
 
 ### CAM5.3: ultrawide quick wins. Risk: low to medium
 
