@@ -15,8 +15,10 @@ counts 30 fps), M.5's first DMA in the 2032x1536 mode stopped with
 CAM-M.5c (error bits: only `ERR_WRONG_CONFIG`; LRTE no effect; the
 overrun's last packet is a VC 1 RAW10 line), CAM-M.5d (VC 1 is the
 phase data, 2016 x ~284, and lands cleanly alone; VC 0 still overruns
-with VC 1 on its own channel), next CAM-M.5e (measure the VC 0 frame's
-real height) with CAM7 in parallel. Kernel branch
+with VC 1 on its own channel), CAM-M.5e (VC 0 overran even at
+twice the height), next CAM-M.5f
+(the largest WDMA height, then the 4080x3072 mode) with CAM7 in
+parallel. Kernel branch
 `omandroid-camera` head `48e1ba5e0` (`extra_lines`; `8c93e69cb` VC
 parameters is in int `fd0aeb894`);
 libcamera 0.7.2-4.6 (patches 0013-0014: the front and
@@ -2710,6 +2712,71 @@ PY
   the sensor register that moves them to VC 1 (the 0x0c02 family,
   section CAM-M.5).
 - **Rollback:** reboot; parameters per load.
+
+**CAM-M.5e result (2026-10-13, int `aca2c8163` =
+`7.3.0-rc6-omandroid-push1-00457-gaca2c816302f`, + `48e1ba5e0`; fresh
+boot; log `logs/camera-20261013-144957-x.log`):** DMA, 2016x1136, bars,
+`extra_lines=1136` (WDMA height 2272, RESOL 0x08e007e0, 5 816 320 bytes a
+buffer), VC 1 parked: **`LASTADDR` again, in the first frame** ("link
+last packet 0x09d86b00, FRM_CNT 0x00000001, LRTE 0x00007fff", logged
+about 40 ms after the stream-on, before the sensor's 100 ms readback);
+FS/FE 144, INT0 b3 x32912 only, WDMA done 0, errors 255 (b14 `LASTDATA`
+x1, b15 `LASTADDR` x253, b20 `OVERLAP` x2).
+
+**Why, fifth pass (offline):**
+- Doubling the height changed nothing, and the errors come at about two
+  a frame: each frame overruns, from the first. Either the VC 0 frame is
+  far longer than 2272 lines, or the WDMA doesn't see VC 0's frame
+  boundaries (no frame start to bring it back to the buffer's top, so it
+  runs on to the end): VC 1's frames, captured alone, end cleanly.
+- The VC 1 header as the last packet at the error is expected either way:
+  the phase lines are interleaved through the frame, so the last header
+  the link saw is often one of them; it says nothing about where the
+  WDMA's data came from (d-4 showed unmatched packets don't reach it).
+- **Turning the sensor's phase output off is not a clean test yet:** the
+  2032x1536 mode, whose list clears 0x0c02/0x0c06, still sent VC 1 frame
+  ends and the same rate of unmatched packets (M.4), so those registers
+  don't switch the stream off, and the register that does is unknown
+  (writing guesses into the sensor's manufacturer space is not a single
+  understood change).
+- `LASTDATA` (b14) once, besides `LASTADDR`: the WDMA also saw a frame end
+  with data still due at least once, which fits frames whose length the
+  WDMA doesn't agree with, not a bus problem.
+
+### CAM-M.5f: the largest buffer the WDMA takes, then the stills mode. Risk: medium (DMA)
+
+No new kernel: `extra_lines` as far as it goes. If even 8192 lines
+overrun, the WDMA isn't seeing VC 0's frames end at all; if it lands, the
+frame's real height is in the file.
+
+```sh
+P='modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 1;'
+# M.5f-1 (fresh boot, kernel aca2c8163) VC 0, bars, WDMA height 8192 (4 x 21 MB buffers
+#   from the 128 MiB pool)
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=1 FRAMES=2 CSIS_OPTS=extra_lines=7056 bash -s" --script tools/camera-cap-test
+tools/phone-ssh 'cat /tmp/cam-2016x1136.raw' > logs/camm-tall.raw
+#   then the M.5e row count with rows = 8192 in the snippet
+#   pass: wdma_done 2, errors 0: "rows written" is the real height
+#   stop: LASTADDR again (the frame never ends for the WDMA: record; next is M.5f-2)
+#   or a CMA allocation failure (record CmaFree; FRAMES=2 needs only the buffers v4l2-ctl asks for)
+# M.5f-2 (next boot, only if M.5f-1 overran) the mode another set-up captured whole frames in
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=4080 H=3072 DMA=1 FRAMES=2 bash -s" --script tools/camera-cap-test
+#   pass: wdma_done 2, errors 0, 2 x 5120 x 3072 bytes (then the 2016x1136 mode is the outlier)
+#   stop: LASTADDR: no GN1 mode captures here; record. The next step is then a kernel
+#   that logs the WDMA's frame-start/end and line-end interrupt counts (they're masked now)
+#   for VC 0 against VC 1, to see whether VC 0's frame starts reach the WDMA
+```
+
+- **Rollback:** reboot; parameters per load.
+
+**The front camera (CAM7) can go now, in parallel** (independent link,
+PHY, bus, sensor and supplies; the int kernel the phone runs has it):
+1. F.1 (read-only, this boot).
+2. F.K: `ov <the overlays the phone boots now> camera-front && bin/omandroid
+   push` with `KERNEL_DIR`/`KERNEL_OUT` of the current int build (one change:
+   the overlay; ASK FIRST). F.2 and F.3 on that boot.
+3. F.4 (link only) on a later fresh boot; F.5 (first DMA) on its own fresh
+   boot. M.5f's DMA steps and F.5 never share a boot.
 
 ### CAM5.3: ultrawide quick wins. Risk: low to medium
 
