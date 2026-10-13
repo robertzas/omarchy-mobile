@@ -865,16 +865,39 @@ omandroid.fingerprint state ''` (`oskWatch`, `osk`) and, as the user,
 
 ### F16b: no keyboard over the lock in PIN mode (0011 updated)
 
-With the keyboard allowed above the lock (F16), a PIN user's lock showed
-squeekboard at once: the toggles load after the view, so the first focus
-went to the text field, which asked for the keyboard. 0011 now moves focus
-to the pad's key handler whenever the pad shows, disables the field under
-the pad (it only shows the dots), and folds a visible keyboard on the way
-back to the pad (`busctl --user call sm.puri.OSK0 ... SetVisible b false`,
-harmless without squeekboard). Harness: in PIN mode, typed "ab12" gives two
-dots (the field has no focus); in password mode, typed letters reach the
-field. Phone delta on top of the 0011 delta as applied:
-`0011b-delta-for-phone.patch` (LockView.qml `d434c511…` to `e5abfba4…`).
+With the keyboard allowed above the lock (F16), a PIN user's lock could show
+squeekboard at once. The first fix (`0011b`, `LockView.qml` `e5abfba4…`:
+the field disabled under the pad, focus moved on every pad change) was
+rolled back on the phone: a correct PIN read as wrong and the lock state got
+confused after a fingerprint unlock. In the harness with real PAM (below),
+`e5abfba4…` passed with hardware keys, so the failure is on the touch path,
+which the harness cannot drive; the cause is not found. 0011 is back to the
+`d434c511…` lock plus one change that does not touch the field, its focus or
+the PIN: on a lock taking input in number-pad mode, the view folds the
+keyboard (`busctl --user call sm.puri.OSK0 … SetVisible b false`) 400 ms
+after the lock shows, after each attempt, and when switching back to the
+pad (not from the style preview's copy of the view).
+
+Harness with real PAM: the lock's PAM services pointed (`configDirectory`,
+harness copy only) at `pam_exec` scripts: the password one accepts `1234`,
+the fingerprint one succeeds when a trigger file appears, for the newest
+conversation only. Result for `4c72b5be…`: wrong PIN stays locked, `1234`
+unlocks, relock then fingerprint unlocks; a fake `sm.puri.OSK0` got
+SetVisible false at lock, after the wrong attempt and at relock, and none at
+shell start. `d434c511…` and `e5abfba4…` gave the same unlock results.
+
+Phone delta from `d434c511…` (as restored): `0011c-delta-for-phone.patch`,
+additive only, to `4c72b5be…`:
+
+```sh
+tools/phone-ssh 'cd /usr/share/omarchy/shell/plugins/lock && sha256sum LockView.qml'   # d434c511…
+tools/phone-ssh 'cd /usr/share/omarchy && patch -p1 --dry-run && patch -p1' < 0011c-delta-for-phone.patch
+tools/phone-ssh 'su - <user> -c omarchy-restart-shell'
+```
+
+Then lock: no keyboard; PIN on the pad unlocks (and a wrong one fails); the
+finger unlocks; ABC shows the keyboard, 123 folds it. **Stop** on any
+wrong-PIN for a correct one: restore `/root/LockView.qml.pre-f16b`.
 
 ## 7. Results
 
