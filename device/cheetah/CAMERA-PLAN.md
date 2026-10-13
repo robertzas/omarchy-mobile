@@ -18,10 +18,11 @@ phase data, 2016 x ~284, and lands cleanly alone; VC 0 still overruns
 with VC 1 on its own channel), CAM-M.5e (VC 0 overran even at
 twice the height), CAM-M.5f (8192
 lines and 4080x3072 overrun too: the WDMA never gets VC 0's frame
-starts), next CAM-M.5g (frame-sync counts per VC and WDMA channel) with
-CAM7 in parallel. Kernel branch
-`omandroid-camera` head `bcc97af77` (frame-sync counters; up to
-`48e1ba5e0` is in int `aca2c8163`);
+starts), CAM-M.5g (the WDMA gets VC 0's first frame
+start and only five line ends: no line framing; every VC 0 DMA so far
+ran with the sensor's colour bars), next CAM-M.5h (VC 0 with a real
+image) with CAM7 (F.1 passed) in parallel. Kernel branch
+`omandroid-camera` head `bcc97af77` (all in int `a56ad74dc`);
 libcamera 0.7.2-4.6 (patches 0013-0014: the front and
 telephoto sensors, a near-size mode rule) built and checked offline, the
 phone still runs 4.4. Ultrawide quality: CAM5.3, Snapshot CAM5.4, what to
@@ -2839,6 +2840,55 @@ tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA
   real line count; FS on another channel (1-3) would show the VC 0
   frame syncs going to the wrong WDMA channel. The next change follows
   from those numbers (no guess in the sensor's registers before them).
+- **Rollback:** reboot; parameters per load.
+
+**CAM-M.5g results (2026-10-13, int `a56ad74dc` =
+`7.3.0-rc6-omandroid-push1-00459-ga56ad74dc41f`, + `bcc97af77`; fresh
+boot; F.1 passed earlier: gpp4-0/1/2 and gpp5-0 function 0):**
+- **M.5g-0 (link only):** FS/FE 143; link FS bits: b0 x143, FE bits: b0
+  x143, nothing else; INT0 b3 x25823. The per-VC source registers show
+  one bit only, so they are probably per link channel rather than per VC
+  [I]: channel 0's frames start and end normally on the link.
+- **M.5g-1 (DMA, `wdma_line_irq=1`, bars):** "WDMA error 0x00008001 ...
+  link last packet 0x09d82b00"; "so far: WDMA FS 1/0/0/0 FE 0/0/0/0
+  lines 5/0/0/0 (ch 0-3); link FS VC0 1 VC1 0, FE VC0 0 VC1 0". Run
+  totals: WDMA FS on channel 0 once, line ends 252 in 143 frames, WDMA
+  errors 250 (b14 x1, b15 x248, b20 x2).
+- Bit 0 of 0x8001 is channel 0's line end (unmasked for this run), not an
+  error.
+
+**Why, seventh pass (offline):** the WDMA took the first frame start,
+then **only five line ends before running out of a 1136-line buffer**: it
+isn't told where VC 0's lines end, so it writes many sensor lines as one
+and never reaches a frame end. The link itself frames VC 0 normally. **And
+every VC 0 DMA run so far had the sensor's colour bars on** (the
+cap-test default, `PATTERN=2`), while the only clean main-camera DMA
+(d-4, VC 1) ran with `PATTERN=0`, and the ultrawide's bars come from a
+different sensor. A test pattern generator that sends its lines without
+the per-line framing the WDMA counts (line boundaries the link passes on
+with real image lines) would give exactly this [I]. It is the one
+untested difference that needs no kernel, so it goes first.
+
+### CAM-M.5h: VC 0 with a real image instead of the colour bars. Risk: medium (DMA)
+
+```sh
+P='modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 1;'
+# M.5h-1 (fresh boot, kernel a56ad74dc) the M.5g-1 run with PATTERN=0
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=1 FRAMES=4 PATTERN=0 CTRLS=analogue_gain=256 CSIS_OPTS=wdma_line_irq=1 bash -s" --script tools/camera-cap-test
+tools/phone-ssh 'dmesg | grep -A9 "stopped:" | tail -10'
+tools/phone-ssh 'cat /tmp/cam-2016x1136.raw' > logs/camm-real.raw
+#   pass: wdma_done 4, errors 0, WDMA line ends about 1136 a frame, 11 632 640 bytes; a
+#   picture after a GRBG debayer (check the Bayer order and rotation here)
+#   stop: LASTADDR again with a few line ends: the pattern isn't the cause; record the
+#   counts. The next step is then a link-side experiment with the WDMA's line framing (the
+#   link channel's pixel mode for C-PHY, a kernel parameter), one boot later
+```
+
+- If M.5h-1 passes: the bars are a test-mode artefact of this sensor;
+  `camera-cap-test`'s default for `SENSOR=s5kgn1` becomes `PATTERN=0`,
+  M.5b-3 (4080x3072), M.6 (gain) and M.7 (libcamera, which never turns
+  the pattern on) follow, and the same caution applies to the front and
+  telephoto (bars only on the link, real images for DMA first).
 - **Rollback:** reboot; parameters per load.
 
 **The front camera (CAM7), on the next boot that has no camera DMA step**
