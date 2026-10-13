@@ -1,3 +1,12 @@
+# Lock screen: a number pad for touch-only devices (the lock-keypad toggle),
+# kept clear of an under-display fingerprint sensor, with a hint that either
+# unlocks. The session lock hides every other surface, on-screen keyboards
+# included, so a phone needs its own digits; a PIN is a numeric password.
+#
+# Against Omarchy 4.0.4 (the edge channel's aarch64 omarchy 4.0.4-2, the same
+# files as tag v4.0.4). 4.0.4 has no "Fingerprint reader unavailable" notice,
+# so the hunk that moved it above the field is gone and the hint shows
+# whenever fingerprints are set up.
 diff --git i/shell/plugins/lock/Keypad.qml w/shell/plugins/lock/Keypad.qml
 new file mode 100644
 index 0000000..98ad1ad
@@ -78,11 +87,11 @@ index 0000000..98ad1ad
 +  }
 +}
 diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
-index ecec660..506dfdb 100644
+index c2deae0..5baa35f 100644
 --- i/shell/plugins/lock/LockView.qml
 +++ w/shell/plugins/lock/LockView.qml
-@@ -24,8 +24,17 @@ Item {
-   property bool powerSaverActive: false
+@@ -16,8 +16,16 @@ Item {
+   property bool loadBackground: true
    property string passwordText: ""
    property bool syncingPasswordText: false
 +  // Touch-only devices: a number pad under the field (the lock-keypad toggle).
@@ -90,8 +99,7 @@ index ecec660..506dfdb 100644
 +  // A phone with a fingerprint sensor under the display has it in the lower
 +  // third of the screen, where the pad would otherwise sit: a finger on the
 +  // sensor pressed a key. With fingerprints set up, the pad keeps the lower
-+  // third clear (also while the reader is unreachable, so the layout does
-+  // not jump), and a hint above the field says either works, as on Android.
++  // third clear, and a hint above the field says either works, as on Android.
 +  readonly property bool keypadClearsSensor: keypad && fingerprintConfigured
 +  readonly property int keypadBottomMargin: Math.round(height * (keypadClearsSensor ? 0.34 : 0.08))
  
@@ -100,8 +108,8 @@ index ecec660..506dfdb 100644
    readonly property int fieldWidth: 381
    readonly property int fieldHeight: 67
    readonly property int outlineThickness: 3
-@@ -55,7 +64,8 @@ Item {
-   signal wakeRequested()
+@@ -53,7 +61,8 @@ Item {
+   }
  
    function forcePasswordFocus() {
 -    passwordInput.forceActiveFocus()
@@ -110,7 +118,7 @@ index ecec660..506dfdb 100644
    }
  
    function clearPassword() {
-@@ -147,16 +157,58 @@ Item {
+@@ -114,16 +123,58 @@ Item {
  
      MouseArea {
        anchors.fill: parent
@@ -168,10 +176,10 @@ index ecec660..506dfdb 100644
 +      anchors.verticalCenter: root.keypad ? undefined : parent.verticalCenter
 +      anchors.bottom: root.keypad ? numberPad.top : undefined
 +      anchors.bottomMargin: root.keypad ? Style.space(40) : 0
-       color: Commons.Color.lock.background
+       color: Color.lock.background
        borderSpec: root.inputBorderSpec
        radius: Style.cornerRadius
-@@ -173,7 +225,7 @@ Item {
+@@ -140,7 +191,7 @@ Item {
          anchors.leftMargin: inputField.borderLeft + 18 + root.fingerprintReserve
          verticalAlignment: TextInput.AlignVCenter
          horizontalAlignment: TextInput.AlignHCenter
@@ -180,10 +188,11 @@ index ecec660..506dfdb 100644
          clip: true
          enabled: root.inputEnabled && !root.authenticatingPassword
          readOnly: root.authenticatingPassword
-@@ -256,14 +308,36 @@ Item {
+@@ -215,5 +266,23 @@ Item {
+         verticalAlignment: Text.AlignVCenter
        }
      }
- 
++
 +    // Touch-only devices with fingerprints: say that either unlocks.
 +    Text {
 +      id: keypadHint
@@ -193,45 +202,29 @@ index ecec660..506dfdb 100644
 +      anchors.bottomMargin: Style.space(18)
 +      anchors.horizontalCenter: inputField.horizontalCenter
 +      width: parent.width - Style.space(32)
-+      visible: root.keypadClearsSensor && !root.fingerprintUnavailable
++      visible: root.keypadClearsSensor
 +      text: "Touch the fingerprint sensor or enter your PIN"
-+      color: Commons.Color.lock.text
++      color: Color.lock.text
 +      font.family: Style.font.family
 +      font.pixelSize: Style.font.subtitle
 +      wrapMode: Text.WordWrap
 +      horizontalAlignment: Text.AlignHCenter
 +    }
-+
-     // The crossed-out icon has no meaning to a user who has never seen it — it
-     // is not intuitive that it signals a broken reader — so the words carry the
-     // explanation and the icon only reinforces it.
-     Text {
-       objectName: "fingerprintUnavailableNotice"
-       textFormat: Text.PlainText
--      anchors.top: inputField.bottom
--      anchors.topMargin: 18
-+      // With the number pad, above the field, in the hint's place: under it
-+      // is the pad.
-+      anchors.top: root.keypad ? undefined : inputField.bottom
-+      anchors.topMargin: root.keypad ? 0 : 18
-+      anchors.bottom: root.keypad ? inputField.top : undefined
-+      anchors.bottomMargin: root.keypad ? Style.space(18) : 0
-       anchors.horizontalCenter: inputField.horizontalCenter
-       visible: root.fingerprintConfigured && root.fingerprintUnavailable
-       text: "Fingerprint reader unavailable"
+   }
+ }
 diff --git i/shell/plugins/lock/Service.qml w/shell/plugins/lock/Service.qml
-index ccd496a..ad89873 100644
+index 9ecb1cc..aa61cf9 100644
 --- i/shell/plugins/lock/Service.qml
 +++ w/shell/plugins/lock/Service.qml
-@@ -24,6 +24,7 @@ Item {
+@@ -22,6 +22,7 @@ Item {
    property bool fingerprintAuthenticating: false
    property bool passwordPamConfigured: false
    property bool fingerprintConfigured: false
 +  property bool keypad: false
-   property int fingerprintUnreachedStreak: 0
-   property bool fingerprintAttemptReachedDevice: false
-   property bool fingerprintAttemptFastError: false
-@@ -208,6 +209,7 @@ Item {
+   property bool previewVisible: false
+   property string enteredPassword: ""
+   property string pendingPassword: ""
+@@ -126,6 +127,7 @@ Item {
    }
  
    function beginLock() {
@@ -239,23 +232,23 @@ index ccd496a..ad89873 100644
      if (!passwordPamConfigured) {
        logEvent("lock-denied: missing-pam")
        return false
-@@ -481,6 +483,7 @@ Item {
-       color: Commons.Color.background
+@@ -266,6 +268,7 @@ Item {
+       color: Color.background
  
        LockView {
 +        keypad: root.keypad
          id: lockView
          anchors.fill: parent
          backgroundPath: root.backgroundPath
-@@ -516,6 +519,7 @@ Item {
+@@ -297,6 +300,7 @@ Item {
      exclusionMode: ExclusionMode.Ignore
  
      LockView {
 +      keypad: root.keypad
        anchors.fill: parent
        backgroundPath: root.backgroundPath
-       videoPosterPath: root.videoPosterPath
-@@ -741,7 +745,8 @@ Item {
+       backgroundVersion: root.backgroundVersion
+@@ -413,7 +417,8 @@ Item {
  
    Timer {
      id: idleBlankTimer
@@ -265,7 +258,7 @@ index ccd496a..ad89873 100644
      repeat: false
      property double armedAt: 0
      onTriggered: {
-@@ -813,6 +818,17 @@ Item {
+@@ -481,6 +486,17 @@ Item {
      else armBlankTimer()
    }
  

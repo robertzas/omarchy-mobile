@@ -1,8 +1,17 @@
+# Screensaver on a phone: turn squeekboard off while it runs (it popped up for
+# the screensaver's terminal) and back on after, once the lock is up with
+# lock-after-screensaver; restore the cursor as it was (a touch device keeps
+# it hidden); a tap ends it; waking it goes straight to the lock; make sure
+# its window is fullscreen; a user foot config wins.
+#
+# Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4): 4.0.4's launcher has no
+# special-workspace loop or focus hand-back after it, so the keyboard
+# restore simply follows the final hypr_focus_monitor.
 diff --git i/bin/omarchy-launch-screensaver w/bin/omarchy-launch-screensaver
-index 78cf757..1552b48 100755
+index afee404..c12a1c6 100755
 --- i/bin/omarchy-launch-screensaver
 +++ w/bin/omarchy-launch-screensaver
-@@ -11,6 +11,16 @@ if omarchy-toggle-enabled screensaver-off && [[ $1 != "force" ]]; then
+@@ -15,6 +15,16 @@ if omarchy-toggle-enabled screensaver-off && [[ $1 != "force" ]]; then
  fi
  
  focused=$(omarchy-hyprland-monitor-focused)
@@ -19,7 +28,7 @@ index 78cf757..1552b48 100755
  terminal=$(xdg-terminal-exec --print-id)
  
  case $terminal in
-@@ -63,7 +73,10 @@ while read -r m special; do
+@@ -64,7 +74,10 @@ for m in $(hyprctl monitors -j | jq -r '.[] | .name'); do
      hypr_exec ghostty --class=org.omarchy.screensaver --config-file="$OMARCHY_PATH/default/ghostty/screensaver" --font-size=18 -e omarchy-screensaver
      ;;
    *foot*)
@@ -31,19 +40,16 @@ index 78cf757..1552b48 100755
      ;;
    *kitty*)
      hypr_exec kitty --class=org.omarchy.screensaver --override font_size=18 --override window_padding_width=0 -e omarchy-screensaver
-@@ -75,6 +88,12 @@ done < <(hyprctl monitors -j | jq -r '.[] | "\(.name) \(.specialWorkspace.name)"
+@@ -75,3 +88,9 @@ for m in $(hyprctl monitors -j | jq -r '.[] | .name'); do
+ done
  
  hypr_focus_monitor "$focused"
- 
++
 +# No screensaver came up to turn the on-screen keyboard back on: do it here.
 +if [[ -f $osk_marker ]] && ! pgrep -f '[o]rg.omarchy.screensaver' >/dev/null; then
 +  rm -f "$osk_marker"
 +  gsettings set $osk_key true
 +fi
-+
- # Emptying a special workspace focuses its monitor, so the last screensaver to close would take focus
- # with it. Hand focus back to the monitor that had it once they are all gone.
- # The class goes through the environment, since in argv the screensaver's pgrep and pkill would match it.
 diff --git i/bin/omarchy-screensaver w/bin/omarchy-screensaver
 index acd3868..8802d3a 100755
 --- i/bin/omarchy-screensaver
