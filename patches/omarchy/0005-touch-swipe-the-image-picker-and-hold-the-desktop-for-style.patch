@@ -2,13 +2,14 @@
 # to a narrow screen, and hold the desktop for the Style menu (there is no
 # right button or keyboard shortcut on a phone).
 #
-# Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4): only the context of the
-# picker's size properties changed (4.0.4 reads Color, not Commons.Color).
+# Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4) with 0000 (Commons.Color)
+# applied: only the context of the picker's size properties differs from
+# upstream main.
 diff --git i/shell/plugins/background/Background.qml w/shell/plugins/background/Background.qml
-index 21e1b0a..fb94395 100644
+index 0a53b20..546aaaf 100644
 --- i/shell/plugins/background/Background.qml
 +++ w/shell/plugins/background/Background.qml
-@@ -104,6 +104,15 @@ Item {
+@@ -105,6 +105,15 @@ Item {
      if (!bgSwitchProc.running) bgSwitchProc.running = true
    }
  
@@ -24,7 +25,7 @@ index 21e1b0a..fb94395 100644
    function openThemeSwitcher() {
      if (!themeSwitchProc.running) themeSwitchProc.running = true
    }
-@@ -312,6 +321,10 @@ Item {
+@@ -313,6 +322,10 @@ Item {
        MouseArea {
          anchors.fill: parent
          acceptedButtons: Qt.LeftButton | Qt.RightButton
@@ -36,13 +37,13 @@ index 21e1b0a..fb94395 100644
            if (mouse.button === Qt.RightButton) root.openThemeSwitcher()
            else root.openSelector()
 diff --git i/shell/plugins/image-picker/ImagePicker.qml w/shell/plugins/image-picker/ImagePicker.qml
-index 5c00240..7f7b65b 100644
+index b0554f5..0f735f6 100644
 --- i/shell/plugins/image-picker/ImagePicker.qml
 +++ w/shell/plugins/image-picker/ImagePicker.qml
-@@ -38,10 +38,11 @@ Item {
-   property color scrim: Color.imagePicker.scrim
-   property color selectedBorder: Color.imagePicker.selectedBorder
-   property color unselectedBorder: Color.imagePicker.unselectedBorder
+@@ -39,10 +39,11 @@ Item {
+   property color scrim: Commons.Color.imagePicker.scrim
+   property color selectedBorder: Commons.Color.imagePicker.selectedBorder
+   property color unselectedBorder: Commons.Color.imagePicker.unselectedBorder
 -  property int expandedWidth: 768
 -  property int expandedHeight: 475
 +  // Fit narrow screens (phones): never wider than the window allows.
@@ -54,7 +55,7 @@ index 5c00240..7f7b65b 100644
    property int sliceSpacing: -30
    property int skewOffset: 28
    property int bottomChromeHeight: showLabels ? (filterable ? 104 : 74) : (filterable ? 60 : 30)
-@@ -434,6 +435,18 @@ Item {
+@@ -435,6 +436,18 @@ Item {
  
            Component.onCompleted: forceActiveFocus()
  

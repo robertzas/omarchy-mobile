@@ -148,11 +148,14 @@ an 11 GB file system, 2.6 GB compressed; every package of Omarchy's list was
 available for aarch64 (Omarchy 4.0.4-2 from the edge channel).
 **Stop** if a patch in `patches/omarchy` didn't apply (the lock screen's PIN
 pad needs 0003 and 0011): rebase it on the Omarchy version in the MANIFEST
-first. **2026-10-13:** all eleven apply to Omarchy 4.0.4-2 (edge; the same
-files as tag v4.0.4), 0008 through the `/usr/bin` link. 0003, 0005, 0006 and
-0011 were rebased from upstream b83d3df onto it; the lock files they give
-equal the phone's tested ones (F16b) apart from the Qt 6.12 `Commons.Color`
-qualification, which 4.0.4 doesn't have.
+first. **2026-10-13:** all twelve apply to Omarchy 4.0.4-2 (edge; the same
+files as tag v4.0.4), 0008 through the `/usr/bin` link. 0000 backports
+upstream b83d3df (`Commons.Color`: Qt 6.12's `QtQuick` `Color` shadows the
+palette, and edge 4.0.4 lacks the fix; drop 0000 once edge has it) and
+applies first; 0003, 0005, 0006 and 0011 were rebased onto 4.0.4 plus 0000.
+With the series, the lock's `LockView.qml` is byte for byte the phone's
+tested file (`4c72b5be…`, F16b). Expect the MANIFEST's "not applied" line
+to read `none`.
 
 ### B4. Offline tests (risk none)
 

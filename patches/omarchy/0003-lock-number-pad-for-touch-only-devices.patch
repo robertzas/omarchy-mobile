@@ -4,9 +4,9 @@
 # included, so a phone needs its own digits; a PIN is a numeric password.
 #
 # Against Omarchy 4.0.4 (the edge channel's aarch64 omarchy 4.0.4-2, the same
-# files as tag v4.0.4). 4.0.4 has no "Fingerprint reader unavailable" notice,
-# so the hunk that moved it above the field is gone and the hint shows
-# whenever fingerprints are set up.
+# files as tag v4.0.4) with 0000 (Commons.Color) applied. 4.0.4 has no
+# "Fingerprint reader unavailable" notice, so the hunk that moved it above
+# the field is gone and the hint shows whenever fingerprints are set up.
 diff --git i/shell/plugins/lock/Keypad.qml w/shell/plugins/lock/Keypad.qml
 new file mode 100644
 index 0000000..98ad1ad
@@ -87,10 +87,10 @@ index 0000000..98ad1ad
 +  }
 +}
 diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
-index c2deae0..5baa35f 100644
+index 3c5f65d..53eef73 100644
 --- i/shell/plugins/lock/LockView.qml
 +++ w/shell/plugins/lock/LockView.qml
-@@ -16,8 +16,16 @@ Item {
+@@ -17,8 +17,16 @@ Item {
    property bool loadBackground: true
    property string passwordText: ""
    property bool syncingPasswordText: false
@@ -108,7 +108,7 @@ index c2deae0..5baa35f 100644
    readonly property int fieldWidth: 381
    readonly property int fieldHeight: 67
    readonly property int outlineThickness: 3
-@@ -53,7 +61,8 @@ Item {
+@@ -54,7 +62,8 @@ Item {
    }
  
    function forcePasswordFocus() {
@@ -118,7 +118,7 @@ index c2deae0..5baa35f 100644
    }
  
    function clearPassword() {
-@@ -114,16 +123,58 @@ Item {
+@@ -115,16 +124,58 @@ Item {
  
      MouseArea {
        anchors.fill: parent
@@ -176,10 +176,10 @@ index c2deae0..5baa35f 100644
 +      anchors.verticalCenter: root.keypad ? undefined : parent.verticalCenter
 +      anchors.bottom: root.keypad ? numberPad.top : undefined
 +      anchors.bottomMargin: root.keypad ? Style.space(40) : 0
-       color: Color.lock.background
+       color: Commons.Color.lock.background
        borderSpec: root.inputBorderSpec
        radius: Style.cornerRadius
-@@ -140,7 +191,7 @@ Item {
+@@ -141,7 +192,7 @@ Item {
          anchors.leftMargin: inputField.borderLeft + 18 + root.fingerprintReserve
          verticalAlignment: TextInput.AlignVCenter
          horizontalAlignment: TextInput.AlignHCenter
@@ -188,7 +188,7 @@ index c2deae0..5baa35f 100644
          clip: true
          enabled: root.inputEnabled && !root.authenticatingPassword
          readOnly: root.authenticatingPassword
-@@ -215,5 +266,23 @@ Item {
+@@ -216,5 +267,23 @@ Item {
          verticalAlignment: Text.AlignVCenter
        }
      }
@@ -204,7 +204,7 @@ index c2deae0..5baa35f 100644
 +      width: parent.width - Style.space(32)
 +      visible: root.keypadClearsSensor
 +      text: "Touch the fingerprint sensor or enter your PIN"
-+      color: Color.lock.text
++      color: Commons.Color.lock.text
 +      font.family: Style.font.family
 +      font.pixelSize: Style.font.subtitle
 +      wrapMode: Text.WordWrap
@@ -213,10 +213,10 @@ index c2deae0..5baa35f 100644
    }
  }
 diff --git i/shell/plugins/lock/Service.qml w/shell/plugins/lock/Service.qml
-index 9ecb1cc..aa61cf9 100644
+index 65fcb19..95726eb 100644
 --- i/shell/plugins/lock/Service.qml
 +++ w/shell/plugins/lock/Service.qml
-@@ -22,6 +22,7 @@ Item {
+@@ -23,6 +23,7 @@ Item {
    property bool fingerprintAuthenticating: false
    property bool passwordPamConfigured: false
    property bool fingerprintConfigured: false
@@ -224,7 +224,7 @@ index 9ecb1cc..aa61cf9 100644
    property bool previewVisible: false
    property string enteredPassword: ""
    property string pendingPassword: ""
-@@ -126,6 +127,7 @@ Item {
+@@ -127,6 +128,7 @@ Item {
    }
  
    function beginLock() {
@@ -232,15 +232,15 @@ index 9ecb1cc..aa61cf9 100644
      if (!passwordPamConfigured) {
        logEvent("lock-denied: missing-pam")
        return false
-@@ -266,6 +268,7 @@ Item {
-       color: Color.background
+@@ -267,6 +269,7 @@ Item {
+       color: Commons.Color.background
  
        LockView {
 +        keypad: root.keypad
          id: lockView
          anchors.fill: parent
          backgroundPath: root.backgroundPath
-@@ -297,6 +300,7 @@ Item {
+@@ -298,6 +301,7 @@ Item {
      exclusionMode: ExclusionMode.Ignore
  
      LockView {
@@ -248,7 +248,7 @@ index 9ecb1cc..aa61cf9 100644
        anchors.fill: parent
        backgroundPath: root.backgroundPath
        backgroundVersion: root.backgroundVersion
-@@ -413,7 +417,8 @@ Item {
+@@ -414,7 +418,8 @@ Item {
  
    Timer {
      id: idleBlankTimer
@@ -258,7 +258,7 @@ index 9ecb1cc..aa61cf9 100644
      repeat: false
      property double armedAt: 0
      onTriggered: {
-@@ -481,6 +486,17 @@ Item {
+@@ -482,6 +487,17 @@ Item {
      else armBlankTimer()
    }
  
