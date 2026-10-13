@@ -1,16 +1,18 @@
 <!-- SPDX-License-Identifier: MIT -->
 # AoC speaker tuning (C10-tuning): research, design and runbook
 
-Status (2026-10-12): **T1 done offline (laptop only); nothing has run on
-the phone.** Static analysis of the stock libraries from the user's own
+Status (2026-10-12): **T1 done offline; T2 and T3.1 passed on the phone;
+T3.2 showed the AoC answers but 0.1.1 discarded its replies (reply
+matching fixed in 0.1.2); next T3b, the first exchange during playback.**
+Sources: static analysis of the stock libraries from the user's own
 factory image (CP2A.260705.006), the AoC firmware's strings and Google's
-GPL AoC driver, then the Waves controller itself run under qemu with a fake
-sender (T1.4). The code is its own package,
-`packages/omandroid-speaker-tuning` 0.1.0 (helper, chroot runner, daemon,
-unit; disabled, mode `off`), plus the `waves` profile of
+GPL AoC driver, the Waves controller run under qemu with a fake sender
+(T1.4), and T2/T3 on the phone. The code is its own package,
+`packages/omandroid-speaker-tuning` (helper, chroot runner, daemon, unit;
+disabled, mode `off`), plus the `waves` profile of
 `tools/extract-vendor-chroot`; `packages/omandroid-audio` is untouched.
 Follows `AOC-PLAN.md` C9 ("C10-tuning"), which another agent owns; this
-file does not change it. Next: T2 (on the phone, no AoC writes).
+file does not change it.
 
 Path abbreviations as in `AOC-PLAN.md`: `V/` is the extracted stock vendor
 tree (`~/android/omandroid/vendor/google/cheetah/proprietary/vendor`), `GA/`
@@ -334,8 +336,8 @@ libraries is reproduced.
    `omandroid-speaker-watch.service`, `After=omandroid-aoc.service`):
    - the only opener of the three AoC devices (`lib/aoc_tuning.py`);
      implements section 2.2 as stock does (open per exchange, 16 KiB bulk
-     buffer, command, 500 ms reply wait, one retry on -110, one exchange at
-     a time);
+     buffer, command, 500 ms reply wait matched by command ID, one retry on
+     -110, one exchange at a time);
    - **allowlist**: only `0x00d5` to block 16, component 2, with a payload
      of 1..16384 bytes, and the read-only `GET_PARAMETER` of block 16
      component 2 key 0 (ASP Mode); anything else is refused before a device
@@ -360,7 +362,8 @@ libraries is reproduced.
      `OMANDROID_SPK_TUNING_VOLUME` (0..1, default 1.0) and
      `OMANDROID_SPK_TUNING_LEFT_UP` (90 or 270);
    - **gates**: every exchange needs `omandroid-speaker-watch` active
-     (`systemctl is-active`), and `music` also the C9 verification stamp
+     (`systemctl is-active`) and "Audio DSP State" = `Playback` (0.1.2,
+     as stock), and `music` also the C9 verification stamp
      (`/var/lib/omandroid/speaker-protection-verified`); otherwise nothing
      is sent and the state says `blocked <reason>`;
    - **state for the watchdog**: writes `/run/omandroid/speaker-tuning`
@@ -609,9 +612,78 @@ a log stream to the laptop for `dmesg`. Each step is one change.
    "Could not configure WAVES" with ASP Mode left changed, any `dmesg`
    error. Rollback: ASP Mode back to V (step 1); worst case reboot (AoC
    RAM only).
-3. Only if step 2 refused the upload outside playback: repeat it during a
-   C8-level tone (as T2.3, `--once` started one second after `pw-play`).
-   Expect rc 0. The audible change and the levels belong to T4.
+3. Superseded by T3b below (0.1.2 refuses to send outside playback).
+
+**T2 and T3 results (2026-10-12, 7.3.0-rc6-omandroid-push1-00361-g32c474a89dd6,
+omandroid-speaker-tuning 0.1.1; run by the human).**
+
+- T2.1 passed: the `waves` tree installed (17 MB), "preconditions met".
+  (0.1.1 fixed `test/all` for builds on the phone: it copied the package
+  with `cp -a .`, which hit makepkg's unreadable `pkg/`.)
+- T2.2 passed exactly as T1 predicted. Run 1: "DSP Waves version: not
+  available" (the controller's reply parser says "wrong id 0" for the
+  empty answer), exchange 2 11204 bytes sha256 `5d5ade25887b684d`,
+  "active SPEAKER_MUSIC_THROTTLE 0 (dry run)". Run 2: "2 exchange(s), 2
+  not accepted" with "SendBufferToDsp fail". No opener in `fuser`, no AoC
+  lines in `dmesg`. T2.3 was not run.
+- T3.1 passed. **ASP Mode reads 1 = `ASP_ON` at idle with no tuning ever
+  sent** (open question 2), and writes of 1, 2 (`ASP_BYPASS`) and 1 stuck
+  (the kernel's "set asp mode: block=16, component=2, key=0, val=1",
+  `SET_PARAMETER` 0x00d1, 18 bytes).
+- T3.2 (live `--once`, throttle, nothing playing, watchdog active): **the
+  AoC answers**, a 26-byte reply with ID 0x00d5, but 0.1.1 discarded it as
+  "ignored a stray reply" because it matched our counter as well as the
+  ID, and the AoC's reply does not carry our counter. Both exchanges
+  therefore timed out after their retry (rc -110; the retry found the
+  late first reply waiting, "dropped 1 stale message(s)"), the controller
+  logged "SendBufferToDsp fail", "2 exchange(s), 2 not accepted". ASP Mode
+  still 1 afterwards; the AoC log showed "AMixSPKR PostProcessing Config:
+  WAVES"; no AoC error, the AoC and speaker protection still active. What
+  the reply's return code was is unknown (0.1.1 did not log it, and the
+  `--record` directory keeps only payloads).
+- Fixed in **0.1.2**: replies are matched by command ID only, exactly as
+  stock's platform library does (it never compares the counter); one
+  exchange at a time and the drain before each keep an older reply from
+  being taken; the first mismatch is logged once ("the AoC's reply
+  counter is not ours (sent N, got M)"), and every exchange's log line
+  now carries the reply's counter and `rx_size`. The fake AoC in the
+  tests now answers with its own counter.
+- **Decision: no sends outside playback.** Stock's sender returns -22
+  without sending when the sink is not active, and the AoC's state for
+  an idle mixer is not something we need to learn. From 0.1.2 every live
+  exchange needs "Audio DSP State" = `Playback` besides the watchdog
+  (`blocked the AoC DSP is Idle, ...` otherwise), `--once` included. The
+  daemon already waited for `Playback` at stream start.
+
+### T3b first live exchange during a C8 tone (risk low; announce it: one 8 s tone)
+
+Prerequisites as T3; 0.1.2 installed (`tools/phone-install-package
+packages/omandroid-speaker-tuning`), the AoC log recorded. One tone at C8
+level; the `--once` starts two seconds into it, so Waves (if the AoC takes
+it) changes the sound for the last seconds only.
+
+```sh
+U='U=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}"); I=$(id -u $U); as_user() { runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/$I "$@"; }'
+tools/phone-ssh 'omandroid-speaker-protection signal tone /tmp/t3b.wav --level -23 --seconds 8'
+tools/phone-ssh "$U"'; systemctl is-active omandroid-speaker-watch; C=$(awk "/aoc/{print \$1; exit}" /proc/asound/cards);
+  (as_user timeout 10 pw-play /tmp/t3b.wav &); sleep 2; amixer -c $C cget name="Audio DSP State" | tail -1;
+  OMANDROID_RUN=/tmp/spk-t3b omandroid-speaker-tuning run --once --mode throttle --record /var/lib/omandroid/speaker-tuning/t3b;
+  echo "exit $?"; sleep 7; amixer -c $C cget name="AoC Speaker Mixer ASP Mode" | tail -1;
+  omandroid-speaker-protection health; dmesg | tail -5'
+```
+
+Expect: DSP State `Playback` (item 1); "the AoC's reply counter is not
+ours" once; exchange 1 (waves id 5, 4 bytes) "rc 0 (reply counter ..,
+rx_size N)", and with N > 0 a "DSP Waves version: ..." line; exchange 2
+(11204 bytes) "rc R (...)"; "active SPEAKER_MUSIC_THROTTLE 0"; exit 0;
+"healthy". Record R, both `rx_size`s, the version text, ASP Mode, the AoC
+log's lines around "WAVES", and whether the tone changed audibly at about
+2 s. Pass: rc 0 for both, no AoC error, the watchdog never muted.
+Stop: a negative rc (record it, then the AoC log), an AoC restart or
+crash, "Could not configure WAVES", a watchdog mute, distortion.
+Rollback: `amixer ... cset name="AoC Speaker Mixer ASP Mode" 2`
+(`ASP_BYPASS`, proven in T3.1) or `omandroid-speaker-protection mute`;
+worst case reboot (AoC RAM only).
 
 ### T4 Waves on, throttle preset, C8 levels (risk medium; announce it)
 
@@ -663,9 +735,10 @@ of section 3.1 item 4 are settled with the `omandroid-audio` owner
 
 1. Does the AoC drop the Waves state when the speaker stream stops, or
    only on an AoC restart? (T4.4)
-2. What does ASP Mode read with no tuning sent: `ASP_OFF`, `ASP_BYPASS`
-   or `ASP_ON` with default coefficients? (T0) And does `ASP_BYPASS` take
-   Waves out of the path immediately? (T3)
+2. What does ASP Mode read with no tuning sent? **`ASP_ON`** (T3.1), so
+   "ASP_ON" alone does not mean "tuned": the watchdog hook of 3.1 item 4
+   must use the daemon's state, not ASP Mode. Does `ASP_BYPASS` take
+   Waves out of the path immediately? (T4, by ear)
 3. Does the controller need a reply (version, meters) before it emits the
    tuning? **No** (T1.4): it sends the full upload with no reply at all.
    What the AoC returns to the version query, and whether the controller
