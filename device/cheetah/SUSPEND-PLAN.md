@@ -885,11 +885,10 @@ Wi-Fi connected): failed, and Wi-Fi stayed dead until a reboot.**
     2 ms besides the wake-up, for up to 2 s (jiffies);
   - after the ACK, device interrupts are masked and cleared until resume,
     as Broadcom's driver does;
-  - **a missed ACK no longer kills Wi-Fi**: host-ready doorbell, then a bus
-    reset (firmware reload, no memory dump) through a new
-    `brcmf_bus_request_reset()`, as Broadcom's driver reloads after a D3 ACK
-    timeout. Re-sending a host-ready alone isn't enough: a D3 inform still
-    queued would put the dongle to sleep again;
+  - ~~a missed ACK requests a bus reset~~: withdrawn in `f8c94c615` after
+    S5b-2 step 2 (below). A missed ACK now logs "device unresponsive after
+    D3 inform; reload the driver stack to recover" and leaves recovery to a
+    full-stack reload, which the sleep hook does;
   - a failed send restarts the firmware console timer (it was left off);
   - hot resume reads the mailbox and the rings once and restarts the poll;
   - one `dev_dbg()` line per D3 entry ("D3 ACK by control message|shared-memory
@@ -906,50 +905,101 @@ message, including `MSGBUF_TYPE_D2H_MAILBOX_DATA`) with the link idle, set
 just before the freeze and cleared right after. Never 0x80000 across a
 suspend.
 
-**S5b-2 (flash `e20614037`; attended; medium risk).** Merge and build as in
-S5 (`git merge omandroid-wifi-d3` in `wt-int`; it merges cleanly into int
-`23c286942`), keep the DTB, push.
+**S5b-2 first run (2026-10-12, 7.3.0-rc6-omandroid-push1-00367-g054dfb8de239,
+int `054dfb8de` with `e20614037`).** Step 1 passed (`wlp1s0` connected, 5/5
+ping, only the old boot lines). **Step 2, the debugfs bus reset, oopsed and
+wedged the phone** (manual power cycle):
 
-1. **Awake regression (read-only, low risk):** as S5a, plus no
-   `D2H_MB_DATA` surprises: `dmesg | grep -iE "brcmf.*(error|fail|timeout|halt)"`
-   empty after 10 minutes of use (FN0 interrupts now read the shared-memory
-   mailbox while awake too). **Stop:** Wi-Fi down, firmware halt, ping
-   loss. **Rollback:** previous images.
-2. **The recovery path, awake (medium risk: first bus reset on this chip):**
+```
+ieee80211 phy0: brcmf_fil_cmd_data: bus is down. we have nothing to do.
+Workqueue: events brcmf_pcie_poll_worker [brcmfmac]
+pc : brcmf_proto_msgbuf_rx_trigger+0x24/0x144 [brcmfmac]
+lr : brcmf_pcie_poll_worker+0x94/0xfc [brcmfmac]
+brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac4389c1-pcie for chip BCM4389/3
+```
+
+then SSH sessions opened but no command ran (a lock held by the dead
+worker).
+
+- **Cause:** `brcmf_pcie_reset()` only masked the device's interrupts before
+  `brcmf_detach()` freed the protocol layer. The interrupt thread, the
+  console timer and our BCM4389 D2H poll worker (from `omandroid-wifi`, not
+  upstream) stayed live; the worker processed the rings through freed
+  memory and died holding `rx_lock`. `brcmf_pcie_remove()` does it right
+  (STATE_DOWN, cancel the poll, synchronise the interrupt); the reset path
+  never did. Upstream's reset has the same gap for the interrupt thread,
+  with nothing as busy as our poll to hit it.
+- **Was the reset ever good on this chip? No evidence that it was.** It was
+  never run before. And a firmware re-download without a power cycle has
+  only been seen to fail here: WIFI-BATTERY-PLAN 9.14 W2.4, a driver-only
+  reload, gave "FW failed to initialize"; the FLR fix for that has no
+  recorded result. Only a reload of the whole stack (`pcie_gs201` too, which
+  cycles WL_REG_ON) is proven. So the missed-ACK auto-reset from `e20614037`
+  inherited both problems.
+- **Fixed in `f8c94c615`** (on `omandroid-wifi-d3`; builds, W=1 and
+  checkpatch clean apart from the sign-off; merges cleanly into int
+  `a1a0d9a66`):
+  - `brcmf_pcie_reset()` first sets STATE_DOWN, stops the console timer,
+    masks and synchronises the interrupt, and cancels the poll, as remove
+    does; `brcmf_pcie_setup()` brings the state back up;
+  - the RX path refuses to run without a protocol layer (`rx_process` and
+    `brcmf_proto_msgbuf_rx_trigger()`);
+  - the missed-ACK path no longer rings host-ready (this firmware traps on an
+    unexpected one, see `brcmf_pcie_preinit()`) or resets: it logs "device
+    unresponsive after D3 inform; reload the driver stack to recover";
+  - the sleep hook (`omandroid-sleep`, not yet released) now reloads the whole
+    stack right after a suspend that failed in the Wi-Fi device, besides
+    switching to unload mode for the boot.
+
+**S5b-2, revised (flash `f8c94c615`; attended).** Merge `omandroid-wifi-d3`
+into `wt-int`, build, keep the DTB, push. Before every step stream the
+kernel log to the laptop, so an oops is captured whole even if the phone
+wedges:
+
+```sh
+tools/phone-ssh 'dmesg -W' > logs/s5b2-kmsg-$(date +%H%M%S).log 2>&1 &
+```
+
+1. **Awake regression (low risk):** as before (Wi-Fi up, ping, no new
+   brcmfmac errors after 10 minutes).
+2. **The full-stack reload (low risk, the proven recovery):**
+   `tools/phone-ssh 'modprobe -r brcmfmac_wcc brcmfmac pcie_gs201 && systemctl restart omandroid-wifi; sleep 20; nmcli -t -f DEVICE,STATE dev | grep "^wl"'`.
+   **Pass:** connected again. **Stop:** anything else (this is what every
+   failure below relies on).
+3. **The debugfs bus reset again (medium risk; tests the teardown fix, not
+   a recovery we depend on):**
 
    ```sh
-   tools/phone-ssh 'ls /sys/kernel/debug/ieee80211/phy0/reset && echo 1 > /sys/kernel/debug/ieee80211/phy0/reset
-   sleep 20; dmesg | grep -iE "brcmf|ieee80211" | tail -20; nmcli -t -f DEVICE,STATE dev | grep "^wl"'
+   tools/phone-ssh 'echo 1 > /sys/kernel/debug/ieee80211/phy0/reset; sleep 30
+   dmesg | grep -iE "brcmf|ieee80211|Oops|BUG" | tail -25; ip -br link | grep wl'
    ```
 
-   **Pass:** the firmware reloads and Wi-Fi reconnects by itself within
-   about 20 s. **Stop:** no interface or a hang (then `systemctl restart
-   omandroid-wifi` after `modprobe -r brcmfmac_wcc brcmfmac pcie_gs201`, or
-   reboot). If this fails, a missed ACK would still leave Wi-Fi dead, so
-   keep the sleep hook's unload mode and stop before step 3.
-3. **One freeze with Wi-Fi connected, `debug` 0:**
+   - **Pass (teardown):** no oops, no hang; SSH keeps working.
+   - **Then either:** Wi-Fi comes back (the re-download works: note it, the
+     reset becomes usable for recovery later), or "FW failed to initialize"
+     / no interface (expected from W2.4: recover with step 2's reload).
+   - **Stop:** an oops or a hang (power cycle by the human; send the
+     streamed log).
+4. **One freeze with Wi-Fi connected, `debug` 0** (as step 3 of the first
+   version):
 
    ```sh
    tools/phone-ssh 'echo 0 > /sys/module/brcmfmac/parameters/debug'
    tools/phone-ssh "$(freeze_cmd s5b2 30)"
    # reconnect after about 60 s
    tools/phone-ssh 'grep -E "rc=|wakeup_irq" /var/lib/omandroid/suspend/s5b2-*.log
-   dmesg | grep -E "D3 ACK by|hot resume|probing again|D3 substate|D3 inform|Firmware has halted" | tail
+   dmesg | grep -E "D3 ACK by|hot resume|probing again|D3 substate|D3 inform|unresponsive" | tail
    nmcli -t -f DEVICE,STATE dev | grep "^wl"; cat /sys/power/suspend_stats/last_failed_dev'
    ```
 
-   - **Pass:** `rc=0`, woken by the RTC after about 30 s; "D3 ACK by ...
-     after N us" (record which path and N); "hot resume"; Wi-Fi reconnects
-     within about 10 s and pings.
-   - **Partial:** `rc` non-zero with "Timeout on response for entering D3
-     substate (N ms, mailboxint ...)", then the firmware reload brings Wi-Fi
-     back by itself: the recovery works but the ACK still isn't found.
-     Record N and `mailboxint`, stop, and keep unload mode.
-   - **Stop:** Wi-Fi doesn't come back after a failed suspend (the reset
-     didn't work), "probing again" fails, or no wake.
-   - **Rollback:** `modprobe -r brcmfmac_wcc brcmfmac pcie_gs201; systemctl
-     restart omandroid-wifi`; previous images.
-4. Then S5c.
+   - **Pass:** `rc=0`, RTC wake after about 30 s, "D3 ACK by ... after N us"
+     (record the path and N), "hot resume", Wi-Fi back within about 10 s.
+   - **ACK still missed:** `rc` non-zero, "Timeout on response for entering
+     D3 substate (N ms, mailboxint ...)" and "device unresponsive". Record
+     N and `mailboxint`, recover with step 2's reload (this freeze ran
+     without the sleep hook), stop, and keep unload mode.
+   - **Stop:** a hang, an oops, or Wi-Fi not back after step 2's reload.
+5. Then S5c.
 
 **S5c, 10 then 20 cycles with Wi-Fi loaded:** S4's loop without the
 `modprobe -r`, adding `nmcli -t -f STATE general` to each log line.

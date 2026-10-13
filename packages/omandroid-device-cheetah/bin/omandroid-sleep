@@ -11,7 +11,8 @@
 #       suspend failure count.
 # post: reload Wi-Fi if pre unloaded it (through the hang-safe service), log
 #       the wake reason, and if the suspend failed in the Wi-Fi device, fall
-#       back to unloading Wi-Fi for the rest of this boot.
+#       back to unloading Wi-Fi for the rest of this boot and reload it now
+#       (a chip stuck in D3 only comes back with a reload of the stack).
 #
 # Wi-Fi stays loaded across sleep only with /etc/omandroid/wifi-keep-across-sleep
 # present (create it once stage S5 passes on the running kernel).
@@ -79,6 +80,10 @@ case "${1:-}/${2:-}" in
       if [[ $dev == "$wifi_pci" ]]; then
         touch "$fallback"
         log "Wi-Fi refused D3; unloading it for sleep until the next boot"
+        # The chip may be stuck in D3: only a reload of the whole stack
+        # (which power-cycles it) brings it back.
+        wifi_unload
+        wifi_reload
       fi
     fi
     ;;
