@@ -1116,12 +1116,15 @@ upper bound.
   scattered 3.9 m median and 6.2 m at 95 % around their mean.
 - **Power:** gpsd's estimate is 39.0 mA.
 
-**G5-2 (GeoClue) passed the same day.** `where-am-i` run as the desktop
+**G5-2 (GeoClue), partly (same day):** `where-am-i` run as the desktop
 user (not root: GeoClue waits for the caller's agent) connected to the
 bridge ("client connected (1)"). Indoors it reported only a 25 km fallback
-position. GNOME Maps, installed from Arch Linux ARM, showed the user's
-position outdoors from the GPS. Chromium's web geolocation does not use
-GeoClue on Linux, so web maps can't locate: use GNOME Maps.
+position. GNOME Maps (installed from Arch Linux ARM) showed a position
+indoors, but the GNSS receiver was not running at the time, so that was
+GeoClue's coarse source, not the GPS. Next: GNOME Maps outdoors with
+`omandroid-gnss status` showing the receiver running. Chromium's web
+geolocation doesn't use GeoClue on Linux, so web maps can't locate; use
+GNOME Maps.
 
 **Step 4 (optional, each a separate run of steps 2-3, 3-5 min):**
 - **Hot start:** right after step 2, again outdoors. Expect a fix within
