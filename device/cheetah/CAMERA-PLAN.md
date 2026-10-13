@@ -20,9 +20,12 @@ twice the height), CAM-M.5f (8192
 lines and 4080x3072 overrun too: the WDMA never gets VC 0's frame
 starts), CAM-M.5g (the WDMA gets VC 0's first frame
 start and only five line ends: no line framing; every VC 0 DMA so far
-ran with the sensor's colour bars), next CAM-M.5h (VC 0 with a real
-image) with CAM7 (F.1 passed) in parallel. Kernel branch
-`omandroid-camera` head `bcc97af77` (all in int `a56ad74dc`);
+ran with the sensor's colour bars), CAM-M.5h (a real image
+fails the same way), next CAM-M.5i (line ends for VC 1, then the link
+pixel mode). CAM7: F.1-F.3 passed (the S5K3J1 answers, link 0's graph is
+up); F.4 next. Kernel branch
+`omandroid-camera` head `d73ed198d` (`pixel_mode`; up to `bcc97af77`
+in int `a56ad74dc`);
 libcamera 0.7.2-4.6 (patches 0013-0014: the front and
 telephoto sensors, a near-size mode rule) built and checked offline, the
 phone still runs 4.4. Ultrawide quality: CAM5.3, Snapshot CAM5.4, what to
@@ -2889,6 +2892,88 @@ tools/phone-ssh 'cat /tmp/cam-2016x1136.raw' > logs/camm-real.raw
   M.5b-3 (4080x3072), M.6 (gain) and M.7 (libcamera, which never turns
   the pattern on) follow, and the same caution applies to the front and
   telephoto (bars only on the link, real images for DMA first).
+- **Rollback:** reboot; parameters per load.
+
+**CAM-M.5h result and CAM7 F.1-F.3 (2026-10-13, int `a56ad74dc`, one
+boot: F.K added `camera-front`; no camera DMA before M.5h-1):**
+- **F.2 passed:** "s5kgn1 1-0010: S5K3J1, model 0x30a1" (the main
+  sensor's "S5KGN1, model 0x08e1" probes too); `vddd_main_front` and
+  `cam_sw4` off afterwards. **F.3 passed:** "1a440000.csis: link 0 -> WDMA
+  context 0, 4 D-PHY data lanes"; graph `s5k3j1 1-0010` -> "gs201-csis
+  link 0". (F.1 had passed: gpp4-0/1/2, gpp5-0 function 0.)
+- **M.5h-1 (VC 0 DMA, `PATTERN=0`, `analogue_gain=256`,
+  `wdma_line_irq=1`): the same failure:** "so far: WDMA FS 1/0/0/0 FE
+  0/0/0/0 lines 5/0/0/0"; FS/FE 143, link errors 26610 (b3), WDMA done 0,
+  errors 248 (last 0x00108001), b15 x247, b20 x2, line ends 253. **Not
+  the test pattern.**
+
+**Why, eighth pass (offline):**
+- `LASTADDR` at every buffer height (1136 to 8192 lines) and after only
+  five line ends fits a WDMA that checks each line against the stride:
+  a "line" that runs past 2560 bytes because its end never came raises
+  it at once, wherever the buffer ends [I]. So the one fact to explain is
+  **the missing line ends for VC 0**.
+- VC 1 captured alone (d-4) landed, but its line ends were never counted:
+  its ~284 lines without line ends would also fill about 284 rows of
+  2560 bytes and need only one frame end, so d-4 doesn't prove VC 1 gets
+  them either. Counting them (M.5g-2, never run) says whether the line
+  framing is missing for VC 0 only (then something VC 0-specific in this
+  sensor's stream) or for this link altogether (then the C-PHY link's
+  hand-over to the WDMA).
+- The link channel's pixel mode (13:12: 0 single, 1 dual, 2 quad, 3
+  octa [I: the field's values beyond quad are inferred]) sets how many
+  pixels a clock the link hands on; the ultrawide uses quad on D-PHY and
+  its line ends arrive. At CAM 533 MHz quad passes 2.1 Gpixel/s, above
+  this link's 1.86 G capacity, so quad isn't too narrow; dual or single
+  would overflow during a line (`ERR_OVER` expected), octa leaves room. A
+  different mode changing the line framing is a long shot [I]; it is the
+  last link-side setting that differs from nothing we've varied.
+- `d73ed198d` `media: gs201-csis: link pixel mode as a bring-up
+  parameter` (W=1 clean; default 2, unchanged).
+
+### CAM-M.5i: line ends for VC 1, then the pixel mode. Risk: medium (DMA)
+
+Rules for these runs: link-only runs (no DMA) may share a boot, any
+number; **one DMA attempt a boot**, on a fresh boot, because a run that
+hits `LASTADDR` leaves the WDMA's state unknown until the next start's
+reset, and two failed DMA runs in a boot can't be told apart. A DMA run
+that passes may be followed on the same boot by link-only runs.
+
+```sh
+P='modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 1;'
+# M.5i-0 (fresh boot, kernel a56ad74dc or later) the reference: VC 1 with line ends counted
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=1 FRAMES=4 PATTERN=0 CSIS_OPTS='ch0_vc=1 wdma_line_irq=1' bash -s" --script tools/camera-cap-test
+tools/phone-ssh 'dmesg | grep -A9 "stopped:" | tail -10'
+#   expect: wdma_done ~4, WDMA FS/FE on channel 0 every frame. Record the line ends per
+#   frame: ~284 = VC 1 has line framing (the problem is VC 0-specific: go on with i-1 anyway,
+#   and the next offline step is the sensor's VC 0 stream); ~1-5 = no line framing on this
+#   link at all (the pixel mode runs below matter more)
+# M.5i-K kernel: int + d73ed198d, the same overlays (ASK FIRST)
+# M.5i-1 (that boot, link only) every pixel mode on the link, one run each
+for m in 1 3 0; do
+  tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=0 PATTERN=0 CSIS_OPTS=pixel_mode=$m bash -s" --script tools/camera-cap-test
+  tools/phone-ssh 'dmesg | grep -A4 "stopped:" | tail -5'
+done
+#   record per mode: FS/FE (~143), the INT0 bits (b3 as always; b4 ERR_OVER expected for 0
+#   and perhaps 1), and link1+0x040 in the scan (pixel mode in 13:12)
+#   stop: no frames or a hang in a mode: don't take it to DMA
+# M.5i-2 (next boot) DMA, dual (1)
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=1 FRAMES=4 PATTERN=0 CSIS_OPTS='pixel_mode=1 wdma_line_irq=1' bash -s" --script tools/camera-cap-test
+# M.5i-3 (next boot, only if i-2 failed) DMA, octa (3)
+tools/camera-stage --watchdog x --cmd "$P LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=1 FRAMES=4 PATTERN=0 CSIS_OPTS='pixel_mode=3 wdma_line_irq=1' bash -s" --script tools/camera-cap-test
+# (single, 0, only if i-1 showed it clean on the link: it can't keep up with this link)
+#   pass (any): wdma_done 4, errors 0, line ends ~1136 a frame (4 x 1136 = 4544 in all,
+#   plus a few), 11 632 640 bytes, a picture
+#   fail: the same five line ends: record; the pixel mode isn't it
+```
+
+- **After i-0 and i-2/3:** if VC 1 has line ends and no pixel mode gives
+  VC 0 any, the cause is in how the sensor sends VC 0 in these settings
+  (the next offline step: what the HAL's GN1 driver writes beyond the
+  mode lists for C-PHY output, e.g. the sensor-side line-start/line-end
+  packets), not the CSIS. If neither stream has line ends, it is the
+  C-PHY link's hand-over: then the link registers the stock HAL writes
+  through its field setters that we don't (section 4.3, RE2) are next.
 - **Rollback:** reboot; parameters per load.
 
 **The front camera (CAM7), on the next boot that has no camera DMA step**
