@@ -111,6 +111,7 @@ Each entry gives the gotcha, then the reason or the fix. Details are in the link
 
 - **PMU G3D (`0x18061e00`-`0x18062010`) from `/dev/mem`:** an immediate crash. [GPU-PLAN](device/cheetah/GPU-PLAN.md)
 - **The AoC PCU (`0x19a00000`) while the AoC's A32 is in reset:** an abort. Also never read the AoC carve-out after the firmware is loaded: it is locked. [AOC-PLAN](device/cheetah/AOC-PLAN.md)
+- **The modem's BAR space (0x40000000-0x405fffff) while CPIF has the link powered down:** a read hangs the SoC (watchdog reset, no pstore). From M4.1h the modem idles its link on its own, so it can go down between any check and the access. Never mmap `resource*` or `devmem` it; use CPIF's own read paths. Config space (`lspci`, `setpci`) is guarded and safe. [MODEM-PLAN](device/cheetah/MODEM-PLAN.md) section 4
 - **PCIe ELBI while the PHY is isolated:** the SoC hangs. Reading HSI2 SysMMU/S2MPU register groups can hang it too: raise the probe one group per run. [MODEM-PLAN](device/cheetah/MODEM-PLAN.md), [WIFI-BATTERY-PLAN](device/cheetah/WIFI-BATTERY-PLAN.md)
 
 ### Display
