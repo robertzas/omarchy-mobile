@@ -1,0 +1,62 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (CAMERA-PLAN.md, stage CAM-T): the telephoto capture path,
+ * the Samsung S5KGM5 on two C-PHY trios to CSIS link 4 and CSIS WDMA
+ * context 0, with its SEM1215SA focus controller linked to the sensor
+ * (lens-focus). Enables the camera power path as camera-stream-link2 does,
+ * plus PERIC0 USI4 and its I2C bus. It stacks with the other camera
+ * overlays: all links share WDMA context 0 and the driver streams one at a
+ * time. Never apply it together with camera-pwr-test.
+ *
+ * Nothing binds at boot: gpio_s2mpg13, slg51002_regulator, s5kgn1 (which
+ * drives the S5KGM5 too), sem1215, phy_gs201_mipi_dcphy_rx and gs201_csis
+ * are blacklisted. sem1215 must be loaded with the others: with lens-focus
+ * set, the media graph waits for the lens.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/firmware/power-management/pmic-2} {
+	status = "okay";
+};
+
+&{/firmware/power-management/pmic-2/regulators/ldo12s} {
+	status = "okay";
+};
+
+&{/regulator-pp3200-bb-cam} {
+	status = "okay";
+};
+
+&{/regulator-pp1300-cam} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109700c0/i2c@10970000/pmic@75} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109300c0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109300c0/i2c@10930000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109300c0/i2c@10930000/lens@34} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109300c0/i2c@10930000/camera-sensor@2d} {
+	lens-focus = <&tele_lens>;
+	status = "okay";
+};
+
+&{/soc@0/phy@1a4f0000} {
+	status = "okay";
+};
+
+&{/soc@0/csis@1a480000} {
+	status = "okay";
+};

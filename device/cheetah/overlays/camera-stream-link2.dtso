@@ -54,12 +54,3 @@
 &{/soc@0/csis@1a460000} {
 	status = "okay";
 };
-
-/*
- * Link 0 has no sensor described and would share WDMA context 0: keep it
- * off. Link 1 (the main camera) is camera-main's to enable; links that
- * share the context stream one at a time.
- */
-&{/soc@0/csis@1a440000} {
-	status = "disabled";
-};

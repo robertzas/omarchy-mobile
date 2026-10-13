@@ -60,8 +60,3 @@
 &{/soc@0/csis@1a450000} {
 	status = "okay";
 };
-
-/* Link 0 has no sensor described yet and would share WDMA context 0 */
-&{/soc@0/csis@1a440000} {
-	status = "disabled";
-};

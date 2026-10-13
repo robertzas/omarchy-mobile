@@ -8,14 +8,21 @@
 #   tools/camera-stage --watchdog x --cmd 'LINK=2 DMA=0 bash -s' --script tools/camera-cap-test
 #   main camera (CAM-M):
 #   tools/camera-stage --watchdog x --cmd 'LINK=1 SENSOR=s5kgn1 W=2032 H=1536 DMA=0 bash -s' --script tools/camera-cap-test
+#   front (CAM7) and telephoto (CAM-T):
+#   tools/camera-stage --watchdog x --cmd 'LINK=0 SENSOR=s5k3j1 W=1920 H=1368 DMA=0 bash -s' --script tools/camera-cap-test
+#   tools/camera-stage --watchdog x --cmd 'LINK=4 SENSOR=s5kgm5 W=2016 H=1512 DMA=0 bash -s' --script tools/camera-cap-test
 #
 # Environment:
 #   LINK=n       the CSIS link the overlay enabled (2: camera-stream-link2,
-#                1: camera-main; the video node is found in the link's
-#                media device)
-#   SENSOR=      imx386 (default, ultrawide) or s5kgn1 (main)
-#   LENS=0|1     load ak7375 too (needed when the overlay set lens-focus:
-#                camera-main always, camera-uw-lens); default 1 for s5kgn1
+#                1: camera-main, 0: camera-front, 4: camera-tele; the video
+#                node is found in the link's media device)
+#   SENSOR=      imx386 (default, ultrawide), s5kgn1 (main), s5k3j1 (front)
+#                or s5kgm5 (telephoto); the last three are all the s5kgn1
+#                module, told apart by their entity names
+#   LENS=0|1     load the lens driver too (ak7375, or sem1215 for the
+#                telephoto; needed when the overlay set lens-focus:
+#                camera-main and camera-tele always, camera-uw-lens);
+#                default 1 for s5kgn1 and s5kgm5
 #   W=, H=       sensor mode (default 2016x1508, binned 60 fps)
 #   DMA=0|1      0: link_only (no DMA, CAM3b); 1: the WDMA writes frames (CAM4)
 #   CH=0..3      WDMA channel (CAM4; default 0)
@@ -38,25 +45,28 @@ LINK=${LINK:?LINK=2, the link the overlay enabled} W=${W:-2016} H=${H:-1508} DMA
 PATTERN=${PATTERN:-2} FRAMES=${FRAMES:-4} SECS=${SECS:-5} CSIS_OPTS=${CSIS_OPTS:-}
 CTRLS=${CTRLS:-} SENSOR_OPTS=${SENSOR_OPTS:-} SENSOR=${SENSOR:-imx386}
 case "$SENSOR" in
-imx386) CODE=SRGGB10_1X10 FOURCC=pRAA LENS=${LENS:-0} ;;
-s5kgn1) CODE=SGRBG10_1X10 FOURCC=pgAA LENS=${LENS:-1} ;;  # GRBG [I]
-*) echo "SENSOR=imx386 or s5kgn1"; exit 1 ;;
+imx386) CODE=SRGGB10_1X10 FOURCC=pRAA MOD=imx386 LENSMOD=ak7375 LENS=${LENS:-0} ;;
+s5kgn1) CODE=SGRBG10_1X10 FOURCC=pgAA MOD=s5kgn1 LENSMOD=ak7375 LENS=${LENS:-1} ;;  # GRBG [I]
+s5k3j1) CODE=SGRBG10_1X10 FOURCC=pgAA MOD=s5kgn1 LENSMOD= LENS=0 ;;  # GRBG [I]
+# GRBG read out vertically flipped (the DT's samsung,vertical-flip) [I]
+s5kgm5) CODE=SBGGR10_1X10 FOURCC=pBAA MOD=s5kgn1 LENSMOD=sem1215 LENS=${LENS:-1} ;;
+*) echo "SENSOR=imx386, s5kgn1, s5k3j1 or s5kgm5"; exit 1 ;;
 esac
 say() { echo "cap-test: $*"; echo "cap-test: $*" > /dev/kmsg; }
 
 # Modules, in order; gs201_csis gets the step's parameters on every run.
 modprobe sec_acpm 2>/dev/null
-MODS="gpio_s2mpg13 slg51002_regulator $SENSOR phy_gs201_mipi_dcphy_rx"
-[ "$LENS" = 1 ] && MODS="$MODS ak7375"
+MODS="gpio_s2mpg13 slg51002_regulator $MOD phy_gs201_mipi_dcphy_rx"
+[ "$LENS" = 1 ] && MODS="$MODS $LENSMOD"
 for m in $MODS; do
 	modprobe "$m" || { say "modprobe $m failed"; exit 1; }
 done
 # the sensor again, fresh, with this run's parameters (none = the defaults)
 grep -c '^gs201_csis ' /proc/modules >/dev/null && rmmod gs201_csis
-if grep -c "^$SENSOR " /proc/modules >/dev/null; then
-	rmmod "$SENSOR" || { say "rmmod $SENSOR failed"; exit 1; }
+if grep -c "^$MOD " /proc/modules >/dev/null; then
+	rmmod "$MOD" || { say "rmmod $MOD failed"; exit 1; }
 fi
-modprobe "$SENSOR" $SENSOR_OPTS || { say "modprobe $SENSOR $SENSOR_OPTS failed"; exit 1; }
+modprobe "$MOD" $SENSOR_OPTS || { say "modprobe $MOD $SENSOR_OPTS failed"; exit 1; }
 grep -c '^gs201_csis ' /proc/modules >/dev/null && rmmod gs201_csis
 if [ "$DMA" = 1 ]; then
 	modprobe gs201_csis allow_stream=1 link_only=0 wdma_channel="$CH" $CSIS_OPTS
@@ -114,4 +124,4 @@ else
 fi
 echo "rc=$?"
 [ -n "$DBG" ] && cat "$DBG/stats"
-dmesg | grep -E "gs201-csis|dcphy|$SENSOR|ak7375|cap-test" | tail -14
+dmesg | grep -E "gs201-csis|dcphy|$MOD|ak7375|sem1215|cap-test" | tail -14
