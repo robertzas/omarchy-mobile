@@ -48,6 +48,8 @@ Item {
 
   function goHome() {
     Quickshell.execDetached(["hyprctl", "dispatch", "hl.dsp.focus({ workspace = \"empty\" })"])
+    // ...and the home screens (omandroid.home) back on their home page.
+    Quickshell.execDetached(["qs", "ipc", "-p", Quickshell.shellDir, "call", "shell", "call", "omandroid.home", "goHome", ""])
     dismiss()
   }
 

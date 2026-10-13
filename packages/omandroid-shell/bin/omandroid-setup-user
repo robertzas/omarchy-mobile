@@ -51,6 +51,10 @@ fi
 if omarchy-done ensure omandroid-keyboard-plugin; then
   add_plugin omandroid.keyboard
 fi
+# Home screens (omandroid.home): pages of apps and widgets on the wallpaper.
+if omarchy-done ensure omandroid-home-plugin; then
+  add_plugin omandroid.home
+fi
 
 # PIN or password (omandroid-set-pin records it): phones set up before the
 # choice existed used a PIN with the lock's number pad, so record that, once.

@@ -41,9 +41,16 @@ if command -v node >/dev/null; then
   node test/wifi-model.js || fail "Wi-Fi model"
   node test/bluetooth-model.js || fail "Bluetooth model"
   node test/sensor-model.js || fail "fingerprint sensor model"
+  node test/tiles-model.js || fail "quick-settings tile layout"
+  node test/home-model.js || fail "home screen model"
 else
   pass "Wi-Fi and Bluetooth models # SKIP no node"
 fi
+
+# The quick-settings tile scripts, against fake commands.
+sh -n plugins/omandroid.quicksettings/tile-state.sh || fail "tile-state.sh parses"
+sh -n plugins/omandroid.quicksettings/tile-action.sh || fail "tile-action.sh parses"
+bash test/tile-scripts.sh || fail "quick-settings tile scripts"
 
 # The Bluetooth pairing helper parses, and its pure parts work without D-Bus.
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omandroid-bt-agent || fail "omandroid-bt-agent parses"
@@ -97,6 +104,18 @@ mkdir -p "$fake/.config/omandroid"; echo password >"$fake/.config/omandroid/cred
 rm -rf "$fake"
 grep -c 'namespace = "^osk\$" }, above_lock = 2' hypr/phone.lua >/dev/null || fail "the on-screen keyboard works above the lock"
 pass "PIN or password"
+
+# Home screens: enabled for new and existing users, and the widget files the
+# registry names exist.
+python3 -c 'import json; assert {"id": "omandroid.home"} in json.load(open("profile/shell.json"))["plugins"]' \
+  || fail "the phone profile enables the home screens"
+grep -c 'add_plugin omandroid.home' bin/omandroid-setup-user >/dev/null || fail "existing users get the home screens"
+if command -v node >/dev/null; then
+  for type in $(node -e 'console.log(Object.keys(require("./plugins/omandroid.home/HomeModel.js").REGISTRY).join(" "))'); do
+    [[ -f plugins/omandroid.home/${type^}Widget.qml ]] || fail "widget $type has ${type^}Widget.qml"
+  done
+fi
+pass "home screen wiring"
 
 bash -n bin/omandroid-setup-user || fail "omandroid-setup-user parses"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT

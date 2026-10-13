@@ -10,12 +10,20 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
+import "TilesModel.js" as TilesModel
 
 // Pull-down quick settings for the phone. The sheet drops from the top edge
-// over the status bar: a clock header, eight toggle tiles, then brightness and
-// volume. Tap outside it, swipe it up, or press Escape to put it away. The
-// Wi-Fi and Bluetooth tiles' chevrons (or a long-press) open the panels in
-// WifiPanel.qml and BluetoothPanel.qml.
+// over the status bar, collapsed as on Android: a clock header, the first
+// four tiles and brightness. A pull down on the sheet (or a tap on its
+// handle) expands it to every tile, a page of eight at a time with a
+// sideways swipe between pages, and volume. Tap outside it, swipe it up, or
+// press Escape to put it away. The Wi-Fi and Bluetooth tiles' chevrons (or a
+// long-press) open the panels in WifiPanel.qml and BluetoothPanel.qml.
+//
+// The pencil under the expanded grid enters edit mode: tap a tile to remove
+// it, hold and drag one to move it, tap one under "Add tiles" to add it.
+// The layout is per user, in ~/.config/omandroid/quicksettings.json
+// (TilesModel.js has the format and the default).
 //
 // Backends are the same ones Omarchy's desktop panels drive: Quickshell's
 // NetworkManager and BlueZ services, omarchy-bluetooth-power, PipeWire, the
@@ -47,7 +55,11 @@ Item {
     }
     wifiPicker.close()
     bluetoothPanelItem.close()
+    if (editing) finishEditing()
+    expanded = payload.expanded === true
+    if (payload.page === "edit") startEditing()
     opened = true
+    refreshProbe()
     refreshDnd()
     brightness.refresh()
     torch.refresh()
@@ -61,6 +73,7 @@ Item {
 
   // Host-initiated close (`shell hide`).
   function close() {
+    if (editing) finishEditing()
     opened = false
   }
 
@@ -74,6 +87,9 @@ Item {
   function state() {
     return JSON.stringify({
       opened: opened,
+      expanded: expanded,
+      editing: editing,
+      tiles: layout,
       wifi: wifi.enabled,
       bluetooth: bluetooth.enabled,
       doNotDisturb: dnd.enabled,
@@ -110,18 +126,344 @@ Item {
   }
 
   // `shell call omandroid.quicksettings toggleTile <name>`: the same
-  // action as tapping a tile. Returns the new state() or "unknown".
+  // action as tapping a tile (any TilesModel id, shown or not). Returns the
+  // new state() or "unknown".
   function toggleTile(name) {
-    var tilesByName = {
-      "wifi": wifi, "bluetooth": bluetooth, "mobile-data": mobileData,
-      "rotation-lock": rotationLock, "torch": torch, "dnd": dnd, "location": location,
-      "nfc": nfc, "fingerprint": fingerprint, "keyboard": keyboard
-    }
-    var target = tilesByName[String(name || "")]
+    var target = backends[String(name || "")]
     if (!target) return "unknown"
     if (!target.available) return "unavailable"
     target.toggle()
     return state()
+  }
+
+  // `shell call omandroid.quicksettings tiles ''` lists every tile with its
+  // state; `setTiles 'wifi torch dnd'` saves a layout (space-separated ids,
+  // since qs ipc splits its arguments on commas; unknown ids are dropped),
+  // `resetTiles ''` the default.
+  function tiles() {
+    var out = []
+    for (var i = 0; i < TilesModel.CATALOG.length; i++) {
+      var id = TilesModel.CATALOG[i].id
+      var b = backends[id]
+      out.push({ id: id, shown: TilesModel.indexOf(layout, id) >= 0, available: !!b && b.available,
+                 enabled: !!b && b.enabled, status: b ? b.status : "" })
+    }
+    return JSON.stringify(out)
+  }
+
+  function setTiles(ids) {
+    var list = TilesModel.parseList(ids)
+    if (!list) return "invalid"
+    saveLayout(list)
+    return JSON.stringify(layout)
+  }
+
+  // `showPage <n>`: the expanded grid's page n (from 0), for scripts and
+  // screenshots.
+  function showPage(n) {
+    expanded = true
+    pager.currentIndex = Math.max(0, Math.min(tilePages.length - 1, parseInt(n, 10) || 0))
+    return String(pager.currentIndex)
+  }
+
+  function resetTiles() {
+    saveLayout(TilesModel.defaults())
+    return JSON.stringify(layout)
+  }
+
+  // Every tile's backend by TilesModel id. Each has available, enabled,
+  // status, icon and toggle(); details (a chevron and a page) or longPress
+  // (related settings) come with openDetails().
+  readonly property var backends: ({
+    "wifi": wifi, "bluetooth": bluetooth, "mobile-data": mobileData, "airplane": airplane,
+    "hotspot": hotspot, "dnd": dnd, "torch": torch, "rotation-lock": rotationLock,
+    "location": location, "nfc": nfc, "battery-saver": batterySaver, "dark-theme": darkTheme,
+    "night-light": nightLight, "stay-awake": stayAwake, "mic": mic, "screenshot": screenshot,
+    "screen-record": screenRecord, "fingerprint": fingerprint, "keyboard": keyboard
+  })
+
+  // ---------------------------------------------------------------- layout
+
+  property bool expanded: false
+  property bool editing: false
+  property var layout: TilesModel.defaults()
+  readonly property var quickTiles: TilesModel.quickRow(layout)
+  readonly property var tilePages: TilesModel.pages(layout)
+  readonly property var spareTiles: TilesModel.available(layout)
+
+  // HOME, not XDG_CONFIG_HOME: the same place omandroid-set-pin keeps its
+  // record, and Omarchy's shell finds shell.json the same way.
+  readonly property string configDir: Quickshell.env("HOME") + "/.config/omandroid"
+  property string pendingLayoutText: ""
+
+  FileView {
+    id: layoutFile
+    path: root.configDir + "/quicksettings.json"
+    watchChanges: true
+    atomicWrites: true
+    printErrors: false
+    onLoaded: root.layout = TilesModel.parseConfig(text())
+    onLoadFailed: function(error) { root.layout = TilesModel.defaults() }
+    onFileChanged: reload()
+  }
+
+  // The directory may not exist yet on a fresh account; write once it does.
+  Process {
+    id: configDirMake
+    command: ["mkdir", "-p", root.configDir]
+    onExited: {
+      if (root.pendingLayoutText === "") return
+      layoutFile.setText(root.pendingLayoutText)
+      root.pendingLayoutText = ""
+    }
+  }
+
+  function saveLayout(next) {
+    var clean = TilesModel.sanitize(next)
+    if (!TilesModel.sameLayout(clean, layout)) layout = clean
+    pendingLayoutText = TilesModel.serialize(clean)
+    if (!configDirMake.running) configDirMake.running = true
+  }
+
+  function startEditing() {
+    editModel.clear()
+    for (var i = 0; i < layout.length; i++) editModel.append({ tileId: layout[i] })
+    expanded = true
+    editing = true
+  }
+
+  function editModelLayout() {
+    var out = []
+    for (var i = 0; i < editModel.count; i++) out.push(editModel.get(i).tileId)
+    return out
+  }
+
+  function finishEditing() {
+    saveLayout(editModelLayout())
+    editing = false
+  }
+
+  function removeTileAt(index) {
+    if (index < 0 || index >= editModel.count) return
+    editModel.remove(index, 1)
+    saveLayout(editModelLayout())
+  }
+
+  function addTile(id) {
+    if (TilesModel.indexOf(editModelLayout(), id) >= 0) return
+    editModel.append({ tileId: id })
+    saveLayout(editModelLayout())
+  }
+
+  function resetLayout() {
+    var list = TilesModel.defaults()
+    editModel.clear()
+    for (var i = 0; i < list.length; i++) editModel.append({ tileId: list[i] })
+    saveLayout(list)
+  }
+
+  ListModel { id: editModel }
+
+  // Probe once at load so the first open doesn't show every probed tile
+  // dimmed while the pass runs.
+  Component.onCompleted: refreshProbe()
+
+  // ---------------------------------------------------------------- probed tiles
+
+  // Tiles with no Quickshell service read their state through one shell
+  // pass (tile-state.sh) and switch through tile-action.sh, both beside this
+  // file. A tap shows its result at once; the next probe confirms it.
+  property var probed: ({})
+  property var optimistic: ({})
+
+  function scriptPath(name) {
+    return decodeURIComponent(String(Qt.resolvedUrl(name)).replace(/^file:\/\//, ""))
+  }
+
+  function refreshProbe() {
+    if (!probeProc.running) probeProc.running = true
+  }
+
+  function probedOn(id, key) {
+    if (optimistic[id] !== undefined) return optimistic[id]
+    return probed[key] === "on"
+  }
+
+  function probedHas(key) {
+    return probed[key] !== undefined && probed[key] !== "none" && probed[key] !== ""
+  }
+
+  function setOptimistic(id, on) {
+    var next = {}
+    for (var key in optimistic) next[key] = optimistic[key]
+    if (on === undefined) delete next[id]
+    else next[id] = on
+    optimistic = next
+  }
+
+  // One action at a time, in order; the probe runs after the last.
+  property var actionQueue: []
+
+  function runTileAction(id, on) {
+    setOptimistic(id, on)
+    actionQueue = actionQueue.concat([[id, on ? "on" : "off"]])
+    if (!actionProc.running) nextTileAction()
+  }
+
+  function nextTileAction() {
+    if (actionQueue.length === 0) { refreshProbe(); return }
+    var job = actionQueue[0]
+    actionQueue = actionQueue.slice(1)
+    actionProc.command = ["sh", scriptPath("tile-action.sh"), job[0], job[1]]
+    actionProc.running = true
+  }
+
+  Process {
+    id: probeProc
+    command: ["sh", root.scriptPath("tile-state.sh")]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.probed = TilesModel.parseProbe(text)
+        if (root.actionQueue.length === 0 && !actionProc.running) root.optimistic = ({})
+      }
+    }
+  }
+
+  Process {
+    id: actionProc
+    onExited: root.nextTileAction()
+  }
+
+  // Detached actions (a recorder that outlives its launcher) check back later.
+  Timer {
+    id: probeLater
+    interval: 1500
+    onTriggered: { root.optimistic = ({}); root.refreshProbe() }
+  }
+
+  // Airplane mode: Wi-Fi, Bluetooth and WWAN rfkill switches together.
+  // The modem's own radio (omandroid-sit radio) is not touched: turning it
+  // back on needs a reboot today.
+  QtObject {
+    id: airplane
+    readonly property bool available: root.probedHas("airplane")
+    readonly property bool enabled: available && root.probedOn("airplane", "airplane")
+    readonly property string icon: enabled ? "󰀝" : "󰀞"
+    readonly property string status: !available ? "No radios" : enabled ? "On" : "Off"
+    function toggle() { if (available) root.runTileAction("airplane", !enabled) }
+  }
+
+  // A Wi-Fi hotspot through NetworkManager. Long-press opens the Wi-Fi panel.
+  QtObject {
+    id: hotspot
+    readonly property bool available: wifi.backendAvailable && !!wifi.device && root.probedHas("hotspot")
+    readonly property bool enabled: available && root.probedOn("hotspot", "hotspot")
+    readonly property string icon: "󰀂"
+    readonly property string status: !available ? "No Wi-Fi radio" : enabled ? "On" : "Off"
+    readonly property bool longPress: true
+    function toggle() { if (available) root.runTileAction("hotspot", !enabled) }
+    function openDetails() { root.openWifiPanel() }
+  }
+
+  // Battery saver: power-profiles-daemon's power-saver profile.
+  QtObject {
+    id: batterySaver
+    readonly property bool available: root.probedHas("powerprofile")
+    readonly property bool enabled: available && (root.optimistic["battery-saver"] !== undefined
+      ? root.optimistic["battery-saver"] : root.probed.powerprofile === "power-saver")
+    readonly property string icon: enabled ? "󰂃" : "󰁹"
+    readonly property string status: !available ? "No power profiles"
+      : root.optimistic["battery-saver"] !== undefined ? (enabled ? "On" : "Off")
+      : TilesModel.powerStatus(root.probed.powerprofile)
+    function toggle() { if (available) root.runTileAction("battery-saver", !enabled) }
+  }
+
+  // Dark theme: swaps between the last light and last dark Omarchy theme.
+  // Long-press opens Omarchy's theme picker.
+  QtObject {
+    id: darkTheme
+    readonly property bool available: root.probedHas("theme_mode")
+    readonly property bool enabled: available && (root.optimistic["dark-theme"] !== undefined
+      ? root.optimistic["dark-theme"] : root.probed.theme_mode !== "light")
+    readonly property string icon: enabled ? "󰖔" : "󰖙"
+    readonly property string status: !available ? "No theme" : TilesModel.themeName(root.probed.theme_name) || (enabled ? "On" : "Off")
+    readonly property bool longPress: true
+    function toggle() { if (available) root.runTileAction("dark-theme", !enabled) }
+    function openDetails() {
+      root.dismiss()
+      Quickshell.execDetached(["omarchy-theme-switcher"])
+    }
+  }
+
+  // Night light through Omarchy's hyprsunset toggle.
+  QtObject {
+    id: nightLight
+    readonly property bool available: root.probedHas("nightlight")
+    readonly property bool enabled: available && root.probedOn("night-light", "nightlight")
+    readonly property string icon: "󰌵"
+    readonly property string status: !available ? "No hyprsunset" : enabled ? "On" : "Off"
+    function toggle() { if (available) root.runTileAction("night-light", !enabled) }
+  }
+
+  // Stay awake: Omarchy's idle indicator, which keeps the screen on.
+  QtObject {
+    id: stayAwake
+    readonly property bool available: root.probedHas("stayawake")
+    readonly property bool enabled: available && root.probedOn("stay-awake", "stayawake")
+    readonly property string icon: "󰅶"
+    readonly property string status: enabled ? "Screen stays on" : "Off"
+    function toggle() { if (available) root.runTileAction("stay-awake", !enabled) }
+  }
+
+  // The default microphone's mute, through PipeWire.
+  QtObject {
+    id: mic
+    readonly property var source: Pipewire.defaultAudioSource
+    readonly property bool available: !!source && !!source.audio
+    readonly property bool enabled: available && !source.audio.muted
+    readonly property string icon: enabled ? "󰍬" : "󰍭"
+    readonly property string status: !available ? "No microphone" : enabled ? "On" : "Muted"
+    function toggle() { if (available) source.audio.muted = !source.audio.muted }
+  }
+
+  PwObjectTracker { objects: mic.source ? [mic.source] : [] }
+
+  // Screenshot: the sheet slides away first so it isn't in the picture.
+  QtObject {
+    id: screenshot
+    readonly property bool available: true
+    readonly property bool enabled: false
+    readonly property string icon: "󰹑"
+    readonly property string status: "Capture"
+    function toggle() {
+      root.dismiss()
+      screenshotLater.restart()
+    }
+  }
+
+  Timer {
+    id: screenshotLater
+    interval: 450
+    onTriggered: Quickshell.execDetached(["omarchy-capture-screenshot", "fullscreen"])
+  }
+
+  // Screen recording through Omarchy's gpu-screen-recorder wrapper. Start
+  // puts the sheet away; a second tap (here or Omarchy's own) stops it.
+  QtObject {
+    id: screenRecord
+    readonly property bool available: root.probedHas("record")
+    readonly property bool enabled: available && root.probedOn("screen-record", "record")
+    readonly property string icon: enabled ? "󰻃" : "󰕧"
+    readonly property string status: !available ? "No recorder" : enabled ? "Recording" : "Off"
+    function toggle() {
+      if (!available) return
+      var start = !enabled
+      root.setOptimistic("screen-record", start)
+      if (start) root.dismiss()
+      Quickshell.execDetached(["sh", root.scriptPath("tile-action.sh"), "screen-record", start ? "on" : "off"])
+      probeLater.restart()
+    }
   }
 
   // ---------------------------------------------------------------- clock
@@ -171,6 +513,9 @@ Item {
     }
     readonly property bool available: backendAvailable && !!device && Networking.wifiHardwareEnabled !== false
     readonly property bool enabled: available && Networking.wifiEnabled
+    readonly property string icon: enabled ? "󰤨" : "󰤭"
+    readonly property bool details: true
+    function openDetails() { root.openWifiPanel() }
     readonly property string status: {
       if (!backendAvailable) return "NetworkManager not running"
       if (!device) return "No Wi-Fi radio"
@@ -229,6 +574,10 @@ Item {
     readonly property bool available: !!adapter
     readonly property bool enabled: available && adapter.enabled
     property bool pending: false
+    readonly property bool busy: pending
+    readonly property string icon: enabled ? (connected ? "󰂱" : "󰂯") : "󰂲"
+    readonly property bool details: true
+    function openDetails() { root.openBluetoothPanel() }
     readonly property var connected: {
       var devices = Bluetooth.devices ? Bluetooth.devices.values : []
       for (var i = 0; i < devices.length; i++)
@@ -282,6 +631,8 @@ Item {
 
     property bool enabled: false
     readonly property bool available: true
+    readonly property string icon: enabled ? "󰂛" : "󰂚"
+    readonly property string status: enabled ? "On" : "Off"
 
     function toggle() {
       enabled = !enabled
@@ -309,15 +660,18 @@ Item {
 
   // ---------------------------------------------------------------- stubs
 
-  // STUB: mobile data. Quickshell.Networking has no modem backend and the
-  // Pixel 7 Pro's modem has no mainline driver, so there is nothing to switch.
-  // Wire this to ModemManager (mmcli / its D-Bus API) when a modem exists.
+  // Mobile data over omandroid-modem-sit: the tile is the cellular bearer
+  // (omandroid-sit data on|off, which starts or stops
+  // omandroid-sit-data.service through polkit). "No modem" until
+  // omandroid-sitd publishes its state.
   QtObject {
     id: mobileData
-    readonly property bool available: false
-    readonly property bool enabled: false
-    readonly property string status: "No modem"
-    function toggle() {}
+    readonly property bool available: root.probedHas("data")
+    readonly property bool enabled: available && root.probedOn("mobile-data", "data")
+    readonly property string icon: "󰞃"
+    readonly property string status: !available ? "No modem"
+      : !enabled ? "Off" : (root.probed.data_status || "On")
+    function toggle() { if (available) root.runTileAction("mobile-data", !enabled) }
   }
 
   // Rotation lock over omandroid-autorotate (omandroid-sensors): it rotates
@@ -329,6 +683,7 @@ Item {
 
     property bool available: false
     property bool enabled: false
+    readonly property string icon: "󰑵"
     readonly property string status: !available ? "No sensor" : enabled ? "Locked" : "Auto-rotate"
 
     function refresh() {
@@ -376,6 +731,7 @@ Item {
     property bool available: false
     property bool enabled: false
     property bool running: false
+    readonly property string icon: enabled ? "󰍎" : "󰍐"
     readonly property string status: !available ? "No GNSS" : !enabled ? "Off" : running ? "In use" : "On"
 
     function refresh() {
@@ -419,6 +775,7 @@ Item {
 
     property bool available: false
     property bool enabled: false
+    readonly property string icon: "󰎖"
     readonly property string status: !available ? "No NFC" : enabled ? "On" : "Off"
 
     function refresh() {
@@ -461,6 +818,7 @@ Item {
     property bool available: false
     property int count: 0
     readonly property bool enabled: available && count > 0
+    readonly property string icon: "󰈷"
     readonly property string status: !available ? "No sensor"
       : count === 0 ? "Set up" : count === 1 ? "1 added" : count + " added"
 
@@ -502,6 +860,7 @@ Item {
 
     property bool available: false
     property bool enabled: false
+    readonly property string icon: "󰌌"
     readonly property string status: !available ? "No keyboard" : enabled ? "Shown" : "Hidden"
 
     function refresh() {
@@ -541,6 +900,7 @@ Item {
 
     property bool available: false
     property bool enabled: false
+    readonly property string icon: "󰉄"
     readonly property string status: !available ? "No flash LED" : enabled ? "On" : "Off"
 
     function refresh() {
@@ -678,6 +1038,16 @@ Item {
   readonly property color foreground: Commons.Color.popups.text
   readonly property int pad: Style.spacing.panelPadding
   readonly property int gap: Style.spacing.lg
+  readonly property int tileHeight: Math.max(64, Style.space(68))
+  readonly property int editTileHeight: Math.max(56, Style.space(60))
+  readonly property int editColumns: 3
+  readonly property int pageRows: {
+    var most = 0
+    for (var i = 0; i < tilePages.length; i++) most = Math.max(most, tilePages[i].length)
+    return Math.max(1, Math.ceil(most / 2))
+  }
+  // Edit mode scrolls past this, so the sheet stays on screen.
+  readonly property real editMaxHeight: Math.max(200, window.height - Style.gapsOut * 2 - root.pad * 4 - Math.max(44, Style.space(48)) - Style.space(40))
 
   PanelWindow {
     id: window
@@ -714,7 +1084,7 @@ Item {
       padding: root.pad
 
       focus: root.opened
-      Keys.onEscapePressed: root.dismiss()
+      Keys.onEscapePressed: root.editing ? root.finishEditing() : root.dismiss()
 
       // Swallow taps inside the sheet so they don't reach the scrim, and turn
       // an upward swipe anywhere on it into a dismiss.
@@ -724,7 +1094,10 @@ Item {
         property real startY: 0
         property real offset: 0
         onPressed: function(mouse) { startY = mouse.y; offset = 0 }
-        onPositionChanged: function(mouse) { offset = Math.min(0, mouse.y - startY) }
+        onPositionChanged: function(mouse) {
+          offset = Math.min(0, mouse.y - startY)
+          if (mouse.y - startY > Style.space(40) && !root.expanded) root.expanded = true
+        }
         onReleased: {
           if (offset < -Style.space(60)) root.dismiss()
           offset = 0
@@ -741,10 +1114,52 @@ Item {
         anchors.leftMargin: sheet.contentLeftInset
         spacing: root.pad
 
+        // ---------- Edit mode's header
+        Item {
+          visible: root.editing
+          width: parent.width
+          height: visible ? doneButton.height : 0
+
+          Text {
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
+            text: "Edit tiles"
+            color: root.foreground
+            font.family: Style.font.family
+            font.pixelSize: Style.font.title
+            font.bold: true
+          }
+
+          Row {
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.spacing.lg
+
+            SheetButton {
+              width: Math.max(80, Style.space(88))
+              label: "Reset"
+              foreground: root.foreground
+              enabled: !TilesModel.sameLayout(root.layout, TilesModel.DEFAULT_LAYOUT)
+              onTapped: root.resetLayout()
+            }
+
+            SheetButton {
+              id: doneButton
+              width: Math.max(80, Style.space(88))
+              label: "Done"
+              primary: true
+              foreground: root.foreground
+              onTapped: root.finishEditing()
+            }
+          }
+        }
+
         // ---------- Header: time and date, battery on the right
         Item {
+          visible: !root.editing
           width: parent.width
-          implicitHeight: Math.max(headerClock.implicitHeight, headerBattery.implicitHeight)
+          implicitHeight: visible ? Math.max(headerClock.implicitHeight, headerBattery.implicitHeight) : 0
 
           Column {
             id: headerClock
@@ -787,126 +1202,274 @@ Item {
 
         PanelSeparator { foreground: root.foreground }
 
-        // ---------- Toggle tiles
+        // ---------- Collapsed: the first row of tiles
         Grid {
-          id: tiles
+          id: quickGrid
+          visible: !root.expanded && !root.editing && root.quickTiles.length > 0
           width: parent.width
           columns: 2
           columnSpacing: root.gap
           rowSpacing: root.gap
 
-          readonly property real tileWidth: (width - columnSpacing) / 2
-
-          Tile {
-            width: tiles.tileWidth
-            icon: wifi.enabled ? "󰤨" : "󰤭"
-            label: "Wi-Fi"
-            status: wifi.status
-            active: wifi.enabled
-            available: wifi.available
-            details: true
-            onClicked: wifi.toggle()
-            onDetailsRequested: root.openWifiPanel()
-          }
-
-          Tile {
-            width: tiles.tileWidth
-            icon: bluetooth.enabled ? (bluetooth.connected ? "󰂱" : "󰂯") : "󰂲"
-            label: "Bluetooth"
-            status: bluetooth.status
-            active: bluetooth.enabled
-            available: bluetooth.available
-            busy: bluetooth.pending
-            details: true
-            onClicked: bluetooth.toggle()
-            onDetailsRequested: root.openBluetoothPanel()
-          }
-
-          Tile {
-            width: tiles.tileWidth
-            icon: "󰞃"
-            label: "Mobile data"
-            status: mobileData.status
-            active: mobileData.enabled
-            available: mobileData.available
-            onClicked: mobileData.toggle()
-          }
-
-          Tile {
-            width: tiles.tileWidth
-            icon: "󰑵"
-            label: "Rotation lock"
-            status: rotationLock.status
-            active: rotationLock.enabled
-            available: rotationLock.available
-            onClicked: rotationLock.toggle()
-          }
-
-          Tile {
-            width: tiles.tileWidth
-            icon: location.enabled ? "󰍎" : "󰍐"
-            label: "Location"
-            status: location.status
-            active: location.enabled
-            available: location.available
-            onClicked: location.toggle()
-          }
-
-          Tile {
-            width: tiles.tileWidth
-            icon: "󰎖"
-            label: "NFC"
-            status: nfc.status
-            active: nfc.enabled
-            available: nfc.available
-            onClicked: nfc.toggle()
-          }
-
-          Tile {
-            width: tiles.tileWidth
-            icon: "󰉄"
-            label: "Torch"
-            status: torch.status
-            active: torch.enabled
-            available: torch.available
-            onClicked: torch.toggle()
-          }
-
-          Tile {
-            width: tiles.tileWidth
-            icon: dnd.enabled ? "󰂛" : "󰂚"
-            label: "Do not disturb"
-            status: dnd.enabled ? "On" : "Off"
-            active: dnd.enabled
-            available: dnd.available
-            onClicked: dnd.toggle()
-          }
-
-          Tile {
-            width: tiles.tileWidth
-            icon: "󰈷"
-            label: "Fingerprint"
-            status: fingerprint.status
-            active: fingerprint.enabled
-            available: fingerprint.available
-            onClicked: fingerprint.toggle()
-          }
-
-          Tile {
-            width: tiles.tileWidth
-            icon: "󰌌"
-            label: "Keyboard"
-            status: keyboard.status
-            active: keyboard.enabled
-            available: keyboard.available
-            onClicked: keyboard.toggle()
+          Repeater {
+            model: root.quickTiles
+            delegate: BoundTile {
+              host: root
+              tileId: modelData
+              width: (quickGrid.width - quickGrid.columnSpacing) / 2
+            }
           }
         }
 
-        PanelSeparator { foreground: root.foreground }
+        // ---------- Expanded: every tile, eight to a page
+        ListView {
+          id: pager
+          visible: root.expanded && !root.editing
+          width: parent.width
+          height: visible ? root.pageRows * root.tileHeight + (root.pageRows - 1) * root.gap : 0
+          orientation: ListView.Horizontal
+          snapMode: ListView.SnapOneItem
+          highlightRangeMode: ListView.StrictlyEnforceRange
+          boundsBehavior: Flickable.StopAtBounds
+          clip: true
+          model: root.tilePages
 
-        // ---------- Sliders
+          delegate: Item {
+            width: pager.width
+            height: pager.height
+
+            Grid {
+              id: pageGrid
+              width: parent.width
+              columns: 2
+              columnSpacing: root.gap
+              rowSpacing: root.gap
+
+              Repeater {
+                model: modelData
+                delegate: BoundTile {
+                  host: root
+                  tileId: modelData
+                  width: (pageGrid.width - pageGrid.columnSpacing) / 2
+                }
+              }
+            }
+
+            Text {
+              visible: modelData.length === 0
+              anchors.centerIn: parent
+              textFormat: Text.PlainText
+              text: "No tiles. Tap 󰏫 to add some."
+              color: Qt.darker(root.foreground, 1.4)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
+            }
+          }
+        }
+
+        // ---------- Page dots and the pencil
+        Item {
+          visible: root.expanded && !root.editing
+          width: parent.width
+          height: visible ? editButton.height : 0
+
+          Row {
+            anchors.centerIn: parent
+            spacing: Style.spacing.md
+            visible: root.tilePages.length > 1
+
+            Repeater {
+              model: root.tilePages.length
+              delegate: Rectangle {
+                width: Math.max(6, Style.space(7))
+                height: width
+                radius: width / 2
+                color: index === pager.currentIndex ? Commons.Color.accent : Util.alpha(root.foreground, 0.3)
+              }
+            }
+          }
+
+          GlyphButton {
+            id: editButton
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            glyph: "󰏫"
+            foreground: root.foreground
+            onTapped: root.startEditing()
+          }
+        }
+
+        // ---------- Edit mode: the shown tiles, then the ones to add
+        Flickable {
+          id: editFlick
+          visible: root.editing
+          width: parent.width
+          height: visible ? Math.min(contentHeight, root.editMaxHeight) : 0
+          contentWidth: width
+          contentHeight: editColumn.implicitHeight
+          boundsBehavior: Flickable.StopAtBounds
+          clip: true
+
+          Column {
+            id: editColumn
+            width: editFlick.width
+            spacing: Style.spacing.lg
+
+            Text {
+              width: parent.width
+              textFormat: Text.PlainText
+              text: "Tap a tile to remove it. Hold and drag to move it."
+              color: Qt.darker(root.foreground, 1.4)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            // The grids reach half a gap past the sheet's padding on each
+            // side, so the tiles' outer edges line up with the separators.
+            Item {
+              x: -root.gap / 2
+              width: parent.width + root.gap
+              height: editGrid.height
+
+              GridView {
+                id: editGrid
+                width: parent.width
+                height: Math.max(1, Math.ceil(count / root.editColumns)) * cellHeight
+                interactive: false
+                cellWidth: width / root.editColumns
+                cellHeight: root.editTileHeight + root.gap
+                model: editModel
+                property int dragIndex: -1
+
+                move: Transition { NumberAnimation { properties: "x,y"; duration: 140; easing.type: Easing.OutCubic } }
+                moveDisplaced: Transition { NumberAnimation { properties: "x,y"; duration: 140; easing.type: Easing.OutCubic } }
+                removeDisplaced: Transition { NumberAnimation { properties: "x,y"; duration: 140 } }
+
+                delegate: Item {
+                  width: editGrid.cellWidth
+                  height: editGrid.cellHeight
+
+                  EditTile {
+                    x: root.gap / 2
+                    width: parent.width - root.gap
+                    height: root.editTileHeight
+                    icon: root.backends[model.tileId] ? root.backends[model.tileId].icon : ""
+                    label: TilesModel.label(model.tileId)
+                    lifted: editGrid.dragIndex === index
+                  }
+                }
+              }
+
+              Text {
+                visible: editModel.count === 0
+                anchors.centerIn: parent
+                textFormat: Text.PlainText
+                text: "No tiles on the sheet"
+                color: Qt.darker(root.foreground, 1.4)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+              }
+
+              // One touch handler over the whole grid: a tap removes, a hold
+              // lifts the tile and moving the finger walks it through the grid.
+              MouseArea {
+                id: editTouch
+                anchors.fill: parent
+                pressAndHoldInterval: 350
+                property bool dragging: false
+
+                onPressAndHold: function(mouse) {
+                  var index = editGrid.indexAt(mouse.x, mouse.y)
+                  if (index < 0) return
+                  editGrid.dragIndex = index
+                  dragging = true
+                  editFlick.interactive = false
+                }
+                onPositionChanged: function(mouse) {
+                  if (!dragging) return
+                  var index = editGrid.indexAt(Math.max(0, Math.min(editGrid.width - 1, mouse.x)),
+                                               Math.max(0, Math.min(editGrid.height - 1, mouse.y)))
+                  if (index >= 0 && index !== editGrid.dragIndex) {
+                    editModel.move(editGrid.dragIndex, index, 1)
+                    editGrid.dragIndex = index
+                  }
+                }
+                onReleased: editTouch.drop()
+                onCanceled: editTouch.drop()
+                onClicked: function(mouse) {
+                  if (dragging) return
+                  root.removeTileAt(editGrid.indexAt(mouse.x, mouse.y))
+                }
+
+                function drop() {
+                  if (dragging) root.saveLayout(root.editModelLayout())
+                  dragging = false
+                  editGrid.dragIndex = -1
+                  editFlick.interactive = true
+                }
+              }
+            }
+
+            PanelSeparator { foreground: root.foreground }
+
+            Text {
+              textFormat: Text.PlainText
+              text: "Add tiles"
+              color: root.foreground
+              font.family: Style.font.family
+              font.pixelSize: Style.font.subtitle
+              font.bold: true
+            }
+
+            Text {
+              visible: root.spareTiles.length === 0
+              textFormat: Text.PlainText
+              text: "Every tile is on the sheet"
+              color: Qt.darker(root.foreground, 1.4)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+
+            Grid {
+              id: spareGrid
+              x: -root.gap / 2
+              width: parent.width + root.gap
+              columns: root.editColumns
+
+              Repeater {
+                model: root.spareTiles
+                delegate: Item {
+                  width: spareGrid.width / root.editColumns
+                  height: root.editTileHeight + root.gap
+
+                  EditTile {
+                    x: root.gap / 2
+                    width: parent.width - root.gap
+                    height: root.editTileHeight
+                    icon: root.backends[modelData] ? root.backends[modelData].icon : ""
+                    label: TilesModel.label(modelData)
+                    adding: true
+                    opacity: spareTouch.pressed ? 0.7 : 1
+                  }
+
+                  MouseArea {
+                    id: spareTouch
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.addTile(modelData)
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        PanelSeparator { foreground: root.foreground; visible: !root.editing }
+
+        // ---------- Sliders: brightness always, volume when expanded
         Column {
+          visible: !root.editing
           width: parent.width
           spacing: Style.spacing.sm
 
@@ -920,6 +1483,7 @@ Item {
           }
 
           SliderRow {
+            visible: root.expanded
             width: parent.width
             icon: audio.icon
             value: audio.volume
@@ -931,9 +1495,11 @@ Item {
         }
 
         // ---------- Handle: a visible cue that the sheet swipes back up
+        // Collapsed, a tap on it (or a pull down anywhere) expands the sheet.
         Item {
+          visible: !root.editing
           width: parent.width
-          height: Math.max(24, Style.space(24))
+          height: visible ? Math.max(28, Style.space(28)) : 0
 
           Rectangle {
             anchors.centerIn: parent
@@ -942,8 +1508,35 @@ Item {
             radius: height / 2
             color: Util.alpha(root.foreground, 0.35)
           }
+
+          MouseArea {
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: Math.max(96, Style.space(120))
+            height: parent.height
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.expanded = !root.expanded
+          }
         }
       }
     }
+  }
+
+  // A tile bound to its backend by TilesModel id. `host` is this sheet:
+  // inline components don't see the document's ids.
+  component BoundTile: Tile {
+    property var host: null
+    property string tileId: ""
+    readonly property var backend: host && host.backends[tileId] ? host.backends[tileId] : null
+
+    icon: backend ? backend.icon : ""
+    label: TilesModel.label(tileId)
+    status: backend ? backend.status : ""
+    active: !!backend && backend.enabled
+    available: !!backend && backend.available
+    busy: !!backend && backend.busy === true
+    details: !!backend && backend.details === true
+    longPress: !!backend && backend.longPress === true
+    onClicked: if (backend) backend.toggle()
+    onDetailsRequested: if (backend && typeof backend.openDetails === "function") backend.openDetails()
   }
 }

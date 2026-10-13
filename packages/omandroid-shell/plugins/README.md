@@ -14,8 +14,9 @@ logical at scale 3).
 | Plugin | Kind | What it is |
 | --- | --- | --- |
 | `omandroid.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings |
-| `omandroid.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: ten tiles, brightness and volume; Wi-Fi picker and Bluetooth panel |
+| `omandroid.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: up to 19 tiles the user arranges, brightness and volume; Wi-Fi picker and Bluetooth panel |
 | `omandroid.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
+| `omandroid.home` | `panel` (keepLoaded) | Home screens: pages of apps and widgets on the wallpaper, with an edit mode |
 | `omandroid.fingerprint` | `panel` (keepLoaded) | Fingerprint target over the sensor during verification, desktop guard, and the enrollment screen |
 | `omandroid.keyboard` | `panel` (keepLoaded) | A hide button right above the on-screen keyboard while it is up (also over the lock) |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
@@ -79,27 +80,55 @@ hardware keys:
 ## omandroid.quicksettings
 
 A sheet that slides down from the top edge over the status bar, styled as an
-Omarchy popup (popups background and border). It has a clock and date header,
-ten tiles in two columns, then brightness and volume sliders. Tap the
-scrim, swipe the sheet up, or press Escape to close it.
+Omarchy popup (popups background and border). It opens collapsed, as on
+Android: a clock and date header, the first four tiles and brightness. A pull
+down on the sheet (or a tap on the handle at its foot) expands it to every
+tile, eight to a page in two columns with a sideways swipe between pages,
+then brightness and volume. Tap the scrim, swipe the sheet up, or press Escape
+to close it.
+
+The pencil under the expanded grid opens edit mode: tap a tile to remove it,
+hold one and drag to move it, tap one under "Add tiles" to add it; Reset puts
+the default back, Done (or Escape) leaves. The layout is per user, in
+`~/.config/omandroid/quicksettings.json` (`{"version": 1, "tiles": [ids]}`,
+rules and default in `TilesModel.js`, tests in `test/tiles-model.js`). Edits
+to the file by hand show on the next refresh.
+
+Default order: Wi-Fi, Bluetooth, Do not disturb, Torch (the collapsed row),
+Mobile data, Rotation lock, Airplane mode, Location, Battery saver, Dark
+theme, Night light, NFC, Fingerprint, Keyboard. Hotspot, Stay awake,
+Microphone, Screenshot and Screen record start under "Add tiles".
 
 | Tile | Backend |
 | --- | --- |
 | Wi-Fi | `Networking.wifiEnabled` (NetworkManager); status shows the SSID. The chevron or a long-press opens the Wi-Fi picker (below) |
 | Bluetooth | `omarchy-bluetooth-power on/off`, the same rfkill path as Omarchy's Bluetooth panel. The chevron or a long-press opens the Bluetooth panel (below) |
-| Mobile data | **Stub**: no modem backend (ModemManager wiring is the TODO) |
+| Mobile data | `omandroid-sit data on/off` (omandroid-modem-sit), which starts or stops `omandroid-sit-data.service` through polkit; on while that unit is active, with the operator and technology from `/run/omandroid-sit/state.json`. "No modem" until omandroid-sitd publishes that file |
+| Airplane mode | Wi-Fi, Bluetooth and WWAN rfkill switches together; on when all are soft-blocked. Turning it off unblocks only the ones that were on (`~/.local/state/omandroid/airplane-restore`). NFC keeps its own tile, and the modem's radio (`omandroid-sit radio`) is not touched, since turning that back on needs a reboot today |
+| Hotspot | `nmcli device wifi hotspot con-name Hotspot` (NetworkManager makes the SSID and password; the Wi-Fi client link drops while it runs) and `nmcli connection down Hotspot`. Long-press opens the Wi-Fi picker |
+| Battery saver | power-profiles-daemon's `power-saver` profile, through `omarchy-powerprofiles-set autodetect power-saver/balanced` (remembered per AC or battery) |
+| Dark theme | Swaps between the user's last dark and last light Omarchy theme (`omarchy-theme-set`; defaults Tokyo Night and Catppuccin Latte, choices kept in `~/.local/state/omandroid/theme-{dark,light}`). Long-press opens Omarchy's theme picker |
+| Night light | `omarchy-toggle-nightlight` (hyprsunset); "No hyprsunset" without it |
+| Stay awake | `omarchy-toggle-idle stay-awake/allow-idle`, Omarchy's idle indicator |
+| Microphone | Mute of PipeWire's default source; "No microphone" without one |
+| Screenshot | Puts the sheet away, then `omarchy-capture-screenshot fullscreen` (file, clipboard and a notification) |
+| Screen record | `omarchy-capture-screenrecording --fullscreen`, a second tap `--stop-recording`; "No recorder" without gpu-screen-recorder |
 | Location | `omandroid-gnss on` and `off` (omandroid-gnss), through polkit; "In use" while the receiver runs, "No GNSS" without the command or the vendor files |
 | NFC | the controller's rfkill switch (`rfkill block nfc`, `rfkill unblock nfc`); "No NFC" until a controller probes (RADIOS-CAMERA-PLAN section 3) |
 | Rotation lock | `omandroid-autorotate` (omandroid-sensors): locked by `~/.local/state/omandroid/rotation-lock`; unlocking also enables the service. "No sensor" while the sensor proxy has no accelerometer |
-| Torch | **Stub**: the flash LED has no mainline driver; once a `*:flash`/`*:torch` LED appears in `/sys/class/leds`, drive it with `brightnessctl -d` |
+| Torch | The rear flash LED in torch mode (`brightnessctl --device=white:torch`); "No flash LED" without it |
 | Do not disturb | The notification service's `notifications` IPC target on this shell instance |
 | Keyboard | Shows or folds the on-screen keyboard (squeekboard's `sm.puri.OSK0` `SetVisible`); "No keyboard" without it on the session bus |
 | Fingerprint | Opens fingerprint setup (`omandroid.fingerprint`); the status counts this user's fingerprints through fprintd (`omandroid-fp-enroll list`); "No sensor" without fprintd or its device |
 | Brightness slider | `brightnessctl --class=backlight` (the panel backlight; dimmed when there is none) |
 | Volume slider | PipeWire default sink; tap the speaker glyph to mute |
 
-Stub tiles render dimmed, report "No modem" / "No sensor" / "No flash LED",
-and do nothing when tapped. Their `toggle()` bodies are deliberately empty.
+Tiles whose backend is missing render dimmed with the reason ("No modem",
+"No sensor", "No flash LED") and ignore taps. The tiles without a Quickshell
+service read their state in one pass of `tile-state.sh` each time the sheet
+opens and after each change, and switch through `tile-action.sh`; both sit
+beside the QML and are tested against fake commands in
+`test/tile-scripts.sh`.
 
 The plugin is `keepLoaded` so the sheet can animate out before it unmaps.
 
@@ -193,7 +222,11 @@ IPC:
 | `omarchy-shell shell summon omandroid.quicksettings '{"page":"bluetooth"}'` | Open the Bluetooth panel |
 | `omarchy-shell shell call omandroid.quicksettings openBluetooth ''` | The same; returns the panel's state, or `unavailable` |
 | `omarchy-shell shell call omandroid.quicksettings bluetoothPanel ''` | JSON: panel open, adapter name, power, discovering, visible, helper, paired, available (with RSSI and type), unnamed count, action, failure, sheet, pairing phase |
-| `omarchy-shell shell call omandroid.quicksettings toggleTile <name>` | Same as tapping a tile. Names: `wifi`, `bluetooth`, `mobile-data`, `rotation-lock`, `location`, `nfc`, `torch`, `dnd`, `fingerprint`, `keyboard`. Returns the new state, `unavailable` or `unknown` |
+| `omarchy-shell shell call omandroid.quicksettings toggleTile <name>` | Same as tapping a tile, shown or not. Names are the ids in `TilesModel.js`: `wifi`, `bluetooth`, `mobile-data`, `airplane`, `hotspot`, `dnd`, `torch`, `rotation-lock`, `location`, `nfc`, `battery-saver`, `dark-theme`, `night-light`, `stay-awake`, `mic`, `screenshot`, `screen-record`, `fingerprint`, `keyboard`. Returns the new state, `unavailable` or `unknown` |
+| `omarchy-shell shell summon omandroid.quicksettings '{"expanded":true}'` / `'{"page":"edit"}'` | Open expanded / in edit mode |
+| `omarchy-shell shell call omandroid.quicksettings showPage <n>` | Expand and show page n (from 0) |
+| `omarchy-shell shell call omandroid.quicksettings tiles ''` | JSON: every tile with shown, available, enabled and status |
+| `omarchy-shell shell call omandroid.quicksettings setTiles 'wifi torch dnd'` | Save a layout (space-separated ids: `qs ipc` splits arguments on commas); `resetTiles ''` saves the default |
 
 ## omandroid.launcher
 
@@ -243,6 +276,106 @@ IPC:
 | `omarchy-shell shell call omandroid.launcher search <text>` | Open and type; returns the mode (`apps`/`agent`) and the top app ids |
 | `omarchy-shell shell call omandroid.launcher ask <prompt>` | Ask the agent directly |
 | `omarchy-shell shell call omandroid.launcher state ''` | JSON: open state, query, mode, app count, agent argv |
+
+Long-press an app in the drawer to put it on the home screen
+(`omandroid.home addApp`).
+
+## omandroid.home
+
+Home screens, after Android launchers (Omalauncher's widget pages, the Pixel
+Launcher's grid and edit mode): pages of app shortcuts and widgets on the
+wallpaper, swiped sideways, with page dots above the dock.
+
+![Home screens](../../../phone/screenshots/home-screens.png)
+![Edit mode](../../../phone/screenshots/home-screens-edit.png)
+
+* **Pages.** Swipe sideways; tap a dot to jump. The home page (Home in recent
+  apps goes back to it) is marked in the Pages sheet.
+* **Grid.** 4 columns by 6 rows by default (3-6 by 4-8, set in Pages). Apps
+  take one cell, widgets a span within their own limits.
+* **Apps** launch the way the drawer and the Omarchy menu do
+  (`AppLibrary.launch`: `uwsm-app -- gtk-launch`). An app that is no longer
+  installed stays, dimmed, until you remove it: its package may come back.
+* **Edit mode.** Long-press anywhere (empty space, an app, a widget). Then
+  drag an item to move it (dropped on an item of the same size, the two swap;
+  on a bigger one, it takes the nearest free cell; dragged past the left or
+  right edge, it moves to that page, making a new page on the right), drag
+  the round corner handle to resize a widget, tap the cross to remove, tap a
+  widget for its settings. The toolbar: **Widgets** and **Apps** add to the
+  page on screen (or the next one with room), **Wallpaper** opens Omarchy's
+  Style menu (what the desktop's long-press opened before this surface
+  covered it, `patches/omarchy/0005`), **Pages** adds, removes, reorders and
+  picks the home page and sets the grid size, **Done** (or a tap on empty
+  space, or Escape) ends it. Swipe empty space to change page while editing.
+
+| Widget | Sizes | What it shows |
+| --- | --- | --- |
+| Clock | 2x1-4x3 | Time and date, Qt formats in its settings |
+| Weather | 2x1-4x2 | Off until turned on with a place; then Open-Meteo (below) |
+| Battery | 1x1-4x2 | UPower's display device: level, charging, time left |
+| Media | 3x1-4x2 | MPRIS: cover, title, artist; previous, play/pause, next |
+| Calendar | 2x2-4x4 | The next 7 days from khal when it's installed, else the month |
+| Note | 1x1-4x6 | Your text, kept in `home.json`; tap to edit |
+| Quick toggles | 2x1-4x2 | Wi-Fi, Bluetooth, do-not-disturb (quick settings' own `toggleTile`) and More |
+| Text or command | 1x1-4x6 | Fixed text, or the first lines of a command run every N s (at least 30, killed after 10 s); optional tap command |
+
+Privacy. Only the weather widget uses the network, and only after you turn
+it on in its settings: it asks Open-Meteo's geocoder for the place's
+coordinates once, then for that point's forecast every 30 minutes, with the
+coordinates rounded to about 1 km. No key or account. Location from GeoClue
+(`omandroid-gnss`) is not used: a typed place needs no location permission
+and no GNSS power. The calendar reads khal's local store; syncing it is
+vdirsyncer's job. The text/command widget runs only what you typed into your
+own `home.json`.
+
+Storage. `~/.config/omandroid/home.json`, written atomically 300 ms after an
+edit and watched, so a hand edit shows up at once. `HomeModel.js` documents
+the format and repairs what it reads: unknown widgets and broken items are
+dropped, sizes are clamped, overlapping items move to the first free cell.
+An unreadable file is left alone and the default is shown; the next edit
+saves the old file as `home.json.bad` first. The first start puts a clock and
+the first four of a short list of installed apps on page 1, and the media and
+battery widgets on page 2.
+
+Why a layer surface and not Hyprland workspaces. Each page could be an empty
+workspace with a widget layer per workspace, and Hyprland would animate the
+swipe. But workspaces are where apps live: an app opened from page 2 would
+land on "page 2" and vanish from page 1, the switcher and `goHome` (which
+focuses an empty workspace) would fight over what a page is, and Hyprland's
+workspace swipe follows the whole screen, not a finger on the wallpaper. So
+there is one surface on the bottom layer (above the wallpaper on the
+background layer, below every window, between the bar and the dock by
+normal exclusion), it shows on whichever empty workspace you're on, and the
+pages are a `ListView` inside it. Apps cover it when open; nothing renders
+while they do.
+
+Smoothness. Widgets are plain rectangles and text: no blur, shadow or
+`layer.enabled`, and only the clock (once a minute), the media widget (while
+playing) and the toggles' do-not-disturb poll (30 s) change while you look.
+Every layout edit rebuilds the page's delegates, so the weather answer and
+command output are cached per widget id and an edit is not a new request.
+
+Fingerprint. No long-press while a fingerprint operation runs, or while the
+finger that reached the sensor is still down, nor for 1.5 s after: the same
+state file (`/run/omandroid-fp-ui/state.json`, or `OMANDROID_FP_UI_STATE`)
+the fingerprint plugin reads. Its desktop guard also maps above this surface
+on the bottom layer while an operation runs.
+
+IPC (`omarchy-shell shell call omandroid.home <method> <arg>`):
+
+| Method | Effect |
+| --- | --- |
+| `state ''` | JSON: loaded, path, page, pages, home page, grid, editing, sheet, items per page, missing apps |
+| `dump ''` | The layout as stored |
+| `goHome ''` / `page <n>` | Show the home page / page n (from 0) |
+| `edit on` / `edit off` | Enter (returns `busy` during a fingerprint operation) or leave edit mode |
+| `addApp <desktop id>` / `addWidget <type>` | Add to the page on screen; returns the new item's id or `full` |
+| `showSheet widgets\|apps\|pages` / `settings <item id>` | Open an edit sheet / a widget's settings |
+
+`omarchy-shell shell summon omandroid.home '{"edit":true}'` and
+`'{"page":1}'` do the same through the host. The pure logic (grid placement,
+moves, swaps, resizes, pages, persistence, the weather and khal parsing) is
+in `HomeModel.js`, tested by `test/home-model.js`.
 
 ## omandroid.fingerprint
 

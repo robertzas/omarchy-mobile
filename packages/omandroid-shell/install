@@ -13,6 +13,7 @@ while IFS= read -r -d '' file; do
 done < <(find plugins profile hypr branding -type f -print0)
 install -Dm644 environment.d/20-omandroid-osk.conf "$destination/usr/lib/environment.d/20-omandroid-osk.conf"
 install -Dm644 systemd/omandroid-nfc-open.service "$destination/usr/lib/systemd/system/omandroid-nfc-open.service"
+install -Dm644 polkit/49-omandroid-admin-self.rules "$destination/usr/share/polkit-1/rules.d/49-omandroid-admin-self.rules"
 install -Dm644 applications/omandroid-open-intent.desktop "$destination/usr/share/applications/omandroid-open-intent.desktop"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omandroid-shell/LICENSE"
 install -Dm644 version "$destination/usr/share/omandroid/shell/version"

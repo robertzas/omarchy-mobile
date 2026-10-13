@@ -125,6 +125,16 @@ Item {
     dismiss()
   }
 
+  // Long-press in the drawer: put the app on the home screen
+  // (omandroid.home), on the page it shows, and go there, as on Android.
+  // Through IPC, like the switcher: a plugin only summons its own panels.
+  function addToHome(entry) {
+    if (!entry) return
+    Quickshell.execDetached(["qs", "ipc", "-p", Quickshell.shellDir, "call", "shell", "call",
+                             "omandroid.home", "addApp", String(entry.id)])
+    dismiss()
+  }
+
   function askAgent(prompt) {
     var text = String(prompt || "").trim()
     if (!text) return "empty"
@@ -353,6 +363,7 @@ Item {
           entry: modelData
           highlighted: index === 0 && root.hasQuery && !root.promptMode
           onTapped: root.launchApp(modelData)
+          onHeld: root.addToHome(modelData)
         }
       }
 
@@ -558,6 +569,7 @@ Item {
     property var entry: null
     property bool highlighted: false
     signal tapped()
+    signal held()
 
     BorderSurface {
       anchors.fill: parent
@@ -605,6 +617,7 @@ Item {
       id: cellTouch
       anchors.fill: parent
       onClicked: cell.tapped()
+      onPressAndHold: cell.held()
     }
   }
 }

@@ -1,0 +1,629 @@
+// SPDX-License-Identifier: MIT
+import QtQuick
+import QtQuick.Controls as Controls
+import Quickshell
+import qs.Commons
+import qs.Commons as Commons
+import qs.Ui
+import "HomeModel.js" as HomeModel
+
+// Edit mode's sheets, sliding up from the bottom of the home screen: add a
+// widget, add an app, manage pages, and one widget's settings. `home` is
+// Home.qml's root, which owns the layout and every edit.
+Item {
+  id: sheets
+
+  property var home: null
+  readonly property string which: home ? home.sheet : ""
+  readonly property color fg: home ? home.foreground : "white"
+  readonly property color dim: home ? home.dimForeground : "white"
+  readonly property int touch: Math.max(44, Style.space(44))
+
+  visible: which !== ""
+
+  function close() { if (home) home.sheet = "" }
+
+  // The scrim: a tap outside the sheet closes it.
+  Rectangle {
+    anchors.fill: parent
+    color: Qt.rgba(0, 0, 0, 0.35)
+    MouseArea { anchors.fill: parent; onClicked: sheets.close() }
+  }
+
+  Rectangle {
+    id: panel
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    height: Math.min(parent.height * 0.82, Math.max(parent.height * 0.4, body.implicitHeight + header.height + Style.spacing.xxl * 2))
+    radius: Math.max(Style.cornerRadius, 14)
+    color: Commons.Color.menu.background
+    border.width: 1
+    border.color: Util.alpha(sheets.fg, 0.15)
+
+    // Taps on the sheet stay on the sheet.
+    MouseArea { anchors.fill: parent }
+
+    Item {
+      id: header
+      anchors.top: parent.top
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.leftMargin: Style.spacing.xxl
+      anchors.rightMargin: Style.spacing.sm
+      height: sheets.touch + Style.spacing.md
+
+      Text {
+        anchors.left: parent.left
+        anchors.verticalCenter: parent.verticalCenter
+        textFormat: Text.PlainText
+        text: sheets.which === "widgets" ? "Add a widget"
+          : sheets.which === "apps" ? "Add an app"
+          : sheets.which === "pages" ? "Pages"
+          : sheets.which === "settings" ? sheets.settingsTitle : ""
+        color: sheets.fg
+        font.family: Style.font.family
+        font.pixelSize: Style.font.heading
+        font.bold: true
+      }
+
+      Button {
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        width: sheets.touch
+        height: sheets.touch
+        iconText: "󰅖"
+        iconSize: Style.font.iconLarge
+        foreground: sheets.fg
+        onClicked: sheets.close()
+      }
+    }
+
+    Loader {
+      id: body
+      anchors.top: header.bottom
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      anchors.margins: Style.spacing.xxl
+      anchors.topMargin: 0
+      readonly property real implicitHeight: item ? item.implicitHeight : 0
+      sourceComponent: sheets.which === "widgets" ? widgetsSheet
+        : sheets.which === "apps" ? appsSheet
+        : sheets.which === "pages" ? pagesSheet
+        : sheets.which === "settings" ? settingsSheet : null
+    }
+  }
+
+  // ---------------------------------------------------------------- shared parts
+
+  component Label: Text {
+    textFormat: Text.PlainText
+    color: sheets.dim
+    font.family: Style.font.family
+    font.pixelSize: Style.font.body
+    wrapMode: Text.Wrap
+  }
+
+  component SheetButton: BorderSurface {
+    id: sb
+    property string label: ""
+    property bool primary: false
+    property bool danger: false
+    signal clicked()
+    implicitWidth: Math.max(sheets.touch * 2, sbText.implicitWidth + Style.spacing.xxl * 2)
+    implicitHeight: sheets.touch
+    radius: Style.cornerRadius
+    color: sbTap.pressed ? Style.pressedFillFor(sheets.fg, Commons.Color.accent)
+      : primary ? Commons.Color.accent : danger ? Util.alpha(Commons.Color.urgent, 0.18) : Style.normalFill
+    borderSpec: Border.controlSpec("normal", sheets.fg, Commons.Color.accent)
+    opacity: enabled ? 1 : 0.4
+    Text {
+      id: sbText
+      anchors.centerIn: parent
+      textFormat: Text.PlainText
+      text: sb.label
+      color: sb.primary ? Commons.Color.background : sb.danger ? Commons.Color.urgent : sheets.fg
+      font.family: Style.font.family
+      font.pixelSize: Style.font.subtitle
+    }
+    MouseArea { id: sbTap; anchors.fill: parent; onClicked: sb.clicked() }
+  }
+
+  // A row with an icon, a title and a line under it.
+  component Row2: Item {
+    id: r2
+    property string glyph: ""
+    property url image: ""
+    property string title: ""
+    property string subtitle: ""
+    signal clicked()
+    width: parent ? parent.width : 0
+    height: Math.max(sheets.touch + 8, 56)
+    Rectangle {
+      anchors.fill: parent
+      radius: Style.cornerRadius
+      color: r2Tap.pressed ? Style.pressedFillFor(sheets.fg, Commons.Color.accent) : "transparent"
+    }
+    Item {
+      id: r2Icon
+      anchors.left: parent.left
+      anchors.leftMargin: Style.spacing.md
+      anchors.verticalCenter: parent.verticalCenter
+      width: 36; height: 36
+      Text {
+        anchors.centerIn: parent
+        visible: r2.glyph !== ""
+        textFormat: Text.PlainText
+        text: r2.glyph
+        color: Commons.Color.accent
+        font.family: Style.font.family
+        font.pixelSize: 26
+      }
+      Image {
+        anchors.fill: parent
+        visible: r2.glyph === ""
+        source: r2.image
+        asynchronous: true
+        fillMode: Image.PreserveAspectFit
+        sourceSize.width: width * Screen.devicePixelRatio
+        sourceSize.height: height * Screen.devicePixelRatio
+      }
+    }
+    Column {
+      anchors.left: r2Icon.right
+      anchors.leftMargin: Style.spacing.xl
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      Text {
+        width: parent.width
+        textFormat: Text.PlainText
+        text: r2.title
+        color: sheets.fg
+        font.family: Style.font.family
+        font.pixelSize: Style.font.title
+        elide: Text.ElideRight
+      }
+      Text {
+        width: parent.width
+        visible: r2.subtitle !== ""
+        textFormat: Text.PlainText
+        text: r2.subtitle
+        color: sheets.dim
+        font.family: Style.font.family
+        font.pixelSize: Style.font.caption
+        elide: Text.ElideRight
+      }
+    }
+    MouseArea { id: r2Tap; anchors.fill: parent; onClicked: r2.clicked() }
+  }
+
+  // ---------------------------------------------------------------- add a widget
+
+  Component {
+    id: widgetsSheet
+    ListView {
+      implicitHeight: count * 64
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      model: HomeModel.widgetTypes()
+      delegate: Row2 {
+        required property var modelData
+        width: ListView.view.width
+        glyph: modelData.icon
+        title: modelData.name
+        subtitle: modelData.w + "×" + modelData.h + (modelData.network ? "  ·  uses the internet once you turn it on" : "")
+        onClicked: sheets.home.addWidgetHere(modelData.type)
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- add an app
+
+  Component {
+    id: appsSheet
+    Item {
+      implicitHeight: 9999
+      property string query: ""
+
+      TextField {
+        id: search
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: sheets.touch
+        font.pixelSize: Style.font.title
+        placeholderText: "Search apps"
+        foreground: sheets.fg
+        onTextEdited: parent.query = text
+        Component.onCompleted: Qt.callLater(function() { search.forceActiveFocus() })
+        Keys.onReturnPressed: if (list.count > 0) sheets.home.addAppHere(list.model[0].entry.id)
+      }
+
+      ListView {
+        id: list
+        anchors.top: search.bottom
+        anchors.topMargin: Style.spacing.lg
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        model: sheets.home && sheets.home.appLibrary ? sheets.home.appLibrary.sortedEntries(parent.query) : []
+        delegate: Row2 {
+          required property var modelData
+          width: ListView.view.width
+          image: sheets.home.appLibrary.iconSource(modelData.entry.icon)
+          title: sheets.home.appLibrary.entryName(modelData.entry)
+          subtitle: sheets.home.appLibrary.entrySubtext(modelData.entry) || ""
+          onClicked: sheets.home.addAppHere(modelData.entry.id)
+        }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- pages
+
+  Component {
+    id: pagesSheet
+    Flickable {
+      implicitHeight: pagesColumn.implicitHeight
+      contentHeight: pagesColumn.implicitHeight
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+
+      Column {
+        id: pagesColumn
+        width: parent.width
+        spacing: Style.spacing.sm
+
+        Repeater {
+          model: sheets.home.layout.pages.length
+          delegate: Item {
+            required property int index
+            readonly property var layout: sheets.home.layout
+            width: pagesColumn.width
+            height: sheets.touch + 8
+            property bool confirm: false
+
+            Rectangle {
+              anchors.fill: parent
+              radius: Style.cornerRadius
+              color: index === sheets.home.currentPage ? Style.selectedFillFor(sheets.fg, Commons.Color.accent) : "transparent"
+            }
+
+            MouseArea { anchors.fill: parent; onClicked: sheets.home.goToPage(index, true) }
+
+            Column {
+              anchors.left: parent.left
+              anchors.leftMargin: Style.spacing.lg
+              anchors.verticalCenter: parent.verticalCenter
+              Text {
+                textFormat: Text.PlainText
+                text: "Page " + (index + 1) + (index === layout.home ? "  󰋜" : "")
+                color: sheets.fg
+                font.family: Style.font.family
+                font.pixelSize: Style.font.title
+              }
+              Text {
+                textFormat: Text.PlainText
+                text: layout.pages[index].items.length === 1 ? "1 item" : layout.pages[index].items.length + " items"
+                color: sheets.dim
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Row {
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              Button {
+                width: sheets.touch; height: sheets.touch
+                iconText: "󰋜"; iconSize: Style.font.iconLarge
+                foreground: index === layout.home ? Commons.Color.accent : sheets.fg
+                onClicked: sheets.home.commit(HomeModel.setHome(layout, index))
+              }
+              Button {
+                width: sheets.touch; height: sheets.touch
+                iconText: "󰁍"; iconSize: Style.font.iconLarge
+                foreground: sheets.fg
+                opacity: index > 0 ? 1 : 0.3
+                onClicked: if (index > 0) { sheets.home.commit(HomeModel.movePage(layout, index, index - 1)); sheets.home.goToPage(index - 1, false) }
+              }
+              Button {
+                width: sheets.touch; height: sheets.touch
+                iconText: "󰁔"; iconSize: Style.font.iconLarge
+                foreground: sheets.fg
+                opacity: index < layout.pages.length - 1 ? 1 : 0.3
+                onClicked: if (index < layout.pages.length - 1) { sheets.home.commit(HomeModel.movePage(layout, index, index + 1)); sheets.home.goToPage(index + 1, false) }
+              }
+              Button {
+                width: sheets.touch; height: sheets.touch
+                // A page with things on it asks first.
+                iconText: parent.parent.confirm ? "󰄬" : "󰆴"; iconSize: Style.font.iconLarge
+                foreground: parent.parent.confirm ? Commons.Color.urgent : sheets.fg
+                opacity: layout.pages.length > 1 ? 1 : 0.3
+                onClicked: {
+                  var row = parent.parent
+                  if (layout.pages.length <= 1) return
+                  if (layout.pages[index].items.length > 0 && !row.confirm) { row.confirm = true; return }
+                  row.confirm = false
+                  sheets.home.commit(HomeModel.removePage(layout, index))
+                }
+              }
+            }
+          }
+        }
+
+        SheetButton {
+          width: pagesColumn.width
+          label: "Add a page"
+          enabled: sheets.home.layout.pages.length < HomeModel.LIMITS.maxPages
+          onClicked: {
+            sheets.home.commit(HomeModel.addPage(sheets.home.layout))
+            sheets.home.goToPage(sheets.home.layout.pages.length - 1, true)
+          }
+        }
+
+        Item { width: 1; height: Style.spacing.lg }
+
+        // Grid size. Shrinking re-places what no longer fits.
+        Repeater {
+          model: [
+            { label: "Columns", key: "columns", min: HomeModel.LIMITS.minColumns, max: HomeModel.LIMITS.maxColumns },
+            { label: "Rows", key: "rows", min: HomeModel.LIMITS.minRows, max: HomeModel.LIMITS.maxRows }
+          ]
+          delegate: Item {
+            required property var modelData
+            width: pagesColumn.width
+            height: sheets.touch
+            readonly property int value: sheets.home.layout.grid[modelData.key]
+            function set(v) {
+              var g = sheets.home.layout.grid
+              sheets.home.commit(HomeModel.setGrid(sheets.home.layout,
+                modelData.key === "columns" ? v : g.columns, modelData.key === "rows" ? v : g.rows))
+            }
+            Text {
+              anchors.left: parent.left
+              anchors.leftMargin: Style.spacing.lg
+              anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.PlainText
+              text: modelData.label
+              color: sheets.fg
+              font.family: Style.font.family
+              font.pixelSize: Style.font.title
+            }
+            Row {
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              Button {
+                width: sheets.touch; height: sheets.touch
+                iconText: "󰍴"; iconSize: Style.font.iconLarge; foreground: sheets.fg
+                opacity: value > modelData.min ? 1 : 0.3
+                onClicked: if (value > modelData.min) set(value - 1)
+              }
+              Text {
+                width: sheets.touch; height: sheets.touch
+                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                textFormat: Text.PlainText
+                text: value
+                color: sheets.fg
+                font.family: Style.font.family
+                font.pixelSize: Style.font.heading
+              }
+              Button {
+                width: sheets.touch; height: sheets.touch
+                iconText: "󰐕"; iconSize: Style.font.iconLarge; foreground: sheets.fg
+                opacity: value < modelData.max ? 1 : 0.3
+                onClicked: if (value < modelData.max) set(value + 1)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- one widget's settings
+
+  readonly property var settingsItem: {
+    if (!home || which !== "settings") return null
+    var found = HomeModel.findItem(home.layout, home.settingsId)
+    return found ? found.item : null
+  }
+  readonly property string settingsTitle: settingsItem ? HomeModel.REGISTRY[settingsItem.type].name : ""
+
+  Component {
+    id: settingsSheet
+    Flickable {
+      id: settingsFlick
+      readonly property var item: sheets.settingsItem
+      readonly property var config: item ? item.config : ({})
+      implicitHeight: form.implicitHeight
+      contentHeight: form.implicitHeight
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+
+      // Fields write here; Save hands the patch to the layout.
+      property var patch: ({})
+      function put(key, value) { var p = Object.assign({}, patch); p[key] = value; patch = p }
+      function value(key) { return patch[key] !== undefined ? patch[key] : config[key] }
+      property string failure: ""
+      property bool busy: false
+
+      function save() {
+        if (!item) return
+        var p = Object.assign({}, patch)
+        if (item.type === "command" && p.interval !== undefined) p.interval = Math.max(0, parseInt(p.interval, 10) || 0)
+        // The weather widget looks its place up once, when it is saved.
+        if (item.type === "weather" && value("enabled") === true
+            && (p.place !== undefined || typeof config.latitude !== "number")) {
+          var place = String(value("place") || "").trim()
+          if (!place) { failure = "Name a place first"; return }
+          busy = true
+          var xhr = new XMLHttpRequest()
+          var id = item.id
+          xhr.onreadystatechange = function() {
+            if (xhr.readyState !== XMLHttpRequest.DONE) return
+            settingsFlick.busy = false
+            var found = xhr.status === 200 ? HomeModel.parseGeocode(xhr.responseText) : null
+            if (!found) { settingsFlick.failure = xhr.status === 200 ? "Place not found" : "No connection to open-meteo.com"; return }
+            p.place = found.name; p.latitude = found.latitude; p.longitude = found.longitude
+            sheets.home.setConfig(id, p)
+            sheets.close()
+          }
+          xhr.open("GET", HomeModel.geocodeUrl(place))
+          xhr.send()
+          return
+        }
+        sheets.home.setConfig(item.id, p)
+        sheets.close()
+      }
+
+      Column {
+        id: form
+        width: parent.width
+        spacing: Style.spacing.lg
+
+        // -- clock
+        Label { visible: settingsFlick.item && settingsFlick.item.type === "clock"; width: parent.width
+                text: "Time and date formats use Qt's patterns: HH:mm, h:mm AP, dddd d MMMM, yyyy-MM-dd." }
+        TextField {
+          visible: settingsFlick.item && settingsFlick.item.type === "clock"
+          width: parent.width; height: sheets.touch; font.pixelSize: Style.font.title; foreground: sheets.fg
+          placeholderText: "Time format"
+          text: settingsFlick.config.timeFormat || ""
+          onTextEdited: settingsFlick.put("timeFormat", text)
+        }
+        TextField {
+          visible: settingsFlick.item && settingsFlick.item.type === "clock"
+          width: parent.width; height: sheets.touch; font.pixelSize: Style.font.title; foreground: sheets.fg
+          placeholderText: "Date format"
+          text: settingsFlick.config.dateFormat || ""
+          onTextEdited: settingsFlick.put("dateFormat", text)
+        }
+
+        // -- weather
+        Item {
+          visible: settingsFlick.item && settingsFlick.item.type === "weather"
+          width: parent.width; height: sheets.touch
+          Text {
+            anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText; text: "Show the weather"
+            color: sheets.fg; font.family: Style.font.family; font.pixelSize: Style.font.title
+          }
+          ToggleSwitch {
+            anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+            checked: settingsFlick.value("enabled") === true
+            onToggled: settingsFlick.put("enabled", !checked)
+          }
+        }
+        Label {
+          visible: settingsFlick.item && settingsFlick.item.type === "weather"; width: parent.width
+          text: "Turned on, the phone asks open-meteo.com for this place's coordinates once, then for its forecast every 30 minutes, sending the coordinates rounded to about 1 km. No account, no key, nothing else is sent."
+        }
+        TextField {
+          visible: settingsFlick.item && settingsFlick.item.type === "weather"
+          width: parent.width; height: sheets.touch; font.pixelSize: Style.font.title; foreground: sheets.fg
+          placeholderText: "City or place"
+          text: settingsFlick.config.place || ""
+          onTextEdited: settingsFlick.put("place", text)
+        }
+        Row {
+          visible: settingsFlick.item && settingsFlick.item.type === "weather"
+          spacing: Style.spacing.lg
+          Repeater {
+            model: [{ label: "°C", value: "celsius" }, { label: "°F", value: "fahrenheit" }]
+            delegate: SheetButton {
+              required property var modelData
+              label: modelData.label
+              primary: settingsFlick.value("units") === modelData.value
+              onClicked: settingsFlick.put("units", modelData.value)
+            }
+          }
+        }
+
+        // -- note
+        Rectangle {
+          visible: settingsFlick.item && settingsFlick.item.type === "notes"
+          width: parent.width
+          height: Math.max(sheets.touch * 3, noteEdit.implicitHeight + Style.spacing.lg * 2)
+          radius: Style.cornerRadius
+          color: Style.normalFill
+          border.width: 1
+          border.color: noteEdit.activeFocus ? Commons.Color.accent : Util.alpha(sheets.fg, 0.3)
+          TextEdit {
+            id: noteEdit
+            anchors.fill: parent
+            anchors.margins: Style.spacing.lg
+            text: settingsFlick.config.text || ""
+            color: sheets.fg
+            font.family: Style.font.family
+            font.pixelSize: Style.font.title
+            wrapMode: TextEdit.Wrap
+            selectByMouse: true
+            onTextChanged: if (activeFocus) settingsFlick.put("text", text)
+            Component.onCompleted: if (settingsFlick.item && settingsFlick.item.type === "notes") Qt.callLater(function() { noteEdit.forceActiveFocus() })
+          }
+        }
+
+        // -- text or command
+        Repeater {
+          model: settingsFlick.item && settingsFlick.item.type === "command" ? [
+            { key: "title", hint: "Title (optional)" },
+            { key: "text", hint: "Text to show (when there's no command)" },
+            { key: "command", hint: "Command (sh -c), e.g. uptime -p" },
+            { key: "interval", hint: "Run every N seconds (0: once)" },
+            { key: "tap", hint: "Command on tap (optional)" }
+          ] : []
+          delegate: TextField {
+            required property var modelData
+            width: form.width; height: sheets.touch; font.pixelSize: Style.font.title; foreground: sheets.fg
+            placeholderText: modelData.hint
+            text: settingsFlick.config[modelData.key] !== undefined && settingsFlick.config[modelData.key] !== "" ? String(settingsFlick.config[modelData.key]) : ""
+            inputMethodHints: modelData.key === "interval" ? Qt.ImhDigitsOnly : Qt.ImhNone
+            onTextEdited: settingsFlick.put(modelData.key, text)
+          }
+        }
+        Label {
+          visible: settingsFlick.item && settingsFlick.item.type === "command"; width: parent.width
+          text: "The command runs as you, through sh, with a 10 second limit; its first lines are shown."
+        }
+
+        // -- the rest
+        Label {
+          visible: settingsFlick.item && ["battery", "media", "agenda", "toggles"].indexOf(settingsFlick.item.type) >= 0
+          width: parent.width
+          text: !settingsFlick.item ? "" : settingsFlick.item.type === "agenda"
+            ? "Events come from khal (the local calendar vdirsyncer syncs), when it's installed. Without it, the month is shown."
+            : "Nothing to set. Drag the corner handle to resize."
+        }
+
+        Text {
+          visible: settingsFlick.failure !== ""
+          width: parent.width
+          textFormat: Text.PlainText
+          text: settingsFlick.failure
+          color: Commons.Color.urgent
+          font.family: Style.font.family
+          font.pixelSize: Style.font.body
+        }
+
+        Row {
+          spacing: Style.spacing.lg
+          SheetButton {
+            label: settingsFlick.busy ? "Looking up…" : "Save"
+            primary: true
+            enabled: !settingsFlick.busy
+            onClicked: settingsFlick.save()
+          }
+          SheetButton {
+            label: "Remove"
+            danger: true
+            onClicked: sheets.home.removeItem(settingsFlick.item.id)
+          }
+        }
+      }
+    }
+  }
+}

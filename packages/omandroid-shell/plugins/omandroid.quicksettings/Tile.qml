@@ -10,7 +10,8 @@ import qs.Ui
 //
 // A tile with `details` also has a page behind it, as on Android: a chevron
 // at the right edge (its own thumb-wide target) and a long-press anywhere
-// open it, while a plain tap still toggles.
+// open it, while a plain tap still toggles. A tile with `longPress` only
+// has the long-press: related settings, with no chevron taking up room.
 BorderSurface {
   id: root
 
@@ -21,6 +22,7 @@ BorderSurface {
   property bool available: true
   property bool busy: false
   property bool details: false
+  property bool longPress: false
 
   property color foreground: Commons.Color.popups.text
   property color accent: Commons.Color.accent
@@ -96,7 +98,7 @@ BorderSurface {
     pressAndHoldInterval: 450
     onClicked: root.clicked()
     // Handling pressAndHold is what stops the release from also clicking.
-    onPressAndHold: if (root.details) root.detailsRequested()
+    onPressAndHold: if (root.details || root.longPress) root.detailsRequested()
   }
 
   // The chevron sits above the toggle's MouseArea, so its taps never toggle.
