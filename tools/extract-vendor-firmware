@@ -73,6 +73,8 @@ Usage: extract-vendor-firmware [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
   -o DIR   staging root to write into (default: ./out/vendor-firmware)
   -w DIR   scratch directory for the ~1 GB vendor.img (default: a temp dir in \$TMPDIR)
   -f       skip the android-info.txt board=$DEVICE check
+  -c FILE  also copy the camera HAL APEX (/vendor/apex/com.google.pixel.camera.hal.apex)
+           to FILE, for tools/extract-camera-data --apex (tools/phone-provision uses it)
 
 Install on the phone (from the omamobile repo):
   tar -C OUTDIR -cf - usr | tools/phone-ssh 'tar -C / -xf -'
@@ -83,10 +85,11 @@ say() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || die "$1 not found ($2)"; }
 
-OUT="./out/vendor-firmware" WORK="" FORCE=""
-while getopts "o:w:fh" opt; do
+OUT="./out/vendor-firmware" WORK="" FORCE="" CAMERA_APEX=""
+while getopts "o:w:c:fh" opt; do
   case $opt in
     o) OUT=$OPTARG ;;
+    c) CAMERA_APEX=$(realpath -m -- "$OPTARG") ;;
     w) WORK=$OPTARG ;;
     f) FORCE=1 ;;
     h) usage; exit 0 ;;
@@ -198,6 +201,12 @@ for entry in "${MAP[@]}"; do
   chmod 0644 "$dest/$to"
   printf '  /vendor/%-28s -> /%s/%s\n' "$from" "$DEST_REL" "$to"
 done
+
+if [[ -n $CAMERA_APEX ]]; then
+  get_file apex/com.google.pixel.camera.hal.apex "$CAMERA_APEX" ||
+    die "/vendor/apex/com.google.pixel.camera.hal.apex is missing from this image"
+  say "Camera HAL APEX copied to $CAMERA_APEX"
+fi
 
 # Sanity checks: right chip, text NVRAM, Cirrus file formats.
 brcm="$dest/brcm"

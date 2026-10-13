@@ -1,0 +1,108 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Build Omarchy Mobile's root file system image (docs/RELEASES.md §6):
+#   out/omamobile-rootfs-<version>-aarch64.img.zst   ext4, label omamobile-root
+#   out/omamobile-rootfs-<version>-aarch64.img.zst.sha256
+#   out/omamobile-rootfs-<version>-aarch64.MANIFEST  what is in it, with versions
+#
+# Inside an Arch Linux ARM container (tools/lib/alarm.sh) it pacstraps:
+#   rootfs/packages.base       Arch Linux ARM's base, sshd, NetworkManager,
+#                              ufw, SDDM, and Omarchy itself from [omarchy]
+#   Omarchy's own list         install/omarchy-base.packages from the omarchy
+#                              package, as Omarchy's ISO installs it, minus
+#                              rootfs/packages.omarchy-skip and whatever isn't
+#                              built for aarch64 (listed in the MANIFEST)
+#   rootfs/packages.omamobile  ours, from out/repo (tools/build-packages), plus
+#                              the device package (PACKAGE in device.conf)
+# then adds the [omamobile] repository itself (file:///var/lib/omamobile/repo),
+# the kernel modules from the current kernel build, and Omarchy's pending
+# patches (patches/omarchy). Device packages are installed, not just cached:
+# there is one device so far, and the first boot then has no package step
+# that can fail (RELEASES §12, decision 6).
+#
+# The image has no user but root (locked), no alarm account, no SSH or host
+# keys, no pacman keyring, no machine id, no Google file and no per-phone
+# data. tools/install-phone adds the owner's firstboot.conf to a copy of it;
+# omamobile-firstboot does the rest on the phone, and the initramfs grows it
+# to the whole userdata partition on the first boot.
+#
+#   tools/build-rootfs [--version V] [--allow-missing "PKG..."] [--keep-raw]
+#     DEVICE       device/<codename>/device.conf (default cheetah)
+#     KERNEL_OUT   kernel build with modules-<release>.tar.zst
+#                  (default ~/android/mainline/out-int: bin/omamobile modules)
+#     --allow-missing   build even if these packages of ours aren't in out/repo
+#                       (say "mesa hyprland libcamera libcamera-ipa
+#                       gst-plugin-libcamera vulkan-panfrost" for a test image
+#                       without the slow builds; the MANIFEST lists them)
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+ROOT=$PWD
+source tools/lib/alarm.sh
+
+DEVICE=${DEVICE:-cheetah}
+KERNEL_OUT=${KERNEL_OUT:-$HOME/android/mainline/out-int}
+VERSION=$(date +%Y.%m.%d)
+ALLOW_MISSING="" KEEP_RAW=0
+while (($#)); do
+  case $1 in
+    --version) VERSION=${2:?}; shift ;;
+    --allow-missing) ALLOW_MISSING=${2:?}; shift ;;
+    --keep-raw) KEEP_RAW=1 ;;
+    -h|--help) sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) alarm_die "unknown argument $1" ;;
+  esac
+  shift
+done
+[[ $VERSION =~ ^[0-9A-Za-z._-]+$ ]] || alarm_die "bad version '$VERSION'"
+[[ $DEVICE =~ ^[a-z0-9]+$ ]] || alarm_die "DEVICE must be a codename"
+conf=device/$DEVICE/device.conf
+[[ -f $conf ]] || alarm_die "no $conf"
+DEVICE_PACKAGE=$(sed -n 's/^PACKAGE=\([a-z0-9-]*\)$/\1/p' "$conf")
+[[ -n $DEVICE_PACKAGE ]] || alarm_die "$conf has no PACKAGE"
+
+repo=out/repo/aarch64
+[[ -f $repo/omamobile.db ]] ||
+  alarm_die "no [omamobile] repository in out/repo: build it first with tools/build-packages (or tools/repo-build)"
+[[ -f $KERNEL_OUT/include/config/kernel.release ]] || alarm_die "no kernel build in $KERNEL_OUT (KERNEL_OUT=...)"
+release=$(cat "$KERNEL_OUT/include/config/kernel.release")
+modules=$KERNEL_OUT/modules-$release.tar.zst
+[[ -f $modules ]] || alarm_die "no $modules: run KERNEL_OUT=$KERNEL_OUT bin/omamobile modules"
+
+name=omamobile-rootfs-$VERSION-aarch64
+out=$ROOT/out
+mkdir -p "$out"
+work=$out/.rootfs-$VERSION
+rm -rf "$work"; mkdir -p "$work"
+
+alarm_fetch
+image=$(alarm_build_image "$ROOT")
+volume=omamobile-rootfs-target-$$
+docker volume create "$volume" >/dev/null
+cleanup() { docker volume rm -f "$volume" >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
+start=$(date +%s)
+alarm_say "Building $name for $DEVICE (kernel $release)"
+commit=$(git rev-parse --short=12 HEAD)$(git diff --quiet HEAD -- rootfs packages tools device 2>/dev/null || echo "-dirty")
+docker run --rm --privileged --platform linux/arm64 \
+  -v "$ROOT:/src:ro" -v "$ROOT/out/repo:/repo:ro" -v "$modules:/modules:ro" \
+  -v "$volume:/target" -v "$work:/out" -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" \
+  -e VERSION="$VERSION" -e DEVICE="$DEVICE" -e DEVICE_PACKAGE="$DEVICE_PACKAGE" \
+  -e KERNEL_RELEASE="$release" -e MODULES_SHA256="$(sha256sum < "$modules" | cut -d' ' -f1)" \
+  -e GIT_COMMIT="$commit" -e ALARM_SHA256="$(sha256sum < "$ALARM_TARBALL" | cut -d' ' -f1)" \
+  -e OMARCHY_CHANNEL="$OMARCHY_CHANNEL" -e ALLOW_MISSING="$ALLOW_MISSING" \
+  -e OUT_UID="$(id -u)" -e OUT_GID="$(id -g)" \
+  "$image" bash /src/rootfs/build-inside
+
+alarm_say "Compressing"
+zstd -q -T0 -12 -f "$work/rootfs.img" -o "$out/$name.img.zst"
+(cd "$out" && sha256sum "$name.img.zst" > "$name.img.zst.sha256")
+cp "$work/MANIFEST" "$out/$name.MANIFEST"
+if ((KEEP_RAW)); then mv "$work/rootfs.img" "$out/$name.img"; fi
+rm -rf "$work"
+
+alarm_say "Checking the image"
+tests/rootfs-smoke "$out/$name.img.zst"
+echo
+ls -lh "$out/$name".*
+echo "built in $(( ($(date +%s) - start) / 60 )) min"

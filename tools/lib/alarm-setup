@@ -1,0 +1,56 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Runs once inside a fresh Arch Linux ARM container (tools/lib/alarm.sh,
+# alarm_build_image): keyrings, the build pacman.conf, base-devel and the
+# unprivileged "builder" account makepkg needs. /setup holds Omarchy's and
+# Omarchy Mobile's keyring files.
+set -euo pipefail
+
+pacman-key --init >/dev/null 2>&1
+pacman-key --populate archlinuxarm >/dev/null 2>&1
+install -m644 /setup/omarchy.gpg /setup/omarchy-trusted /setup/omarchy-revoked \
+  /setup/omamobile.gpg /setup/omamobile-trusted /setup/omamobile-revoked /usr/share/pacman/keyrings/
+pacman-key --populate omarchy omamobile >/dev/null 2>&1
+
+# The order the phone uses: Omarchy's aarch64 builds before Arch Linux ARM's.
+# [omamobile] is added per run (file:///repo), when a repository exists.
+cat >/etc/pacman.conf <<CONF
+[options]
+HoldPkg = pacman glibc
+Architecture = aarch64
+CheckSpace
+ParallelDownloads = 5
+DownloadUser = alpm
+# pacman's Landlock sandbox doesn't work under qemu-user
+DisableSandbox
+SigLevel = Required DatabaseOptional
+LocalFileSigLevel = Optional
+
+[omarchy]
+Server = https://pkgs.omarchy.org/${OMARCHY_CHANNEL}/\$arch
+
+[core]
+Include = /etc/pacman.d/mirrorlist
+
+[extra]
+Include = /etc/pacman.d/mirrorlist
+
+[alarm]
+Include = /etc/pacman.d/mirrorlist
+
+[aur]
+Include = /etc/pacman.d/mirrorlist
+CONF
+
+pacman -Syu --noconfirm --needed base-devel arch-install-scripts git sudo e2fsprogs >/dev/null
+# The tarball's own kernel and its "alarm" account are not needed to build
+pacman -Rns --noconfirm linux-aarch64 >/dev/null 2>&1 || true
+userdel -r alarm >/dev/null 2>&1 || true
+
+groupadd -g "$BUILDER_GID" builder 2>/dev/null || groupadd builder
+useradd -m -u "$BUILDER_UID" -g builder builder 2>/dev/null || useradd -m -g builder builder
+echo 'builder ALL=(root) NOPASSWD: /usr/bin/pacman' >/etc/sudoers.d/builder
+chmod 440 /etc/sudoers.d/builder
+sed -i 's/^#\?MAKEFLAGS=.*/MAKEFLAGS="-j'"$(nproc)"'"/' /etc/makepkg.conf
+chown -R "$BUILDER_UID:$BUILDER_GID" /var/cache/pacman/pkg
+echo "setup done: $(pacman -Q pacman base-devel | tr '\n' ' ')"

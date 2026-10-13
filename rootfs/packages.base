@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# The root image's own packages from Arch Linux ARM, installed first
+# (tools/build-rootfs). Omarchy's list comes next, from the omarchy package
+# itself (install/omarchy-base.packages, minus packages.omarchy-skip), then
+# Omarchy Mobile's (packages.omamobile). One name per line; # comments.
+base
+sudo
+openssh
+networkmanager
+ufw
+iptables-nft
+sddm
+e2fsprogs
+kmod
+python
+polkit
+pciutils
+usbutils
+less
+# Mali-G710 CSF firmware for panthor (arm/mali/arch10.8), GPU-PLAN
+linux-firmware-other
+wireless-regdb
+# Arch Linux ARM's package signing keys (base pulls only Arch's)
+archlinuxarm-keyring
+# Omarchy itself, from [omarchy] (edge: Omarchy's aarch64 builds)
+omarchy-keyring
+omarchy
+omarchy-settings

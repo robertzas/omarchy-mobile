@@ -1,0 +1,216 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Build Omarchy Mobile's packages for aarch64 on this laptop, without a phone:
+# makepkg in an Arch Linux ARM container (Docker + qemu-user, tools/lib/alarm.sh),
+# then sign them and the database with the key in keys/, into the
+# [omamobile] repository at out/repo/aarch64 (as tools/repo-build does with
+# the phone as the builder). tools/build-rootfs puts that repository into the
+# root image; tools/repo-push still copies it to a running phone.
+#
+#   tools/build-packages [options] [packages/<name>...]
+#     (no names)     every package in packages/ except the slow ones below
+#     --all          every package, the slow ones too
+#     --force        rebuild even when out/repo has this version already
+#     --nocheck      skip the package tests
+#     --check-in-container
+#                    run the PKGBUILDs' check() under emulation instead of the
+#                    package's test/all natively on this laptop (the default:
+#                    the tests are the same, and some time out under qemu)
+#     --import DIR   copy prebuilt *.pkg.tar.zst from DIR into the repository
+#                    (for example Mesa from an earlier build), then sign it
+#     --list         print what would be built and what is up to date
+#
+# Mesa, Hyprland and libcamera are large C/C++ builds: under qemu-user on a
+# laptop they take hours (Mesa the longest). They're built only when named or
+# with --all, and only once per version, since out/repo keeps them.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+ROOT=$PWD
+source tools/lib/alarm.sh
+
+SLOW=(mesa hyprland libcamera)
+repo=out/repo/aarch64
+all=0 force=0 nocheck=0 container_check=0 list=0 imports=() dirs=()
+while (($#)); do
+  case $1 in
+    --all) all=1 ;;
+    --force) force=1 ;;
+    --nocheck) nocheck=1 ;;
+    --check-in-container) container_check=1 ;;
+    --list) list=1 ;;
+    --import) imports+=("${2:?--import needs a directory}"); shift ;;
+    -h|--help) sed -n '3,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*) alarm_die "unknown option $1" ;;
+    *) dirs+=("${1%/}") ;;
+  esac
+  shift
+done
+
+# Default order: dependencies of our own packages first (check() of a later
+# package can then install an earlier one from the repository being built).
+ORDER=(omamobile-keyring libfprint neard omamobile-apps omamobile-device-cheetah omamobile-audio
+       omamobile-sensors omamobile-gnss omamobile-fingerprint omamobile-mirror omamobile-shell
+       omamobile-modem omamobile-modem-sit omamobile-speaker-tuning omamobile-waydroid
+       omamobile-firstboot mesa hyprland libcamera)
+if ((${#dirs[@]} == 0)) && ((${#imports[@]} == 0)); then
+  for name in "${ORDER[@]}"; do
+    [[ -d packages/$name ]] || continue
+    ((all)) || [[ " ${SLOW[*]} " != *" $name "* ]] || continue
+    dirs+=("packages/$name")
+  done
+  for d in packages/*/; do
+    name=$(basename "$d")
+    [[ " ${ORDER[*]} " == *" $name "* ]] || dirs+=("packages/$name")
+  done
+fi
+for d in "${dirs[@]}"; do [[ -f $d/PKGBUILD ]] || alarm_die "no PKGBUILD in $d"; done
+
+mkdir -p "$repo"
+export GNUPGHOME=$ROOT/keys/gnupg
+[[ -f keys/fingerprint && -d $GNUPGHOME ]] || alarm_die "no signing key in keys/ (maintainer only; see docs/RELEASES.md §10)"
+key=$(cat keys/fingerprint)
+
+# The version makepkg will produce, from the PKGBUILD's own fields. Our
+# PKGBUILDs read pkgver from a version file through $startdir.
+pkg_version() {
+  (
+    cd "$1"
+    startdir=$PWD
+    # shellcheck disable=SC1091
+    source ./PKGBUILD >/dev/null 2>&1
+    echo "${epoch:+$epoch:}$pkgver-$pkgrel"
+  )
+}
+pkg_names() { ( cd "$1"; startdir=$PWD; source ./PKGBUILD >/dev/null 2>&1; echo "${pkgname[@]}" ); }
+up_to_date() {
+  local dir=$1 want name f
+  want=$(pkg_version "$dir")
+  for name in $(pkg_names "$dir"); do
+    f=$(ls "$repo/$name-$want"-*.pkg.tar.zst 2>/dev/null | head -1)
+    [[ -n $f ]] || return 1
+  done
+}
+
+if ((list)); then
+  for d in "${dirs[@]}"; do
+    if up_to_date "$d"; then echo "up to date  $d $(pkg_version "$d")"; else echo "to build    $d $(pkg_version "$d")"; fi
+  done
+  for name in "${SLOW[@]}"; do
+    [[ " ${dirs[*]} " == *" packages/$name "* ]] && continue
+    up_to_date "packages/$name" || echo "missing     packages/$name $(pkg_version "packages/$name") (slow: name it or use --all, or --import a build)"
+  done
+  exit 0
+fi
+
+# Put package files in the repository, replacing older files of the same name
+add_to_repo() {
+  local file name base
+  for file; do
+    base=${file##*/}
+    name=$(bsdtar -xOf "$file" .PKGINFO | sed -n 's/^pkgname = //p')
+    [[ -n $name ]] || alarm_die "$base: no .PKGINFO"
+    for old in "$repo/$name"-*.pkg.tar.zst; do
+      [[ -e $old ]] || continue
+      [[ $(bsdtar -xOf "$old" .PKGINFO | sed -n 's/^pkgname = //p') == "$name" ]] || continue
+      [[ ${old##*/} == "$base" ]] || rm -f "$old" "$old.sig"
+    done
+    cp -f "$file" "$repo/$base"
+    rm -f "$repo/$base.sig"
+    echo "    $base"
+  done
+}
+
+for dir in "${imports[@]}"; do
+  alarm_say "Importing prebuilt packages from $dir"
+  files=("$dir"/*.pkg.tar.zst)
+  [[ -e ${files[0]} ]] || alarm_die "no *.pkg.tar.zst in $dir"
+  for f in "${files[@]}"; do
+    [[ $(bsdtar -xOf "$f" .PKGINFO | sed -n 's/^arch = //p') =~ ^(aarch64|any)$ ]] || alarm_die "$f is not an aarch64 package"
+  done
+  add_to_repo "${files[@]}"
+done
+
+build=()
+for d in "${dirs[@]}"; do
+  if ((force == 0)) && up_to_date "$d"; then
+    echo "up to date: $d $(pkg_version "$d")"
+  else
+    build+=("$d")
+  fi
+done
+
+if ((${#build[@]})); then
+  alarm_fetch
+  image=$(alarm_build_image "$ROOT")
+fi
+
+sign_and_index() {
+  local package
+  for package in "$repo"/*.pkg.tar.zst; do
+    [[ -e $package ]] || continue
+    [[ -f $package.sig ]] || gpg --batch --yes --local-user "$key" --detach-sign "$package"
+  done
+  rm -f "$repo"/omamobile.db* "$repo"/omamobile.files*
+  repo-add --quiet --sign --key "$key" "$repo/omamobile.db.tar.gz" "$repo"/*.pkg.tar.zst
+}
+
+for dir in "${build[@]}"; do
+  name=$(basename "$dir")
+  alarm_say "$name $(pkg_version "$dir")"
+  work=$(mktemp -d)
+  # The package directory as it is (including gitignored prebuilt files the
+  # PKGBUILDs install), minus makepkg's work directories and old packages.
+  tar cf - --exclude="./$name/pkg" --exclude="./$name/src/build" --exclude='*.pkg.tar.*' \
+    -C "$(dirname "$dir")" "./$name" | tar xf - -C "$work"
+  out=$work/out && mkdir -p "$out"
+  incheck=0
+  if ((nocheck == 0)); then
+    if ((container_check)) || [[ ! -x $dir/test/all ]]; then
+      incheck=1
+    else
+      "$dir/test/all" > "$work/test.log" 2>&1 || { tail -20 "$work/test.log"; rm -rf "$work"; alarm_die "$name: test/all failed"; }
+      echo "    test/all passed ($(grep -c '^ok' "$work/test.log") checks, natively)"
+    fi
+  fi
+  # Our own earlier packages resolve from the repository being built
+  have_repo=0
+  [[ -f $repo/omamobile.db ]] && have_repo=1
+  start=$(date +%s)
+  docker run --rm --platform linux/arm64 \
+    -v "$work:/work" -v "$ROOT/$repo:/repo/aarch64:ro" \
+    -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" -v "$ALARM_CACHE/src:/srcdest" \
+    -e NAME="$name" -e HAVE_REPO="$have_repo" -e INCHECK="$incheck" \
+    "$image" bash -c '
+      set -euo pipefail
+      trap "chown -R builder: /var/cache/pacman/pkg /srcdest" EXIT
+      if [[ $HAVE_REPO == 1 ]]; then
+        sed -i "0,/^\[omarchy\]/s//[omamobile]\nServer = file:\/\/\/repo\/\$arch\n\n[omarchy]/" /etc/pacman.conf
+      fi
+      pacman -Sy >/dev/null
+      chown -R builder: /work /srcdest
+      cd /work/$NAME
+      info=$(su builder -c "makepkg --printsrcinfo")
+      # Every dependency a repository can provide goes in (the build-time
+      # ones always; runtime ones so check() can run). Ours that are not
+      # built yet are left out: makepkg runs with --nodeps.
+      wanted=$(awk "\$1 ~ /^(depends|makedepends|checkdepends)\$/ {print \$3}" <<<"$info" | sed "s/[<>=].*//" | sort -u)
+      install=()
+      for dep in $wanted; do
+        pacman -Sp --print-format %n "$dep" >/dev/null 2>&1 && install+=("$dep")
+      done
+      ((${#install[@]})) && pacman -S --noconfirm --needed --asdeps --overwrite "/usr/share/pacman/keyrings/*" "${install[@]}" >/dev/null
+      flags=(-f --nodeps --noconfirm)
+      [[ $INCHECK == 1 ]] || flags+=(--nocheck)
+      su builder -c "SRCDEST=/srcdest PKGDEST=/work/out PKGEXT=.pkg.tar.zst makepkg ${flags[*]}" 2>&1 | tail -25
+      ls /work/out/*.pkg.tar.zst >/dev/null
+    ' || { rm -rf "$work"; alarm_die "$name: build failed"; }
+  add_to_repo "$out"/*.pkg.tar.zst
+  rm -rf "$work"
+  echo "    built in $(( ($(date +%s) - start) / 60 )) min"
+  # Index after each package, so the next one can depend on it
+  sign_and_index
+done
+
+alarm_say "Signing and indexing $repo"
+sign_and_index
+ls -1 "$repo" | grep -E '\.pkg\.tar\.zst$'

@@ -1,0 +1,125 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for tools/phone-provision with a synthetic backup in the old layout
+# (no real phone data, no factory image): the dry run's path mapping (old
+# names to new, the old account's home to the user's), that it touches
+# nothing in a dry run, and, when Docker is available, a real run against a
+# throwaway Arch Linux container standing in for the phone: files land
+# under the new names owned by root (tar --no-same-owner), the fingerprint
+# tree keeps its Android owners, the home import belongs to the user, a
+# second run is idempotent, and differing fingerprint state is never replaced
+# without --force.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+SRC=$PWD
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+t=$(mktemp -d)
+container=""
+cleanup() { [[ -n $container ]] && docker rm -f "$container" >/dev/null 2>&1; rm -rf "$t"; }
+trap cleanup EXIT
+
+# A backup shaped like the 2026-10-13 one, with made-up contents
+B=$t/backup; S=$t/src
+mkdir -p "$B" "$S/var/lib/omandroid-vendor/modem" "$S/etc/omandroid" "$S/usr/lib/firmware/omandroid/camera" \
+         "$S/etc/NetworkManager/system-connections" "$S/home/omandroid/.config/omandroid/widgets/my.test-widget" \
+         "$S/home/omandroid/.config/omarchy"
+echo 'ro.boot.cdt_hwid=0xTEST' > "$S/var/lib/omandroid-vendor/modem/props.conf"
+echo '0000  modem_userdata' > "$S/etc/omandroid/modem-nv.sha256"
+echo 'stage = media' > "$S/etc/omandroid/speaker.conf"
+echo 'stage = old' > "$S/etc/omandroid/speaker.conf.pacnew"
+echo 'camera data' > "$S/usr/lib/firmware/omandroid/camera/imx386-uw.bin"
+printf '[connection]\nid=test\n' > "$S/etc/NetworkManager/system-connections/test.nmconnection"
+chmod 600 "$S/etc/NetworkManager/system-connections/test.nmconnection"
+echo '{"pages": [{"plugin": "omandroid.home"}]}' > "$S/home/omandroid/.config/omandroid/home.json"
+echo '{"tiles": ["omandroid.wifi"]}' > "$S/home/omandroid/.config/omandroid/quicksettings.json"
+echo 'import qs.Omandroid' > "$S/home/omandroid/.config/omandroid/widgets/my.test-widget/Widget.qml"
+echo '{}' > "$S/home/omandroid/.config/omarchy/shell.json"
+tar -C "$S" -cf "$B/phone-config.tar" var/lib/omandroid-vendor/modem/props.conf etc/omandroid usr/lib/firmware/omandroid \
+  etc/NetworkManager/system-connections home/omandroid/.config/omandroid home/omandroid/.config/omarchy/shell.json
+(cd "$B" && sha256sum phone-config.tar > phone-config.tar.sha256)
+F=$t/fp/omandroid-fp
+mkdir -p "$F/persist-ss" "$F/data/vendor/omandroid-fp"
+echo 'secure storage' > "$F/persist-ss/0"
+echo 'calibration' > "$F/mfg_data.img"
+echo 'secret' > "$F/data/vendor/omandroid-fp/secret"
+tar -C "$t/fp" --numeric-owner --owner=0 --group=0 -cf "$B/var-lib-omandroid-fp.tar" omandroid-fp/mfg_data.img omandroid-fp/data
+tar -C "$t/fp" --numeric-owner --owner=1000 --group=1000 -rf "$B/var-lib-omandroid-fp.tar" omandroid-fp/persist-ss
+(cd "$B" && sha256sum var-lib-omandroid-fp.tar > var-lib-omandroid-fp.tar.sha256)
+
+# A dry run contacts no phone: the fake ssh fails the test if it's called
+cat > "$t/no-ssh" <<'EOF'
+#!/bin/bash
+echo "ssh called: $*" >> "$T/ssh.calls"; exit 1
+EOF
+chmod +x "$t/no-ssh"
+export T=$t
+out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --backup "$B" --work "$t/work" \
+      --user alice --import-home --restore-config --restore-wifi --fingerprint 2>&1) || { echo "$out"; fail "the dry run succeeds"; }
+[[ ! -e $t/ssh.calls ]] || fail "a dry run never contacts the phone"
+for line in \
+  "var/lib/omandroid-vendor/modem/props.conf -> /var/lib/omamobile-vendor/modem/props.conf" \
+  "etc/omandroid/modem-nv.sha256 -> /etc/omamobile/modem-nv.sha256" \
+  "usr/lib/firmware/omandroid/camera/imx386-uw.bin -> /usr/lib/firmware/omamobile/camera/imx386-uw.bin" \
+  "etc/omandroid/speaker.conf -> /etc/omamobile/speaker.conf" \
+  "etc/NetworkManager/system-connections/test.nmconnection -> /etc/NetworkManager/system-connections/test.nmconnection" \
+  "home/omandroid/.config/omandroid/home.json -> /home/alice/.config/omamobile/home.json" \
+  "home/omandroid/.config/omandroid/widgets -> /home/alice/.config/omamobile/widgets" \
+  "/var/lib/omandroid-fp/data/vendor/omandroid-fp/secret -> /var/lib/omamobile-fp/data/vendor/omamobile-fp/secret" \
+  "would stop omamobile-fp.service"; do
+  grep -qF -- "$line" <<<"$out" || { echo "$out"; fail "maps: $line"; }
+done
+grep -q 'pacnew' <<<"$out" && fail "never restores .pacnew files"
+grep -q 'first storageproxyd start' <<<"$out" || fail "warns that the first storageproxyd start needs the human's go"
+[[ -z $(ls -A "$t/work") ]] || fail "the staging (per-phone data) is removed"
+pass "dry run: old paths mapped to new names and the user's home, phone untouched, fingerprint warning"
+
+out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --backup "$B" --work "$t/work" --user alice 2>&1)
+grep -q 'speaker.conf\|nmconnection\|home.json\|omamobile-fp' <<<"$out" && fail "config, Wi-Fi, home and fingerprint stay opt-in"
+cp "$B/phone-config.tar.sha256" "$t/sum"
+echo "0000  phone-config.tar" > "$B/phone-config.tar.sha256"
+PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --backup "$B" --work "$t/work" --user alice >/dev/null 2>&1 &&
+  fail "refuses a backup that doesn't match its checksum"
+cp "$t/sum" "$B/phone-config.tar.sha256"
+tools/phone-provision --dry-run --backup "$B" --work "$t/work" >/dev/null 2>&1 && fail "needs a factory image or --skip-extract"
+pass "opt-in steps stay off by default; a bad backup checksum or a missing factory image is refused"
+
+# --- a real run against a container standing in for the phone -----------------
+if ! command -v docker >/dev/null || ! docker image inspect archlinux:latest >/dev/null 2>&1; then
+  echo "ok - # skip: no docker or archlinux:latest image for the end-to-end run"
+  exit 0
+fi
+container=omamobile-provision-test-$$
+docker run -d --name "$container" --network none archlinux:latest sleep 600 >/dev/null
+docker exec "$container" bash -c 'useradd -m -u 1000 alice && mkdir -p /var/lib/omamobile/firstboot /usr/lib/omamobile-vendor/modem &&
+  echo alice > /var/lib/omamobile/firstboot/user && echo package-file > /usr/lib/omamobile-vendor/modem/profile.conf'
+cat > "$t/phone-ssh" <<EOF
+#!/bin/bash
+exec docker exec -i $container bash -c "\$*"
+EOF
+chmod +x "$t/phone-ssh"
+prov() { PHONE_SSH=$t/phone-ssh tools/phone-provision --skip-extract --backup "$B" --work "$t/work" "$@" > "$t/out" 2>&1; }
+prov --import-home --restore-config --fingerprint || { cat "$t/out"; fail "a run against the stand-in phone succeeds"; }
+on() { docker exec "$container" bash -c "$*"; }
+[[ $(on 'cat /var/lib/omamobile-vendor/modem/props.conf') == 'ro.boot.cdt_hwid=0xTEST' ]] || fail "props.conf restored"
+[[ $(on 'stat -c %u:%g /var/lib/omamobile-vendor/modem/props.conf /etc/omamobile/modem-nv.sha256 /usr/lib/firmware/omamobile/camera/imx386-uw.bin' | sort -u) == 0:0 ]] ||
+  fail "system files belong to root (tar --no-same-owner)"
+[[ $(on 'stat -c %u:%g /usr /usr/lib /etc') == $'0:0\n0:0\n0:0' ]] || fail "existing directories keep their owner"
+[[ $(on 'cat /usr/lib/omamobile-vendor/modem/profile.conf') == package-file ]] || fail "package files beside the restored ones stay"
+on 'test ! -e /etc/omandroid && test ! -e /var/lib/omandroid-vendor && test ! -e /var/lib/omandroid-fp' || fail "nothing lands under the old names"
+[[ $(on 'stat -c %U /home/alice/.config/omamobile/home.json /home/alice/.config/omamobile/widgets/my.test-widget/Widget.qml' | sort -u) == alice ]] ||
+  fail "the imported home files belong to the user"
+on 'grep -q omamobile.home /home/alice/.config/omamobile/home.json && grep -q qs.Omamobile /home/alice/.config/omamobile/widgets/my.test-widget/Widget.qml' ||
+  fail "ids in the imported files are renamed"
+[[ $(on 'stat -c %u:%g /var/lib/omamobile-fp/persist-ss/0') == 1000:1000 ]] || fail "the fingerprint secure storage keeps its Android owner"
+[[ $(on 'stat -c %u:%g /var/lib/omamobile-fp/data/vendor/omamobile-fp/secret') == 0:0 ]] || fail "the fingerprint secret stays root's"
+[[ $(on 'stat -c %a /var/lib/omamobile-fp') == 700 ]] || fail "the fingerprint state is private"
+pass "a real run: new names, root-owned system files, user-owned home files, Android owners for the fingerprint state"
+
+prov --import-home --restore-config --fingerprint || { cat "$t/out"; fail "a second run succeeds"; }
+pass "running again is idempotent"
+on 'echo enrolled-since > /var/lib/omamobile-fp/persist-ss/0'
+prov --fingerprint && fail "differing fingerprint state is never replaced without --force"
+grep -q -- '--force' "$t/out" || fail "says how to replace it"
+[[ $(on 'cat /var/lib/omamobile-fp/persist-ss/0') == enrolled-since ]] || fail "the phone's newer state is untouched"
+pass "differing fingerprint state is kept unless --force"

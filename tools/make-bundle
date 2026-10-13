@@ -1,0 +1,120 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Assemble a release bundle for one device (docs/RELEASES.md §6):
+#
+#   out/bundle/omamobile-<codename>-<version>/
+#     README.txt     what it is, what it touches, how to go back to stock
+#     install        tools/install-phone
+#     device.conf    the descriptor the images were built from
+#     images/        the BOOT_IMAGES (boot init_boot vendor_boot vendor_kernel_boot dtbo)
+#     omamobile.gpg  the public key SHA256SUMS.sig is checked against
+#     MANIFEST       kernel release, root image, both repositories' commits
+#     SHA256SUMS     checksums of everything above
+#     SHA256SUMS.sig signed with the key in keys/ (maintainer only; --unsigned skips)
+#   out/bundle/omamobile-rootfs-<version>-aarch64.img.zst (+ .sha256, .MANIFEST)
+#
+#   tools/make-bundle [--version V] [--rootfs FILE] [--unsigned]
+#     DEVICE (default cheetah), KERNEL_OUT (default ~/android/mainline/out-int,
+#     with images from bin/omamobile images)
+# Nothing in a bundle comes from a factory image: tools/phone-provision
+# extracts Google's files on the user's machine after the install.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+ROOT=$PWD
+say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
+die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
+
+DEVICE=${DEVICE:-cheetah}
+KERNEL_OUT=${KERNEL_OUT:-$HOME/android/mainline/out-int}
+version=$(date +%Y.%m.%d) rootfs="" unsigned=0
+while (($#)); do
+  case $1 in
+    --version) version=${2:?}; shift ;;
+    --rootfs) rootfs=${2:?}; shift ;;
+    --unsigned) unsigned=1 ;;
+    -h|--help) sed -n '3,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown argument $1" ;;
+  esac
+  shift
+done
+[[ $DEVICE =~ ^[a-z0-9]+$ ]] || die "DEVICE must be a codename"
+conf=device/$DEVICE/device.conf
+[[ -f $conf ]] || die "no $conf"
+boot_images=$(sed -n 's/^BOOT_IMAGES="\(.*\)"$/\1/p' "$conf")
+[[ -n $boot_images ]] || die "$conf has no BOOT_IMAGES"
+if [[ -z $rootfs ]]; then
+  shopt -s nullglob
+  for f in out/omamobile-rootfs-*-aarch64.img.zst; do rootfs=$f; done
+fi
+[[ -n $rootfs && -f $rootfs && -f $rootfs.sha256 ]] || die "no root image with a .sha256 (tools/build-rootfs)"
+release=$(cat "$KERNEL_OUT/include/config/kernel.release" 2>/dev/null) || die "no kernel build in $KERNEL_OUT"
+
+name=omamobile-$DEVICE-$version
+out=out/bundle
+dir=$out/$name
+rm -rf "$dir"
+mkdir -p "$dir/images"
+say "Assembling $dir"
+install -m755 tools/install-phone "$dir/install"
+install -m644 "$conf" "$dir/device.conf"
+install -m644 packages/omamobile-keyring/omamobile.gpg "$dir/omamobile.gpg"
+for p in $boot_images; do
+  [[ -f $KERNEL_OUT/images/$p.img ]] || die "missing $KERNEL_OUT/images/$p.img (bin/omamobile images)"
+  install -m644 "$KERNEL_OUT/images/$p.img" "$dir/images/$p.img"
+done
+# Images must be newer than the kernel and initramfs they were packed from
+for f in arch/arm64/boot/Image initramfs.cpio.lz4; do
+  [[ $KERNEL_OUT/images/boot.img -nt $KERNEL_OUT/$f || ! -e $KERNEL_OUT/$f ]] ||
+    die "$KERNEL_OUT/images is older than $f: run bin/omamobile images"
+done
+
+rootname=$(basename "$rootfs")
+for f in "$rootfs" "$rootfs.sha256" "${rootfs%.img.zst}.MANIFEST"; do
+  [[ -f $f ]] && ln -f "$f" "$out/" 2>/dev/null || cp -f "$f" "$out/"
+done
+kernel_commit=$(git -C "${KERNEL_DIR:-$HOME/android/mainline/wt-int}" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+{
+  echo "# Omarchy Mobile $version for $(sed -n 's/^NAME="\(.*\)"$/\1/p' "$conf") ($DEVICE)"
+  echo "version: $version"
+  echo "device: $DEVICE"
+  echo "kernel release: $release"
+  echo "kernel commit (linux-omarchy-mobile): $kernel_commit"
+  echo "omarchy-mobile commit: $(git rev-parse --short=12 HEAD)$(git diff --quiet HEAD || echo -dirty)"
+  echo "root image: $rootname ($(cut -d' ' -f1 "$rootfs.sha256"))"
+  echo
+  echo "# boot images"
+  (cd "$dir/images" && sha256sum -- *.img)
+} > "$dir/MANIFEST"
+cat > "$dir/README.txt" <<EOF
+Omarchy Mobile $version for the $(sed -n 's/^NAME="\(.*\)"$/\1/p' "$conf") ($DEVICE)
+
+Native Omarchy (Arch Linux ARM, Hyprland, Omarchy's packages) on the phone,
+with a mainline kernel and no Android. https://github.com/derekross/omarchy-mobile
+
+Install: put the phone in fastboot mode (bootloader unlocked), connect it, and
+run ./install from this directory. $rootname must be next to
+this directory. The installer checks the phone first, asks for your user
+name, password, Wi-Fi and SSH key, shows exactly what it will write, and
+waits for you to type "$DEVICE".
+
+What it writes: slot B's boot images ($(for p in $boot_images; do printf '%s_b ' "$p"; done)) and
+userdata (the Arch root). That ERASES userdata. It never touches slot A,
+the bootloader, radio, persist, efs, modem, devinfo or vbmeta.
+
+After the first boot: run tools/phone-provision from the repository with your
+own factory image for $DEVICE (firmware for Wi-Fi, Bluetooth, haptics,
+speakers and the camera; nothing Google's ships in this bundle).
+
+Going back to stock: stock Android is still on slot A. In fastboot,
+"fastboot --set-active=a" and reboot, then factory-reset Android (its data
+was erased). Or flash Google's factory image for $DEVICE.
+EOF
+(cd "$dir" && find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig -printf '%P\n' | sort | xargs sha256sum -- > SHA256SUMS)
+if ((unsigned)); then
+  say "Unsigned bundle (--unsigned): install needs --unsigned too"
+else
+  [[ -f keys/fingerprint && -d keys/gnupg ]] || die "no signing key in keys/ (maintainer only), or --unsigned"
+  GNUPGHOME=$ROOT/keys/gnupg gpg --batch --yes --local-user "$(cat keys/fingerprint)" --detach-sign -o "$dir/SHA256SUMS.sig" "$dir/SHA256SUMS"
+  say "Signed SHA256SUMS with $(cat keys/fingerprint)"
+fi
+ls -l "$dir" "$out"

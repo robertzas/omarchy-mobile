@@ -1,0 +1,372 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# install-phone: install Omarchy Mobile on a phone in fastboot mode, from the
+# laptop (docs/RELEASES.md §6). In a release bundle this file is "install".
+#
+# What it writes, and nothing else:
+#   - slot B's boot images, one "fastboot flash <image>_b" per BOOT_IMAGES
+#     entry of the device descriptor, each checked against its storage-guard
+#     allowlist (UFS_RW);
+#   - "fastboot flash userdata" with the root image (this ERASES userdata:
+#     stock Android on slot A needs a factory reset if it is ever booted again);
+#   - "fastboot --set-active=b", then "fastboot reboot".
+# It has no code path for any other partition, and never uses -w, --slot,
+# "flashing" or an unsuffixed partition name. Slot A, the bootloader, radio,
+# persist, efs, modem, devinfo and vbmeta are never touched.
+#
+# Before anything it checks: the phone answers in fastboot, its product is the
+# descriptor's CODENAME, the bootloader is unlocked, and both bootloader slots
+# carry the same version. It asks for the user name, password, host name,
+# time zone, optional Wi-Fi and the SSH public key, writes them as
+# /etc/omamobile/firstboot.conf (and root's authorized_keys) into a LOCAL
+# COPY of the root image with debugfs (no root needed), shows exactly what it
+# will run, and waits for the codename to be typed. The phone's first boot
+# (omamobile-firstboot) creates the user from that file and deletes it.
+#
+#   install-phone [--dry-run] [options]
+#     --dry-run              read the phone's variables (read-only) and prepare
+#                            the image copy, then print every flash command
+#                            instead of running it
+#     --device CODENAME      repository mode: device/CODENAME/device.conf (default
+#                            $DEVICE or cheetah); in a bundle, its device.conf
+#     --images DIR           the slot B images (repository default:
+#                            $KERNEL_OUT/images, KERNEL_OUT=~/android/mainline/out-int)
+#     --rootfs FILE          the root image (.img.zst; default: the newest
+#                            omamobile-rootfs-*-aarch64.img.zst in out/, or
+#                            beside a bundle)
+#     --work DIR             where the local image copy goes (default
+#                            ~/.cache/omamobile-install; needs the image's size free)
+#     --bootloader-slots-match VERSION
+#                            when the bootloader reports no per-slot versions:
+#                            you checked the other slot carries VERSION too
+#                            (it must equal the current slot's)
+#     --unsigned             accept a bundle without SHA256SUMS.sig (development)
+#
+# Answers are read from standard input, so they can be piped for tests.
+set -euo pipefail
+shopt -s nullglob
+# Byte-wise character ranges in the checks below ([ -~] is printable ASCII)
+export LC_ALL=C
+
+FASTBOOT=${FASTBOOT:-fastboot}
+SIGNING_KEY=6C84FE3D240709E70E27CC94B301F5EA62B249FE  # Omarchy Mobile package and release key
+here=$(cd -- "$(dirname -- "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+
+say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
+note() { printf '    %s\n' "$*"; }
+die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
+
+dry=0 device="" images="" rootfs="" work="" slots_match="" unsigned=0
+while (($#)); do
+  case $1 in
+    --dry-run) dry=1 ;;
+    --device) device=${2:?}; shift ;;
+    --images) images=${2:?}; shift ;;
+    --rootfs) rootfs=${2:?}; shift ;;
+    --work) work=${2:?}; shift ;;
+    --bootloader-slots-match) slots_match=${2:?}; shift ;;
+    --unsigned) unsigned=1 ;;
+    -h|--help) sed -n '3,46p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown argument $1 (see --help)" ;;
+  esac
+  shift
+done
+
+for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd openssl sha256sum; do
+  command -v "$tool" >/dev/null || die "$tool not found (fastboot: android-tools; debugfs: e2fsprogs)"
+done
+
+# --- Where things are: a release bundle, or this repository ------------------
+if [[ -f $here/device.conf && -d $here/images ]]; then
+  mode=bundle
+  conf=$here/device.conf
+  images=${images:-$here/images}
+  if [[ -z $rootfs ]]; then
+    for f in "$here"/../omamobile-rootfs-*-aarch64.img.zst "$here"/omamobile-rootfs-*-aarch64.img.zst; do rootfs=$f; done
+  fi
+else
+  mode=repository
+  repo=$(cd -- "$here/.." && pwd)
+  device=${device:-${DEVICE:-cheetah}}
+  [[ $device =~ ^[a-z0-9]+$ ]] || die "--device must be a codename"
+  conf=$repo/device/$device/device.conf
+  images=${images:-${KERNEL_OUT:-$HOME/android/mainline/out-int}/images}
+  if [[ -z $rootfs ]]; then
+    for f in "$repo"/out/omamobile-rootfs-*-aarch64.img.zst; do rootfs=$f; done
+  fi
+fi
+[[ -f $conf ]] || die "no device descriptor $conf"
+[[ -n $rootfs && -f $rootfs ]] || die "no root image (tools/build-rootfs makes one; or --rootfs FILE)"
+
+# The descriptor is data (docs/RELEASES.md §3): parsed line by line, never sourced
+declare -A D=()
+n=0
+while IFS= read -r line || [[ -n $line ]]; do
+  n=$((n + 1))
+  [[ $line =~ ^[[:space:]]*(#.*)?$ ]] && continue
+  if [[ $line =~ ^([A-Z][A-Z0-9_]*)=\"([^\"\$\`\\]*)\"$ || $line =~ ^([A-Z][A-Z0-9_]*)=([^\"\$\`\\\'[:space:]]*)$ ]]; then
+    D[${BASH_REMATCH[1]}]=${BASH_REMATCH[2]}
+  else
+    die "$conf:$n: not a KEY=value line"
+  fi
+done < "$conf"
+CODENAME=${D[CODENAME]:-}
+[[ $CODENAME =~ ^[a-z0-9]+$ ]] || die "$conf: no CODENAME"
+[[ $mode == bundle || $CODENAME == "$device" ]] || die "$conf: CODENAME=$CODENAME, expected $device"
+BOOT_IMAGES=${D[BOOT_IMAGES]:-} UFS_RW=${D[UFS_RW]:-}
+[[ -n $BOOT_IMAGES && -n $UFS_RW ]] || die "$conf: BOOT_IMAGES and UFS_RW are required"
+for p in $UFS_RW; do
+  [[ $p == *_b || $p == userdata ]] || die "$conf: UFS_RW may hold only *_b partitions and userdata, not $p"
+done
+[[ " $UFS_RW " == *" userdata "* ]] || die "$conf: userdata is not on the storage-guard allowlist"
+for p in $BOOT_IMAGES; do
+  [[ $p =~ ^[a-z_]+$ ]] || die "$conf: bad image name $p"
+  [[ " $UFS_RW " == *" ${p}_b "* ]] || die "$conf: ${p}_b is not on the storage-guard allowlist (UFS_RW)"
+  [[ -f $images/$p.img ]] || die "missing $images/$p.img (bin/omamobile images)"
+done
+
+# --- Integrity of what will be written ---------------------------------------
+say "Checking the files ($mode mode)"
+if [[ $mode == bundle ]]; then
+  [[ -f $here/SHA256SUMS ]] || die "the bundle has no SHA256SUMS"
+  if [[ -f $here/SHA256SUMS.sig ]]; then
+    command -v gpg >/dev/null || die "gpg is needed to check the bundle's signature"
+    gnupg=$(mktemp -d)
+    gpg --homedir "$gnupg" -q --batch --import "$here/omamobile.gpg" 2>/dev/null || die "the bundle has no omamobile.gpg"
+    status=$(gpg --homedir "$gnupg" --batch --status-fd 1 --verify "$here/SHA256SUMS.sig" "$here/SHA256SUMS" 2>/dev/null || true)
+    rm -rf "$gnupg"
+    grep -Eq "^\[GNUPG:\] VALIDSIG .* $SIGNING_KEY\$" <<<"$status" || die "SHA256SUMS is not signed by the Omarchy Mobile key ($SIGNING_KEY)"
+    note "SHA256SUMS signed by $SIGNING_KEY"
+  else
+    ((unsigned)) || die "the bundle is not signed (SHA256SUMS.sig); --unsigned accepts a development bundle"
+    note "unsigned bundle (--unsigned)"
+  fi
+  (cd "$here" && sha256sum -c --quiet SHA256SUMS) || die "a bundle file doesn't match SHA256SUMS"
+  note "bundle checksums match"
+fi
+if [[ -f $rootfs.sha256 ]]; then
+  (cd "$(dirname "$rootfs")" && sha256sum -c --quiet "$(basename "$rootfs").sha256") || die "$rootfs doesn't match its .sha256"
+  note "root image checksum matches"
+else
+  die "no $rootfs.sha256"
+fi
+manifest=${rootfs%.img.zst}.MANIFEST
+if [[ -f $manifest ]]; then
+  built_for=$(sed -n 's/^device: \([a-z0-9]*\).*/\1/p' "$manifest")
+  [[ -z $built_for || $built_for == "$CODENAME" ]] || die "the root image was built for $built_for, not $CODENAME"
+  # The kernel in the boot images must find its modules in the root image,
+  # or it boots without its drivers (the GPU among them)
+  modules_release=$(sed -n 's/^kernel modules: \([^ ]*\).*/\1/p' "$manifest")
+  if [[ $mode == bundle ]]; then
+    images_release=$(sed -n 's/^kernel release: //p' "$here/MANIFEST" 2>/dev/null || true)
+  else
+    images_release=$(cat "$images/../include/config/kernel.release" 2>/dev/null || true)
+  fi
+  if [[ -n $modules_release && -n $images_release && $modules_release != "$images_release" ]]; then
+    die "the root image has modules for $modules_release, but the boot images are $images_release: rebuild one to match"
+  fi
+  if [[ -n $modules_release && -n $images_release ]]; then note "kernel $images_release, its modules in the root image"; fi
+fi
+
+# --- The phone ---------------------------------------------------------------
+say "Checking the phone"
+mapfile -t serials < <("$FASTBOOT" devices 2>/dev/null | awk '$2 == "fastboot" {print $1}')
+((${#serials[@]} == 1)) || die "expected one phone in fastboot mode, found ${#serials[@]} ('fastboot devices')"
+serial=${serials[0]}
+fb() { "$FASTBOOT" -s "$serial" "$@"; }
+vars=$(fb getvar all 2>&1 | sed -E 's/^\(bootloader\) //')
+var() { awk -F: -v k="$1" '$1 == k { sub(/^[^:]*:[ ]*/, ""); print; exit }' <<<"$vars"; }
+product=$(var product)
+[[ $product == "$CODENAME" ]] || die "the phone is '${product:-unknown}', not $CODENAME (${D[NAME]:-}): wrong descriptor or wrong phone"
+[[ $(var unlocked) == yes ]] || die "the bootloader is locked: unlock it first (this erases the phone; see CONTRIBUTING.md)"
+current_slot=$(var current-slot)
+current_bl=$(var version-bootloader)
+[[ -n $current_bl ]] || die "the phone reports no version-bootloader"
+# Per-slot bootloader versions, where the bootloader reports them
+bl_a=$(sed -nE 's/^version-bootloader[-_:]a:[ ]*//p' <<<"$vars" | head -1)
+bl_b=$(sed -nE 's/^version-bootloader[-_:]b:[ ]*//p' <<<"$vars" | head -1)
+if [[ -n $bl_a && -n $bl_b ]]; then
+  [[ $bl_a == "$bl_b" ]] || die "the bootloader slots differ (a: $bl_a, b: $bl_b): flash the same factory bootloader to both from stock first"
+  note "bootloader $bl_a on both slots"
+elif [[ -n $slots_match ]]; then
+  [[ $slots_match == "$current_bl" ]] || die "--bootloader-slots-match $slots_match, but slot ${current_slot:-?} has $current_bl"
+  note "bootloader $current_bl on slot ${current_slot:-?}; the other slot confirmed by you (--bootloader-slots-match)"
+else
+  die "the phone only reports slot ${current_slot:-?}'s bootloader ($current_bl). Setting slot B active runs slot B's bootloader, so both must match. Check the other slot (fastboot getvar version-bootloader while it is current), then rerun with --bootloader-slots-match $current_bl"
+fi
+note "$CODENAME, unlocked, current slot ${current_slot:-?}"
+
+# --- The owner's answers -----------------------------------------------------
+RESERVED='^(root|alarm|omamobile|omandroid|omarchy|bin|daemon|mail|ftp|http|nobody|dbus|systemd-.*|tss|uuidd|alpm|git|avahi|cups|cups-browsed|lp|_talkd|polkitd|rtkit|qemu|brltty|gluster|rpc|libvirt-qemu|pcscd|nvidia-persistenced|sddm|builder|admin)$'
+USERNAME_RE='^[a-z_][a-z0-9_-]{0,31}$'
+HOSTNAME_RE='^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$'
+SSHKEY_RE='^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/]+={0,3}( [ -~]*)?$'
+ask() { local prompt=$1 default=${2:-} answer; printf '%s%s: ' "$prompt" "${default:+ [$default]}" >&2; IFS= read -r answer || die "no answer"; printf '%s' "${answer:-$default}"; }
+ask_secret() { local answer; printf '%s: ' "$1" >&2; IFS= read -rs answer || die "no answer"; printf '\n' >&2; printf '%s' "$answer"; }
+
+say "About the phone's owner"
+while true; do
+  username=$(ask "User name")
+  if [[ ! $username =~ $USERNAME_RE ]]; then echo "  lower-case letters, digits, - and _, starting with a letter or _ (at most 32)" >&2
+  elif [[ $username =~ $RESERVED ]]; then echo "  '$username' is reserved; pick your own name" >&2
+  else break; fi
+done
+while true; do
+  password=$(ask_secret "Password or PIN (unlocks the phone, and for sudo)")
+  again=$(ask_secret "Again")
+  if [[ -z $password ]]; then echo "  it can't be empty" >&2
+  elif [[ $password != "$again" ]]; then echo "  they don't match" >&2
+  elif [[ $password == *$'\n'* ]]; then echo "  no line breaks" >&2
+  else break; fi
+done
+credential=password
+[[ $password =~ ^[0-9]+$ ]] && credential=pin
+password_hash=$(printf '%s\n' "$password" | openssl passwd -6 -stdin)
+unset password again
+[[ $password_hash == '$6$'* ]] || die "openssl passwd -6 failed"
+while true; do
+  hostname=$(ask "Host name" "$username-phone")
+  [[ $hostname =~ $HOSTNAME_RE ]] && break
+  echo "  1-63 letters, digits or dashes, not starting or ending with a dash" >&2
+done
+tz_default=$(timedatectl show -p Timezone --value 2>/dev/null || true)
+[[ -n $tz_default ]] || tz_default=$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||' || true)
+while true; do
+  timezone=$(ask "Time zone" "${tz_default:-UTC}")
+  [[ $timezone =~ ^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$ && -f /usr/share/zoneinfo/$timezone ]] && break
+  echo "  not a time zone (like Europe/Paris or America/New_York)" >&2
+done
+full_name=$(ask "Full name for git (optional)")
+[[ $full_name != *[:,]* ]] || die "the full name can't contain : or ,"
+email=$(ask "Email for git (optional)")
+[[ -z $email || $email =~ ^[^[:space:]@]+@[^[:space:]@]+$ ]] || die "'$email' is not an email address"
+wifi_ssid=$(ask "Wi-Fi network name (optional; Enter to skip)")
+wifi_psk=""
+if [[ -n $wifi_ssid ]]; then
+  (( ${#wifi_ssid} <= 32 )) || die "a Wi-Fi network name is at most 32 characters"
+  wifi_psk=$(ask_secret "Wi-Fi password (Enter for an open network)")
+  [[ -z $wifi_psk || $wifi_psk =~ ^[\ -~]{8,63}$ || $wifi_psk =~ ^[0-9A-Fa-f]{64}$ ]] ||
+    die "a Wi-Fi password is 8-63 printable characters"
+fi
+while true; do
+  key_file=$(ask "SSH public key for root and $username" "$HOME/.ssh/id_ed25519.pub")
+  key_file=${key_file/#\~/$HOME}
+  if [[ -f $key_file ]] && [[ $(head -1 "$key_file") =~ $SSHKEY_RE ]] && [[ $(grep -c . "$key_file") == 1 ]]; then break; fi
+  echo "  not a single OpenSSH public key file (a .pub, never the private key)" >&2
+done
+ssh_key=$(head -1 "$key_file")
+
+# --- A local copy of the root image, with the owner's first-boot file -------
+work=${work:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-install}
+mkdir -p "$work"
+chmod 700 "$work"
+copy=$work/root.img sparse=$work/root.simg conf_file=$work/firstboot.conf keys_file=$work/authorized_keys
+# The copy holds the password hash (and any Wi-Fi password): never left behind
+cleanup() { rm -f "$conf_file" "$keys_file" "$copy" "$sparse"; }
+trap cleanup EXIT
+(
+  umask 077
+  {
+    echo "# Written by install-phone on the laptop; omamobile-firstboot reads and deletes it."
+    echo "USERNAME=$username"
+    echo "PASSWORD_HASH=$password_hash"
+    echo "HOSTNAME=$hostname"
+    echo "TIMEZONE=$timezone"
+    echo "SSH_KEY=$ssh_key"
+    echo "CREDENTIAL=$credential"
+    [[ -n $full_name ]] && echo "FULL_NAME=$full_name"
+    [[ -n $email ]] && echo "EMAIL=$email"
+    if [[ -n $wifi_ssid ]]; then
+      echo "WIFI_SSID=$wifi_ssid"
+      [[ -n $wifi_psk ]] && echo "WIFI_PSK=$wifi_psk"
+    fi
+  } > "$conf_file"
+  printf '%s\n' "$ssh_key" > "$keys_file"
+)
+unset wifi_psk
+
+say "Preparing a local copy of the root image in $work"
+rm -f "$copy" "$sparse"
+zstd -q -d --sparse -f "$rootfs" -o "$copy"
+[[ $(dumpe2fs -h "$copy" 2>/dev/null | sed -n 's/^Filesystem volume name: *//p') == omamobile-root ]] ||
+  die "$rootfs is not an Omarchy Mobile root image (label omamobile-root)"
+debugfs -w -f - "$copy" >/dev/null 2>&1 <<EOF || true
+mkdir /etc/omamobile
+rm /etc/omamobile/firstboot.conf
+write $conf_file /etc/omamobile/firstboot.conf
+sif /etc/omamobile/firstboot.conf mode 0100600
+sif /etc/omamobile/firstboot.conf uid 0
+sif /etc/omamobile/firstboot.conf gid 0
+mkdir /root/.ssh
+sif /root/.ssh mode 040700
+sif /root/.ssh uid 0
+sif /root/.ssh gid 0
+rm /root/.ssh/authorized_keys
+write $keys_file /root/.ssh/authorized_keys
+sif /root/.ssh/authorized_keys mode 0100600
+sif /root/.ssh/authorized_keys uid 0
+sif /root/.ssh/authorized_keys gid 0
+EOF
+cmp -s <(debugfs -R "cat /etc/omamobile/firstboot.conf" "$copy" 2>/dev/null) "$conf_file" || die "writing firstboot.conf into the image copy failed"
+cmp -s <(debugfs -R "cat /root/.ssh/authorized_keys" "$copy" 2>/dev/null) "$keys_file" || die "writing authorized_keys into the image copy failed"
+e2fsck -fn "$copy" >/dev/null 2>&1 || die "the image copy doesn't check clean after the writes"
+note "firstboot.conf and root's authorized_keys written, file system checks clean"
+userdata_image=$copy
+if command -v img2simg >/dev/null; then
+  img2simg "$copy" "$sparse"
+  rm -f "$copy"
+  userdata_image=$sparse
+  note "converted to an Android sparse image ($(du -h "$sparse" | cut -f1))"
+fi
+
+# --- What will be written ----------------------------------------------------
+# The only way this script writes to the phone. PART must be one of the
+# descriptor's boot images with _b on the allowlist, or userdata.
+flash() {
+  local part=$1 file=$2 ok=0 p
+  for p in $BOOT_IMAGES; do [[ $part == "${p}_b" ]] && ok=1; done
+  [[ $part == userdata ]] && ok=1
+  ((ok)) && [[ " $UFS_RW " == *" $part "* ]] || die "refusing to write $part: not a slot B boot image or userdata on the allowlist"
+  run flash "$part" "$file"
+}
+run() {
+  if ((dry)); then
+    printf '    would run: %s -s %s %s\n' "$FASTBOOT" "$serial" "$*"
+  else
+    printf '    %s %s\n' "$FASTBOOT" "$*"
+    fb "$@" || die "fastboot $* failed; the phone is still in fastboot. Slot A is untouched; fix the cause and rerun"
+  fi
+}
+
+say "The plan"
+note "phone:     ${D[NAME]:-$CODENAME} ($CODENAME), serial $serial"
+note "user:      $username ($credential), host $hostname, time zone $timezone"
+note "Wi-Fi:     ${wifi_ssid:-none}"
+note "SSH key:   ${ssh_key:0:40}... (root and $username)"
+note "root image: $(basename "$rootfs")"
+echo
+echo "These commands, and only these, will run:"
+for p in $BOOT_IMAGES; do echo "    fastboot flash ${p}_b $images/$p.img"; done
+echo "    fastboot flash userdata $userdata_image"
+echo "    fastboot --set-active=b"
+echo "    fastboot reboot"
+echo
+echo "userdata will be ERASED: stock Android's data is lost, and stock Android on"
+echo "slot A will need a factory reset if you ever boot it again. Slot A itself,"
+echo "the bootloader, radio, persist, efs, modem and devinfo are not touched."
+echo
+answer=$(ask "Type the phone's codename ($CODENAME) to go ahead")
+[[ $answer == "$CODENAME" ]] || die "not confirmed; nothing was written"
+
+((dry)) && say "Dry run: printing the commands instead of running them" || say "Flashing"
+for p in $BOOT_IMAGES; do flash "${p}_b" "$images/$p.img"; done
+flash userdata "$userdata_image"
+run --set-active=b
+run reboot
+if ((dry)); then
+  say "Dry run done: nothing was written to the phone"
+else
+  say "Done. The phone boots slot B; the first boot sets up $username (a few minutes)."
+  echo "    Watch it:  tools/phone-ssh 'journalctl -fu omamobile-firstboot'"
+  echo "    Then:      tools/phone-provision FACTORY.zip  (firmware, per-phone data)"
+fi

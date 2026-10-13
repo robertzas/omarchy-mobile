@@ -1,0 +1,299 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# phone-provision: after a fresh install's first boot, put back what the root
+# image can't carry: Google's firmware and vendor files (extracted here, on
+# the laptop, from the user's own factory image) and this phone's own data
+# (from the read-only backup taken before the reinstall). Runs as root on the
+# phone over tools/phone-ssh. Every step is idempotent and prints what it wrote.
+#
+#   tools/phone-provision [options] FACTORY.zip
+#   tools/phone-provision [options] --skip-extract     (backup only)
+#
+# From the factory image (tools/extract-*; nothing Google's leaves the laptop
+# except into this phone):
+#   firmware     Wi-Fi, Bluetooth, haptics, speaker amplifiers -> /usr/lib/firmware/updates
+#   chroots      gnss and modem vendor trees -> /usr/lib/omamobile-vendor/<profile>
+#                (and waves with --with-waves)
+#   fingerprint  the HAL's Android tree -> /usr/lib/omamobile-fp/{root,MANIFEST,SOURCE}
+#   camera       sensor and PHY data -> /usr/lib/firmware/omamobile/camera (needs
+#                python with unicorn and pyelftools, ~/.cache/omamobile-venv;
+#                without it, the backup's copies are used)
+# From the backup (default ~/android/reference/phone-backup-20261013, made
+# before the rename: its paths use the old names and are mapped to the new):
+#   always       the modem's board id (var/lib/omamobile-vendor/modem/props.conf)
+#                and NV checksums (etc/omamobile/modem-nv.sha256)
+#   --restore-config  /etc/omamobile speaker, gnss, modem-sit, speaker-tuning settings
+#   --restore-wifi    saved NetworkManager connections
+#   --import-home     home screens, quick settings and widgets into the user's
+#                     ~/.config/omamobile (ids renamed omandroid -> omamobile)
+#   --fingerprint     the fingerprint state (Trusty secure storage, factory
+#                     calibration, enrolment) -> /var/lib/omamobile-fp, with the
+#                     fingerprint service stopped. It never starts the service:
+#                     the first storageproxyd start needs the human's go
+#                     (FINGERPRINT-PLAN F4)
+# Options:
+#   --backup DIR   the backup directory      --user NAME   the phone's user
+#   --work DIR     local staging (default ~/.cache/omamobile-provision; it holds
+#                  Google's files and per-phone data, removed afterwards unless --keep)
+#   --force        replace fingerprint state that differs from the backup
+#   --dry-run      stage locally and print every extraction and push; touch
+#                  nothing on the phone
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+ROOT=$PWD
+
+say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
+note() { printf '    %s\n' "$*"; }
+die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
+
+backup=$HOME/android/reference/phone-backup-20261013
+work=${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-provision
+dry=0 skip_extract=0 fingerprint=0 import_home=0 restore_config=0 restore_wifi=0 waves=0 keep=0 force=0
+user="" factory=""
+PHONE_SSH=${PHONE_SSH:-$ROOT/tools/phone-ssh}
+while (($#)); do
+  case $1 in
+    --dry-run) dry=1 ;;
+    --skip-extract) skip_extract=1 ;;
+    --fingerprint) fingerprint=1 ;;
+    --import-home) import_home=1 ;;
+    --restore-config) restore_config=1 ;;
+    --restore-wifi) restore_wifi=1 ;;
+    --with-waves) waves=1 ;;
+    --keep) keep=1 ;;
+    --force) force=1 ;;
+    --backup) backup=${2:?}; shift ;;
+    --work) work=${2:?}; shift ;;
+    --user) user=${2:?}; shift ;;
+    -h|--help) sed -n '3,42p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*) die "unknown option $1" ;;
+    *) [[ -z $factory ]] || die "one factory image only"; factory=$1 ;;
+  esac
+  shift
+done
+((skip_extract)) || [[ -n $factory ]] || die "give the factory image (FACTORY.zip), or --skip-extract"
+[[ -z $factory || -f $factory ]] || die "no $factory"
+[[ -n $factory ]] && factory=$(readlink -f "$factory")
+
+phone() { "$PHONE_SSH" "$@"; }
+
+# --- Inputs ------------------------------------------------------------------
+say "Checking the backup in $backup"
+config_tar=$backup/phone-config.tar fp_tar=$backup/var-lib-omandroid-fp.tar
+[[ -f $config_tar ]] || die "no $config_tar"
+for f in "$config_tar" $( ((fingerprint)) && echo "$fp_tar"); do
+  [[ -f $f ]] || die "no $f"
+  if [[ -f $f.sha256 ]]; then
+    [[ $(sha256sum < "$f" | cut -d' ' -f1) == "$(cut -d' ' -f1 < "$f.sha256")" ]] || die "$f doesn't match $f.sha256"
+    note "$(basename "$f"): checksum matches"
+  else
+    note "$(basename "$f"): no .sha256 to check against"
+  fi
+done
+
+if ((dry)); then
+  user=${user:-USER}
+  note "dry run: the phone isn't contacted; the user is shown as '$user' (or --user)"
+else
+  say "Checking the phone"
+  phone true || die "the phone doesn't answer at 172.16.42.1 (tools/phone-ssh)"
+  if [[ -z $user ]]; then
+    user=$(phone 'cat /var/lib/omamobile/firstboot/user 2>/dev/null' || true)
+    [[ -n $user ]] || user=$(phone "getent passwd | awk -F: '\$3 >= 1000 && \$3 < 60000 {print \$1; exit}'")
+  fi
+  [[ $user =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "no user on the phone (or --user NAME)"
+  phone "getent passwd '$user' >/dev/null" || die "no account '$user' on the phone"
+  note "user $user, kernel $(phone 'uname -r')"
+fi
+
+mkdir -p "$work"
+chmod 700 "$work"
+W=$(mktemp -d "$work/run.XXXXXX")
+cleanup() { ((keep)) || rm -rf "$W"; }
+trap cleanup EXIT
+
+# Old names in the backup -> new. The old account's home becomes the user's.
+map_path() {
+  local p=$1
+  p=${p/#home\/omandroid\//home\/$user\/}
+  printf '%s' "${p//omandroid/omamobile}"
+}
+
+DID=()
+# push_tree LOCAL_DIR PHONE_DEST [replace|merge] [owner]: put a staged tree
+# on the phone. replace swaps each top-level entry of the tree in place
+# (other files in PHONE_DEST stay); merge extracts over what's there.
+# Ownership is root's (tar --no-same-owner), or owner's, chown'd after.
+push_tree() {
+  local src=$1 dest=$2 how=${3:-merge} owner=${4:-} n sums
+  n=$(find "$src" -type f | wc -l)
+  if ((dry)); then
+    note "would push $n files to $dest ($how${owner:+, owned by $owner})"
+    DID+=("would push $n files to $dest")
+    return
+  fi
+  sums=$(cd "$src" && find . -type f -printf '%P\0' | sort -z | xargs -0r sha256sum)
+  if [[ $how == replace ]]; then
+    tar -C "$src" --owner=0 --group=0 --numeric-owner -cf - . | phone "set -e
+      mkdir -p '$dest'; t=\$(mktemp -d '$dest/.provision.XXXXXX')
+      tar -C \"\$t\" -xf - --no-same-owner
+      for x in \$(ls -A \"\$t\"); do rm -rf '$dest'/\"\$x\"; mv \"\$t\"/\"\$x\" '$dest'/\"\$x\"; done
+      rmdir \"\$t\""
+  else
+    tar -C "$src" --owner=0 --group=0 --numeric-owner -cf - . |
+      phone "set -e; mkdir -p '$dest'; tar -C '$dest' -xf - --no-same-owner --no-overwrite-dir"
+  fi
+  if [[ -n $owner ]]; then
+    (cd "$src" && find . -mindepth 1 -maxdepth 1 -printf '%P\n') | while read -r top; do
+      phone "chown -R '$owner' '$dest/$top'"
+    done
+  fi
+  phone "cd '$dest' && sha256sum -c --quiet" <<<"$sums" || die "the files in $dest don't match after the push"
+  note "pushed $n files to $dest, verified"
+  DID+=("pushed $n files to $dest")
+}
+
+# --- From the factory image ----------------------------------------------------
+camera_done=0
+if ((skip_extract == 0)); then
+  say "Extracting from $(basename "$factory") (on this laptop)"
+  profiles=(gnss modem)
+  ((waves)) && profiles+=(waves)
+  py=python3
+  [[ -x $HOME/.cache/omamobile-venv/bin/python ]] && py=$HOME/.cache/omamobile-venv/bin/python
+  have_unicorn=0
+  "$py" -c 'import unicorn, elftools' 2>/dev/null && have_unicorn=1
+  extract() {
+    if ((dry)); then note "would run: $*"; return; fi
+    note "$*"
+    "$@" > "$W/extract.log" 2>&1 || { tail -20 "$W/extract.log"; die "extraction failed: $*"; }
+  }
+  extract tools/extract-vendor-firmware -o "$W/fw" -c "$W/camera.apex" -w "$W" "$factory"
+  for p in "${profiles[@]}"; do extract tools/extract-vendor-chroot -p "$p" -o "$W/chroot-$p" -w "$W" "$factory"; done
+  extract tools/extract-fingerprint-vendor -o "$W/fp-vendor" -w "$W" "$factory"
+  ((have_unicorn)) && extract "$py" tools/extract-camera-data --apex "$W/camera.apex" -d "$W/camera"
+  ((have_unicorn)) || note "no unicorn/pyelftools for $py: camera data comes from the backup instead"
+
+  say "Pushing Google's files"
+  if ((dry)); then
+    note "would push the firmware tree to /usr/lib/firmware/updates"
+    for p in "${profiles[@]}"; do note "would replace /usr/lib/omamobile-vendor/$p/{root,MANIFEST,SOURCE,...}"; done
+    note "would replace /usr/lib/omamobile-fp/{root,MANIFEST,SOURCE}"
+    ((have_unicorn)) && note "would push the camera data to /usr/lib/firmware/omamobile/camera" && camera_done=1
+  else
+    push_tree "$W/fw/usr/lib/firmware/updates" /usr/lib/firmware/updates merge
+    for p in "${profiles[@]}"; do push_tree "$W/chroot-$p" "/usr/lib/omamobile-vendor/$p" replace; done
+    push_tree "$W/fp-vendor" /usr/lib/omamobile-fp replace
+    if ((have_unicorn)); then
+      mkdir -p "$W/camera-stage" && cp "$W"/camera/*.bin "$W/camera-stage/"
+      push_tree "$W/camera-stage" /usr/lib/firmware/omamobile/camera merge
+      camera_done=1
+    fi
+  fi
+fi
+
+# --- From the backup -----------------------------------------------------------
+say "Restoring this phone's data from the backup"
+mkdir -p "$W/backup" "$W/stage"
+tar -C "$W/backup" -xf "$config_tar" --no-same-owner
+# What to take, as paths inside the backup
+take=(var/lib/omandroid-vendor/modem/props.conf etc/omandroid/modem-nv.sha256)
+if ((camera_done == 0)); then
+  while read -r f; do take+=("$f"); done < <(cd "$W/backup" && find usr/lib/firmware/omandroid/camera -name '*.bin' 2>/dev/null | sort)
+fi
+if ((restore_config)); then
+  for f in speaker gnss modem-sit speaker-tuning; do
+    [[ -f $W/backup/etc/omandroid/$f.conf ]] && take+=("etc/omandroid/$f.conf")
+  done
+fi
+if ((restore_wifi)); then
+  while read -r f; do take+=("$f"); done < <(cd "$W/backup" && find etc/NetworkManager/system-connections -name '*.nmconnection' 2>/dev/null | sort)
+fi
+for f in "${take[@]}"; do
+  [[ -f $W/backup/$f ]] || die "the backup has no $f"
+  new=$(map_path "$f")
+  install -D -m "$(stat -c %a "$W/backup/$f")" "$W/backup/$f" "$W/stage/$new"
+  note "$f -> /$new"
+done
+push_tree "$W/stage" / merge
+
+if ((import_home)); then
+  say "Importing home screens, quick settings and widgets for $user"
+  src=$W/backup/home/omandroid/.config/omandroid
+  [[ -d $src ]] || die "the backup has no home/omandroid/.config/omandroid"
+  home_stage=$W/home/.config/omamobile
+  mkdir -p "$home_stage"
+  for f in home.json quicksettings.json widget-guard.json widgets; do
+    [[ -e $src/$f ]] || continue
+    cp -a "$src/$f" "$home_stage/"
+    note "home/omandroid/.config/omandroid/$f -> /$(map_path "home/omandroid/.config/omandroid/$f")"
+  done
+  # Plugin and widget ids carried the old name
+  while IFS= read -r -d '' f; do
+    if grep -q -i omandroid "$f"; then
+      sed -i 's/omandroid/omamobile/g; s/Omandroid/Omamobile/g; s/OMANDROID/OMAMOBILE/g' "$f"
+      note "renamed ids in ${f#"$W/home/"}"
+    fi
+  done < <(find "$W/home" -type f \( -name '*.json' -o -name '*.qml' -o -name '*.js' \) -print0)
+  if ((dry)); then
+    push_tree "$W/home" "/home/$user" merge "$user:$user"
+  else
+    push_tree "$W/home" "$(phone "getent passwd '$user' | cut -d: -f6")" merge "$user:$user"
+  fi
+fi
+
+if ((fingerprint)); then
+  say "Fingerprint state"
+  cat <<'WARN'
+    !! The fingerprint state is Trusty's secure storage for this phone. This
+    !! tool only copies it to /var/lib/omamobile-fp with the service stopped;
+    !! it never starts omamobile-fp. The first storageproxyd start on it writes
+    !! the phone's RPMB and is irreversible: it needs the human's explicit go
+    !! (device/cheetah/FINGERPRINT-PLAN.md F4).
+WARN
+  mkdir -p "$W/fp"
+  tar -C "$W/fp" -xf "$fp_tar" --no-same-owner
+  [[ -d $W/fp/omandroid-fp ]] || die "$fp_tar has no omandroid-fp/"
+  # Ownership is Android's (storageproxyd runs as AID_SYSTEM, 1000), so this
+  # one tree keeps the backup's numeric owners, renamed paths and all.
+  fp_list=$(tar -tf "$fp_tar" | sed 's|^omandroid-fp/||' | grep . || true)
+  while read -r f; do note "/var/lib/omandroid-fp/$f -> /var/lib/omamobile-fp/$(map_path "$f")"; done <<<"$fp_list"
+  if ((dry)); then
+    note "would stop omamobile-fp.service, then restore $(wc -l <<<"$fp_list") entries to /var/lib/omamobile-fp"
+    DID+=("would restore the fingerprint state")
+  else
+    if phone 'test -s /var/lib/omamobile-fp/persist-ss/0'; then
+      remote=$(phone 'sha256sum /var/lib/omamobile-fp/persist-ss/0 | cut -d" " -f1')
+      local_sum=$(tar -xOf "$fp_tar" omandroid-fp/persist-ss/0 | sha256sum | cut -d' ' -f1)
+      if [[ $remote != "$local_sum" ]] && ((force == 0)); then
+        die "/var/lib/omamobile-fp already holds different secure storage: not replacing it (--force)"
+      fi
+    fi
+    phone 'systemctl stop omamobile-fp.service 2>/dev/null; systemctl is-active --quiet omamobile-fp.service && exit 1; true' ||
+      die "omamobile-fp.service won't stop"
+    # Rename the inner directory too, then stream with numeric owners kept
+    python3 -I - "$fp_tar" "$W/fp.tar" <<'PY'
+import sys, tarfile
+src, dst = sys.argv[1], sys.argv[2]
+with tarfile.open(src) as i, tarfile.open(dst, "w") as o:
+    for m in i.getmembers():
+        name = m.name
+        if not name.startswith("omandroid-fp"):
+            sys.exit(f"unexpected member {name}")
+        name = name[len("omandroid-fp"):].lstrip("/") or "."
+        m.name = name.replace("omandroid", "omamobile")
+        o.addfile(m, i.extractfile(m) if m.isfile() else None)
+PY
+    phone 'set -e; mkdir -p /var/lib/omamobile-fp; tar -C /var/lib/omamobile-fp -xpf - --numeric-owner --same-owner' < "$W/fp.tar"
+    phone 'chmod 0700 /var/lib/omamobile-fp; ls -ln /var/lib/omamobile-fp/persist-ss'
+    note "restored; omamobile-fp.service stays stopped"
+    DID+=("restored the fingerprint state (service stopped, not started)")
+  fi
+fi
+
+say "Done"
+for d in "${DID[@]}"; do note "$d"; done
+((dry)) && note "dry run: nothing was changed on the phone" ||
+  note "reboot the phone for the firmware to load (Wi-Fi, Bluetooth, haptics, speakers, camera)"
+((keep)) && note "staging kept in $W (Google's files and per-phone data: delete it when done)"
+true

@@ -1,0 +1,220 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for tools/install-phone against a fake fastboot (no phone, nothing
+# flashed): the refusals (wrong product, locked bootloader, mismatched or
+# unknown bootloader slots, reserved user names, partitions outside the
+# storage-guard allowlist, a bad root image checksum), the dry run's output
+# (exactly the allowed commands), a full run's fastboot calls (exactly those
+# commands, nothing else), and the first-boot file it writes into the image.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+SRC=$PWD
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+for tool in debugfs mkfs.ext4 zstd openssl; do command -v $tool >/dev/null || { echo "skip: no $tool"; exit 0; }; done
+t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
+
+# A repository-shaped tree: the script, a descriptor, images, a tiny root image
+R=$t/repo
+mkdir -p "$R/tools" "$R/device/testdev" "$R/out" "$t/images" "$t/home/.ssh" "$t/rootdir/etc" "$t/rootdir/root"
+cp tools/install-phone "$R/tools/install-phone"
+descriptor() {
+  cat <<'EOF'
+# test device
+CODENAME=testdev
+NAME="Test Phone"
+BOOT_IMAGES="boot init_boot vendor_boot vendor_kernel_boot dtbo"
+UFS_RW="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
+EOF
+}
+descriptor > "$R/device/testdev/device.conf"
+for p in boot init_boot vendor_boot vendor_kernel_boot dtbo vbmeta; do echo "$p image" > "$t/images/$p.img"; done
+echo 'root:x:0:0::/root:/bin/bash' > "$t/rootdir/etc/passwd"
+mkfs.ext4 -q -L omamobile-root -d "$t/rootdir" "$t/root.img" 16M
+img=$R/out/omamobile-rootfs-2026.10.13-aarch64.img.zst
+zstd -q "$t/root.img" -o "$img"
+(cd "$R/out" && sha256sum "$(basename "$img")" > "$(basename "$img").sha256")
+printf 'version: 2026.10.13\ndevice: testdev (omamobile-device-testdev)\n' > "$R/out/omamobile-rootfs-2026.10.13-aarch64.MANIFEST"
+ssh-keygen -q -t ed25519 -N '' -C test -f "$t/home/.ssh/id_ed25519" 2>/dev/null ||
+  echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl test' > "$t/home/.ssh/id_ed25519.pub"
+
+# The fake fastboot: logs every call; "getvar all" prints $T/vars;
+# a userdata flash keeps a copy of the image for inspection
+mkdir -p "$t/bin"
+cat > "$t/bin/fastboot" <<'EOF'
+#!/bin/bash
+echo "$*" >> "$T/fastboot.log"
+if [[ $1 == devices ]]; then printf 'FAKE123\tfastboot\n'; exit 0; fi
+[[ $1 == -s ]] && shift 2
+case $1 in
+  getvar) sed 's/^/(bootloader) /' "$T/vars" >&2 ;;
+  flash) [[ $2 == userdata ]] && cp "$3" "$T/userdata.flashed" ;;
+esac
+exit 0
+EOF
+chmod +x "$t/bin/fastboot"
+export T=$t
+vars() {
+  cat > "$t/vars" <<EOF
+product:${1:-testdev}
+unlocked:${2:-yes}
+current-slot:b
+version-bootloader:cloudripper-17.0-15199429
+${3:-}
+EOF
+}
+answers() {
+  # user name(s), password twice, host, time zone, name, email, Wi-Fi, key, confirmation
+  printf '%s\n' "${USERS:-alice}" 1234 1234 "" UTC "Alice Example" "" "${SSID:-Home Net}" "${PSK:-correct horse}" "" "${CONFIRM:-testdev}"
+}
+install() {
+  : > "$t/fastboot.log"
+  answers | HOME=$t/home PATH="$t/bin:$PATH" "$R/tools/install-phone" --device testdev --images "$t/images" \
+    --work "$t/work" "$@" > "$t/out" 2>&1
+}
+flashing_calls() { grep -v -E '^(devices|-s FAKE123 getvar all)$' "$t/fastboot.log" || true; }
+
+vars "" "" $'version-bootloader-a:cloudripper-17.0-15199429\nversion-bootloader-b:cloudripper-17.0-15199429'
+install --dry-run || { cat "$t/out"; fail "a dry run succeeds"; }
+expected="    would run: fastboot -s FAKE123 flash boot_b $t/images/boot.img
+    would run: fastboot -s FAKE123 flash init_boot_b $t/images/init_boot.img
+    would run: fastboot -s FAKE123 flash vendor_boot_b $t/images/vendor_boot.img
+    would run: fastboot -s FAKE123 flash vendor_kernel_boot_b $t/images/vendor_kernel_boot.img
+    would run: fastboot -s FAKE123 flash dtbo_b $t/images/dtbo.img
+    would run: fastboot -s FAKE123 flash userdata $t/work/root.simg
+    would run: fastboot -s FAKE123 --set-active=b
+    would run: fastboot -s FAKE123 reboot"
+command -v img2simg >/dev/null || expected=${expected//root.simg/root.img}
+[[ $(grep 'would run:' "$t/out") == "$expected" ]] || { grep 'would run:' "$t/out"; fail "the dry run prints exactly the allowed commands"; }
+[[ -z $(flashing_calls) ]] || fail "a dry run only reads variables: $(flashing_calls)"
+grep -qF 'correct horse' "$t/out" && fail "the Wi-Fi password is never printed"
+[[ -z $(ls "$t/work") ]] || fail "the image copy (with the password hash) is removed"
+pass "dry run: exactly the allowed commands printed, only getvar sent"
+
+install || { cat "$t/out"; fail "a full run succeeds"; }
+want="-s FAKE123 flash boot_b $t/images/boot.img
+-s FAKE123 flash init_boot_b $t/images/init_boot.img
+-s FAKE123 flash vendor_boot_b $t/images/vendor_boot.img
+-s FAKE123 flash vendor_kernel_boot_b $t/images/vendor_kernel_boot.img
+-s FAKE123 flash dtbo_b $t/images/dtbo.img
+-s FAKE123 flash userdata $t/work/root.simg
+-s FAKE123 --set-active=b
+-s FAKE123 reboot"
+command -v img2simg >/dev/null || want=${want//root.simg/root.img}
+[[ $(flashing_calls) == "$want" ]] || { flashing_calls; fail "a run sends exactly the allowed commands"; }
+pass "full run: fastboot gets exactly slot B's images, userdata, set-active b, reboot"
+
+flashed=$t/userdata.flashed
+if command -v simg2img >/dev/null && [[ $(head -c4 "$flashed" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
+  simg2img "$flashed" "$t/flashed.img"; flashed=$t/flashed.img
+fi
+conf=$(debugfs -R 'cat /etc/omamobile/firstboot.conf' "$flashed" 2>/dev/null)
+grep -qx 'USERNAME=alice' <<<"$conf" || fail "firstboot.conf names the user"
+grep -q '^PASSWORD_HASH=\$6\$' <<<"$conf" || fail "firstboot.conf has a sha512-crypt hash"
+grep -q '1234' <<<"$(grep -v PASSWORD_HASH <<<"$conf")" && fail "the plain PIN is not in firstboot.conf"
+grep -qx 'CREDENTIAL=pin' <<<"$conf" || fail "a numeric password is a PIN"
+grep -qx 'HOSTNAME=alice-phone' <<<"$conf" || fail "the default host name is <user>-phone"
+grep -qx 'WIFI_SSID=Home Net' <<<"$conf" && grep -qx 'WIFI_PSK=correct horse' <<<"$conf" || fail "the Wi-Fi network"
+grep -qxF "SSH_KEY=$(cat "$t/home/.ssh/id_ed25519.pub")" <<<"$conf" || fail "the SSH key"
+debugfs -R 'stat /etc/omamobile/firstboot.conf' "$flashed" 2>/dev/null | grep -q 'Mode:  0600' || fail "firstboot.conf is root-only"
+debugfs -R 'stat /etc/omamobile/firstboot.conf' "$flashed" 2>/dev/null | grep -q 'User:     0   Group:     0' || fail "firstboot.conf belongs to root"
+[[ $(debugfs -R 'cat /root/.ssh/authorized_keys' "$flashed" 2>/dev/null) == "$(cat "$t/home/.ssh/id_ed25519.pub")" ]] || fail "root's authorized_keys"
+mkdir -p "$t/fbroot/usr/share/zoneinfo" "$t/fbroot/etc"
+: > "$t/fbroot/usr/share/zoneinfo/UTC"
+cp "$t/rootdir/etc/passwd" "$t/fbroot/etc/passwd"
+printf '%s\n' "$conf" > "$t/fb.conf"
+OMAMOBILE_FIRSTBOOT_ROOT=$t/fbroot "$SRC/packages/omamobile-firstboot/bin/omamobile-firstboot" --check "$t/fb.conf" >/dev/null ||
+  fail "omamobile-firstboot accepts what install-phone writes"
+pass "the image copy gets a root-only firstboot.conf (hash, not password) and root's key, which firstboot accepts"
+
+refuse() {
+  local why=$1; shift
+  if install "$@"; then cat "$t/out"; fail "refuses $why"; fi
+  [[ -z $(flashing_calls) ]] || fail "nothing is flashed when it refuses $why"
+}
+vars other "" $'version-bootloader-a:x\nversion-bootloader-b:x'
+refuse "another phone"; grep -q "not testdev" "$t/out" || fail "says it is the wrong phone"
+vars "" no $'version-bootloader-a:x\nversion-bootloader-b:x'
+refuse "a locked bootloader"; grep -q locked "$t/out" || fail "says the bootloader is locked"
+vars "" "" $'version-bootloader-a:cloudripper-17.0-1\nversion-bootloader-b:cloudripper-16.0-9'
+refuse "different bootloader slots"; grep -q 'slots differ' "$t/out" || fail "says the slots differ"
+vars
+refuse "an unknown other slot"; grep -q -- '--bootloader-slots-match' "$t/out" || fail "says how to confirm the other slot"
+refuse "a wrong confirmed version" --bootloader-slots-match cloudripper-16.0-9
+install --dry-run --bootloader-slots-match cloudripper-17.0-15199429 || { cat "$t/out"; fail "a confirmed matching version passes"; }
+pass "refuses another phone, a locked bootloader, mismatched or unconfirmed bootloader slots"
+
+vars "" "" $'version-bootloader-a:x\nversion-bootloader-b:x'
+for name in root omamobile omarchy alarm omandroid; do
+  USERS=$(printf '%s\nalice' "$name") install --dry-run || { cat "$t/out"; fail "re-asks after $name"; }
+  grep -q "'$name' is reserved" "$t/out" || fail "refuses the reserved user name $name"
+done
+USERS=$(printf 'Bob\n1bob\nalice') install --dry-run || fail "re-asks after bad names"
+[[ $(grep -c 'lower-case letters' "$t/out") == 2 ]] || fail "refuses user names that aren't valid"
+CONFIRM=cheetah refuse "a wrong confirmation"; grep -q 'not confirmed' "$t/out" || fail "says it wasn't confirmed"
+pass "refuses reserved and invalid user names, and anything but the codename as confirmation"
+
+descriptor | sed 's/^BOOT_IMAGES=.*/BOOT_IMAGES="boot vbmeta"/' > "$R/device/testdev/device.conf"
+refuse "an image outside UFS_RW"; grep -q 'vbmeta_b is not on the storage-guard allowlist' "$t/out" || fail "names the partition outside UFS_RW"
+descriptor | sed 's/^UFS_RW=.*/UFS_RW="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata persist"/' > "$R/device/testdev/device.conf"
+refuse "a non-slot-B partition on the allowlist"; grep -q 'not persist' "$t/out" || fail "names persist"
+descriptor | sed 's/^UFS_RW=.*/UFS_RW="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b"/' > "$R/device/testdev/device.conf"
+refuse "userdata off the allowlist"
+descriptor | sed 's/^NAME=.*/NAME="$(touch x)"/' > "$R/device/testdev/device.conf"
+refuse "a descriptor with shell in it"
+descriptor > "$R/device/testdev/device.conf"
+cp "$R/out/$(basename "$img").sha256" "$t/sum"; echo "0000  $(basename "$img")" > "$R/out/$(basename "$img").sha256"
+refuse "a root image that doesn't match its checksum"
+cp "$t/sum" "$R/out/$(basename "$img").sha256"
+sed -i 's/^device: .*/device: cheetah/' "$R/out/omamobile-rootfs-2026.10.13-aarch64.MANIFEST"
+refuse "a root image built for another device"
+sed -i 's/^device: .*/device: testdev/' "$R/out/omamobile-rootfs-2026.10.13-aarch64.MANIFEST"
+mkdir -p "$t/include/config" && echo 7.3.0-test-1 > "$t/include/config/kernel.release"
+echo 'kernel modules: 7.3.0-test-2 (tarball sha256 0)' >> "$R/out/omamobile-rootfs-2026.10.13-aarch64.MANIFEST"
+refuse "a root image whose modules don't match the boot images' kernel"; grep -q 'modules for 7.3.0-test-2' "$t/out" || fail "names both kernels"
+sed -i 's/^kernel modules: .*/kernel modules: 7.3.0-test-1 (tarball sha256 0)/' "$R/out/omamobile-rootfs-2026.10.13-aarch64.MANIFEST"
+install --dry-run || { cat "$t/out"; fail "matching kernel and modules pass"; }
+pass "refuses partitions outside the allowlist, a non-data descriptor, a bad or foreign root image, mismatched modules"
+
+# A release bundle: install beside device.conf and images/, the root image next to it
+BD=$t/bundle/omamobile-testdev-2026.10.13
+mkdir -p "$BD/images"
+cp tools/install-phone "$BD/install"
+cp "$R/device/testdev/device.conf" "$BD/device.conf"
+for p in boot init_boot vendor_boot vendor_kernel_boot dtbo; do cp "$t/images/$p.img" "$BD/images/"; done
+cp "$img" "$img.sha256" "$R/out/omamobile-rootfs-2026.10.13-aarch64.MANIFEST" "$t/bundle/"
+(cd "$BD" && find . -type f ! -name SHA256SUMS -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS)
+binstall() {
+  : > "$t/fastboot.log"
+  answers | HOME=$t/home PATH="$t/bin:$PATH" "$BD/install" --work "$t/work" "$@" > "$t/out" 2>&1
+}
+if binstall --dry-run; then fail "refuses an unsigned bundle"; fi
+grep -q 'not signed' "$t/out" || fail "says the bundle is unsigned"
+binstall --dry-run --unsigned || { cat "$t/out"; fail "a development bundle installs with --unsigned"; }
+grep -q 'would run: fastboot -s FAKE123 flash boot_b' "$t/out" || fail "a bundle uses its own images"
+echo tampered >> "$BD/images/dtbo.img"
+if binstall --dry-run --unsigned; then fail "refuses a bundle file that doesn't match SHA256SUMS"; fi
+(cd "$BD" && find . -type f ! -name SHA256SUMS -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS)
+if command -v gpg >/dev/null; then
+  G=$t/gnupg; mkdir -m700 "$G"
+  gpg --homedir "$G" -q --batch --passphrase '' --quick-gen-key 'Not The Release Key <test@example.org>' ed25519 sign never 2>/dev/null
+  gpg --homedir "$G" -q --batch --export > "$BD/omamobile.gpg"
+  gpg --homedir "$G" -q --batch --detach-sign -o "$BD/SHA256SUMS.sig" "$BD/SHA256SUMS"
+  if binstall --dry-run; then fail "refuses a bundle signed by another key"; fi
+  grep -q 'not signed by the Omarchy Mobile key' "$t/out" || fail "says the signature is not the release key's"
+fi
+[[ -z $(flashing_calls) ]] || fail "a refused bundle flashes nothing"
+pass "bundle mode: signature required (pinned key), checksums checked, its own images used"
+
+# The script itself: one write path, and none of the forbidden fastboot forms
+code=$(grep -v '^[[:space:]]*#' tools/install-phone)
+grep -nE '(run|fb|FASTBOOT")[^#]*( -w( |$)|--slot|flashing|erase|format|oem )' <<<"$code" && fail "no -w, --slot, flashing, erase, format or oem"
+[[ $(grep -cE '^\s*run flash ' <<<"$code") == 1 ]] || fail "one flash call, inside flash()"
+[[ $(grep -cE '^\s*fb "\$@"' <<<"$code") == 1 ]] || fail "one fastboot write path, inside run()"
+pass "one guarded write path; no -w, --slot, flashing, erase, format or oem"
+
+# Reserved names agree with omamobile-firstboot's
+a=$(sed -n "s/^RESERVED='\(.*\)'$/\1/p" tools/install-phone)
+b=$(sed -n "s/^RESERVED='\(.*\)'$/\1/p" packages/omamobile-firstboot/bin/omamobile-firstboot)
+[[ -n $a && $a == "$b" ]] || fail "install-phone and omamobile-firstboot reserve the same names"
+pass "install-phone and omamobile-firstboot agree on reserved names"
