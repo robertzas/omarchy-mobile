@@ -2,7 +2,7 @@
 
 Native Omarchy on Google Pixel phones: Arch Linux ARM, Hyprland and Omarchy's own packages running directly on the phone with a mainline kernel, with Android apps in Waydroid as a later goal. First device: Pixel 7 Pro (cheetah, gs201).
 
-**Status (2026-10-12):** a pocket computer, not yet a phone. Display at 120 Hz, GPU, touch, Wi-Fi, Bluetooth audio, battery, haptics, torch, sensors with auto-rotate and the speakers (at a capped volume) work. Calls, SMS, mobile data, cameras, fingerprint unlock and sleep on screen-off are in progress. What works on each phone: [docs/DEVICES.md](docs/DEVICES.md). What's missing and the plan to get there: [docs/ROADMAP.md](docs/ROADMAP.md).
+**Status (2026-10-12):** a pocket computer, not yet a phone. Display at 120 Hz, GPU, touch, Wi-Fi, Bluetooth audio, battery, haptics, torch, sensors with auto-rotate and the speakers (quieter than stock for now) work. Calls, SMS, mobile data, cameras, fingerprint unlock and sleep on screen-off are in progress. What works on each phone: [docs/DEVICES.md](docs/DEVICES.md). What's missing and the plan to get there: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 Plan: https://claude.ai/code/artifact/060038bc-beff-497e-9643-4f322318b2be
 
@@ -12,7 +12,7 @@ Plan: https://claude.ai/code/artifact/060038bc-beff-497e-9643-4f322318b2be
 | --- | --- |
 | `bin/omandroid` | Build and flash tooling: `capture`, `kernel`, `modules`, `initramfs`, `images`, `flash`, `push`, `kexec`, `fastboot` |
 | `tools/` | Staged bring-up and capture tools, on-phone probes, firmware extraction from the user's factory image, package and repository helpers |
-| `packages/` | pacman packages: `omandroid-shell` (the phone profile for Omarchy's shell), `omandroid-device-cheetah` (Pixel 7 Pro support), `omandroid-sensors` (sensors and auto-rotate through the AoC), `omandroid-gnss` (location on demand), `omandroid-audio` (PipeWire and speaker protection), `omandroid-fingerprint` with a patched `libfprint`, `omandroid-modem` (the modem's vendor chroot profile), `neard`, `omandroid-keyring` (the `[omandroid]` repository's signing key), patched `mesa` and `hyprland`. `tools/phone-install-package` builds one on the phone and installs it |
+| `packages/` | pacman packages: `omandroid-shell` (the phone profile for Omarchy's shell), `omandroid-device-cheetah` (Pixel 7 Pro support), `omandroid-sensors` (sensors and auto-rotate through the AoC), `omandroid-gnss` (location on demand), `omandroid-audio` (PipeWire and speaker protection), `omandroid-fingerprint` with a patched `libfprint`, `omandroid-modem` (the modem's vendor chroot profile), `omandroid-modem-sit` (the SIT client daemon, not yet run on the phone), `neard`, `omandroid-keyring` (the `[omandroid]` repository's signing key), patched `mesa` and `hyprland`. `tools/phone-install-package` builds one on the phone and installs it |
 | `patches/omarchy/` | Changes to Omarchy for touch devices, to send upstream (`bridge-*` ones are stopgaps for the phone's older Omarchy) |
 | `bin/lineage-ref` | Builds LineageOS for the phone. Used as a rooted reference Android (M0) and, later, for Waydroid images |
 | `kernel/configs/` | Our kernel config fragment, merged on top of arm64 `defconfig` |
