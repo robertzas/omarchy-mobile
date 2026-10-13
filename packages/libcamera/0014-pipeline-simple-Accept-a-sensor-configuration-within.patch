@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Tue, 13 Oct 2026 13:42:14 -0400
+Subject: [PATCH 14/14] pipeline: simple: Accept a sensor configuration within
+ 1% of the stream
+
+The simple pipeline handler picks the smallest sensor configuration
+whose largest processed output covers every processed stream. The
+software ISP's debayer leaves a margin of 8 columns, so a binned sensor
+mode exactly as wide as a common stream size never covers it: the Pixel
+7 Pro's front camera has a 1920x1368 binned mode (1912 columns out) and
+a 3840x2736 full one, and a 1920x1080 video stream runs the full mode,
+four times the data to read and debayer per frame.
+
+Let a configuration whose largest output falls short by at most 1% in
+each direction qualify as well. The existing stream adjustment then
+brings the stream down to what the configuration delivers (1912x1080
+there) and reports the configuration as adjusted. A request now gets
+the smaller sensor mode whenever one is within 1% of it, at the cost of
+up to 1% of the stream's size.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/libcamera/pipeline/simple/simple.cpp | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/src/libcamera/pipeline/simple/simple.cpp b/src/libcamera/pipeline/simple/simple.cpp
+index 9fa4cce..6a5b399 100644
+--- a/src/libcamera/pipeline/simple/simple.cpp
++++ b/src/libcamera/pipeline/simple/simple.cpp
+@@ -1234,12 +1234,23 @@ CameraConfiguration::Status SimpleCameraConfiguration::validate()
+ 	const SimpleCameraData::Configuration *maxPipeConfig = nullptr;
+ 	pipeConfig_ = nullptr;
+ 
++	/*
++	 * A configuration whose largest output is short of the processed
++	 * streams by at most 1% in each direction qualifies too, and the
++	 * streams are adjusted down to it below. The converter may need a
++	 * margin (the software ISP's debayer leaves 8 columns), so a binned
++	 * sensor mode exactly as wide as the request would otherwise lose to a
++	 * full-resolution one, at four times the data per frame.
++	 */
++	const Size nearProcessedStreamSize{ maxProcessedStreamSize.width * 99 / 100,
++					    maxProcessedStreamSize.height * 99 / 100 };
++
+ 	for (const SimpleCameraData::Configuration *pipeConfig : *configs) {
+ 		const Size &captureSize = pipeConfig->captureSize;
+ 		const Size &maxOutputSize = pipeConfig->outputSizes.max;
+ 
+-		if (maxOutputSize.width >= maxProcessedStreamSize.width &&
+-		    maxOutputSize.height >= maxProcessedStreamSize.height &&
++		if (maxOutputSize.width >= nearProcessedStreamSize.width &&
++		    maxOutputSize.height >= nearProcessedStreamSize.height &&
+ 		    captureSize.width >= maxRawStreamSize.width &&
+ 		    captureSize.height >= maxRawStreamSize.height) {
+ 			if (!pipeConfig_ || captureSize < pipeConfig_->captureSize)
+-- 
+2.55.0
+

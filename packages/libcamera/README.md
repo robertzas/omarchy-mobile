@@ -27,6 +27,8 @@ in the table. See `device/cheetah/CAMERA-PLAN.md`, section 5.2.
 | `0010-software_isp-Gather-GPU-statistics-over-the-visible-.patch` | GPU debayer: 3A statistics over the whole visible frame, not its top-left corner (cube oakley) |
 | `0011-ipa-simple-agc-Add-digital-gain-past-the-sensor-s-li.patch` | Up to 4x digital gain once exposure and analogue gain are at their limits |
 | `0012-ipa-simple-Tune-the-Pixel-7-Pro-s-ultrawide-and-main.patch` | Af on both cameras, a stand-in colour matrix for the IMX386, contrast and saturation defaults |
+| `0013-libcamera-Add-the-Samsung-S5K3J1-and-S5KGM5-sensors.patch` | The front and telephoto sensors: helpers (black level 64, gain code / 32), properties, tuning files (identity matrix, Af on the telephoto) |
+| `0014-pipeline-simple-Accept-a-sensor-configuration-within.patch` | A sensor mode within 1% of the stream qualifies: the front camera's 1080p runs its binned mode |
 | `libcamera-fix-python3.14-macro-redefinition.patch` | Arch's patch, unchanged (sha512 `8b54cbdf…`) |
 | `.SRCINFO` | `makepkg --printsrcinfo` output |
 
@@ -42,7 +44,7 @@ in the table. See `device/cheetah/CAMERA-PLAN.md`, section 5.2.
   first and falls back to the CPU.
 - No documentation and no test suite. There is no `libcamera-docs` split;
   ALARM's `libcamera-docs` 0.7.2-4 can stay installed.
-- `pkgrel=4.5`, so it sorts above ALARM's 0.7.2-4.
+- `pkgrel=4.6`, so it sorts above ALARM's 0.7.2-4.
 
 ## What the kernel side must provide
 
@@ -108,6 +110,11 @@ own, desaturated colours. `s5kgn1.yaml` has the identity. Both set a contrast
 default of 1.2 (Snapshot and most apps don't set it); the S5KGN1 adds
 saturation 1.1.
 
+`s5k3j1.yaml` (front, fixed focus) and `s5kgm5.yaml` (telephoto, Af on its
+SEM1215SA with the main camera's step counts) have the identity, contrast 1.2
+and saturation 1.1 (0013). The kernel gives each of the three Samsung parts
+its own entity name, which is how libcamera picks the helper and the file.
+
 What the software ISP still lacks: denoising, lens shading correction,
 sharpening and a calibrated colour pipeline. White balance is grey-world.
 Pictures stay noisier and softer at the corners than with Google's ISP.
@@ -115,6 +122,10 @@ Pictures stay noisier and softer at the corners than with Google's ISP.
 ## Status
 
 0.7.2-4.4 (0001-0003) runs on the phone: the ultrawide captures end to end.
+0.7.2-4.6 adds 0013-0014 (2026-10-13, off the phone): all 14 patches
+apply in order to `v0.7.2`; a minimal x86_64 build (simple pipeline and
+IPA) compiles without warnings; both new tuning files parse.
+
 0.7.2-4.5 (0004-0012) is checked off the phone only (2026-10-13):
 
 - All patches apply in PKGBUILD order to a clean `v0.7.2` checkout with

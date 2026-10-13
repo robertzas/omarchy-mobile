@@ -1,0 +1,186 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Tue, 13 Oct 2026 13:42:14 -0400
+Subject: [PATCH 13/14] libcamera: Add the Samsung S5K3J1 and S5KGM5 sensors
+
+The S5K3J1 and S5KGM5 are the front and 5x telephoto cameras of the
+Google Pixel 7 Pro, captured through the gs201 CSIS receiver and the
+simple pipeline handler with the software ISP, as its main camera.
+
+Add their camera sensor helpers: a black level of 64 at 10 bits and the
+linear analogue gain of Samsung's sensors, code / 32 (0x20 is 1x). Add
+their sensor properties: the unit cells of 1.22 um and 0.7 um the
+phone's maker gives for these cameras, and two-frame control delays. The
+test pattern numbering is not known, so no test pattern modes are
+listed.
+
+Add uncalibrated tuning files for the simple IPA: the identity colour
+matrix so the saturation default applies, contrast 1.2 and saturation
+1.1 as on the main camera, and autofocus on the telephoto's lens with
+the main camera's step counts. The front camera has fixed focus.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/libipa/camera_sensor_helper.cpp       | 26 +++++++++++++++
+ src/ipa/simple/data/meson.build               |  2 ++
+ src/ipa/simple/data/s5k3j1.yaml               | 25 ++++++++++++++
+ src/ipa/simple/data/s5kgm5.yaml               | 33 +++++++++++++++++++
+ .../sensor/camera_sensor_properties.cpp       | 20 +++++++++++
+ 5 files changed, 106 insertions(+)
+ create mode 100644 src/ipa/simple/data/s5k3j1.yaml
+ create mode 100644 src/ipa/simple/data/s5kgm5.yaml
+
+diff --git a/src/ipa/libipa/camera_sensor_helper.cpp b/src/ipa/libipa/camera_sensor_helper.cpp
+index 734be09..34891a4 100644
+--- a/src/ipa/libipa/camera_sensor_helper.cpp
++++ b/src/ipa/libipa/camera_sensor_helper.cpp
+@@ -844,6 +844,32 @@ public:
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("ov13858", CameraSensorHelperOv13858)
+ 
++class CameraSensorHelperS5k3j1 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperS5k3j1()
++	{
++		/* 64 at 10 bits. */
++		blackLevel_ = 4096;
++		/* Code / 32: 0x20 is 1x, 0x200 is 16x. */
++		gain_ = AnalogueGainLinear{ 1, 0, 0, 32 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("s5k3j1", CameraSensorHelperS5k3j1)
++
++class CameraSensorHelperS5kgm5 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperS5kgm5()
++	{
++		/* 64 at 10 bits. */
++		blackLevel_ = 4096;
++		/* Code / 32: 0x20 is 1x, 0x200 is 16x. */
++		gain_ = AnalogueGainLinear{ 1, 0, 0, 32 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("s5kgm5", CameraSensorHelperS5kgm5)
++
+ class CameraSensorHelperS5kgn1 : public CameraSensorHelper
+ {
+ public:
+diff --git a/src/ipa/simple/data/meson.build b/src/ipa/simple/data/meson.build
+index f76f402..31f141e 100644
+--- a/src/ipa/simple/data/meson.build
++++ b/src/ipa/simple/data/meson.build
+@@ -2,6 +2,8 @@
+ 
+ conf_files = files([
+     'imx386.yaml',
++    's5k3j1.yaml',
++    's5kgm5.yaml',
+     's5kgn1.yaml',
+     'uncalibrated.yaml',
+ ])
+diff --git a/src/ipa/simple/data/s5k3j1.yaml b/src/ipa/simple/data/s5k3j1.yaml
+new file mode 100644
+index 0000000..b9e2c55
+--- /dev/null
++++ b/src/ipa/simple/data/s5k3j1.yaml
+@@ -0,0 +1,25 @@
++# SPDX-License-Identifier: CC0-1.0
++#
++# Samsung S5K3J1 (the Pixel 7 Pro's front camera), not calibrated yet. The
++# black level comes from the sensor's helper. Fixed focus: no Af.
++#
++# The colour matrix is the identity until a calibration, so the saturation
++# default applies.
++%YAML 1.1
++---
++version: 1
++algorithms:
++  - BlackLevel:
++  - Awb:
++  - Ccm:
++      ccms:
++        - ct: 5000
++          ccm: [ 1, 0, 0,
++                 0, 1, 0,
++                 0, 0, 1 ]
++  # Defaults for applications that do not set the controls.
++  - Adjust:
++      contrast: 1.2
++      saturation: 1.1
++  - Agc:
++...
+diff --git a/src/ipa/simple/data/s5kgm5.yaml b/src/ipa/simple/data/s5kgm5.yaml
+new file mode 100644
+index 0000000..35ccf44
+--- /dev/null
++++ b/src/ipa/simple/data/s5kgm5.yaml
+@@ -0,0 +1,33 @@
++# SPDX-License-Identifier: CC0-1.0
++#
++# Samsung S5KGM5 (the Pixel 7 Pro's 5x telephoto), not calibrated yet. The
++# black level comes from the sensor's helper.
++#
++# The colour matrix is the identity until a calibration, so the saturation
++# default applies.
++#
++# Autofocus scans the SEM1215SA lens's range (the module's calibrated span,
++# set by the kernel driver) in 8 coarse steps, then around the sharpest one
++# in steps of 1/32 of the range: a long focal length gives a shallow depth
++# of field.
++%YAML 1.1
++---
++version: 1
++algorithms:
++  - BlackLevel:
++  - Awb:
++  - Ccm:
++      ccms:
++        - ct: 5000
++          ccm: [ 1, 0, 0,
++                 0, 1, 0,
++                 0, 0, 1 ]
++  # Defaults for applications that do not set the controls.
++  - Adjust:
++      contrast: 1.2
++      saturation: 1.1
++  - Agc:
++  - Af:
++      coarseSteps: 8
++      fineSteps: 32
++...
+diff --git a/src/libcamera/sensor/camera_sensor_properties.cpp b/src/libcamera/sensor/camera_sensor_properties.cpp
+index f690019..4dba1aa 100644
+--- a/src/libcamera/sensor/camera_sensor_properties.cpp
++++ b/src/libcamera/sensor/camera_sensor_properties.cpp
+@@ -519,6 +519,26 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
+ 			},
+ 			.sensorDelays = { },
+ 		} },
++		{ "s5k3j1", {
++			.unitCellSize = { 1220, 1220 },
++			.testPatternModes = {},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
++		{ "s5kgm5", {
++			.unitCellSize = { 700, 700 },
++			.testPatternModes = {},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
+ 		{ "s5kgn1", {
+ 			.unitCellSize = { 1200, 1200 },
+ 			.testPatternModes = {},
+-- 
+2.55.0
+
