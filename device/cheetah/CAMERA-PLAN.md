@@ -1,13 +1,21 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Camera plan (cheetah / gs201): raw capture first, then libcamera
 
-Status (2026-10-13, late): **the ultrawide works end to end through
-libcamera (CAM5); the main camera (Samsung S5KGN1, C-PHY on link 1) is
-built offline and waits for the CAM-M runbook; ultrawide quality work is
-CAM5.3, Snapshot CAM5.4, the front camera's plan CAM7; see 7.Q for what
-quality to expect.** The CAM-M kernel work is committed on
-`omandroid-camera` (question 11: the C-PHY values come from a per-phone
-data file). Earlier status: **K, CAM0 (partly), CAM1, CAM2 and CAM3a passed on the
+Status (2026-10-13, evening): **the ultrawide works end to end through
+libcamera (CAM5). The other three cameras are built offline and wait for
+the phone: main (Samsung S5KGN1, C-PHY, link 1; runbook CAM-M), front
+(Samsung S5K3J1, D-PHY, link 0; CAM7) and telephoto (Samsung S5KGM5,
+C-PHY, link 4, SEM1215SA focus; CAM-T). Question 11 is done: every DC-PHY
+setting, D-PHY included, now comes from the per-phone data file
+`gs201-dcphy.bin`, so the ultrawide needs that file before it runs a
+kernel from this branch: runbook P comes first.** Kernel branch
+`omandroid-camera` head `c91185280` (built as
+`7.3.0-rc6-omandroid-push1-00382-gc91185280474`, not merged into
+`omandroid-int`); libcamera 0.7.2-4.6 (patches 0013-0014: the front and
+telephoto sensors, a near-size mode rule) built and checked offline, the
+phone still runs 4.4. Ultrawide quality: CAM5.3, Snapshot CAM5.4, what to
+expect and what needs captures: 7.Q. Order on the phone: section 7.R.
+Earlier status: **K, CAM0 (partly), CAM1, CAM2 and CAM3a passed on the
 phone (the ultrawide answers as a Sony IMX386); CAM3b.3 showed the sensor
 streaming but nothing on links 0 or 1. The ultrawide is on CSIS link 2
 with DC-PHY slaves 2+3 as one four-lane receiver (section 4.4); the link 2
@@ -95,9 +103,9 @@ Path abbreviations (as in the other plans):
 | Camera | LWIS node | Sensor | I2C bus (base), addr | Reg width (addr/val) | Reset | MCLK (clock, pad, rate) |
 |---|---|---|---|---|---|---|
 | Main | `sensor-nagual` | Samsung GN1, 50 MP [I] | `hsi2c_1` (`0x10900000`), `0x3d` | 16/16 | gpp2-2 | `CIS_CLK3`, gpp9-0 (`sensor_mclk4`), 26 MHz |
-| Front | `sensor-dokkaebi` | Samsung 3J1 [I] | `hsi2c_2` (`0x10910000`), `0x10` | 16/16 | gpp4-2 | `CIS_CLK1`, gpp5-0 (`sensor_mclk2`), 24 MHz |
+| Front | `sensor-dokkaebi` | Samsung S5K3J1 [V: the HAL's driver for chip ID 0x30a1, section 4.5; CAM7 reads it] | `hsi2c_2` (`0x10910000`), `0x10` | 16/16 | gpp4-2 | `CIS_CLK1`, gpp5-0 (`sensor_mclk2`), 24 MHz |
 | Ultrawide | `sensor-sandworm` | Sony IMX386 [V: model ID 0x0386 read on the phone, CAM3a] | `hsi2c_3` (`0x10920000`), `0x1a` | 16/8 | gpp6-3 | `CIS_CLK0`, gpp3-0 (`sensor_mclk1`), 24 MHz |
-| Tele | `sensor-kraken` | Samsung GM5 [I] | `hsi2c_4` (`0x10930000`), `0x2d` | 16/16 | gpp6-2 | `CIS_CLK2`, gpp7-0 (`sensor_mclk3`), 24 MHz |
+| Tele | `sensor-kraken` | Samsung S5KGM5 [V: the HAL's driver for chip ID 0x08d5, 4.5; CAM-T reads it] | `hsi2c_4` (`0x10930000`), `0x2d` | 16/16 | gpp6-2 | `CIS_CLK2`, gpp7-0 (`sensor_mclk3`), 24 MHz |
 
 Evidence **[V]**: `GD/pantah/dts/gs201-cheetah-camera.dtsi` (nodes "REAR
 CAMERA NAGUAL", "FRONT CAMERA DOKKAEBI", "REAR ULTRA WIDE CAMERA SANDWORM",
@@ -120,7 +128,7 @@ Each bus also carries the module's other parts **[V]** (`R/live.dts:18865-19100`
 | `hsi2c_1` | `eeprom-gargoyle`/`ois-gargoyle` at `0x24` (32-bit values: an OIS controller holding the module EEPROM), AF actuator `act-slenderman` at `0x0c`, the laser AF `stmvl53l1` at `0x29` |
 | `hsi2c_2` | EEPROM `smaug-dokkaebi` at `0x51` (front is fixed focus: no actuator) |
 | `hsi2c_3` | EEPROM `smaug-sandworm` at `0x50`, AF actuator `act-slenderman-sandworm` at `0x0f` (the ultrawide focuses, for macro) |
-| `hsi2c_4` | `jotnar` at `0x34`: one controller for the tele's EEPROM, OIS and AF |
+| `hsi2c_4` | `jotnar` at `0x34`: one controller for the tele's EEPROM, OIS and AF, a SEMCO SEM1215SA [V: the HAL's `sem121_family` drivers and `sem1215sa` properties] |
 
 The flash (LM3644 on `hsi2c_15`, `0x63`) already works as the torch
 (`HAPTICS-TORCH-PLAN.md`).
@@ -541,6 +549,65 @@ reproduced on our phone** (CAM3b.5 and CAM4 check them); in our own words:
   `CON0-3`, that is the next single change. We keep stock's WDMA start
   value `0xf83` (they use `0x3`) and the HAL's `0x7fff` line-rate default.
 
+### 4.5 Findings, third pass: front, telephoto, PHY (2026-10-13)
+
+Offline, on the user's own HAL (sha256 `ce9acaad...`) with
+`tools/extract-camera-data` and disassembly; facts in our own words:
+
+- **Front: S5K3J1 [V: HAL].** One model-ID function returns 0x30a1; two
+  driver classes share it (the camera's own and a "virtual" one). Unlike
+  the GN1's, this driver asks a settings object it holds (8 bytes, made by
+  the driver factory) for its lists. Default init: 366 writes after the
+  soft reset it starts with (page 0xfcfc = 0x4000, 0x6010 = 1, then a
+  3 ms delay record), switching between page 0x2000 (a firmware patch) and
+  0x4000 (standard registers) through the direct page register 0xfcfc.
+  Nine mode lists, five sizes: **3840x2736 at 30 fps** (full), 3840x2236
+  at 30, **1920x1368 at 60** (binned, 4:3), 1920x1116 at 120, 3648x2736
+  at 30. All four D-PHY lanes (0x0114 = 0x03xx) at an output PLL of
+  24.576 MHz x 271 / 4 = **1665 Mbps per lane** [I: that this PLL is the
+  lane rate; the ultrawide's analogue rule gave its measured 1548]; the
+  HAL's PHY table gives settle 8 there.
+- **Telephoto: S5KGM5 [V: HAL].** Model ID 0x08d5. Default init: 4047
+  writes (two other variants, 3816 and 3870, behind debug flags), also
+  paged through 0xfcfc; no soft reset in the list (the driver writes the
+  GN1's). Four modes: **4032x3024 at 30 fps** (2x2 binned from the 48 MP
+  array; 1530 writes), 4032x2272 at 60, 2016x1136 at 60, **2016x1512 at 60**.
+  The lists don't touch 0x0114, so the part's default lane count applies
+  (two C-PHY trios [I], as the board's DT for link 4 suggests). Output PLL
+  24.576 x 220 / 3 = **1802 Msps** (the full mode: x 249 / 3 = 2040 Msps)
+  [I]; settle 7.
+- **The HAL's mode records** (1424 bytes) carry the pixel rate at 0x150
+  (GN1 1307.66 M, 3J1 809-811 M, GM5 911.77 M pixels/s; with each list's
+  frame and line length they give the frame rates the HAL names) and at
+  0x158 the link's capacity in pixels/s: lanes x rate / 10 for D-PHY
+  (3J1: 4 x 1665 / 10 = 666), trios x rate x 16/7 / 10 for C-PHY (GM5:
+  2 x 1802 x 16/7 / 10 = 824). By the same rule the GN1's 1862 means 2716
+  Msps per trio, its output PLL (24.576 x 442 / 4) [I]: the 931 MHz link
+  frequency in our DT (CAM-M) is half the HAL's capacity figure, not half
+  the symbol rate. Both give settle 7, so nothing changes until CAM-M
+  measures it (question 10).
+- **The DC-PHY setup, D-PHY [V: HAL].** The same function as for C-PHY,
+  with its C-PHY flag clear, writes: every lane off, the bias block
+  CON0-4 (`0x10, 0x110, 0x3223, 0, 0x200`: CON0-3 are new to our D-PHY
+  path, which left them at 0 on the phone), the clock lane, then per data
+  lane the writes our driver made (section 4.3, RE5), with three fields
+  following the rate: the settle count, the settle clock select (below
+  1500 Mbps) and the skew delay (ANA_CON2 9:8). Its settle table runs in
+  111 steps from 80 to 2147 Mbps (the rate argument is a signed 32-bit Hz
+  count, so higher rates can't be asked for); 1548 gives 7, as before.
+- **Telephoto focus: SEMCO SEM1215SA [V: HAL].** The HAL's register table
+  for its actuator family names 0x0200 mode, 0x0201 status, 0x0204/0x0205
+  target low/high, 0x0206/0x0207 position read-back, 0x0b00 status
+  monitor control (and temperature, soft-landing and standby registers we
+  don't use). Its module calibration is read from the controller's memory
+  window; the infinity and macro words at 0xc7b6/0xc7bc are [I] (CAM-T
+  checks them, read only).
+- **Emulator notes.** The library loads its static-guard bytes with
+  Armv8.3 RCpc loads (LDAPR), which unicorn's default CPU faults on; the
+  tool now selects its newest CPU model. Function-local static lists are
+  built by their getter when the guard stub says "initialise now". The
+  ultrawide's and main camera's outputs are byte-identical to before.
+
 ### 4.2 Work items
 
 | Item | Question | How |
@@ -549,7 +616,7 @@ reproduced on our phone** (CAM3b.5 and CAM4 check them); in our own words:
 | RE2 | (answered, 4.3) CSIS link control: enable, lane count, data type and virtual channel per channel, `ISP_CONFIG` fields | the code that fills `csis_cmn_ctrl`, `isp_config_ch0` (compare with `imx-mipi-csis` bit fields) |
 | RE3 | (answered except the WDMA input value, 4.3) CSIS WDMA: format codes for RAW10/RAW8/RAW16, packing, stride rules, address slot use, enable/abort, link routing | the code around the context-0 control and format registers and the common DMA config register |
 | RE4 | (answered; extract tool built) ultrawide mode tables: one binned or 1080p-class mode, its PLL, line length, frame length | the sandworm sensor driver; express as CCS-standard registers where they are standard |
-| RE5 | C-PHY settings (main/tele, if C-PHY; D-PHY answered, 4.3) | the PHY write sequence for `use_cphy` |
+| RE5 | (answered, 4.3, CAM-M, 4.5) DC-PHY settings for both modes | the HAL's PHY setup, run per rate by `tools/extract-camera-data` into `gs201-dcphy.bin` |
 
 ---
 
@@ -683,6 +750,88 @@ checkpatch `--strict` clean apart from the usual trailer items;
 the default DTB and default + each of the three camera overlays: only the
 existing `soc_id` and framebuffer reports.
 
+**Every PHY setting from the data file; front and telephoto, built
+2026-10-13 on top of `e6fc91e77` (head `c91185280`, test build
+`7.3.0-rc6-omandroid-push1-00382-gc91185280474` in `out-camera`; not
+merged into int):**
+
+| Commit | |
+|---|---|
+| `b53e91232` | `dt-bindings: phy: google,gs201-mipi-dcphy-rx: settings for every link from the data file` |
+| `f397875e0` | `phy: samsung: gs201-mipi-dcphy-rx: take the D-PHY settings from the data file too` |
+| `15b6520b0` | `arm64: dts: exynos: google: gs201-cheetah: one DC-PHY settings file` |
+| `3a5034d4e` | `dt-bindings: media: google,gs201-csis: LRTE packet delimiters` |
+| `96db0fbad` | `media: gs201-csis: LRTE packet delimiters` |
+| `51d26c424` | `dt-bindings: media: i2c: samsung,s5kgn1: add the S5K3J1 and S5KGM5` |
+| `2f58a69dd` | `media: i2c: s5kgn1: support the S5K3J1 and S5KGM5` |
+| `58da5a453` | `dt-bindings: vendor-prefixes: add semco` |
+| `963e2c8a1` | `dt-bindings: media: i2c: add SEMCO SEM1215SA` |
+| `44addd39f` | `media: i2c: add a SEMCO SEM1215SA lens driver` |
+| `30e0ab416` | `arm64: dts: exynos: google: gs201: add USI2, USI4 and CSIS link 4` |
+| `c91185280` | `arm64: dts: exynos: google: gs201-cheetah: front and telephoto cameras` |
+
+- **DC-PHY (question 11).** No stock value is left in the driver or the
+  DT: the D-PHY bias and lane words, the settle count by rate (the DT's
+  `google,hs-settle` is gone) and the skew delay come from
+  `omandroid/camera/gs201-dcphy.bin`, like the C-PHY ones. New format
+  "ODPH" v1 (replaces "OCPH", never installed): per mode a list of
+  operations on the bias block, the clock lane (D-PHY) or every data lane
+  or trio (write, masked update, or masked update from a rate-table
+  column) and a rate table (Mbps or Msps). Loaded at the first power-on
+  of any link; `firmware-name` is now required. **A missing or bad file
+  fails the power-on** ("PHY settings ... not loaded (-2): generate them
+  from your phone's software"), and a rate outside the table's range is
+  refused. The only change on the wire for the ultrawide: bias CON0-3 are
+  now written with stock's values (they read 0 before, CAM3b.5).
+- **CSIS:** `google,lrte-packet-delimiters` on a link sets its LRTE
+  packet delimiter enable (0x600 bit 31, spacers at reset: 0xffff7fff);
+  the telephoto's link 4 has it [I: the bring-up in section 4.4 needed it].
+- **Sensors:** the `s5kgn1` driver now takes `samsung,s5k3j1` and
+  `samsung,s5kgm5`: per part the chip ID, supplies and waits in stock's
+  order (3J1: LDO12S, LDO8, switch 4, 1 ms, MCLK, 1 ms, reset, 8 ms; GM5:
+  LDO12S, 0.3 ms, LDO7, LDO3, MCLK, 1 ms, reset, 10 ms), the soft reset
+  (3J1: through page 0xfcfc, 3 ms; GM5 as the GN1), page 0x4000 selected
+  again before controls (3J1, GM5), and the crop mapping. Subdevs are
+  named `s5k3j1`/`s5kgm5`/`s5kgn1` (libcamera picks helper and tuning by
+  it). `samsung,vertical-flip` sets 0x0101 bit 1 after the settings and
+  reports the flipped Bayer order (the telephoto: GRBG read flipped =
+  BGGR) [I].
+- **`sem1215`** (new, `CONFIG_VIDEO_SEM1215=m`): the telephoto's focus as
+  a V4L2 lens subdev. Power in stock's order, wait for status 0x0201 = 1,
+  servo on (0x0200 = 1), status monitor on (0x0b00 = 1), position low then
+  high byte; servo off before power-off; powered while the subdev is open
+  (as ak7375). At probe it reads the module's focus calibration (read
+  only) and limits the control to it plus 40 codes; implausible values
+  leave 0-1023. `debug_position=1` logs the read-back.
+- **DT:** USI2 (0x1004, SPI 675, gpp4-0/1) and USI4 (0x100c, SPI 677,
+  gpp8-0/1), CSIS link 4 (`csis4`, 0x1a480000, SPI 193, WDMA context 0);
+  cheetah: the S5K3J1 at `hsi2c_2` 0x10 on `csis0` (4 D-PHY lanes,
+  832512000 Hz), the S5KGM5 at `hsi2c_4` 0x2d on `csis4` (2 C-PHY trios,
+  901120000 and 1019904000 Hz, vertical flip) and its SEM1215SA at 0x34,
+  MCLK pins gpp5-0 and gpp7-0, all on the shared 128 MiB pool. All
+  disabled. Overlays (repo): `camera-front`, `camera-tele`; `camera-main`
+  and `camera-stream-link2` no longer disable link 0.
+- Repo: `tools/extract-camera-data` writes all four sensors' files and
+  `gs201-dcphy.bin` in one run; `tools/camera-cap-test` takes
+  `SENSOR=s5k3j1|s5kgm5`; device-cheetah 0.1.28 blacklists `sem1215`;
+  `CONFIG_VIDEO_SEM1215=m`.
+
+**Checks (laptop, 2026-10-13):** `bin/omandroid kernel` exit 0; `W=1` on
+`phy-gs201-mipi-dcphy-rx.o`, `gs201-csis.o`, `s5kgn1.o`, `sem1215.o` and
+the DTB: only the existing simplefb warning; checkpatch `--strict` per
+commit: only the trailer form and (new files) MAINTAINERS;
+`dt_binding_check` (dtschema 2026.9) on the PHY, CSIS, sensor, lens and
+vendor-prefix bindings clean; `dt-validate` on the default DTB, on
+default + each of `camera-front` and `camera-tele`, and on default +
+`camera-stream-link2 camera-uw-lens camera-main camera-front camera-tele`:
+only the existing `soc_id` and framebuffer reports, and the last leaves
+all four links, the PHY, the four sensors and three lenses okay. The data
+files from this HAL: `imx386-uw.bin` and `s5kgn1-main.bin` byte-identical
+to before, `s5k3j1-front.bin` (7088 bytes), `s5kgm5-tele.bin` (51452),
+`gs201-dcphy.bin` (2480: D-PHY 32 writes, 3 rate columns, 111 ranges;
+C-PHY 20 writes, 2 columns, 3 ranges, the same values as the old C-PHY
+file); copies in `~/android/reference/` only.
+
 ### 5.2 Userspace
 
 - libcamera: Arch Linux ARM ships 0.7.2-4 (= upstream's latest release)
@@ -735,6 +884,19 @@ existing `soc_id` and framebuffer reports.
   range 0-480 and the exposure margin of 10 lines are [I] too. The output
   is per-phone and never committed; it needs `pip install unicorn
   pyelftools` in a virtual environment.
+- **Extended 2026-10-13** to the three Samsung parts and the PHY: one run
+  (`--apex ... -d DIR`) writes `imx386-uw.bin`, `s5kgn1-main.bin`,
+  `s5k3j1-front.bin`, `s5kgm5-tele.bin` and `gs201-dcphy.bin`. The 3J1's
+  and GM5's lists are found from their model-ID functions as the GN1's
+  (the 3J1 through the settings object its driver holds; section 4.5);
+  delay records in a list become the delay byte of the write before them;
+  a part's leading soft reset (the driver's to write) is checked and
+  dropped; one mode per output size (the HAL's first). The PHY file runs
+  the HAL's PHY setup once per rate in D-PHY (80-2147 Mbps) and C-PHY
+  (1-2147 Msps) mode with a stand-in register writer, checks that every
+  lane gets the same writes in bias, clock lane, data lane order, and
+  turns the masked writes whose value follows the rate into rate-table
+  columns.
 - Mainline `ccs` with CCS static data was the other candidate. It needs
   the sensor's limit registers or a full set of limits in the static data,
   neither of which we have for the IMX386; a small driver with the
@@ -1942,6 +2104,83 @@ passes. libcamera picks the mode from the stream size the app asks for,
 so this is per app (Snapshot asks for a preview size; its photo is the
 preview frame).
 
+**Added 2026-10-13 (offline, libcamera 4.6 and the kernel in 5.1):**
+
+| Change | Expected effect | Where |
+|---|---|---|
+| The telephoto (48 MP GM5 behind a 5x folded lens, SEM1215SA focus) | real zoom: 4032x3024 binned stills, 2016x1512 preview; AF over the module's calibrated range | CAM-T |
+| The front camera (3J1) | selfies and video calls; fixed focus | CAM7 |
+| A sensor mode within 1% of the stream qualifies (0014) | 1080p video and previews run the binned modes (the 3J1's 1920x1368 instead of its 3840x2736: a quarter of the data per frame); a stream the size of a binned mode loses its last 8 columns instead of quadrupling the work | libcamera 0014 |
+| Sensor helpers, properties and tuning stubs for the 3J1 and GM5 | right exposure and gain from the start (code / 32), identity matrix with contrast 1.2 and saturation 1.1, AF on the telephoto | libcamera 0013 |
+
+**What needs captures on the phone** (each with `tools/camera-cap-test`
+raw frames at a fixed exposure and gain, or `cam` DNGs of the raw stream;
+everything stays ours, nothing from Google's tuning):
+
+1. **Colour matrices, per camera:** a colour chart (24 patches) filling a
+   third of the frame, under daylight, a 4000 K LED and a tungsten bulb,
+   exposed so the white patch is at about 80% of full scale. libcamera's
+   own tuning library (`utils/tuning/libtuning`, its CCM module, with
+   `rkisp1.py` as the template for a soft-ISP script whose output is the
+   same `ccms` list) fits one matrix per colour temperature; the result
+   replaces the IMX519 stand-in and the identities.
+2. **Lens shading, per camera:** flat fields (an evenly lit white wall or
+   a diffuser over the lens) at the same three lights. Measures the
+   vignetting and colour shading that make the corners dark and tinted.
+   libcamera 0.7.2's soft ISP can't correct it yet; with the measurement a
+   gain map in the GPU debayer is a contained patch (later work).
+3. **Noise and black level per gain:** dark frames (lens covered) at
+   analogue gain codes 1x-16x. Confirms the 64 black level on all four
+   sensors and gives the noise growth that sets the AGC's gain ceiling
+   against exposure time, and a denoise strength once there is a denoise.
+4. **Focus ranges:** each lens's useful travel from the AF sweeps (CAM5.3-3,
+   M.7, T.6/T.7) as `range: [ min, max ]` in its `Af` entry: shorter, more
+   accurate scans.
+5. **Rotation and mirroring** of each camera from one picture of text
+   (CAM-M.5, F.7, T.5).
+
+### P: the DC-PHY settings file, before any kernel from this branch. Risk: low
+
+From `f397875e0` on, no link powers on without `gs201-dcphy.bin`: the
+ultrawide stops working on such a kernel until the file is installed. So
+the files go on the phone first (no reboot), then the kernel, then one
+check that the ultrawide is unchanged.
+
+```sh
+# P.0 (laptop) every data file from your own HAL; never commit them
+~/.cache/omandroid-venv/bin/python tools/extract-camera-data \
+    --apex <vendor>/apex/com.google.pixel.camera.hal.apex -d /tmp/camdata
+#   expect: HAL sha256 ce9acaad...; IMX386 init 139, S5KGN1 init 1565,
+#   S5K3J1 init 366 (5 modes), S5KGM5 init 4047 (4 modes);
+#   "D-PHY: 32 register writes, 3 by rate in 111 ranges (80-2147 Mbps)",
+#   settle 7 at 1548 and 8 at 1665; "C-PHY: 20 register writes, 2 by rate in
+#   3 ranges (1-2147 Msps)", settle 7 at 1802 and 1862
+#   (the same five files are in ~/android/reference/ from this HAL)
+# P.1 (phone, no reboot) install them, and the bring-up blacklist for the new
+#   lens driver until omandroid-device-cheetah 0.1.28 is installed
+for f in imx386-uw s5kgn1-main s5k3j1-front s5kgm5-tele gs201-dcphy; do
+  tools/phone-ssh "cat > /usr/lib/firmware/omandroid/camera/$f.bin" < /tmp/camdata/$f.bin; done
+tools/phone-ssh 'sha256sum /usr/lib/firmware/omandroid/camera/*.bin'
+tools/phone-ssh 'printf "blacklist s5kgn1\nblacklist ak7375\nblacklist sem1215\n" > /etc/modprobe.d/omandroid-camera-bringup.conf'
+#   expect: the sums match `sha256sum /tmp/camdata/*.bin`
+# P.K kernel: the human merges omandroid-camera (head c91185280 or later)
+#   into int; images with the overlays the phone runs today (camera-stream-link2,
+#   camera-uw-lens if it has it), nothing new (ASK FIRST: flashes and reboots)
+# P.2 (this boot) the ultrawide as in CAM5.2: one libcamera capture
+tools/phone-ssh 'cam -c1 --capture=30 --file=/tmp/p#.ppm --stream pixelformat=RGB888,width=2008,height=1508 2>&1 | tail -2; dmesg | grep -E "PHY settings|link 2: D-PHY|stopped" | tail -4'
+#   pass: "PHY settings from omandroid/camera/gs201-dcphy.bin: D-PHY 32 writes,
+#   111 rate ranges; C-PHY 20 writes, 3 rate ranges"; "link 2: D-PHY 4 lanes
+#   (with the next link's) at 1548288000 bps, settle 7 ... bias 0x10 0x110
+#   0x3223 0x0 0x200"; WDMA errors 0; the picture as before
+#   stop: "not loaded" (P.1 missed: install, retry, no reboot); link errors on
+#   every frame or no frames (the new bias CON0-3 words: rollback, record)
+```
+
+- **Rollback:** the previous kernel (`cp "$D.default" "$D"` with its
+  images, or push the last int build). The files are harmless to older
+  kernels.
+- Then CAM-M, CAM7 and CAM-T, one overlay per boot (section 7.R).
+
 ### CAM-M: the main camera (Samsung S5KGN1, C-PHY on link 1). Risk: medium
 
 **Facts.** All [V] from the user's own HAL by `tools/extract-camera-data
@@ -2064,20 +2303,14 @@ the existing `soc_id` and framebuffer reports; the overlays leave
 stays as the phone runs today.
 
 ```sh
-# M.0 (laptop) the data file, from your own HAL (as CAM3b.0; never commit)
-~/.cache/omandroid-venv/bin/python tools/extract-camera-data --sensor s5kgn1 \
-    --apex <vendor>/apex/com.google.pixel.camera.hal.apex -o /tmp/s5kgn1-main.bin \
-    --cphy-output /tmp/gs201-cphy.bin
-#   expect: "C-PHY: 19 register writes, settle by rate: 9 from 0 Msps, 9 from 500 Msps,
-#   7 from 999 Msps"; init 1565 writes; 4080x3072 30 fps, 4080x2288 60, 2016x1136 120, 2032x1536 60
-tools/phone-ssh 'cat > /usr/lib/firmware/omandroid/camera/s5kgn1-main.bin' < /tmp/s5kgn1-main.bin
-tools/phone-ssh 'cat > /usr/lib/firmware/omandroid/camera/gs201-cphy.bin' < /tmp/gs201-cphy.bin
-tools/phone-ssh 'printf "blacklist s5kgn1\nblacklist ak7375\n" > /etc/modprobe.d/omandroid-camera-main-bringup.conf'
+# M.0 the data files and the bring-up blacklist: runbook P (P.0, P.1), done
+#   once for all cameras (s5kgn1-main.bin: init 1565 writes; 4080x3072 30 fps,
+#   4080x2288 60, 2016x1136 120, 2032x1536 60)
 # M.1 (read-only, today's kernel) the main module's pins as ABL left them
 tools/phone-ssh 'grep -E "gpp2-[012]|gpp9-0" /sys/kernel/debug/pinctrl/*/pins 2>/dev/null | head'
 #   expect: gpp2-0/1/2 and gpp9-0 inputs (function 0); stop if any is an output
-# M.K kernel (the human commits or merges wt-camera first) + overlays
-#   camera-stream-link2 camera-main (ASK FIRST: flashes and reboots)
+# M.K (after P) the same kernel, overlays camera-stream-link2 (camera-uw-lens)
+#   camera-main (ASK FIRST: flashes and reboots)
 KERNEL_DIR=~/android/mainline/wt-camera KERNEL_OUT=~/android/mainline/out-camera \
     ov camera-stream-link2 camera-main && bin/omandroid push
 tools/phone-ssh 'uname -r; lsmod | grep -cE "s5kgn1|ak7375|gs201_csis"'
@@ -2092,11 +2325,11 @@ tools/phone-ssh 'modprobe ak7375; modprobe phy_gs201_mipi_dcphy_rx; modprobe gs2
 #   dmesg "link 1 -> WDMA context 0, 3 C-PHY trios"; the ultrawide's link 2 graph unchanged
 # M.4 (next boot) colour bars on link 1, link only (no DMA), 2032x1536
 tools/camera-stage --watchdog x --cmd 'LINK=1 SENSOR=s5kgn1 W=2032 H=1536 DMA=0 bash -s' --script tools/camera-cap-test
-#   pass: dmesg "C-PHY settings from omandroid/camera/gs201-cphy.bin: 19 writes, 3 settle ranges",
-#   "link 1: C-PHY 3 trios at ... sps, settle 7", "link 1 on: ... C-PHY trios ... CAM 533000000 Hz";
+#   pass: dmesg "link 1: C-PHY 3 trios at 1862459936 sps, settle 7" (the PHY file loaded
+#   at P.2), "link 1 on: ... C-PHY trios ... CAM 533000000 Hz";
 #   stats: frame_start/frame_end rising ~30/s, link_errors only ERR_WRONG_CONFIG (0x8) if any;
 #   sensor log: frame_count rising
-#   stop: "C-PHY settings ... not loaded" (M.0's file missing: install it, retry; no reboot needed),
+#   stop: "PHY settings ... not loaded" (P.1's file missing: install it, retry; no reboot needed),
 #   CRC/ECC/OVER errors on every frame (next single change: CAM vote 664 MHz), no frame start at
 #   all (the PHY or the trio count), a hang (watchdog, pstore)
 # M.5 (next boot) first DMA on link 1: colour bars, then the solid colour for the Bayer order
@@ -2130,7 +2363,9 @@ tools/phone-ssh 'cat /tmp/m000119.ppm' > logs/camm-frame.ppm
 ### CAM5.3: ultrawide quick wins. Risk: low to medium
 
 ```sh
-# 5.3-1 (userspace) libcamera 0.7.2-4.5: AF patches, digital gain, tuning
+# 5.3-1 (userspace) libcamera 0.7.2-4.6: AF patches, digital gain, tuning, the
+#   front and telephoto sensors, the near-size mode rule (0014: a 2016x1508
+#   request now runs the binned mode, adjusted to 2008x1508)
 tools/phone-install-package packages/libcamera
 tools/phone-ssh 'pacman -Q libcamera; cam -l'
 # 5.3-2 (kernel with the gs201-csis changes above; ASK FIRST) cached buffers:
@@ -2165,44 +2400,162 @@ runtime PM tied to streaming in the ak7375 driver or in libcamera.
    until the AGC settles.
 2. When it lists and previews: move `snapshot` (and `pipewire-libcamera`)
    from `optdepends` to `depends` in `omandroid-apps` (bump its version).
-3. Loading at boot (after CAM-M passes and the overlays move into the
-   default DT): drop `imx386`, `s5kgn1`, `ak7375`,
+3. Loading at boot (after CAM-M, CAM7 and CAM-T pass and the overlays
+   move into the default DT): drop `imx386`, `s5kgn1`, `ak7375`, `sem1215`,
    `phy_gs201_mipi_dcphy_rx`, `gs201_csis` (and the PMIC modules they need)
    from `omandroid-camera.conf` in a new device-cheetah version, or load
    them from a oneshot unit ordered after the regulators, as the AoC unit
    does. Nothing powers a sensor until a stream starts, except the lens
    (above) and each sensor's chip-ID read at probe.
 
-### CAM7 (plan): the front camera, Samsung 3J1 on link 0
+### CAM7: the front camera (Samsung S5K3J1, D-PHY on link 0). Risk: medium
 
-Facts from another bring-up on this phone model [I here]: chip ID 0x30a1
-at 0x0000 on `hsi2c_2` (USI2, 0x10910000, SPI 675, pins gpp4-0/1,
-950 kHz as stock), 0x10; reset gpp4-2; MCLK `CIS_CLK1` gpp5-0; supplies
-LDO12S, SLG LDO8 1.1 V (shared with the main sensor), SLG switch 4;
-**D-PHY, four lanes on link 0 / slave 0, about 1665 Mbps per lane**;
-GRBG; fixed focus (no actuator; EEPROM at 0x51); a binned 1920x1368 mode
-(60 fps) and full 3840x2736 (30 fps). Its quirk: the 3J1 sends 4224 words
-of phase-detection and embedded data ahead of each image on VC 0, so the
-WDMA writes them before the image (the image starts 2 rows and 384 pixels
-in, and the link reports an H-size mismatch). Plan:
+**Facts.** [V] from the user's own HAL (section 4.5) unless marked: chip ID
+0x30a1 at 0x0000; `hsi2c_2` (USI2, 0x10910000, SPI 675, pins gpp4-0/1,
+950 kHz as stock), 0x10; reset gpp4-2; MCLK `CIS_CLK1` on gpp5-0 at
+24.576 MHz; supplies LDO12S, SLG LDO8 1.1 V (shared with the main
+sensor), SLG switch 4 (stock DT, section 1.2); four D-PHY lanes at 1665
+Mbps [I: from its PLL], settle 8; modes 3840x2736 at 30, 3840x2236 at 30,
+1920x1368 at 60, 1920x1116 at 120, 3648x2736 at 30; fixed focus (EEPROM
+at 0x51, not described). [I] (section 4.4's bring-up): link 0 / slave 0,
+GRBG, rotation 270, and 4224 words of phase-detection and embedded data
+ahead of each image on VC 0 that the WDMA wrote before the image (image
+2 rows and 384 pixels in, an H-size mismatch on the link). Our link's
+channel 0 takes RAW10 only, which may drop them if they come in another
+data type [I]; F.5 looks.
 
-1. RE: `tools/extract-camera-data --sensor s5k3j1` (the HAL's
-   `dokkaebi` driver, the GN1 method: model ID 0x30a1, virtual table,
-   static initialisers); find whether its mode lists can turn the extra
-   data off or move it to another data type or VC; the settle count at
-   1665 Mbps (RE5's table).
-2. Kernel: USI2 node; a sensor driver (the S5KGN1 driver generalised to a
-   Samsung data-file driver with a compatible per part, or an `s5k3j1.c`
-   copy; mainline has no 3J1, Intel's out-of-tree one is a reference for
-   the register map); DT on `csis0` (WDMA context 0, already set up),
-   D-PHY 4 lanes, settle from RE; if the leading data can't be turned off,
-   park it: the link's channel 0 filters by data type, so the RAW10 data
-   type alone should already drop it [I], else a WDMA line skip.
-3. Runbook as CAM-M: chip ID, graph, link only, first DMA, libcamera.
-   Rotation 270 and `orientation = <0>` (front) [I].
+**Built** (section 5.1): the `s5kgn1` driver's `samsung,s5k3j1` part, the
+DT on `csis0`, overlay `camera-front`, `s5k3j1-front.bin` from P.0,
+libcamera 0013 (helper, properties, `s5k3j1.yaml`) and 0014 (1080p video
+from the binned mode).
 
-The telephoto (GM5, link 4, two C-PHY trios, needs the link's LRTE packet
-delimiter enable bit 31 at 0x600) comes after the front.
+```sh
+# F.0 the data files: runbook P (s5k3j1-front.bin, gs201-dcphy.bin)
+# F.1 (read-only, any kernel) the front module's pins as ABL left them
+tools/phone-ssh 'grep -E "gpp4-[012]|gpp5-0" /sys/kernel/debug/pinctrl/*/pins 2>/dev/null | head'
+#   expect: inputs (function 0); stop if any is an output driven high
+# F.K (after P; CAM-M first if it's running) images with camera-front added
+#   to the overlays the phone runs (ASK FIRST: flashes and reboots)
+KERNEL_DIR=~/android/mainline/wt-camera KERNEL_OUT=~/android/mainline/out-camera \
+    ov camera-stream-link2 camera-uw-lens camera-main camera-front && bin/omandroid push
+# F.2 (this boot) power-up and chip ID only
+tools/camera-stage --watchdog x --cmd 'modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; modprobe s5kgn1; sleep 1; dmesg | grep -E "s5kgn1|slg51002" | tail -6; grep -E "ldo12s|vddd_main_front|cam_sw4" /sys/kernel/debug/regulator/regulator_summary'
+#   pass: "s5kgn1 N-0010: S5K3J1, model 0x30a1"; LDO8 and switch 4 off again afterwards
+#   stop: NACK or another ID (MCLK pin, reset, or switch 4 not the right supply), a rail left on
+# F.3 (same boot) the graph
+tools/phone-ssh 'modprobe phy_gs201_mipi_dcphy_rx; modprobe gs201_csis; sleep 1; for d in /dev/media*; do media-ctl -d $d -p | grep -E "s5k3j1|link 0"; done; dmesg | grep "link 0 ->"'
+#   pass: "link 0 -> WDMA context 0, 4 D-PHY data lanes"; "s5k3j1 N-0010" -> "gs201-csis link 0"
+# F.4 (next boot) colour bars on link 0, link only, binned mode
+tools/camera-stage --watchdog x --cmd 'LINK=0 SENSOR=s5k3j1 W=1920 H=1368 DMA=0 bash -s' --script tools/camera-cap-test
+#   pass: "link 0: D-PHY 4 lanes at 1665024000 bps, settle 8"; frame_start/frame_end ~30/s;
+#   link errors at most ERR_WRONG_CONFIG once a frame
+#   stop: SOT/ECC/CRC on every frame (first change: CAM vote 533 MHz, `CSIS_OPTS=cam_khz=533000`),
+#   no frame start (link or lanes: record), a hang
+# F.5 (next boot) first DMA: bars, then a real image; where does the image start?
+tools/camera-stage --watchdog x --cmd 'LINK=0 SENSOR=s5k3j1 W=1920 H=1368 DMA=1 FRAMES=4 bash -s' --script tools/camera-cap-test
+tools/phone-ssh 'cat /tmp/cam-1920x1368.raw' > logs/camf-bars.raw
+tools/raw10-stats logs/camf-bars.raw --width 1920 --height 1368 --stride 2432 --bars 8
+#   pass: wdma_errors 0; eight bars that start at column 0 of row 0
+#   if the bars start 2 rows and 384 pixels in: the leading data reached the WDMA; record
+#   it and stop (next single change: park it by data type or a WDMA line skip, section 8)
+tools/camera-stage --watchdog x --cmd 'LINK=0 SENSOR=s5k3j1 W=1920 H=1368 DMA=1 FRAMES=4 PATTERN=0 CTRLS=analogue_gain=256 bash -s' --script tools/camera-cap-test
+# F.6 the gain model: as M.6 (codes 32-512, signal 1:2:4:8:16 confirms code/32)
+# F.7 libcamera 4.6: listed, a picture, 1080p video from the binned mode
+tools/phone-ssh 'cam -l; cam -c3 --capture=60 --file=/tmp/f#.ppm --stream pixelformat=RGB888,width=1912,height=1368 2>&1 | tail -2'
+tools/phone-ssh 'LIBCAMERA_LOG_LEVELS=SimplePipeline:0 cam -c3 --capture=30 --stream pixelformat=RGB888,width=1920,height=1080 2>&1 | grep -E "Picked|Adjusting size"'
+#   pass: the front listed (the camera index may differ: pick it from cam -l); a right-way-up
+#   picture after the app's rotation (else: the DT rotation); "Picked ... 1920x1368" and
+#   1920x1080 adjusted to 1912x1080
+```
+
+- **Rollback:** reboot (all per load); images without `camera-front`.
+- **Risks:** LDO8 is shared with the main sensor: both cameras' drivers
+  vote it, and one streams at a time. The bus pins sit next to gpp4-3
+  (another device's request line): the pinctrl groups don't overlap.
+
+### CAM-T: the telephoto (Samsung S5KGM5, C-PHY on link 4, SEM1215SA focus). Risk: medium
+
+**Facts.** [V] from the user's own HAL (section 4.5) unless marked: chip ID
+0x08d5; `hsi2c_4` (USI4, 0x10930000, SPI 677, pins gpp8-0/1, 1 MHz as
+stock), 0x2d; reset gpp6-2 (the same bank as the ultrawide's bus and
+reset); MCLK `CIS_CLK2` on gpp7-0 at 24.576 MHz; supplies LDO12S, 0.3 ms,
+SLG LDO7 1.0 V, LDO3 2.25 V (stock DT); C-PHY at 1802 Msps (full mode
+2040) [I: its PLL], settle 7; modes 4032x3024 at 30 (2x2 binned), 4032x2272
+at 60, 2016x1136 at 60, 2016x1512 at 60. The SEM1215SA at 0x34 (focus,
+OIS, module calibration) on LDO12S, 1 ms, SLG LDO5 2.85 V, switch 1.
+[I] (section 4.4's bring-up): link 4 / slave 4, two trios; the link needs
+LRTE packet delimiters enabled or it sees frame starts only; CAM DVFS 533
+MHz; the image is mirrored at rotation 270 and right after a vertical
+readout flip (then BGGR); the focus range is the module's calibrated span
+(infinity to macro) plus a margin. gpp8-2 (the torch's HWEN) shares the
+bus pins' bank.
+
+**Built** (section 5.1): the `s5kgn1` driver's `samsung,s5kgm5` part with
+`samsung,vertical-flip`, `sem1215`, `csis4` with
+`google,lrte-packet-delimiters`, overlay `camera-tele`,
+`s5kgm5-tele.bin` from P.0, libcamera 0013 (`s5kgm5.yaml` with Af).
+
+```sh
+# T.0 the data files: runbook P; device-cheetah 0.1.28 or P.1's bring-up file
+#   (blacklist sem1215)
+# T.1 (read-only, any kernel) pins as ABL left them; the torch off
+tools/phone-ssh 'grep -E "gpp8-[012]|gpp6-2|gpp7-0" /sys/kernel/debug/pinctrl/*/pins 2>/dev/null | head'
+#   expect: gpp8-0/1, gpp6-2, gpp7-0 inputs; gpp8-2 as the torch driver set it
+# T.K (after P, one overlay per boot) images with camera-tele added (ASK FIRST)
+KERNEL_DIR=~/android/mainline/wt-camera KERNEL_OUT=~/android/mainline/out-camera \
+    ov camera-stream-link2 camera-uw-lens camera-main camera-front camera-tele && bin/omandroid push
+# T.2 (this boot) sensor power-up and chip ID
+tools/camera-stage --watchdog x --cmd 'modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; modprobe s5kgn1; sleep 1; dmesg | grep -E "s5kgn1|slg51002" | tail -6; grep -E "ldo12s|vddd_tele|vdda_tele" /sys/kernel/debug/regulator/regulator_summary'
+#   pass: "s5kgn1 N-002d: S5KGM5, model 0x08d5, vertical flip"; LDO7 and LDO3 off again
+#   stop: NACK, another ID, a rail left on; the torch stops working (bank sharing)
+# T.3 (same boot) the lens: power, ready, calibration (read only)
+tools/phone-ssh 'modprobe sem1215 debug_position=1; sleep 1; dmesg | grep sem1215 | tail -3'
+#   pass: "focus range A-B (calibrated X-Y)" with 0 <= X < Y <= 1023 (record that it is
+#   plausible, not the values: they are this module's calibration); or "no focus calibration"
+#   (the addresses are [I]): the whole range, still usable; record which
+#   stop: "not ready: status ..." (the ready bit or the supplies), any I2C error
+# T.4 (same boot) graph, then (next boot) colour bars on link 4, link only
+tools/phone-ssh 'modprobe phy_gs201_mipi_dcphy_rx; modprobe gs201_csis; sleep 1; dmesg | grep "link 4 ->"; for d in /dev/media*; do media-ctl -d $d -p | grep -E "s5kgm5|sem1215|link 4"; done'
+#   pass: "link 4 -> WDMA context 0, 2 C-PHY trios, LRTE packet delimiters"; the lens's ancillary link
+tools/camera-stage --watchdog x --cmd 'LINK=4 SENSOR=s5kgm5 W=2016 H=1512 DMA=0 bash -s' --script tools/camera-cap-test
+#   pass: "link 4: C-PHY 2 trios at 1802240000 sps, settle 7", "CAM 533000000 Hz", FS and FE
+#   ~30/s; debugfs regs: 0x600 = 0xffff7fff
+#   stop: frame starts without frame ends (LRTE: record 0x600), CRC errors on every frame
+#   (the trio count: record 0x0114 with SENSOR_OPTS unchanged, then stop), a hang
+# T.5 (next boot) first DMA: bars, then a real image (BGGR as flipped)
+tools/camera-stage --watchdog x --cmd 'LINK=4 SENSOR=s5kgm5 W=2016 H=1512 DMA=1 FRAMES=4 bash -s' --script tools/camera-cap-test
+tools/phone-ssh 'cat /tmp/cam-2016x1512.raw' > logs/camt-bars.raw
+tools/raw10-stats logs/camt-bars.raw --width 2016 --height 1512 --stride 2560 --bars 8
+tools/camera-stage --watchdog x --cmd 'LINK=4 SENSOR=s5kgm5 W=2016 H=1512 DMA=1 FRAMES=4 PATTERN=0 CTRLS=analogue_gain=256 bash -s' --script tools/camera-cap-test
+#   pass: wdma_errors 0; bars; the real frame right-way-round after a 270-degree turn
+#   (text readable, not mirrored); if mirrored: the flip is wrong (record; drop
+#   samsung,vertical-flip or add a horizontal one in a later DT change)
+# T.6 focus by hand: the lens moves and reads back (it is powered while the subdev is open)
+tools/phone-ssh 'for s in /dev/v4l-subdev*; do v4l2-ctl -d $s -l 2>/dev/null | grep -q focus_absolute && { echo $s; v4l2-ctl -d $s -l | grep focus_absolute; }; done'
+#   the telephoto's lens is the one whose range matches T.3; for P = its min, middle and max:
+tools/phone-ssh 'v4l2-ctl -d /dev/v4l-subdevN --set-ctrl focus_absolute=P; dmesg | grep sem1215 | tail -1'
+#   pass: "position P, read back R" with R within a few percent of P each time
+# T.7 libcamera 4.6: a picture with autofocus
+tools/phone-ssh 'cam -l; LIBCAMERA_LOG_LEVELS=IPASoftAf:0 cam -cN --capture=120 --file=/tmp/t#.ppm --stream pixelformat=RGB888,width=2008,height=1512 2>&1 | grep -E "Focus range|Autofocus completed" | tail -3'
+#   (N: the telephoto's index in cam -l) pass: AF completes, a sharp frame at 5x
+```
+
+- **Rollback:** reboot; images without `camera-tele`.
+- **Risks:** the SEM1215SA also runs OIS: we never switch OIS on or write
+  its memory; with the servo off the lens rests on its stops. The
+  calibration read is read only. The torch shares gpp8's bank: kernel
+  pinctrl and GPIO serialise the register writes.
+
+### 7.R Order on the phone (2026-10-13)
+
+1. **P** (files, no reboot; then the merged kernel with today's overlays,
+   one reboot; the ultrawide must be unchanged).
+2. **CAM5.3-1** (libcamera 0.7.2-4.6 instead of 4.5; no reboot) and CAM5.3-2.
+3. **CAM-M** (reboot with `camera-main`), M.2-M.8.
+4. **CAM7** (reboot with `camera-front`), F.2-F.7.
+5. **CAM-T** (reboot with `camera-tele`), T.2-T.7.
+6. CAM5.3-3/-4 (ultrawide lens, full resolution) and CAM5.4 (Snapshot)
+   whenever convenient; loading at boot only after all four pass.
 
 ---
 
@@ -2235,8 +2588,22 @@ delimiter enable bit 31 at 0x600) comes after the front.
     rotation (CAM-M.4-M.6), and whether its link needs 533 MHz here too.
 11. ~~May the CAM-M kernel work be committed?~~ Yes, option B (the human,
     2026-10-13): all driver code committed, the C-PHY values in the
-    per-phone data file `tools/extract-camera-data` generates. Still open:
-    the D-PHY path's analog words (ANA_CON1 0xea40, ANA_CON2 2, bias CON4
-    0x200) and the cheetah DT's `google,hs-settle` 7 are stock's values
-    too, committed earlier (RE5); moving them into the same data file is
-    the human's call.
+    per-phone data file `tools/extract-camera-data` generates. ~~The D-PHY
+    values and `google,hs-settle`?~~ Done the same way (decided
+    2026-10-13, `f397875e0`, `15b6520b0`): one file, `gs201-dcphy.bin`,
+    for both modes; runbook P installs it before the kernel.
+12. The front camera's leading 4224 words (CAM7): does channel 0's RAW10
+    data type filter drop them (F.5)? If not: a data type or VC the
+    sensor's settings can move them to (another HAL init variant), or a
+    WDMA line skip.
+13. The telephoto's lane count and LRTE: two trios by its default and
+    delimiters needed are [I] (T.4 checks both); and whether the GN1
+    wants the delimiters too (it worked without them elsewhere).
+14. Rotations and mirroring: front 270, telephoto 270 with a vertical
+    flip, main 90 are [I]; the ultrawide's 90 was set from our own CAM4
+    frames, but another bring-up reports 270 for it: check with one
+    picture of text per camera in an app that applies `Rotation`.
+15. The SEM1215SA's calibration addresses (0xc7b6, 0xc7bc) are [I] (T.3).
+16. The GN1's real symbol rate: its output PLL says 2716 Msps per trio,
+    the HAL's capacity figure 1862 (section 4.5). Settle 7 either way; the
+    DT value matters only if a rate-dependent setting ever does.
