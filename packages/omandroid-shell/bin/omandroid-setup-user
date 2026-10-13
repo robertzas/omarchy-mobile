@@ -56,6 +56,20 @@ if omarchy-done ensure omandroid-home-plugin; then
   add_plugin omandroid.home
 fi
 
+# Developer tools that packages pull in but a phone's app drawer shouldn't
+# list (v4l-utils comes with ffmpeg): hidden for this user with the usual
+# NoDisplay override in ~/.local/share/applications, which Omarchy's app
+# library honours. Still runnable from a terminal.
+if omarchy-done ensure omandroid-hide-dev-tools; then
+  apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+  mkdir -p "$apps"
+  for id in qv4l2 qvidcap assistant designer linguist qdbusviewer; do
+    src=/usr/share/applications/$id.desktop
+    [[ -f $src && ! -e $apps/$id.desktop ]] || continue
+    sed '/^\[Desktop Entry\]/a NoDisplay=true' "$src" | grep -v '^NoDisplay=false' > "$apps/$id.desktop"
+  done
+fi
+
 # PIN or password (omandroid-set-pin records it): phones set up before the
 # choice existed used a PIN with the lock's number pad, so record that, once.
 if omarchy-done ensure omandroid-credential-type; then

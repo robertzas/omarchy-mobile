@@ -18,5 +18,28 @@ build=/home/omandroid/build/pkgs
 # makepkg's own work dirs (pkg/, src/ at the top) and old packages stay home.
 tar cf - --exclude="./$name/pkg" --exclude="./$name/src/build" --exclude="*.pkg.tar.*" \
   -C "$(dirname "$dir")" "./$name" | "$ssh" "tar xf - -C $build --no-same-owner && chown -R omandroid: $build/$name"
+# Build-only dependencies (makedepends, checkdepends) that aren't installed
+# yet go in for the build and out again afterwards, like makepkg -s -r
+# (makepkg runs as the user, so pacman runs here as root). Runtime
+# depends are pacman -U's job below. Without this, qt6-tools stayed after a
+# libcamera build and put four Qt developer apps in the phone's drawer.
+srcinfo=$("$ssh" "su - omandroid -c 'cd $build/$name && makepkg --printsrcinfo'")
+want=$(awk '$1 ~ /^(depends|makedepends|checkdepends)$/ {print $3}' <<<"$srcinfo" | sort -u | tr '\n' ' ')
+buildonly=$(awk '$1 ~ /^(makedepends|checkdepends)$/ {print $3}' <<<"$srcinfo" | sort -u | tr '\n' ' ')
+missing=""
+[[ -n ${want// } ]] && missing=$("$ssh" "pacman -T $want" || true)
+if [[ -n $missing ]]; then
+  echo "build dependencies: $(tr '\n' ' ' <<<"$missing")"
+  "$ssh" "OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -S --needed --noconfirm --asdeps $(tr '\n' ' ' <<<"$missing") >/dev/null"
+fi
+remove=""
+for dep in $missing; do
+  [[ " $buildonly " == *" $dep "* ]] && remove+="${dep%%[<>=]*} "
+done
+cleanup() {
+  [[ -n $remove ]] && "$ssh" "OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -Rns --noconfirm $remove >/dev/null 2>&1 && echo 'removed build dependencies: $remove'"
+  return 0
+}
+trap cleanup EXIT
 "$ssh" "su - omandroid -c 'cd $build/$name && makepkg -f --noconfirm' 2>&1 | tail -2"
 "$ssh" "OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U --noconfirm $build/$name/$name-*.pkg.tar.* 2>&1 | grep -E '^error|installing|upgrading|reinstalling' ; pacman -Q $name"
