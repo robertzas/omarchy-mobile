@@ -1016,11 +1016,20 @@ tools/phone-ssh 'dmesg -W' > logs/s5b2-kmsg-$(date +%H%M%S).log 2>&1 &
    0000:01:00.0. Nothing reached the shared-memory mailbox either. Step 2's
    reload recovered Wi-Fi. The sleep hook stays in unload mode.
 
-Next (S5b-3): the ACK arrives as a control-ring message, and the handler
-wakes the PM waiter inside ring processing, before the ring's read pointer
-is committed. Suspend then marks the bus down and refuses the remaining
-ring writes. The fix defers the wake-up to the end of the IRQ thread (branch
-`omandroid-wifi-d3`). Rerun step 4, then S5c.
+**S5b-3 (2026-10-13, 7.3.0-rc6-omandroid-push1-00375-gc73a652bd07a): passed.**
+The wake-up ordering was already right (`812288601` publishes the ACK only
+after the ring's read pointer is written back). The real cause: the D3
+inform, an H2D mailbox-data message, went out without the epoch (sequence)
+byte that `9f7b5cac4` added to every other control-ring message. Firmware
+20.101.90 checks it, so it never consumed the inform: the dongle's read
+index stopped on that slot, and every later control message queued behind
+it. Google's GPL bcmdhd numbers mailbox data like any other control
+message. Fix: `3dc1f0098` (number the mailbox-data message), plus
+`1505e2a20` (`synchronize_irq()` before masking for D3, so the interrupt
+thread that took the ACK can't unmask again). One freeze with Wi-Fi
+connected (`freeze_cmd s5b3 30`): `rc=0`, RTC wake, "D3 ACK by control
+message after 13864 us", "hot resume", Wi-Fi connected, and ping working
+right after. Next: S5c.
 
 **S5c, 10 then 20 cycles with Wi-Fi loaded:** S4's loop without the
 `modprobe -r`, adding `nmcli -t -f STATE general` to each log line.
