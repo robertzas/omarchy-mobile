@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Omandroid screen mirroring: copy to ~/.config/omandroid/mirror.conf.
+# KEY=value lines; read by omandroid-mirror-run when mirroring starts.
+# The listen address is always 172.16.42.1:5900 (the USB link). ADDRESS may
+# be set only to that; anything else is refused.
+
+# Frame-rate limit (1-120). The panel runs at up to 120 Hz, but each frame is
+# 1440x3120: 30 keeps the link and the phone's CPU comfortable.
+#FPS=30
+
+# Output to capture; empty = the first (the phone has one, the panel).
+#OUTPUT=
+
+# 1 = view only: the viewer's mouse and keyboard reach nothing.
+#VIEW_ONLY=0
+
+# 1 = draw the pointer into the picture (useful when someone controls the
+# phone from the computer and a recording should show where).
+#CURSOR=0
+
+# Keyboard layout for keys typed in the viewer (xkb layout[-variant]).
+#KEYBOARD=us
+
+# Ask for a username and password. The file holds the password on its first
+# line and must not be readable by others (chmod 600). Turns on RSA-AES
+# encryption (TigerVNC 1.13+); an RSA key is made next to the file on first use.
+#PASSWORD_FILE=~/.config/omandroid/mirror.password
+#USERNAME=omandroid

@@ -1,0 +1,168 @@
+<!-- SPDX-License-Identifier: MIT -->
+# omandroid-mirror
+
+The phone's screen on a computer, over the USB cable, with the computer's
+mouse and keyboard driving the phone: what scrcpy does for Android, done with
+VNC. Use it for live demos (the viewer window goes into OBS), for screenshots,
+or to type into the phone from a real keyboard.
+
+```
+computer                                   phone (USB gadget link, usb0)
+tools/phone-mirror ──ssh──> omandroid-mirror on
+                              ├─ omandroid-mirror-firewall.service (root):
+                              │    ufw allow in on usb0 to 172.16.42.1 port 5900 proto tcp
+                              └─ omandroid-mirror.service (user unit, the session's user):
+                                   wayvnc --max-fps=30 --name="Omandroid phone" 172.16.42.1:5900
+VNC viewer  <──────── 172.16.42.1:5900 ────────>  wayvnc (screencopy + virtual pointer/keyboard)
+```
+
+wayvnc captures Hyprland's output with the wlroots screencopy protocol and
+sends input back through the virtual pointer and virtual keyboard protocols,
+which Hyprland supports. It runs as the logged-in user inside the graphical
+session (it needs that user's `WAYLAND_DISPLAY`); `omandroid-mirror` started
+as root finds that user with `loginctl` and starts the unit in their manager
+(`systemctl --user -M <user>@`).
+
+## Use
+
+On the computer, with the phone on the USB cable:
+
+```sh
+tools/phone-mirror                     # mirror on, viewer open; closing the viewer turns it off
+tools/phone-mirror --keep              # leave mirroring on after the viewer closes
+tools/phone-mirror --viewer tigervnc --height 1000
+```
+
+On the phone (root over `tools/phone-ssh`, or the user in a terminal):
+
+```sh
+omandroid-mirror on          # start; idempotent
+omandroid-mirror status      # running?, the address, the firewall rule, the user
+omandroid-mirror status --json
+omandroid-mirror off         # stop and close the port; idempotent
+```
+
+Any VNC viewer then connects to `172.16.42.1:5900` (TigerVNC writes it
+`172.16.42.1::5900`).
+
+### On the computer
+
+`tools/phone-mirror` picks the first viewer it finds and says what to install
+if there is none:
+
+| Viewer | Install (Arch) | Notes |
+| --- | --- | --- |
+| Remmina (preferred) | `sudo pacman -S remmina libvncserver` | scales the phone into a portrait window; the window title is "Omandroid phone" |
+| TigerVNC `vncviewer` | `sudo pacman -S tigervnc` | title "Omandroid phone - TigerVNC"; TigerVNC has no client-side scaling, so the 1440x3120 picture scrolls in the window |
+| `gvncviewer` | (gtk-vnc's example viewer) | last resort |
+
+## Settings
+
+`~/.config/omandroid/mirror.conf` of the session's user, `KEY=value` lines
+(the commented example is `/usr/share/omandroid/mirror/mirror.conf.example`).
+Read when mirroring starts: `omandroid-mirror off; omandroid-mirror on` after
+a change.
+
+| Key | Default | |
+| --- | --- | --- |
+| `FPS` | 30 | wayvnc's frame-rate limit, 1-120 |
+| `OUTPUT` | first output | the output to capture (the phone has one) |
+| `VIEW_ONLY` | 0 | 1: the viewer can't send input |
+| `CURSOR` | 0 | 1: draw the pointer into the picture |
+| `KEYBOARD` | wayvnc's default | xkb layout for typed keys, e.g. `de` or `us-intl` |
+| `PASSWORD_FILE` | none | ask for a password (below) |
+| `USERNAME` | omandroid | the username that goes with it |
+| `ADDRESS` | 172.16.42.1 | may only be 172.16.42.1: anything else is refused |
+
+The listen address is fixed at the phone's end of the USB link,
+172.16.42.1, port 5900. wayvnc is never started on `0.0.0.0` or on the Wi-Fi
+address, and the script refuses to start when 172.16.42.1 is missing from
+`usb0` (cable out) instead of falling back to anything.
+
+### Authentication: none by default
+
+By default the viewer gets in without a password. The listener is on a
+point-to-point link that exists only while a cable is plugged into one
+computer, and that computer already has root SSH to the phone over the same
+link: a VNC password adds nothing against whoever holds the cable end.
+
+Set `PASSWORD_FILE` when the computer on the other end is shared or not
+yours, or you want the screen to need a second secret. The file holds the
+password on its first line and must be `chmod 600` (the script refuses it
+otherwise). wayvnc then requires a username and password with RSA-AES
+encryption, and an RSA key is made next to the password file on first use
+(`ssh-keygen`, or `openssl`). TigerVNC 1.13 and later speak RSA-AES; Remmina's
+VNC plugin may not, so use `--viewer tigervnc` with a password. wayvnc also
+offers TLS (a certificate) and PAM; this package doesn't set those up. The
+password is copied into `$XDG_RUNTIME_DIR/omandroid-mirror/wayvnc.conf`
+(tmpfs, mode 600) for wayvnc to read.
+
+## Firewall
+
+ufw is on on the phone (incoming denied, SSH allowed on `usb0`). While
+mirroring runs, `omandroid-mirror-firewall.service` holds one rule:
+
+```sh
+ufw allow in on usb0 to 172.16.42.1 port 5900 proto tcp comment 'omandroid-mirror'
+```
+
+Stopping the unit (`omandroid-mirror off`, or shutdown) deletes it; `off` as
+root also deletes a rule left by a crash. If ufw is inactive or missing,
+nothing is changed. The active local user may start and stop that one unit
+through polkit (`50-omandroid-mirror.rules`), so a quick-settings tile can run
+`omandroid-mirror on|off` without root.
+
+The first time on a phone, add the rule under a dead-man switch, as for any
+firewall change (AGENTS.md): if the new rule somehow cuts SSH, ufw turns
+itself off after 90 s.
+
+```sh
+tools/phone-ssh 'systemd-run --unit=fw-deadman --on-active=90 /usr/bin/ufw disable'
+tools/phone-ssh 'omandroid-mirror on && ufw status verbose'
+tools/phone-ssh true && tools/phone-ssh 'systemctl stop fw-deadman.timer'   # a fresh login works: disarm
+```
+
+## Recording
+
+- **Live demos, streaming: OBS.** Add a *Window Capture (PipeWire)* source
+  and pick the viewer window ("Omandroid phone"). On Hyprland the portal asks
+  which window; the choice can be remembered.
+- **The smoothest recordings: on the phone.** Omarchy's own screen recording
+  (gpu-screen-recorder) records the panel at its real frame rate with no
+  network in between, then you copy the file. From the phone's menu, or over
+  SSH (replace `<user>`; `--list-capture-options` names the output):
+
+  ```sh
+  tools/phone-ssh 'systemd-run --user -M <user>@ --collect --unit=omandroid-rec \
+      gpu-screen-recorder -w screen -f 60 -k h264 -fallback-cpu-encoding yes \
+      -o /home/<user>/Videos/demo.mp4'
+  # ... demo ...
+  tools/phone-ssh 'systemctl --user -M <user>@ kill -s INT omandroid-rec'   # SIGINT finishes the file
+  tools/phone-ssh 'cat /home/<user>/Videos/demo.mp4' > demo.mp4
+  ```
+
+  The phone has no hardware video encoder that Linux drives yet, so this is
+  CPU encoding of a 1440x3120 picture; if it drops frames, try `-f 30` or
+  `-s 720x1560`. That gpu-screen-recorder is built for aarch64 is not yet
+  checked on the phone.
+
+### What to expect
+
+Each frame is 1440x3120. wayvnc sends only the parts of the screen that
+changed, so a still screen costs almost nothing, but a full-screen animation
+is a large update on the phone's CPU and the USB link. At the default
+30 fps limit expect a smooth-enough picture for demos with a delay of roughly
+a frame or two plus encoding time, and lower frame rates during full-screen
+scrolling. Input from the viewer is a mouse, not a touchscreen: a click is a
+tap, and drags work where the app accepts a mouse drag; multi-touch gestures
+don't. Hyprland may show a pointer on the phone while the viewer moves it.
+Rotation changes the shared picture's shape; the viewer follows it.
+
+## Notes
+
+- The units are not enabled; nothing runs until `omandroid-mirror on`.
+- The user unit is `PartOf=graphical-session.target`: logging out ends
+  mirroring (the firewall rule stays until `omandroid-mirror off`).
+- If Hyprland's `ecosystem:enforce_permissions` is on, allow screencopy for
+  `/usr/bin/wayvnc`.
+- Logs: `journalctl --user -u omandroid-mirror` as the session's user.

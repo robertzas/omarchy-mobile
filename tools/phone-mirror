@@ -1,0 +1,123 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# phone-mirror: the phone's screen in a window on this computer, with mouse
+# and keyboard input, over the USB link (like scrcpy, over VNC).
+#
+#   tools/phone-mirror [--keep] [--viewer remmina|tigervnc|gvncviewer] [--height PX]
+#
+# Starts mirroring on the phone (omandroid-mirror on, package omandroid-mirror),
+# opens a VNC viewer on 172.16.42.1:5900 titled "Omandroid phone", and turns
+# mirroring off again when the viewer closes (--keep leaves it on).
+#   --viewer   pick a viewer; default: the first installed of remmina (scales
+#              the phone to the window), tigervnc's vncviewer, gvncviewer
+#   --height   window height in pixels (default 900); the width follows the
+#              phone's 1440:3120 portrait shape
+# For OBS: add a "Window Capture (PipeWire)" source and pick the viewer window.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+ADDRESS=172.16.42.1
+PORT=5900
+TITLE="Omandroid phone"
+KEEP=0 VIEWER= HEIGHT=900
+
+usage() { sed -n '3,16s/^# \{0,1\}//p' "$0" >&2; exit 2; }
+die() { echo "phone-mirror: $*" >&2; exit 1; }
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --keep) KEEP=1 ;;
+    --viewer) VIEWER=${2:?}; shift ;;
+    --height) HEIGHT=${2:?}; shift ;;
+    -h|--help) usage ;;
+    *) usage ;;
+  esac
+  shift
+done
+[[ $HEIGHT =~ ^[0-9]+$ ]] && (( HEIGHT >= 200 )) || die "--height takes a number of pixels"
+WIDTH=$(( HEIGHT * 1440 / 3120 ))
+
+have() { command -v "$1" >/dev/null; }
+remmina_vnc() { # Remmina without libvncserver has no VNC plugin
+  [[ -e /usr/lib/remmina/plugins/remmina-plugin-vnc.so ]] || ls /usr/lib*/remmina/plugins/*vnc* >/dev/null 2>&1
+}
+missing() {
+  cat >&2 <<EOF
+phone-mirror: no VNC viewer found on this computer. Install one:
+  sudo pacman -S remmina libvncserver   # recommended: scales the phone to the window
+  sudo pacman -S tigervnc               # vncviewer: full-size picture, no scaling
+EOF
+  exit 1
+}
+if [[ -z $VIEWER ]]; then
+  if have remmina && remmina_vnc; then VIEWER=remmina
+  elif have vncviewer; then VIEWER=tigervnc
+  elif have gvncviewer; then VIEWER=gvncviewer
+  else missing; fi
+fi
+case $VIEWER in
+  remmina) have remmina || die "remmina is not installed: sudo pacman -S remmina libvncserver"
+           remmina_vnc || die "remmina has no VNC plugin: sudo pacman -S libvncserver" ;;
+  tigervnc) have vncviewer || die "vncviewer is not installed: sudo pacman -S tigervnc" ;;
+  gvncviewer) have gvncviewer || die "gvncviewer is not installed (gtk-vnc's example viewer)" ;;
+  *) die "unknown viewer $VIEWER (remmina, tigervnc, gvncviewer)" ;;
+esac
+
+tools/phone-ssh true 2>/dev/null || die "the phone does not answer on $ADDRESS (USB cable, tools/phone-ssh)"
+tools/phone-ssh command -v omandroid-mirror >/dev/null ||
+  die "omandroid-mirror is not installed on the phone: tools/phone-install-package packages/omandroid-mirror"
+
+tmp=$(mktemp -d)
+cleanup() {
+  rm -rf "$tmp"
+  if (( KEEP )); then
+    echo "phone-mirror: mirroring stays on (tools/phone-ssh omandroid-mirror off to stop it)"
+  else
+    tools/phone-ssh omandroid-mirror off >/dev/null 2>&1 && echo "phone-mirror: mirroring off" ||
+      echo "phone-mirror: could not turn mirroring off: tools/phone-ssh omandroid-mirror off" >&2
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+tools/phone-ssh omandroid-mirror on || die "omandroid-mirror on failed on the phone"
+for _ in $(seq 1 20); do
+  timeout 1 bash -c "exec 3<>/dev/tcp/$ADDRESS/$PORT" 2>/dev/null && break
+  sleep 0.5
+done
+timeout 1 bash -c "exec 3<>/dev/tcp/$ADDRESS/$PORT" 2>/dev/null ||
+  die "nothing listens on $ADDRESS:$PORT (on the phone: journalctl --user -u omandroid-mirror)"
+
+case $VIEWER in
+  remmina)
+    # The profile's name is the window title.
+    cat > "$tmp/omandroid-phone.remmina" <<EOF
+[remmina]
+name=$TITLE
+protocol=VNC
+server=$ADDRESS:$PORT
+colordepth=32
+quality=9
+scale=1
+viewmode=1
+window_width=$WIDTH
+window_height=$HEIGHT
+window_maximize=0
+showcursor=0
+viewonly=0
+disableclipboard=0
+disablepasswordstoring=1
+EOF
+    remmina -c "$tmp/omandroid-phone.remmina" >/dev/null 2>&1 || true ;;
+  tigervnc)
+    # Title "Omandroid phone - TigerVNC". TigerVNC does not scale: the
+    # window shows the phone at full size and scrolls.
+    vncviewer -geometry "${WIDTH}x${HEIGHT}" -RemoteResize=0 -Shared=1 "$ADDRESS::$PORT" || true ;;
+  gvncviewer)
+    gvncviewer "$ADDRESS:$(( PORT - 5900 ))" || true ;;
+esac
+
+# A viewer that was already running (Remmina is single-instance) hands the
+# connection over and returns at once: wait until no connection is left.
+while ss -Htn state established dst "$ADDRESS" "dport = :$PORT" 2>/dev/null | grep . >/dev/null; do
+  sleep 1
+done

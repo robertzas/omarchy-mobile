@@ -85,6 +85,7 @@ tools/phone-ssh CMD    -> run anything; stream files with  ssh 'cat > f' < f
 | `tools/aoc-audio-diag` | On-phone AoC playback diagnosis (`tools/phone-ssh 'EP=6 MODES=copy bash -s' < tools/aoc-audio-diag`): plays a short tone under `timeout`, snapshots mailbox IRQs, ring counters, CS35L41 registers and DAPM. `EP=` entry point, `MODES=` copy/mmap, `AOCLOG=1` records the AoC firmware log, `SETUP2=0/1` sets `ep_setup2` |
 | `tools/aoc-amp-diag` | On-phone CS35L41 check (`AMP=` top, bottom or both; `CH=` L, R or LR): a -20 dBFS tone through EP6 in stock's TDM 0 format, with both amplifiers' DAPM widgets and registers dumped mid-tone |
 | `tools/extract-vendor-firmware`, `extract-vendor-chroot`, `extract-fingerprint-vendor` | Google's files from the user's own factory image, on the laptop |
+| `tools/phone-mirror` | The phone's screen in a VNC viewer on the laptop with input (`omandroid-mirror on` on the phone, wayvnc on 172.16.42.1:5900 only); `--keep` leaves it on. Affects the phone's feel: announce it |
 | `tools/phone-install-package packages/X` | Build a package on the phone and install it |
 | `tools/repo-build`, `tools/repo-push` | Maintainer only: the signed `[omandroid]` repository (needs `keys/`, never committed) |
 | `tools/publish-kernel` | Maintainer only: publish `omandroid` to GitHub on a squashed upstream base |

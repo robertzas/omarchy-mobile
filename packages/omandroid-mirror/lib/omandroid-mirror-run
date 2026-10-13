@@ -1,0 +1,100 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omandroid-mirror-run: start wayvnc for omandroid-mirror.service (a user
+# unit in the graphical session). Reads ~/.config/omandroid/mirror.conf,
+# refuses any listen address other than the USB link's 172.16.42.1, writes
+# wayvnc's config to $XDG_RUNTIME_DIR/omandroid-mirror/ and execs wayvnc.
+set -euo pipefail
+
+ADDRESS=172.16.42.1	# the phone's end of the USB gadget link (usb0); never anything else
+PORT=5900
+IFACE=usb0
+NAME="Omandroid phone"	# the desktop name: the viewer's window title
+CONF=${OMANDROID_MIRROR_CONF:-${XDG_CONFIG_HOME:-$HOME/.config}/omandroid/mirror.conf}
+
+die() { echo "omandroid-mirror: $*" >&2; exit 1; }
+
+# Settings: KEY=value lines, read without sourcing the file.
+FPS=30 OUTPUT= VIEW_ONLY=0 CURSOR=0 KEYBOARD= PASSWORD_FILE= USERNAME=omandroid CONF_ADDRESS=
+if [[ -r $CONF ]]; then
+  while IFS= read -r line || [[ -n $line ]]; do
+    line=${line%%#*}
+    [[ $line =~ ^[[:space:]]*([A-Z_]+)[[:space:]]*=[[:space:]]*(.*[^[:space:]])?[[:space:]]*$ ]] || continue
+    key=${BASH_REMATCH[1]} val=${BASH_REMATCH[2]:-}
+    val=${val#\"}; val=${val%\"}
+    case $key in
+      FPS) FPS=$val ;;
+      OUTPUT) OUTPUT=$val ;;
+      VIEW_ONLY) VIEW_ONLY=$val ;;
+      CURSOR) CURSOR=$val ;;
+      KEYBOARD) KEYBOARD=$val ;;
+      PASSWORD_FILE) PASSWORD_FILE=${val/#\~/$HOME} ;;
+      USERNAME) USERNAME=$val ;;
+      ADDRESS) CONF_ADDRESS=$val ;;
+      *) echo "omandroid-mirror: $CONF: unknown setting $key (ignored)" >&2 ;;
+    esac
+  done < "$CONF"
+fi
+
+# The listen address is fixed. A setting that asks for another one is an
+# error rather than ignored, so nobody believes they moved it to Wi-Fi.
+[[ -z $CONF_ADDRESS || $CONF_ADDRESS == "$ADDRESS" ]] ||
+  die "refusing to listen on $CONF_ADDRESS: mirroring listens only on the USB link, $ADDRESS"
+[[ $FPS =~ ^[0-9]+$ ]] && (( FPS >= 1 && FPS <= 120 )) || die "FPS must be 1-120, not '$FPS'"
+[[ $VIEW_ONLY == [01] && $CURSOR == [01] ]] || die "VIEW_ONLY and CURSOR take 0 or 1"
+[[ $OUTPUT =~ ^[A-Za-z0-9_.-]*$ ]] || die "bad OUTPUT '$OUTPUT'"
+[[ $KEYBOARD =~ ^[A-Za-z0-9_-]*$ ]] || die "bad KEYBOARD '$KEYBOARD'"
+[[ $USERNAME =~ ^[A-Za-z0-9_.-]+$ ]] || die "bad USERNAME '$USERNAME'"
+
+# wayvnc would bind nothing (and retry forever) without the address: say why.
+ip -4 -o addr show dev "$IFACE" 2>/dev/null | grep -F " $ADDRESS/" >/dev/null ||
+  die "$ADDRESS is not on $IFACE: is the USB cable connected?"
+
+[[ -n ${XDG_RUNTIME_DIR:-} ]] || die "no XDG_RUNTIME_DIR: run as the logged-in user"
+if [[ -z ${WAYLAND_DISPLAY:-} ]]; then
+  for s in "$XDG_RUNTIME_DIR"/wayland-[0-9]; do
+    [[ -S $s ]] && { WAYLAND_DISPLAY=${s##*/}; export WAYLAND_DISPLAY; break; }
+  done
+fi
+[[ -n ${WAYLAND_DISPLAY:-} ]] || die "no Wayland session found in $XDG_RUNTIME_DIR"
+
+run=$XDG_RUNTIME_DIR/omandroid-mirror
+mkdir -p "$run"; chmod 700 "$run"
+umask 077
+cfg=$run/wayvnc.conf
+{
+  echo "address=$ADDRESS"
+  echo "port=$PORT"
+  if [[ -n $PASSWORD_FILE ]]; then
+    [[ -f $PASSWORD_FILE && -r $PASSWORD_FILE ]] || die "PASSWORD_FILE $PASSWORD_FILE is not readable"
+    mode=$(stat -c %a "$PASSWORD_FILE")
+    (( (8#$mode & 8#077) == 0 )) || die "PASSWORD_FILE $PASSWORD_FILE is readable by others (chmod 600 it)"
+    IFS= read -r pw < "$PASSWORD_FILE" || true
+    [[ -n ${pw:-} ]] || die "PASSWORD_FILE $PASSWORD_FILE is empty"
+    [[ $pw != *$'\r'* ]] || die "PASSWORD_FILE has a carriage return"
+    # RSA-AES (TigerVNC 1.13+ "RA2"): encrypted, and no certificate to make.
+    key=${PASSWORD_FILE%/*}/mirror-rsa.pem
+    if [[ ! -s $key ]]; then
+      if command -v ssh-keygen >/dev/null; then
+        ssh-keygen -q -m pem -t rsa -b 3072 -N "" -f "$key" >/dev/null </dev/null || die "ssh-keygen failed"
+        rm -f "$key.pub"
+      elif command -v openssl >/dev/null; then
+        openssl genrsa -traditional -out "$key" 3072 2>/dev/null || die "openssl genrsa failed"
+      else
+        die "a password needs ssh-keygen (openssh) or openssl to make the RSA key"
+      fi
+    fi
+    echo "enable_auth=true"
+    echo "username=$USERNAME"
+    echo "password=$pw"
+    echo "rsa_private_key_file=$key"
+  fi
+} > "$cfg"
+
+args=(--config="$cfg" --max-fps="$FPS" --name="$NAME")
+[[ -n $OUTPUT ]] && args+=(--output="$OUTPUT")
+[[ -n $KEYBOARD ]] && args+=(--keyboard="$KEYBOARD")
+(( VIEW_ONLY )) && args+=(--disable-input)
+(( CURSOR )) && args+=(--render-cursor)
+# The positional address wins over the config file's; both say the same.
+exec wayvnc "${args[@]}" "$ADDRESS:$PORT"

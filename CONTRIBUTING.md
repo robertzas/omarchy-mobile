@@ -132,6 +132,7 @@ bin/omandroid flash            # flash the five *_b images, set slot B active, b
 bin/omandroid push             # modules-push if needed, write slot B over SSH, verify, reboot
 bin/omandroid modules-push     # modules only, no reboot
 tools/phone-ssh <command>      # root@172.16.42.1 over USB
+tools/phone-mirror             # the phone's screen in a window here, mouse and keyboard included (omandroid-mirror)
 ```
 
 - **The device** comes from `DEVICE` (default `cheetah`, in [`omandroid.conf`](omandroid.conf)) and its descriptor `device/<codename>/device.conf`: `DEVICE=<codename> bin/omandroid images`. How builds and releases work for several devices: [docs/RELEASES.md](docs/RELEASES.md).
