@@ -675,8 +675,9 @@ Item {
         if (!item) return
         var p = Object.assign({}, patch)
         if (item.type === "command" && p.interval !== undefined) p.interval = Math.max(0, parseInt(p.interval, 10) || 0)
-        // A user widget's fields are typed by its manifest's schema.
-        if (sheets.settingsUserId) {
+        // A user widget's fields are typed by its manifest's schema, and a
+        // ported built-in's by its registry schema (the same format).
+        if (sheets.settingsSpec && sheets.settingsSpec.schema) {
           var schema = sheets.settingsSpec && sheets.settingsSpec.schema ? sheets.settingsSpec.schema : []
           Object.keys(p).forEach(function(key) {
             var field = schema.filter(function(f) { return f.key === key })[0]
@@ -832,7 +833,7 @@ Item {
           wrapMode: Text.Wrap
         }
         Repeater {
-          model: sheets.settingsUserId && sheets.settingsSpec && sheets.settingsSpec.schema ? sheets.settingsSpec.schema : []
+          model: sheets.settingsSpec && sheets.settingsSpec.schema ? sheets.settingsSpec.schema : []
           delegate: Column {
             id: fieldColumn
             required property var modelData
@@ -902,6 +903,15 @@ Item {
             + (sheets.settingsRecord.manifest && sheets.settingsRecord.manifest.capabilities.length
                ? "\nIt " + UserWidgets.capabilityText(sheets.settingsRecord.manifest.capabilities) + " (declared)." : "\nNo commands, no network.")
             + (sheets.settingsRecord.warnings.length ? "\n" + sheets.settingsRecord.warnings.slice(0, 4).join("\n") : "")
+        }
+
+        // -- a built-in ported from omarchy-widgets: what it talks to, and whose it is
+        Label {
+          visible: !sheets.settingsUserId && !!sheets.settingsSpec && !!sheets.settingsSpec.credit
+          width: parent.width
+          text: !sheets.settingsSpec || !sheets.settingsSpec.credit ? ""
+            : (sheets.settingsSpec.network ? "Uses the internet once turned on: " + (sheets.settingsSpec.source || "") + ".\n" : "")
+              + "Ported from " + sheets.settingsSpec.credit + " in Simon Schubert's omarchy-widgets (MIT)."
         }
 
         // -- the rest

@@ -7,7 +7,7 @@ Omandroid's phone profile for Omarchy's own shell. It isn't a fork: these are or
 | `plugins/omandroid.bar` | Phone status bar (a full `bar` plugin) |
 | `plugins/omandroid.quicksettings` | Pull-down quick settings |
 | `plugins/omandroid.launcher` | Home bar: app search, app grid and a prompt to the user's Omarchy default agent |
-| `plugins/omandroid.home` | Home screens: pages of apps and widgets on the wallpaper, with an edit mode |
+| `plugins/omandroid.home` | Home screens: pages of apps and widgets on the wallpaper, with an edit mode. The built-ins include ports of every widget in Simon Schubert's [omarchy-widgets](https://github.com/SimonSchubert/omarchy-widgets) `widgets/simonschubert/` (MIT, `LICENSE-omarchy-widgets`), in `ported/` |
 | `plugins/omandroid.keyboard` | Hide button above the on-screen keyboard |
 | `plugins/omandroid.fingerprint` | The under-display fingerprint sensor: target during verification, enrollment screen |
 | `profile/shell.json` | The phone layout the setup seeds once |

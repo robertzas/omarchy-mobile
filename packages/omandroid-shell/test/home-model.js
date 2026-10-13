@@ -453,6 +453,74 @@ test("host.run: declared, one at a time, rate-limited, with a timeout", () => {
   assert.ok(r.timedOut && r.stdout.length === 65536 && r.stderr === "")
 })
 
+// ---------------------------------------------------------------- the registry
+
+const fs = require("fs")
+const HOME_DIR = path.join(__dirname, "../plugins/omandroid.home")
+const FIELD_TYPES = ["string", "path", "integer", "number", "boolean", "enum"]
+
+test("every built-in is valid, sized inside its limits, and has its QML", () => {
+  assert.deepStrictEqual([...M.WIDGET_ORDER].sort(), Object.keys(M.REGISTRY).sort())
+  assert.strictEqual(new Set(M.WIDGET_ORDER).size, M.WIDGET_ORDER.length)
+  const names = new Set()
+  for (const type of M.WIDGET_ORDER) {
+    const s = M.REGISTRY[type]
+    assert.ok(/^[a-z][A-Za-z0-9]*$/.test(type), type)
+    assert.ok(typeof s.name === "string" && s.name.length > 0 && s.name.length <= 40, type)
+    assert.ok(!names.has(s.name), "two built-ins are called " + s.name)
+    names.add(s.name)
+    assert.ok(typeof s.icon === "string" && s.icon.length > 0 && s.icon.length <= 4, type)
+    for (const k of ["min", "max", "size"]) {
+      assert.ok(Array.isArray(s[k]) && s[k].length === 2 && s[k].every((n) => Number.isInteger(n) && n >= 1), type + " " + k)
+    }
+    assert.ok(s.min[0] <= s.size[0] && s.size[0] <= s.max[0] && s.min[1] <= s.size[1] && s.size[1] <= s.max[1], type + " size")
+    assert.ok(s.max[0] <= M.GRID.columns && s.max[1] <= M.GRID.rows, type + " fits the default grid")
+    assert.strictEqual(typeof s.network, "boolean", type)
+    assert.ok(s.config && typeof s.config === "object" && !Array.isArray(s.config), type)
+    const file = type.charAt(0).toUpperCase() + type.slice(1) + "Widget.qml"
+    assert.ok(fs.existsSync(path.join(HOME_DIR, file)), file)
+    // Network widgets are opt-in: off until the user turns them on.
+    if (s.network) assert.strictEqual(s.config.enabled, false, type + " starts off")
+  }
+})
+
+test("the ports carry their schema, credit and folder", () => {
+  const ported = Object.keys(M.PORTED)
+  assert.ok(ported.length >= 47, ported.length)
+  assert.deepStrictEqual([...M.PORTED_ORDER].sort(), [...ported].sort())
+  const license = fs.readFileSync(path.join(HOME_DIR, "LICENSE-omarchy-widgets"), "utf8")
+  assert.ok(license.includes("Copyright (c) 2026 Simon Schubert and contributors"))
+  for (const type of ported) {
+    const s = M.REGISTRY[type]
+    assert.strictEqual(s, M.PORTED[type])
+    assert.ok(/^simonschubert\/[a-z0-9-]+$/.test(s.credit), type)
+    if (s.network) {
+      assert.ok(typeof s.source === "string" && s.source.length > 0, type + " names what it talks to")
+      assert.strictEqual(s.schema[0].key, "enabled", type + " can be turned on")
+    }
+    const keys = new Set()
+    for (const f of s.schema || []) {
+      assert.ok(/^[A-Za-z_][A-Za-z0-9_]{0,39}$/.test(f.key) && !keys.has(f.key), type + " " + f.key)
+      keys.add(f.key)
+      assert.ok(FIELD_TYPES.includes(f.type), type + " " + f.key)
+      assert.ok(Object.prototype.hasOwnProperty.call(s.config, f.key), type + ": " + f.key + " has a default, or setConfig drops it")
+      if (f.type === "enum") assert.ok(f.options.includes(s.config[f.key]), type + " " + f.key)
+    }
+    // The wrapper names the port's folder, and the port credits the original.
+    const file = type.charAt(0).toUpperCase() + type.slice(1) + "Widget.qml"
+    const wrapper = fs.readFileSync(path.join(HOME_DIR, file), "utf8")
+    const folder = /folder: "ported\/([a-z0-9-]+)"/.exec(wrapper)
+    assert.ok(folder, file)
+    assert.ok(wrapper.includes("LICENSE-omarchy-widgets") && wrapper.includes(s.credit), file)
+    assert.ok(fs.existsSync(path.join(HOME_DIR, "ported", folder[1], "Widget.qml")), folder[1])
+    // A placed port keeps what it saves: its settings survive a layout round trip.
+    const l = M.addWidget(M.emptyLayout(grid), 0, type)
+    const placed = l.pages[0].items[0]
+    assert.deepStrictEqual([placed.w, placed.h], s.size, type)
+    assert.deepStrictEqual(M.parse(M.serialize(l)).pages[0].items[0].config, s.config, type)
+  }
+})
+
 let failed = 0
 for (const [name, fn] of tests) {
   try { fn(); console.log("ok - home model: " + name) } catch (e) { failed++; console.log("not ok - home model: " + name + "\n  " + (e.stack || e)) }

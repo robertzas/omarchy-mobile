@@ -117,6 +117,44 @@ if command -v node >/dev/null; then
 fi
 pass "home screen wiring"
 
+# The built-ins ported from omarchy-widgets: their QML parses and lints clean
+# (qmllint with the shell's imports, as `omandroid-widget check` runs it), their
+# helper scripts parse, and the MIT notice ships with them.
+grep -c 'Copyright (c) 2026 Simon Schubert and contributors' plugins/omandroid.home/LICENSE-omarchy-widgets >/dev/null \
+  || fail "the omarchy-widgets license ships with the home screen"
+if [[ -n $qmlformat ]]; then
+  for qml in plugins/omandroid.home/ported/*/*.qml; do
+    "$qmlformat" "$qml" >/dev/null 2>&1 || fail "$qml parses"
+  done
+fi
+while IFS= read -r -d '' file; do
+  case $file in
+    *.js) if command -v node >/dev/null; then node --check "$file" || fail "$file parses"; fi ;;
+    *.py) python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$file" || fail "$file parses" ;;
+    *.sh) bash -n "$file" || fail "$file parses" ;;
+  esac
+done < <(find plugins/omandroid.home/ported -type f \( -name '*.js' -o -name '*.py' -o -name '*.sh' \) -print0)
+if command -v node >/dev/null; then
+  python3 -B - "$(node -e 'const M = require("./plugins/omandroid.home/HomeModel.js"); console.log(M.PORTED_ORDER.map((t) => t.charAt(0).toUpperCase() + t.slice(1) + "Widget.qml").join(" "))')" <<'PY' || fail "the ported built-ins lint clean"
+import glob, importlib.machinery, importlib.util, os, sys
+loader = importlib.machinery.SourceFileLoader("omandroid_widget", "bin/omandroid-widget")
+spec = importlib.util.spec_from_loader("omandroid_widget", loader)
+tool = importlib.util.module_from_spec(spec)
+loader.exec_module(tool)
+home = "plugins/omandroid.home"
+if not tool.qmllint_path() or not os.path.isdir(os.path.join(tool.OMARCHY_PATH, "shell")):
+    print("ok - ported built-ins lint # SKIP no qmllint or Omarchy shell")
+    sys.exit(0)
+files = [os.path.join(home, "PortedWidget.qml")] + [os.path.join(home, f) for f in sys.argv[1].split()]
+files += sorted(glob.glob(os.path.join(home, "ported/*/*.qml")))
+lint = tool.run_qmllint([os.path.abspath(f) for f in files])
+for line in lint["errors"] + lint["warnings"]:
+    print("  " + line)
+sys.exit(1 if lint["errors"] or lint["warnings"] else 0)
+PY
+fi
+pass "ported built-ins"
+
 # The user's own widgets: the tool, its tests, and what ships with it.
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omandroid-widget || fail "omandroid-widget parses"
 python3 -B test/widget-tool.py || fail "omandroid-widget"
