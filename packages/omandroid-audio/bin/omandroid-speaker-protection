@@ -392,10 +392,19 @@ start() {
     [[ $(ctl_enum "$p PCM Source") == DSP ]] || fail "$p PCM Source is not DSP"
     # DRE (dynamic range enhancement), on in stock's mixer_paths.xml init
     # ("DRE DRE Switch" 1): lowers the amplifier's noise floor on quiet
-    # signals. Off unless OMANDROID_SPK_DRE=1 until C9d-3 has compared it.
-    if [[ ${OMANDROID_SPK_DRE:-0} == 1 ]]; then
+    # signals. On by default since C9d-5 (cleaner by ear on the bottom
+    # speaker); OMANDROID_SPK_DRE=0 leaves it off.
+    if [[ ${OMANDROID_SPK_DRE:-1} == 1 ]]; then
       ctl_set "$p DRE Switch" on || fail "$p DRE Switch failed"
       [[ $(ctl_values "$p DRE Switch") == on ]] || fail "$p DRE Switch did not read back"
+    fi
+    # The amplifier's hardware noise gate, as stock's DT sets it
+    # (cirrus,hw-noise-gate-select = 63: every gate source): mutes the
+    # output stage while the signal is below the gate threshold. On by
+    # default since C9d-5; OMANDROID_SPK_NOISE_GATE=0 leaves it off.
+    if [[ ${OMANDROID_SPK_NOISE_GATE:-1} == 1 ]]; then
+      ctl_set "$p HW Noise Gate Enable" 63 || fail "$p HW Noise Gate Enable failed"
+      [[ $(ctl_values "$p HW Noise Gate Enable") == 63 ]] || fail "$p HW Noise Gate Enable did not read back"
     fi
     ctl_set "$p Analog PCM Volume" "$(level "$p" ANALOG)" || fail "$p Analog PCM Volume failed"
     v=$(ctl_values "$p Analog PCM Volume")

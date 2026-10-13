@@ -29,6 +29,7 @@ def initial():
         c[f'{p} DSP1 Firmware'] = {'type': 'ENUMERATED', 'items': FW, 'v': 1}
         c[f'{p} DSP1 Preload Switch'] = {'type': 'BOOLEAN', 'v': 0}
         c[f'{p} DRE Switch'] = {'type': 'BOOLEAN', 'v': 0}
+        c[f'{p} HW Noise Gate Enable'] = {'type': 'INTEGER', 'max': 63, 'v': 0}
     c['TDM_0_RX Mixer EP6'] = {'type': 'BOOLEAN', 'v': 0}
     return c
 

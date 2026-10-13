@@ -161,10 +161,11 @@ prep=(OMANDROID_SPK_STAGE=); run media
   $(val "Bottom Digital PCM Volume") == 737 && $(val "Bottom Analog PCM Volume") == 10 ]] || { cat "$r/out" >&2; fail "stage media: 737 / 10 by default"; }
 [[ $(cat "$r/run/speaker-protection") == "ok: stage media"* ]] || fail "stage media: status"
 pass "stage media (the default): 737 / 10 on both, without a stamp or speaker_protection=1"
-prep=(OMANDROID_SPK_DRE=1); run dre
-((rc == 0)) && [[ $(val "Top DRE Switch") == on && $(val "Bottom DRE Switch") == on ]] || fail "DRE on when asked"
-r0=$r; r=$tmp/run.ok; [[ $(val "Top DRE Switch") == off ]] || fail "DRE left off by default"; r=$r0
-pass "DRE (stock's) on only when asked"
+prep=(OMANDROID_SPK_DRE=0 OMANDROID_SPK_NOISE_GATE=0); run dre
+((rc == 0)) && [[ $(val "Top DRE Switch") == off && $(val "Bottom HW Noise Gate Enable") == 0 ]] || fail "DRE and the gate off when asked"
+r0=$r; r=$tmp/run.ok; [[ $(val "Top DRE Switch") == on && $(val "Bottom DRE Switch") == on &&
+  $(val "Top HW Noise Gate Enable") == 63 && $(val "Bottom HW Noise Gate Enable") == 63 ]] || fail "DRE and the gate on by default"; r=$r0
+pass "DRE and the hardware noise gate (stock's) on by default, off when asked"
 
 check_refused() {  # name, then the scenario ran
   ((rc == 1)) || { cat "$r/out" >&2; fail "$1: start fails"; }

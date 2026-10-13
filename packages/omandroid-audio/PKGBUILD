@@ -7,7 +7,7 @@ pkgdesc="Omandroid audio for the Pixel 7 Pro: UCM profile and PipeWire rules for
 arch=(any)
 url="https://github.com/derekross/omandroid"
 license=(MIT)
-depends=(bash coreutils kmod python alsa-lib alsa-utils alsa-ucm-conf e2fsprogs pipewire wireplumber)
+depends=(bash coreutils kmod python alsa-lib alsa-utils alsa-ucm-conf e2fsprogs pipewire wireplumber swh-plugins)
 backup=(etc/omandroid/speaker.conf)
 
 check() {
