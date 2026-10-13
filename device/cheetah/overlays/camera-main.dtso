@@ -1,0 +1,67 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (CAMERA-PLAN.md, stage CAM-M): the main camera capture path,
+ * the Samsung S5KGN1 on three C-PHY trios to CSIS link 1 and CSIS WDMA
+ * context 0, with its AK7375-type focus actuator. Enables the camera power
+ * path as camera-stream-link2 does, plus PERIC0 USI1 and its I2C bus. It
+ * stacks with camera-stream-link2 (the ultrawide): both links share WDMA
+ * context 0 and the driver streams one at a time. Never apply it together
+ * with camera-pwr-test.
+ *
+ * Nothing binds at boot: gpio_s2mpg13, slg51002_regulator, s5kgn1, ak7375,
+ * phy_gs201_mipi_dcphy_rx and gs201_csis are blacklisted. ak7375 must be
+ * loaded with the others: the sensor's lens-focus makes the media graph
+ * wait for the lens.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/firmware/power-management/pmic-2} {
+	status = "okay";
+};
+
+&{/firmware/power-management/pmic-2/regulators/ldo12s} {
+	status = "okay";
+};
+
+&{/regulator-pp3200-bb-cam} {
+	status = "okay";
+};
+
+&{/regulator-pp1300-cam} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109700c0/i2c@10970000/pmic@75} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109000c0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109000c0/i2c@10900000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109000c0/i2c@10900000/lens@c} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109000c0/i2c@10900000/camera-sensor@3d} {
+	lens-focus = <&main_vcm>;
+	status = "okay";
+};
+
+&{/soc@0/phy@1a4f0000} {
+	status = "okay";
+};
+
+&{/soc@0/csis@1a450000} {
+	status = "okay";
+};
+
+/* Link 0 has no sensor described yet and would share WDMA context 0 */
+&{/soc@0/csis@1a440000} {
+	status = "disabled";
+};

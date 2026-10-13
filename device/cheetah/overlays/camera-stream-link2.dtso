@@ -56,13 +56,10 @@
 };
 
 /*
- * One link only: links 0 and 1 no longer have the sensor, and link 0 shares
- * WDMA context 0. Keep them off even if an earlier DTB had them on.
+ * Link 0 has no sensor described and would share WDMA context 0: keep it
+ * off. Link 1 (the main camera) is camera-main's to enable; links that
+ * share the context stream one at a time.
  */
 &{/soc@0/csis@1a440000} {
-	status = "disabled";
-};
-
-&{/soc@0/csis@1a450000} {
 	status = "disabled";
 };

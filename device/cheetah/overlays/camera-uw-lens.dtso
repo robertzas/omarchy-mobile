@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (CAMERA-PLAN.md, stage CAM5.3): the ultrawide's AK7375-type
+ * focus actuator at 0x0f, linked to the IMX386 (lens-focus) so libcamera
+ * finds it. Apply on top of camera-stream-link2. ak7375 is blacklisted like
+ * the other camera drivers and must be loaded with them: with lens-focus
+ * set, the media graph waits for the lens.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/usi@109200c0/i2c@10920000/lens@f} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109200c0/i2c@10920000/camera-sensor@1a} {
+	lens-focus = <&uw_vcm>;
+};
