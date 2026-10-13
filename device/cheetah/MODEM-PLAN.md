@@ -10,12 +10,18 @@ trains at Gen1 x2, not Gen3 x2 (open item, section 6.2). Earlier: M0, M2.5,
 M3.1, M3.3-B, M3.4.0-M3.4.4 passed; the first M3.4.5 run failed on the
 s51xx probe (no memory window; see "M3.4.5, first run"). **Every modem
 power-off is followed by one recovered UFS error-handler pass**, so the
-modem stays on once up (M2.6). Next on the phone: M4 (registration, SMS,
-data, voice), held for the human. Section 6.3 lists what our CPIF port
+modem stays on once up (M2.6). **M4.1 (first SIT request) got no
+reply** (GET_SIM_STATUS timed out, CP still ONLINE, UFS 0). **M4.1b
+(2026-10-13) showed the modem never takes a frame from either legacy
+transmit buffer and sends nothing after ONLINE**; the doorbell, the shared
+memory and coherency check out, and the one remaining difference from
+stock and the working stack is the packet processor. Next on the phone:
+M4.1c (the same kernel with `modem-cpif-pktproc`; a reboot), held for the
+human. Section 6.3 lists what our CPIF port
 still lacks for data and suspend.
 Kernel branch `omandroid-modem` in `~/android/mainline/wt-modem` (head
-`7d9c1c3a4`, section 6.3 and M3.4.5b), build in `~/android/mainline/out-modem` (last
-full build `7.3.0-rc6-omandroid-push1-00363-g7d9c1c3a4465`, W=1 clean on
+`151fa8928`, section 6.3, M3.4.5b and M4.1b), build in `~/android/mainline/out-modem` (last
+full build `7.3.0-rc6-omandroid-push1-00365-g151fa8928ac4`, W=1 clean on
 the touched files).
 Everything new is disabled by default. RADIOS-CAMERA-PLAN.md section 1 is
 the survey this follows.
@@ -1456,6 +1462,8 @@ tools/phone-ssh 'timeout 60 omandroid-sitd --probe' 2>&1 | tee logs/m4.1-probe.l
 #     no response at all (the IPC channel or CPIF's IPC path: send the kmsg log); a CP crash
 #   rollback: none needed (read-only)
 
+#   no SIM in the phone (2026-10-13): see M4.1b for what the probe prints then
+
 # M4.2 registration (announce: the radio transmits from now on; risk: medium)
 tools/phone-ssh 'systemctl start --no-block omandroid-sitd; sleep 5; journalctl -fu omandroid-sitd' | tee logs/m4.2-sitd.log
 #   (Ctrl-C once "Calls and SMS service ready" or a failure shows; allow up to ~6 minutes)
@@ -1523,6 +1531,190 @@ tools/phone-ssh 'sleep 240; systemctl is-active omandroid-modem omandroid-sitd o
 
 **Record** in MODEM-CLIENT.md's results table or here: per step, the date,
 `uname -r`, pass/fail, the failing step and its status code.
+
+**M4.1, first run (2026-10-13, int `a0a2d81c1`,
+`7.3.0-rc6-omandroid-push1-00419-ga0a2d81c16c6`, `omandroid-modem-sit`
+0.2.0, no SIM in the phone): FAILED, no reply.** GET_SIM_STATUS timed
+out after 8 s; the CP stayed ONLINE, UFS 0. Kernel log, from the boot on:
+- At ONLINE (100.8 s) the init handshake **completed**: "INIT_START <-
+  s5300", "capability part:0 AP:0x00000002 CP:0x00000007", "LINK_ATTR_SBD_IPC
+  is NOT set" (expected: stock's `mif,link_attrs` is the same 0x17c8, without
+  SBD; the S5300 uses the legacy buffers), "PIF_INIT_DONE -> s5300",
+  "PHONE_START <- s5300", "INIT_END -> s5300", BOOTING -> ONLINE. With the
+  SIT protocol CPIF sends INIT_END at PHONE_START without waiting for an
+  IPC client.
+- At the probe (1167 s): "ipc_open: umts_ipc0", then "ipc_write: umts_ipc0:
+  wait for INIT_END done (150ms) cnt:1 last:0 cmd:0xC2". That line is a
+  one-time 150 ms settle after an INIT_END the writer hasn't seen yet
+  (`last_init_end_cnt` 0 -> 1), not a hang: the write then went to the
+  FMT legacy buffer with no error logged, and `ap2cp_msg` still held
+  INIT_END (0xC2 = valid | command | 2). Then nothing until "ipc_release"
+  8 s later: no CPIF error, no MSI-side message, no link event.
+- From ONLINE to the probe (about 1070 s): **no cp2ap_wakeup interrupt and
+  no link change at all**. On the working stack the modem drops its wakeup
+  line when idle and the AP powers the link down; replies came through
+  "idle PCIe wake/retrain". Here either the modem held CP2AP_WAKEUP high
+  throughout, or the GPIO interrupt (gpa8-3, level-low) never reached
+  CPIF. Not yet known which.
+- Also at load: a workqueue WARN with backtrace (`mem_rx_work` without
+  WQ_PERCPU; harmless, fixed in `cf6661059`).
+
+Our CPIF's device tree (link attributes, legacy buffer offsets and sizes,
+control-message offsets, channel numbers) matches stock's live DT line for
+line; the doorbell and MSI paths carried PIF_INIT_DONE and PHONE_START
+within a millisecond of each other, so both directions of the command
+path work. What the log can't tell is which of three things happened:
+the modem never took the frame from the FMT buffer, it took it and didn't
+answer, or it answered and the reply never reached umts_ipc0.
+`151fa8928` adds a read-only `/sys/devices/platform/cpif/legacy_queues`
+(the ring pointers of each legacy buffer, flow control, both wakeup lines,
+a held-back doorbell) that separates the three, and M4.1b reads it around
+one probe, plus a read-only AT query on the other buffer (RAW,
+`umts_router`). Differences from the working stack that are still open,
+for after M4.1b and one per boot: the packet processor (stock and the
+working stack run it; we run without `modem-cpif-pktproc`, so the AP
+capability is 0x2 instead of 0x3), and the idle wake/link-down cycle.
+
+```sh
+# M4.1b SIT contact with diagnostics (read-only; risk: low). Needs a reboot to the new kernel, which
+# powers the CP off (one UFS pass), then M3.4.5b's start again.
+# Before (laptop): the human merges omandroid-modem (151fa8928 or later) into omandroid-int, builds it.
+# 1. new kernel (asks the human: reboot; risk: low): as M3.4.5b step 2, then kmsg terminal:
+tools/phone-ssh dmesg -w | tee logs/m4.1b-kmsg.log
+#   pass: no "mem_rx_work is using neither WQ_PERCPU" WARN when CPIF loads
+# 2. the modem to ONLINE: M3.4.5b step 4 (dead-man, clear the marker, start the unit); pass as there
+# 3. state before the probe (read-only)
+tools/phone-ssh 'C=/sys/devices/platform/cpif; cat $C/legacy_queues $C/info_region;
+  cat $C/napi/rx_int_count $C/napi/rx_poll_count; grep -E "mif_cp2ap|cp2ap_wakeup|phone_active" /proc/interrupts' | tee logs/m4.1b-before.txt
+#   expect: "magic:0x000000AA mem_access:1" ("active" is a field CPIF never sets: ignore it); for each buffer tx head == tail and rx head == tail;
+#   tx_flowctrl_mask:0x0; record cp2ap_wakeup (1 = the modem holds the link awake), the interrupt counts
+# 4. the probe (read-only): no SIM is in the phone
+tools/phone-ssh 'timeout 60 omandroid-sitd --probe' 2>&1 | tee logs/m4.1b-probe.log
+#   pass for the IPC path: any "SIT GET_SIM_STATUS: error=<n> length=<n>" line: a reply came back.
+#   With no SIM, expect "SIM card state 0 applications []" (0 = absent, no applications), or, if the
+#   modem answers absent with a short or error reply, "SIM status layout unexpected, length <n>" or a
+#   "modem rejected request with error <n>" traceback: all three are a pass here (record which).
+#   Then radio state 0, packet registration state 0, NR mode, SMSC present False (no SIM): any value.
+#   fail: "TimeoutError: SIT GET_SIM_STATUS" again: go on with 5. and 6., they tell where it stopped
+# 5. state after (read-only), at once
+tools/phone-ssh 'C=/sys/devices/platform/cpif; cat $C/legacy_queues $C/info_region;
+  cat $C/napi/rx_int_count $C/napi/rx_poll_count; grep -E "mif_cp2ap|cp2ap_wakeup|phone_active" /proc/interrupts' | tee logs/m4.1b-after.txt
+#   read the FMT line against 3.:
+#   - fmt tx head moved and tail did NOT follow: the modem never took the frame (AP->CP: the doorbell
+#     or what it reads in shared memory). Stop; record both files
+#   - tx tail followed head, rx head unchanged, mif_cp2ap_msg count unchanged: the modem took it and
+#     didn't answer. Stop; record cp2ap_wakeup. Next change (one per boot, offline first): the
+#     packet processor overlay, or the idle wake cycle
+#   - rx head moved but rx tail didn't follow, or tail followed and the probe still timed out: the reply
+#     arrived and CPIF didn't deliver it (MSI count, rx_int_count/rx_poll_count tell interrupt vs NAPI)
+# 6. the other buffer: a read-only AT query on umts_router (RAW), radio stays off
+tools/phone-ssh 'cd /usr/lib/omandroid-sit && timeout 20 python3 -c "import os, at, paths
+fd = paths.open_channel(paths.ROUTER)
+try: print(repr(at.exchange(fd, at.COMMANDS[\"radio-state\"], 8)))
+finally: os.close(fd)"; cat /sys/devices/platform/cpif/legacy_queues'
+#   pass: "+CFUN: 0" and "OK" (the radio is off). Empty: the RAW buffer doesn't answer either
+#   stop (any step): a CP crash (modem_state not ONLINE, /run/omandroid-modem/crashed), an Oops,
+#     UFS beyond 0 while the modem doesn't change power
+#   rollback: none (read-only); the modem stays ONLINE. Quote only the queue and count lines, never
+#     the AT reply beyond "+CFUN: <n>" and OK
+```
+
+**M4.1b, results (2026-10-13, int `b28635c96`,
+`7.3.0-rc6-omandroid-push1-00422-gb28635c965f3`; logs `logs/m4.1b-*`):
+FAILED the same way, and located.** Step 1 passed (no workqueue WARN);
+ONLINE with one POWER_ON, UFS 0, link Gen1 x2 (target Gen3).
+- Before the probe: "magic:0x000000AA mem_access:1" (the legacy link's
+  words, written at PHONE_START; "active:0" is an unused field); FMT and
+  NORM_RAW: every head and tail 0; flow control 0; cp2ap_wakeup 1,
+  ap2cp_wakeup 1, link powered, no doorbell held back; `ap2cp_msg` 0xC2
+  (INIT_END), `cp2ap_msg` 0xC8 (PHONE_START, the CP's last command);
+  `ap2cp_united_status` 0x4000 (the SIM-slot bits only). Interrupts:
+  mif_cp2ap_msg 2052 (all during the boot), mif_cp2ap_status 0,
+  cp2ap_wakeup 0, phone_active 0.
+- Probe: TimeoutError on GET_SIM_STATUS. After: **FMT "tx head:24 tail:0"**,
+  rx 0/0; `ap2cp_msg` 0x82 (valid | send FMT: the data doorbell went out,
+  none held back); MSI count unchanged at 2052. The AT query on
+  `umts_router`: no reply, NORM_RAW "tx head:24 tail:0".
+- So the modem takes nothing from either legacy transmit buffer, and from
+  ONLINE on it sends nothing at all (no MSI, no indication, no RFS
+  request), while it stays ONLINE with both wakeup lines high.
+
+Checked offline against stock's live DT, Google's CPIF and the working
+stack's patches:
+- Doorbell: the same address (BAR0 at bus 0x14e00000, CPU 0x40000000, +
+  0x60000) and value (0x10000 | int 0) as the working stack, written with
+  no error and read back; PIF_INIT_DONE through it got PHONE_START 0.9 ms
+  later.
+- Coherency: the IPC region is mapped write-back as on stock (linear map
+  there), and the boot loader image cbd sends is copied into the same
+  write-back mapping (IPC region + 0x10000) and the CP's ROM read it and
+  booted it: the CP does see what the AP writes through that mapping. The host sets the same IOCC registers as the working stack
+  (DBI 0x8e8 = 0x10101010, HSI1 sysreg 0x704 bits 1:0).
+- Device tree, legacy offsets, control-message offsets, magic (0xAA),
+  INIT_END at PHONE_START for SIT: as stock.
+- **Different from stock and from the working stack: the packet
+  processor.** We run without `modem-cpif-pktproc`: the AP capability word
+  reads 0x2 (channel extension only) where both others write 0x3
+  (+ uplink packet processor), and the downlink processor's info region
+  is left empty ("pktproc_init: version:0 ... num_queue:0") where the CP
+  expects version 2 with four queues. The CP announces 0x7. Open question
+  7 and section 6.2 item 4 named this as the first suspect for a CP that
+  stops at the IPC start; the symptom (ONLINE, then no IPC in either
+  direction) fits a CP that waits on its packet-processor setup.
+
+The int kernel already has `CONFIG_CP_PKTPROC` and `CONFIG_CP_PKTPROC_UL`
+(the 2026-10-13 fragment), so M4.1c needs no new kernel: only the overlay,
+in the images. **It can't be tried without a reboot**: the CP reads the
+capability word and the packet-processor info once, at the INIT handshake
+after its boot, and the overlay changes the device tree CPIF bound to
+(CPIF can't be unloaded). The reboot powers the CP off (one UFS pass) and
+the modem then needs M3.4.5b's start. The packet-processor code
+(`27a9eb4e9`, `000a39ed3`, `db2aaa156`) has never run on the hardware:
+the step below is risk medium for that reason.
+
+```sh
+# M4.1c the packet processor on (asks the human: reboot; announce: the modem powers on; risk: medium:
+# first run of the CPIF packet processor and its four MSI blocks)
+# 1. the same int kernel, images with the overlay after modem-cpif-test
+ov gnss-pmic-test gnss-test aoc-boot-test modem-cpif-test modem-cpif-pktproc && bin/omandroid push
+tools/phone-ssh 'uname -r; lsmod | grep -cE "^(cpif|shm_ipc|pcie_gs201_cp) "; dmesg | grep -c ufshcd_err_handler;
+  ls /proc/device-tree/cpif/pktproc_dl_support'
+#   pass: the int release (record it); 0; 0; the property exists
+tools/phone-ssh dmesg -w | tee logs/m4.1c-kmsg.log      # second terminal
+# 2. the modem to ONLINE: M3.4.5b step 4. Expect, in addition, at CPIF load (as stock's dmesg):
+#   "pktproc_get_info: version:2 cp_base:0x20000000 mode:1 num_queue:4", "pktproc_create: Create queue 0".."3",
+#   "pktproc_get_info_ul: ... num_queue:2", "pktproc_create_ul: Queue 0" and "Queue 1", and NOT "legacy
+#   buffers only"; at the first link up no "register_separated_msi_vector ... err"; at INIT_START
+#   "pktproc_init: version:2 ... num_queue:4", "capability part:0 AP:0x00000003", no "pktproc_init_ul() ret",
+#   PIF_INIT_DONE, "PHONE_START", "capability part:0 AP:0x00000003 CP:0x00000007", INIT_END, ONLINE
+#   stop: an Oops or panic (the watchdog resets the phone; record the kmsg log); "pktproc_init() error",
+#     "init_ap_capabilities part:0 fail", "ERR! capability"; the CP not ONLINE (collect as M3.4.5); a crash file
+#   rollback: images without modem-cpif-pktproc (as M4.1b); reboot
+# 3. a minute after ONLINE, read-only: is the CP talking by itself now?
+tools/phone-ssh 'sleep 60; C=/sys/devices/platform/cpif; cat $C/legacy_queues $C/info_region;
+  grep -E "mif_cp2ap|cp2ap_wakeup|phone_active|pktproc|DW-PCI-MSI" /proc/interrupts' | tee logs/m4.1c-before.txt
+#   record: mif_cp2ap_msg above its count at ONLINE, an FMT/NORM_RAW rx head off 0 (an indication or an RFS
+#   request), cp2ap_wakeup 0 with a link power-down in the kmsg (the idle cycle): any of these means the
+#   CP's IPC side started. None of them: go on anyway, 4. decides
+# 4. the probe, no SIM (read-only), and the state after, as M4.1b steps 4 and 5
+tools/phone-ssh 'timeout 60 omandroid-sitd --probe' 2>&1 | tee logs/m4.1c-probe.log
+tools/phone-ssh 'C=/sys/devices/platform/cpif; cat $C/legacy_queues $C/info_region;
+  grep -E "mif_cp2ap|cp2ap_wakeup|DW-PCI-MSI" /proc/interrupts' | tee logs/m4.1c-after.txt
+#   pass: a "SIT GET_SIM_STATUS: error=<n> length=<n>" line; with no SIM "SIM card state 0 applications []"
+#     (or "SIM status layout unexpected, length <n>", or "modem rejected request with error <n>": also a pass);
+#     FMT tx tail == head after it
+#   fail: TimeoutError and FMT "tx head:24 tail:0" again: the packet processor was not it. Stop, keep the
+#     modem up, send the four files; the next suspects are the CP's own view (its boot log) and the
+#     wakeup handshake, offline first
+#   if the link went down while idle (step 3), the probe's write wakes it: expect "Reserve doorbell
+#     interrupt: PCI not powered on", a link up and the reply; one UFS check after (power changes)
+# 5. AT on the RAW buffer, as M4.1b step 6: "+CFUN: 0" and OK
+# UFS after every step: unchanged, except a pass at a link power change (record it)
+```
+
+**M4.2 needs a SIM**: registration waits for GET_SIM_STATUS to show a
+ready USIM (`sim_timeout`, 120 s) and fails without one. With no SIM,
+M4.1b is the last M4 step.
 
 
 ## 4. Risks
