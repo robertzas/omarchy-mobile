@@ -1,0 +1,7 @@
+# Built on the computer by bionic/Makefile (the phone has no bionic
+# toolchain) and copied along with the package; never committed.
+bionic/prebuilt/
+pkg/
+src/
+*.pkg.tar.*
+__pycache__/
