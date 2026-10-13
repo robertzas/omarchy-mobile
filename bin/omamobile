@@ -255,7 +255,24 @@ cmd_images() {
   local dtb="$boot/dts/$DEV_DTB"
   [[ -f "$boot/Image" && -f "$dtb" ]] || die "build the kernel first: omamobile kernel"
   [[ -f "$KERNEL_OUT/initramfs.cpio.lz4" ]] || die "build the initramfs first: omamobile initramfs"
-  mkdir -p "$img" && rm -f "$img"/*
+  mkdir -p "$img" && rm -rf "$img"/*
+
+  # The descriptor's bring-up overlays, compiled from device/<codename>/overlays
+  # and applied onto the kernel's DTB, in order. The kernel's own DTB is left
+  # as built; the images carry the overlaid copy.
+  if [[ -n ${DEV_DTB_OVERLAYS:-} ]]; then
+    local ov ovdir="$img/overlays" ovs=() fdtoverlay="$KERNEL_OUT/scripts/dtc/fdtoverlay"
+    mkdir -p "$ovdir"
+    say "DTB overlays: $DEV_DTB_OVERLAYS"
+    for ov in $DEV_DTB_OVERLAYS; do
+      [[ $ov =~ ^[a-z0-9-]+$ ]] || die "DTB_OVERLAYS: bad overlay name '$ov'"
+      [[ -f "$ROOT/device/$DEVICE/overlays/$ov.dtso" ]] || die "no overlay device/$DEVICE/overlays/$ov.dtso"
+      "$dtc" -q -@ -I dts -O dtb -o "$ovdir/$ov.dtbo" "$ROOT/device/$DEVICE/overlays/$ov.dtso" || die "overlay $ov does not compile"
+      ovs+=("$ovdir/$ov.dtbo")
+    done
+    "$fdtoverlay" -i "$dtb" -o "$img/$DEV_CODENAME-overlaid.dtb" "${ovs[@]}" || die "applying the overlays failed"
+    dtb="$img/$DEV_CODENAME-overlaid.dtb"
+  fi
 
   say "Kernel: Image.lz4"
   lz4 -l -9 -f -q "$boot/Image" "$img/Image.lz4"
