@@ -216,6 +216,50 @@ Item {
   // Errors widgets hit when the home screen built them (QML that loads
   // badly), by widget id and hash: shown on their card and by widgetStatus.
   property var runtimeErrors: ({})
+  // Crash guard. An error card catches a widget's QML errors, but a widget
+  // that crashes Quickshell itself takes the shell down, and the crash-loop
+  // restarts with it. So each user widget is recorded in widget-guard.json
+  // (written synchronously) while it loads and for its first seconds; an
+  // entry still there at the next start was running when the shell died,
+  // and that widget stays off until its files change (a new hash).
+  readonly property string guardPath: configDir + "/widget-guard.json"
+  property var guardLoading: ({})
+  property var guardCrashed: ({})
+  FileView {
+    id: guardFile
+    path: root.guardPath
+    blockLoading: true
+    blockWrites: true
+    atomicWrites: true
+    printErrors: false
+    onLoaded: {
+      var data = {}
+      try { data = JSON.parse(text() || "{}") || {} } catch (e) { data = {} }
+      root.guardCrashed = Object.assign({}, data.crashed || {}, data.loading || {})
+      root.guardLoading = ({})
+      Object.keys(data.loading || {}).forEach(function(id) {
+        console.warn("omandroid.home: widget " + id + " was loading when the shell stopped; it stays off until it changes")
+      })
+      root.guardWrite()
+    }
+  }
+  function guardWrite() {
+    guardFile.setText(JSON.stringify({ loading: guardLoading, crashed: guardCrashed }) + "\n")
+  }
+  function guardBegin(widgetId, hash) {
+    var next = Object.assign({}, guardLoading); next[widgetId] = hash
+    guardLoading = next; guardWrite()
+  }
+  // `ran`: the widget has now run cleanly, so an older crash of it is forgotten.
+  function guardEnd(widgetId, ran) {
+    var crashed = ran && (widgetId in guardCrashed)
+    if (!(widgetId in guardLoading) && !crashed) return
+    var next = Object.assign({}, guardLoading); delete next[widgetId]
+    guardLoading = next
+    if (crashed) { var c = Object.assign({}, guardCrashed); delete c[widgetId]; guardCrashed = c }
+    guardWrite()
+  }
+
   // A widget to place once the scan has seen it (just created or copied).
   property string pendingAdd: ""
 
@@ -299,6 +343,8 @@ Item {
     if (card.state === "ok") {
       var runtime = runtimeErrors[widgetId]
       if (runtime && runtime.hash === r.hash) return { state: "error", message: runtime.message, url: "", record: r }
+      if (guardCrashed[widgetId] === r.hash)
+        return { state: "error", message: "This widget crashed the shell, so it's off. Edit it to try again.", url: "", record: r }
       card.url = "file://" + r.dir + "/" + r.manifest.entry + "?v=" + r.hash
     }
     return card

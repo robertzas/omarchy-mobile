@@ -31,7 +31,14 @@ Item {
   // Set when the home screen rebuilds this cell (a layout change), so no
   // late compile result is applied to a Loader that is going away.
   property bool gone: false
-  Component.onDestruction: gone = true
+  Component.onDestruction: { gone = true; if (home && widgetId) home.guardEnd(widgetId) }
+
+  // The crash guard (Home.qml) holds this widget until it has run a moment.
+  Timer {
+    id: settled
+    interval: 3000
+    onTriggered: if (frame.home) frame.home.guardEnd(frame.widgetId, true)
+  }
 
   onUrlChanged: build()
   Component.onCompleted: build()
@@ -48,6 +55,7 @@ Item {
     // Compiled synchronously: a widget is one small local file, and an
     // asynchronous compile that finished after this cell was rebuilt
     // called setSource on a destroyed Loader and crashed the shell.
+    if (home) home.guardBegin(widgetId, record ? record.hash : "")
     var c = Qt.createComponent(url)
     var finish = function() {
       if (frame.gone || frame.builtUrl !== wanted) return
@@ -60,8 +68,10 @@ Item {
           cellsWide: frame.entry ? frame.entry.w : 1,
           cellsHigh: frame.entry ? frame.entry.h : 1
         })
+        settled.restart()
       } else if (c.status === Component.Error && frame.home) {
         frame.home.noteRuntimeError(frame.widgetId, c.errorString().trim())
+        frame.home.guardEnd(frame.widgetId)
       }
     }
     if (c.status === Component.Loading) c.statusChanged.connect(finish)
