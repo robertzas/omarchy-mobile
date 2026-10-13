@@ -1001,6 +1001,27 @@ tools/phone-ssh 'dmesg -W' > logs/s5b2-kmsg-$(date +%H%M%S).log 2>&1 &
    - **Stop:** a hang, an oops, or Wi-Fi not back after step 2's reload.
 5. Then S5c.
 
+**S5b-2 revised, results (2026-10-13, 7.3.0-rc6-omandroid-push1-00372-g6e3b1e5164d6):**
+
+1. Awake: passed (ping over Wi-Fi; only the usual boot-time brcmfmac lines).
+2. Full-stack reload: **passed** (connected again within 20 s). The reload
+   registers a new wiphy (`phy1`), so later steps must glob
+   `/sys/kernel/debug/ieee80211/phy*/reset` rather than name `phy0`.
+3. debugfs bus reset: **passed.** No oops and no hang (the teardown fix
+   works). The firmware downloaded again and Wi-Fi reconnected by itself, so
+   the reset is usable as a recovery.
+4. Freeze with Wi-Fi connected: **ACK still missed.** `rc=1` and "Timeout
+   on response for entering D3 substate (1999 ms, mailboxint 0x00000000)",
+   then "device unresponsive after D3 inform"; `last_failed_dev` was
+   0000:01:00.0. Nothing reached the shared-memory mailbox either. Step 2's
+   reload recovered Wi-Fi. The sleep hook stays in unload mode.
+
+Next (S5b-3): the ACK arrives as a control-ring message, and the handler
+wakes the PM waiter inside ring processing, before the ring's read pointer
+is committed. Suspend then marks the bus down and refuses the remaining
+ring writes. The fix defers the wake-up to the end of the IRQ thread (branch
+`omandroid-wifi-d3`). Rerun step 4, then S5c.
+
 **S5c, 10 then 20 cycles with Wi-Fi loaded:** S4's loop without the
 `modprobe -r`, adding `nmcli -t -f STATE general` to each log line.
 
