@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Re-apply the hardening to Waydroid's Python after every waydroid install or
+# upgrade (omandroid-waydroid-harden; WAYDROID-PLAN.md W3).
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = waydroid
+Target = omandroid-waydroid
+
+[Action]
+Description = Keeping Waydroid's container away from the phone's hardware...
+When = PostTransaction
+Exec = /usr/lib/omandroid-waydroid/omandroid-waydroid-harden patch /

@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Keep Waydroid's container away from hardware only our drivers may drive.
+
+Waydroid 1.6.3 binds /sys/kernel/debug (rbind, read-write), every /dev/video*
+and every /dev/fb* into the container, and chmods /dev/video* and /dev/fb* to
+0777 at each container start. On this phone that would give Android's root:
+  - debugfs, whose regmap files reach PMU and other registers that crash the
+    SoC when read (AGENTS.md: never read PMU registers from userspace);
+  - the camera's raw CSIS and sensor nodes (CAMERA-PLAN.md), world-writable;
+  - the boot framebuffer.
+The container is privileged (no user namespace) and keeps CAP_MKNOD and
+CAP_SYS_ADMIN, so it could also make a block device node for the UFS and
+undo the storage guard's read-only flag. lxc-omandroid.conf denies every
+block device through the cgroup2 device controller.
+
+  omandroid-waydroid-harden patch  [ROOT]  patch Waydroid's Python (pacman hook)
+  omandroid-waydroid-harden config [ROOT]  fix the generated LXC config (before
+                                           each container start)
+  omandroid-waydroid-harden verify [ROOT]  exit 1 unless both are in place
+
+ROOT defaults to /. Every edit is idempotent and refuses a file whose
+expected text is missing (a new Waydroid version needs this script checked).
+"""
+import os
+import re
+import sys
+
+TAG = "# omandroid-waydroid: "
+LXC_PY = "usr/lib/waydroid/tools/helpers/lxc.py"
+MANAGER_PY = "usr/lib/waydroid/tools/actions/container_manager.py"
+LXC_DIR = "var/lib/waydroid/lxc/waydroid"
+INCLUDE = "lxc.include = /usr/share/omandroid-waydroid/lxc-omandroid.conf"
+
+# (file, exact text, what it does)
+CUTS = [
+    (LXC_PY, '    for n in glob.glob("/dev/fb*"):\n        make_entry(n)\n', "fb nodes"),
+    (LXC_PY, '    for n in glob.glob("/dev/video*"):\n        make_entry(n)\n', "video nodes"),
+    (LXC_PY, '    make_entry("/sys/kernel/debug", options="rbind,create=dir,optional 0 0")\n', "debugfs"),
+    (MANAGER_PY, '        perm_list.extend(glob.glob("/dev/fb*"))\n', "fb chmod 777"),
+    (MANAGER_PY, '        perm_list.extend(glob.glob("/dev/video*"))\n', "video chmod 777"),
+    (MANAGER_PY, '            "/sys/kernel/debug/sync/sw_sync",\n', "debugfs sw_sync chmod"),
+]
+
+# Lines the generated config_nodes must not carry (an older or unpatched
+# generation): debugfs, video and framebuffer binds.
+BAD_NODE = re.compile(r"^lxc\.mount\.entry\s*=\s*/(sys/kernel/debug|dev/video\d+|dev/fb\d+|dev/graphics/fb\d+)\s")
+
+
+def commented(text):
+    return "".join(TAG + line.lstrip() + "\n" for line in text.splitlines())
+
+
+def patch(root):
+    ok = True
+    for rel in sorted({c[0] for c in CUTS}):
+        path = os.path.join(root, rel)
+        s = open(path).read()
+        new = s
+        for f, text, what in CUTS:
+            if f != rel:
+                continue
+            if text in new:
+                new = new.replace(text, commented(text), 1)
+                print(f"{rel}: removed {what}")
+            elif commented(text) in new:
+                pass
+            else:
+                print(f"{rel}: {what}: expected text not found; check this Waydroid version", file=sys.stderr)
+                ok = False
+        if new != s:
+            tmp = path + ".omandroid-tmp"
+            with open(tmp, "w") as fh:
+                fh.write(new)
+            os.chmod(tmp, os.stat(path).st_mode & 0o7777)
+            os.replace(tmp, path)
+    return ok
+
+
+def config(root):
+    d = os.path.join(root, LXC_DIR)
+    nodes = os.path.join(d, "config_nodes")
+    conf = os.path.join(d, "config")
+    if not os.path.exists(conf):
+        print(f"{conf}: missing; run 'waydroid init' first", file=sys.stderr)
+        return False
+    if os.path.exists(nodes):
+        lines = open(nodes).read().splitlines(keepends=True)
+        kept = [l for l in lines if not BAD_NODE.match(l)]
+        if len(kept) != len(lines):
+            with open(nodes, "w") as fh:
+                fh.writelines(kept)
+            print(f"{nodes}: dropped {len(lines) - len(kept)} hardware binds")
+    s = open(conf).read()
+    if INCLUDE not in s.splitlines():
+        with open(conf, "a") as fh:
+            fh.write(("" if s.endswith("\n") else "\n") + INCLUDE + "\n")
+        print(f"{conf}: added the omandroid device rules")
+    return True
+
+
+def verify(root):
+    ok = True
+    for rel, text, what in CUTS:
+        if text in open(os.path.join(root, rel)).read():
+            print(f"FAIL {rel}: {what} still active")
+            ok = False
+    d = os.path.join(root, LXC_DIR)
+    nodes = os.path.join(d, "config_nodes")
+    if os.path.exists(nodes):
+        for l in open(nodes):
+            if BAD_NODE.match(l):
+                print(f"FAIL {nodes}: {l.strip()}")
+                ok = False
+    conf = os.path.join(d, "config")
+    if not os.path.exists(conf) or INCLUDE not in open(conf).read().splitlines():
+        print(f"FAIL {conf}: no omandroid device rules")
+        ok = False
+    if ok:
+        print("ok    Waydroid hardened")
+    return ok
+
+
+def main():
+    if len(sys.argv) not in (2, 3) or sys.argv[1] not in ("patch", "config", "verify"):
+        raise SystemExit(__doc__.split("\n\n")[3])
+    root = sys.argv[2] if len(sys.argv) == 3 else "/"
+    fn = {"patch": patch, "config": config, "verify": verify}[sys.argv[1]]
+    sys.exit(0 if fn(root) else 1)
+
+
+if __name__ == "__main__":
+    main()

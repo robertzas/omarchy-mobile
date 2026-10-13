@@ -1,0 +1,142 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Android apps through Waydroid on Omandroid (device/cheetah/WAYDROID-PLAN.md).
+#
+#   omandroid-waydroid check            read-only: kernel, GPU, cgroups, hardening
+#   omandroid-waydroid init             download and set up the Android images
+#                                       (root; SYSTEM_TYPE from waydroid.conf)
+#   omandroid-waydroid mesa             patch the vendor Mesa for the Mali-G710
+#   omandroid-waydroid props            write our Android properties, then
+#                                       regenerate Waydroid's config
+#   omandroid-waydroid firewall on|off  ufw rules for waydroid0 (DHCP, DNS, routing)
+#   omandroid-waydroid on|off           start at boot (the container service)
+#   omandroid-waydroid status
+#
+# Nothing starts by itself: the package installs with Waydroid off.
+set -euo pipefail
+
+LIB=/usr/lib/omandroid-waydroid
+CONF=/etc/omandroid/waydroid.conf
+WORK=/var/lib/waydroid
+SYSTEM_TYPE=VANILLA
+LCD_DENSITY=480
+MULTI_WINDOWS=true
+# shellcheck source=/dev/null
+[[ -r $CONF ]] && . "$CONF"
+
+die() { echo "omandroid-waydroid: $*" >&2; exit 1; }
+need_root() { [[ $EUID -eq 0 ]] || die "run as root (sudo)"; }
+
+harden_config() {
+  "$LIB/omandroid-waydroid-harden" config /
+}
+
+cmd_check() {
+  local rc=0
+  "$LIB/omandroid-waydroid-check" || rc=1
+  if [[ -e $WORK/lxc/waydroid/config ]]; then
+    "$LIB/omandroid-waydroid-harden" verify / || rc=1
+  else
+    echo "--    Waydroid not initialized yet (omandroid-waydroid init)"
+    # The Python patch can be checked before init.
+    "$LIB/omandroid-waydroid-harden" verify / 2>/dev/null | grep -v 'no omandroid device rules' || true
+  fi
+  return "$rc"
+}
+
+cmd_props() {
+  need_root
+  [[ -e $WORK/waydroid.cfg ]] || die "not initialized (omandroid-waydroid init)"
+  python3 -I - "$WORK/waydroid.cfg" "$LCD_DENSITY" "$MULTI_WINDOWS" <<'EOF'
+import configparser, sys
+path, density, multi = sys.argv[1:4]
+cfg = configparser.ConfigParser()
+cfg.optionxform = str          # Android property names are case sensitive
+cfg.read(path)
+if "properties" not in cfg:
+    cfg["properties"] = {}
+p = cfg["properties"]
+p["ro.sf.lcd_density"] = density            # the shell's 3x scale (160 * 3)
+p["persist.waydroid.multi_windows"] = multi  # one Hyprland window per app
+p["persist.waydroid.width_padding"] = "0"
+p["persist.waydroid.height_padding"] = "0"
+with open(path, "w") as fh:
+    cfg.write(fh)
+print(f"{path}: properties set")
+EOF
+  waydroid upgrade -o
+  harden_config
+}
+
+cmd_mesa() {
+  need_root
+  local img
+  for img in "$WORK/images/vendor.img" /usr/share/waydroid-extra/images/vendor.img /etc/waydroid-extra/images/vendor.img; do
+    [[ -f $img ]] && break
+  done
+  [[ -f $img ]] || die "no vendor.img found; run omandroid-waydroid init first"
+  "$LIB/omandroid-waydroid-mesa" "$img" "$WORK/overlay/vendor"
+}
+
+cmd_init() {
+  need_root
+  "$LIB/omandroid-waydroid-check" >/dev/null || die "the kernel is missing options; run omandroid-waydroid check"
+  "$LIB/omandroid-waydroid-harden" patch / || die "Waydroid's Python could not be hardened; not continuing"
+  case $SYSTEM_TYPE in VANILLA|GAPPS|FOSS) ;; *) die "SYSTEM_TYPE must be VANILLA, GAPPS or FOSS ($CONF)";; esac
+  waydroid init -s "$SYSTEM_TYPE"
+  harden_config
+  cmd_mesa
+  cmd_props
+  echo "Waydroid is set up. Next: omandroid-waydroid firewall on, then"
+  echo "  systemctl start waydroid-container, then (as the user) waydroid session start."
+}
+
+cmd_firewall() {
+  need_root
+  command -v ufw >/dev/null || die "ufw is not installed"
+  local verb=${1:-}
+  case $verb in
+    on)
+      # Android's DHCP and DNS go to dnsmasq on the host's side of the
+      # bridge; everything else is forwarded and masqueraded by
+      # waydroid-net.sh. ufw's default forward policy is DROP, and every
+      # netfilter base chain must accept a packet, so ufw needs its own rules.
+      ufw allow in on waydroid0 to any port 67 proto udp comment 'omandroid-waydroid DHCP'
+      ufw allow in on waydroid0 to any port 53 comment 'omandroid-waydroid DNS'
+      ufw route allow in on waydroid0 comment 'omandroid-waydroid out'
+      ;;
+    off)
+      ufw --force delete allow in on waydroid0 to any port 67 proto udp || true
+      ufw --force delete allow in on waydroid0 to any port 53 || true
+      ufw --force delete route allow in on waydroid0 || true
+      ;;
+    *) die "firewall on|off" ;;
+  esac
+}
+
+cmd_onoff() {
+  need_root
+  case $1 in
+    on)
+      cmd_check >/dev/null || die "omandroid-waydroid check fails; not enabling"
+      systemctl enable --now waydroid-container.service ;;
+    off)
+      systemctl disable --now waydroid-container.service ;;
+  esac
+}
+
+cmd_status() {
+  systemctl --no-pager --lines=0 status waydroid-container.service 2>/dev/null | sed -n 1,3p || true
+  waydroid status 2>/dev/null || true
+}
+
+case ${1:-} in
+  check) cmd_check ;;
+  init) cmd_init ;;
+  mesa) cmd_mesa ;;
+  props) cmd_props ;;
+  firewall) shift; cmd_firewall "${1:-}" ;;
+  on|off) cmd_onoff "$1" ;;
+  status) cmd_status ;;
+  *) sed -n '4,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Let the Waydroid vendor image's Mesa drive the Mali-G710.
+
+The vendor image ships upstream Mesa, whose Panfrost model table has no
+Mali-G710 (packages/mesa/0001-*, not merged upstream yet). Without a model
+entry the Gallium driver refuses the GPU, Android's gralloc cannot allocate,
+and surfaceflinger aborts at every start. The host's Mesa adds a G710 row
+that copies the G610 row (the same Valhall core). This does the equivalent
+in the vendor library without rebuilding it: the G610 row's product ID,
+PAN_PROD_ID(10, 8, 7) = 0xa8070000 under mask 0xff0f0000, becomes the
+G710's 0xa8020000, so the G710 gets the G610's (identical) parameters and
+Android reports "Mali-G610".
+
+    omandroid-waydroid-mesa VENDOR_IMG [OVERLAY_DIR]
+
+VENDOR_IMG is Waydroid's vendor.img (ext4, read with debugfs, never
+mounted or changed). The patched copies go to
+OVERLAY_DIR/{lib64,lib}/libgallium_dri.so; OVERLAY_DIR defaults to
+/var/lib/waydroid/overlay/vendor, which Waydroid mounts over /vendor.
+Refuses a library where the G610 row is not found exactly once, or that
+already knows the G710. Run it again after every vendor image update.
+Remove the overlay files once the image's Mesa has the G710 upstream.
+"""
+import hashlib
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+# struct pan_model starts with { u32 gpu_prod_id; u32 gpu_prod_id_mask; ... }
+# (little endian on aarch64 and arm).
+G610 = (0xA8070000).to_bytes(4, "little") + (0xFF0F0000).to_bytes(4, "little")
+G710 = (0xA8020000).to_bytes(4, "little") + (0xFF0F0000).to_bytes(4, "little")
+CANDIDATES = {
+    "lib64": ["/lib64/libgallium_dri.so", "/lib64/dri/libgallium_dri.so"],
+    "lib": ["/lib/libgallium_dri.so", "/lib/dri/libgallium_dri.so"],
+}
+
+
+def dump(image, src, dest):
+    """Copy one file out of an ext4 image with debugfs; False if absent."""
+    r = subprocess.run(["debugfs", "-R", f"dump {src} {dest}", image],
+                       capture_output=True, text=True)
+    return r.returncode == 0 and os.path.exists(dest) and os.path.getsize(dest) > 0
+
+
+def patch_one(image, arch, outdir):
+    with tempfile.TemporaryDirectory() as tmp:
+        lib = os.path.join(tmp, "libgallium_dri.so")
+        for src in CANDIDATES[arch]:
+            if dump(image, src, lib):
+                break
+            if os.path.exists(lib):
+                os.unlink(lib)
+        else:
+            print(f"{arch}: no libgallium_dri.so in {image}; skipped")
+            return None
+        data = bytearray(open(lib, "rb").read())
+        if G710 in data:
+            raise SystemExit(f"{arch} {src}: already has a G710 row; nothing to do (remove the overlay)")
+        hits = []
+        at = data.find(G610)
+        while at >= 0:
+            hits.append(at)
+            at = data.find(G610, at + 1)
+        if len(hits) != 1:
+            raise SystemExit(f"{arch} {src}: G610 row found {len(hits)} times; not patching")
+        data[hits[0]:hits[0] + len(G710)] = G710
+        dest = os.path.join(outdir, arch, "libgallium_dri.so")
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest + ".tmp", "wb") as fh:
+            fh.write(data)
+        os.chmod(dest + ".tmp", 0o644)
+        os.replace(dest + ".tmp", dest)
+        print(f"{dest}: from {src}, row at {hits[0]:#x}, sha256 {hashlib.sha256(data).hexdigest()}")
+        return dest
+
+
+def main():
+    if len(sys.argv) not in (2, 3):
+        raise SystemExit(__doc__.split("\n\n")[1])
+    image = sys.argv[1]
+    outdir = sys.argv[2] if len(sys.argv) == 3 else "/var/lib/waydroid/overlay/vendor"
+    if not shutil.which("debugfs"):
+        raise SystemExit("debugfs (e2fsprogs) is needed")
+    if not os.path.isfile(image):
+        raise SystemExit(f"{image}: not a file")
+    done = [d for d in (patch_one(image, a, outdir) for a in ("lib64", "lib")) if d]
+    if not any(d.endswith("lib64/libgallium_dri.so") for d in done):
+        raise SystemExit("the 64-bit library was not patched")
+
+
+if __name__ == "__main__":
+    main()

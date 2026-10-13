@@ -1,0 +1,80 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Read-only check that this kernel and host can run Waydroid
+# (device/cheetah/WAYDROID-PLAN.md W0/W1). Prints one line per item and exits
+# 1 if anything required is missing. Touches nothing.
+#   omandroid-waydroid-check            the running kernel (/proc/config.gz)
+#   CONFIG_FILE=path omandroid-waydroid-check   a .config instead (tests, laptop)
+set -uo pipefail
+
+cfg=${CONFIG_FILE:-/proc/config.gz}
+if [[ ! -r $cfg ]]; then
+  echo "FAIL: $cfg not readable (CONFIG_IKCONFIG_PROC)" >&2
+  exit 1
+fi
+if [[ $cfg == *.gz ]]; then config=$(zcat -- "$cfg"); else config=$(cat -- "$cfg"); fi
+
+missing=0
+want() {	# want OPTION y|m|ym WHY
+  local opt=$1 ok=$2 why=$3 v
+  v=$(grep -E "^CONFIG_${opt}=" <<<"$config" | head -n1 | cut -d= -f2)
+  if [[ -n $v && $ok == *"$v"* ]]; then
+    printf 'ok    %-32s %s\n' "$opt=$v" "$why"
+  else
+    printf 'MISS  %-32s %s\n' "$opt=${v:-unset}" "$why"
+    missing=1
+  fi
+}
+
+# Container basics
+want ANDROID_BINDER_IPC y "binder (built in; binder_linux is not a module here)"
+want ANDROID_BINDERFS y "binderfs: Waydroid allocates binder, vndbinder, hwbinder"
+want PSI y "lmkd; without it Android's init reboots the container"
+want MEMFD_CREATE y "ashmem replacement (sys.use_memfd)"
+want CGROUPS y "LXC"
+want CGROUP_FREEZER y "Waydroid's freeze/unfreeze"
+want CGROUP_DEVICE y "the block-device deny rule (lxc-omandroid.conf)"
+want CGROUP_BPF y "cgroup2 device rules are BPF programs"
+for ns in PID_NS NET_NS IPC_NS UTS_NS; do want "$ns" y "LXC namespaces"; done
+want BRIDGE ym "waydroid0"
+want VETH ym "the container's interface"
+want TUN ym "/dev/tun (Android VPN apps)"
+want OVERLAY_FS ym "/var/lib/waydroid/overlay"
+want FUSE_FS ym "Android's /sdcard (FUSE passthrough)"
+# Host NAT: waydroid-net.sh with LXC_USE_NFT=true (Arch's package)
+want NF_TABLES ym "host NAT through nft"
+want NF_TABLES_INET y "table inet lxc"
+want NFT_NAT ym "table ip lxc, postrouting"
+want NFT_MASQ ym "masquerade"
+# Android's netd inside the container: legacy iptables and policy routing
+want NETFILTER_XTABLES_LEGACY y "Android's iptables uses the legacy interface"
+for t in IP_NF_FILTER IP_NF_MANGLE IP_NF_RAW IP_NF_NAT IP6_NF_FILTER IP6_NF_MANGLE IP6_NF_RAW; do
+  want "$t" ym "netd's tables"
+done
+want IP_MULTIPLE_TABLES y "netd's per-network routing (ip rule)"
+want IPV6_MULTIPLE_TABLES y "netd's per-network routing (ip -6 rule)"
+want INET_DIAG_DESTROY y "netd closes a lost network's sockets"
+for m in NETFILTER_XT_MARK NETFILTER_XT_CONNMARK NETFILTER_XT_MATCH_OWNER NETFILTER_XT_MATCH_QUOTA \
+         NETFILTER_XT_MATCH_BPF NETFILTER_XT_MATCH_PKTTYPE NETFILTER_XT_MATCH_U32 \
+         NETFILTER_XT_TARGET_IDLETIMER NETFILTER_XT_TARGET_TCPMSS NETFILTER_XT_MATCH_SOCKET; do
+  want "$m" ym "netd's chains"
+done
+
+# Live state (only when checking the running kernel)
+if [[ -z ${CONFIG_FILE:-} ]]; then
+  if grep -qw binder /proc/filesystems; then echo "ok    binderfs in /proc/filesystems"; else echo "MISS  binderfs not registered"; missing=1; fi
+  if [[ -e /proc/pressure/memory ]]; then echo "ok    /proc/pressure/memory"; else echo "MISS  /proc/pressure/memory (psi=0 on the command line?)"; missing=1; fi
+  render=
+  for r in /sys/class/drm/renderD*; do
+    [[ -e $r/device/driver ]] || continue
+    if [[ $(basename "$(readlink -f "$r/device/driver")") == panthor ]]; then render=/dev/$(basename "$r"); fi
+  done
+  if [[ -n $render ]]; then echo "ok    $render is panthor"; else echo "MISS  no panthor render node (GPU-PLAN.md)"; missing=1; fi
+  if mountpoint -q /sys/fs/cgroup && [[ $(stat -fc %T /sys/fs/cgroup) == cgroup2fs ]]; then
+    echo "ok    cgroup2 on /sys/fs/cgroup"
+  else
+    echo "MISS  cgroup2 not mounted on /sys/fs/cgroup"; missing=1
+  fi
+fi
+
+exit "$missing"
