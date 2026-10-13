@@ -9,7 +9,7 @@
  * module EEPROM (0x50).
  *
  * Nothing here switches anything at boot: gpio-s2mpg13, slg51002-regulator
- * and gs201-cam-power are blacklisted (modprobe.d/omandroid-camera.conf),
+ * and gs201-cam-power are blacklisted (modprobe.d/omamobile-camera.conf),
  * so the fixed supplies and the camera PMIC wait for their GPIOs and the
  * test nodes for their supplies until each module is loaded by hand, one
  * per boot, as the runbook says. Paths, not labels, so the base DTB needs

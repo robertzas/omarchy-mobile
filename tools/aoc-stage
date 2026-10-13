@@ -8,9 +8,9 @@
 # BEFORE a second one touches the hardware. Every step prints what it is about
 # to do into the kernel log first ("aoc-stage: ...").
 #
-# Needs a kernel with omandroid-aoc and a DTB with the aoc-boot-test overlay.
+# Needs a kernel with omamobile-aoc and a DTB with the aoc-boot-test overlay.
 # The modules (gsa, gs201_aoc_sysmmu, gs201_aoc_boot, gs201_aoc_rails) must be
-# blacklisted from autoload (/etc/modprobe.d/omandroid-aoc-bringup.conf).
+# blacklisted from autoload (/etc/modprobe.d/omamobile-aoc-bringup.conf).
 #
 # Usage:
 #   tools/aoc-stage [options] STAGE
@@ -60,10 +60,10 @@ set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SSH="$ROOT/tools/phone-ssh"
 LOGDIR="$ROOT/logs"
-FW="$HOME/android/omandroid/vendor/google/cheetah/proprietary/vendor/firmware/aoc.bin"
+FW="$HOME/android/omamobile/vendor/google/cheetah/proprietary/vendor/firmware/aoc.bin"
 DBG=/sys/kernel/debug/aoc
 GSADBG=/sys/kernel/debug/17c90000.gsa
-MARKER=/var/lib/omandroid/aoc-bringup-started
+MARKER=/var/lib/omamobile/aoc-bringup-started
 
 watchdog=0 stage= pstore=0 trusty=0
 

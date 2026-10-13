@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# The speaker protection watchdog (AOC-PLAN.md C8f/C9): mutes both amplifiers
+# if their protection stops working (kernel log errors from the amplifiers,
+# the amplifiers no longer held awake, levels above the stage's ceilings, or,
+# during playback, a DSP that is not running the protection firmware with the
+# calibration applied). Started by omamobile-speaker-protection.service and
+# bound to it; when it stops, for any reason, the amplifiers are muted.
+[Unit]
+Description=Speaker protection watchdog
+BindsTo=omamobile-speaker-protection.service
+After=omamobile-speaker-protection.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/omamobile/speaker.conf
+ExecStart=/usr/bin/omamobile-speaker-protection watch
+ExecStopPost=/usr/bin/omamobile-speaker-protection mute --reason "the speaker watchdog stopped"
+Restart=no

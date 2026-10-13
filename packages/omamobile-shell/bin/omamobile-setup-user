@@ -1,0 +1,223 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile's user setup: what a platform's "setup-user" step does in
+# Omarchy's lifecycle contract (docs/lifecycle-dispatch.md upstream). Runs as
+# the user. Each step runs once, tracked with Omarchy's own omarchy-done
+# markers, so the user's later changes are never overwritten.
+set -euo pipefail
+
+share=/usr/share/omamobile/shell
+config=~/.config/omarchy
+
+# A phone has no keyboard-first workflow: skip Omarchy's "Learn Keybindings"
+# welcome (see patches/omarchy/0001-first-run-...patch).
+omarchy-done mark welcome-keybindings-not-applicable
+
+# Phone shell plugins: link them, so package updates reach the user
+mkdir -p "$config/plugins"
+for plugin in "$share"/plugins/omamobile.*; do
+  ln -sfn "$plugin" "$config/plugins/$(basename "$plugin")"
+done
+
+# Phone shell profile (bar, quick settings, launcher), seeded once
+if omarchy-done ensure omamobile-shell-profile; then
+  cp "$share/profile/shell.json" "$config/shell.json"
+fi
+
+# Plugins added after a profile was seeded: switched on once each, in the
+# user's shell.json (a user who removes one later keeps it off).
+add_plugin() {
+  python3 - "$config/shell.json" "$1" <<'PY'
+import json, sys
+path, plugin = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as f:
+        config = json.load(f)
+except FileNotFoundError:
+    sys.exit(0)
+plugins = config.setdefault("plugins", [])
+if not any(isinstance(p, dict) and p.get("id") == plugin for p in plugins):
+    plugins.append({"id": plugin})
+    with open(path + ".new", "w") as f:
+        json.dump(config, f, indent=2)
+        f.write("\n")
+    import os
+    os.replace(path + ".new", path)
+PY
+}
+if omarchy-done ensure omamobile-fingerprint-plugin; then
+  add_plugin omamobile.fingerprint
+fi
+if omarchy-done ensure omamobile-keyboard-plugin; then
+  add_plugin omamobile.keyboard
+fi
+# Home screens (omamobile.home): pages of apps and widgets on the wallpaper.
+if omarchy-done ensure omamobile-home-plugin; then
+  add_plugin omamobile.home
+fi
+
+# Developer tools that packages pull in but a phone's app drawer shouldn't
+# list (v4l-utils comes with ffmpeg): hidden for this user with the usual
+# NoDisplay override in ~/.local/share/applications, which Omarchy's app
+# library honours. Still runnable from a terminal.
+if omarchy-done ensure omamobile-hide-dev-tools; then
+  apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+  mkdir -p "$apps"
+  for id in qv4l2 qvidcap assistant designer linguist qdbusviewer; do
+    src=/usr/share/applications/$id.desktop
+    [[ -f $src && ! -e $apps/$id.desktop ]] || continue
+    sed '/^\[Desktop Entry\]/a NoDisplay=true' "$src" | grep -v '^NoDisplay=false' > "$apps/$id.desktop"
+  done
+fi
+
+# PIN or password (omamobile-set-pin records it): phones set up before the
+# choice existed used a PIN with the lock's number pad, so record that, once.
+if omarchy-done ensure omamobile-credential-type; then
+  if [[ ! -f ~/.config/omamobile/credential ]]; then
+    mkdir -p ~/.config/omamobile
+    echo pin >~/.config/omamobile/credential
+  fi
+fi
+
+# Phone scale: 1440x3120 at 3 is 480x1040 logical, seeded once
+if omarchy-done ensure omamobile-monitor-scale; then
+  sed -i 's/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = 3/' ~/.config/hypr/monitors.lua
+fi
+
+# Touch phone: no pointer on screen (it still hides on touch if a USB mouse is
+# attached and the user turns it back on). Added once to the user's override
+# file, Omarchy's place for local Hyprland settings.
+if omarchy-done ensure omamobile-hide-cursor; then
+  cat >>~/.config/hypr/looknfeel.lua <<'LUA'
+
+-- Omarchy Mobile: a touch phone shows no pointer
+hl.config({ cursor = { invisible = true, hide_on_touch = true } })
+LUA
+fi
+
+# On-screen keyboard: squeekboard shows itself when a text field takes focus
+# (Hyprland relays text-input-v3 to its input-method-v2). Started from
+# Omarchy's user autostart file, once.
+if omarchy-done ensure omamobile-osk; then
+  gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true
+  cat >>~/.config/hypr/autostart.lua <<'LUA'
+
+-- Omarchy Mobile: on-screen keyboard
+o.launch_on_start("squeekboard")
+LUA
+fi
+
+# squeekboard needs Hyprland's input-method slot, which Omarchy's fcitx5 (run
+# for desktop compose sequences) would otherwise take. Masked for this user
+# only, once; unmask to bring it back.
+if omarchy-done ensure omamobile-osk-input-method; then
+  systemctl --user mask --now omarchy-fcitx5.service
+fi
+
+# Suspend isn't supported on the phone's kernel yet: take it out of the system
+# menu with Omarchy's own toggle (omarchy-toggle-suspend brings it back).
+if omarchy-done ensure omamobile-suspend-off; then
+  mkdir -p ~/.local/state/omarchy/toggles
+  touch ~/.local/state/omarchy/toggles/suspend-off
+fi
+
+# Phone window rules (apps fill the screen instead of floating at desktop
+# sizes), loaded after Omarchy's defaults from the user's override file, once.
+if omarchy-done ensure omamobile-phone-rules; then
+  cat >>~/.config/hypr/looknfeel.lua <<LUA
+
+-- Omarchy Mobile: phone window rules
+dofile("$share/hypr/phone.lua")
+LUA
+fi
+
+# Chromium's first-run dialogs are desktop-sized: their buttons land off a
+# phone screen (the "Additional Terms" page blocked a login). Skip them, once.
+if omarchy-done ensure omamobile-chromium-no-first-run; then
+  grep -qx -- --no-first-run ~/.config/chromium-flags.conf 2>/dev/null ||
+    echo --no-first-run >>~/.config/chromium-flags.conf
+fi
+
+# Websites and web apps should get their phone versions. Sites choose by the
+# user agent (desktop Chromium on Linux ignores --use-mobile-user-agent, and
+# an explicit one also drops the desktop client hints). Once.
+if omarchy-done ensure omamobile-chromium-mobile; then
+  flags=~/.config/chromium-flags.conf
+  major=$(chromium --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
+  [[ -f $flags ]] && sed -i -e '/^"\?--user-agent=/d' "$flags"
+  # Quoted: the launcher splits each line on spaces otherwise.
+  echo "\"--user-agent=Mozilla/5.0 (Linux; Android 14; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major:-153}.0.0.0 Mobile Safari/537.36\"" >>"$flags"
+fi
+
+# Lock screen: Omarchy's lock with a number pad (lock-keypad toggle, see
+# patches/omarchy/0003-*), since its session lock hides the on-screen keyboard.
+if omarchy-done ensure omamobile-lock-keypad; then
+  mkdir -p ~/.local/state/omarchy/toggles
+  touch ~/.local/state/omarchy/toggles/lock-keypad
+fi
+
+# Chromium won't lay out narrower than about 500 px, wider than the phone's
+# 480 px (at scale 3), so its window ran off the right edge. On Wayland its
+# --force-device-scale-factor multiplies the output scale, so 0.83 gives about
+# 550 px of layout width (2.5, the first try, made everything 2.5x bigger).
+if omarchy-done ensure omamobile-chromium-scale-2; then
+  if grep -q -- '^--force-device-scale-factor=' ~/.config/chromium-flags.conf 2>/dev/null; then
+    sed -i 's/^--force-device-scale-factor=.*/--force-device-scale-factor=0.83/' ~/.config/chromium-flags.conf
+  else
+    echo --force-device-scale-factor=0.83 >>~/.config/chromium-flags.conf
+  fi
+fi
+
+# The first version of the mobile step above also deleted the scale factor,
+# so Chromium's window ran off the right edge again. Put it back, once.
+if omarchy-done ensure omamobile-chromium-scale-3; then
+  grep -q -- '^--force-device-scale-factor=' ~/.config/chromium-flags.conf 2>/dev/null ||
+    echo --force-device-scale-factor=0.83 >>~/.config/chromium-flags.conf
+fi
+
+# Style > Unlock picks the look of the disk-encryption unlock screen. The phone
+# has no encrypted disk, and the early boot logo follows the default theme, so
+# hide it through Omarchy's menu extension file (reused id + failing "when").
+if omarchy-done ensure omamobile-menu-hide-unlock; then
+  extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
+  if [[ -f $extension ]] && ! grep -q '"style.unlock"' "$extension"; then
+    sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: no disk-unlock screen on the phone\n  "style.unlock": {"when": "false"},/' "$extension"
+  fi
+fi
+
+# Omarchy's Setup > Security > Fingerprint looks for a USB reader and installs
+# libfprint-git. On the phone it opens Omarchy Mobile's enrollment screen instead
+# (omamobile.fingerprint, through fprintd), once, through the same menu
+# extension file (a reused id replaces the entry).
+if omarchy-done ensure omamobile-menu-fingerprint; then
+  extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
+  mkdir -p "$(dirname "$extension")"
+  [[ -s $extension ]] || printf '{\n}\n' >"$extension"
+  if ! grep -q '"setup.security.fingerprint"' "$extension"; then
+    sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: fingerprint setup on the screen, through fprintd\n  "setup.security.fingerprint": {"icon": "\xf3\xb0\x88\xb7", "label": "Fingerprint", "when": "test -x \/usr\/lib\/omamobile-fp\/omamobile-fp-chroot", "action": "omarchy-shell shell summon omamobile.fingerprint '"'"'{\\"page\\":\\"enroll\\"}'"'"'"},/' "$extension"
+  fi
+fi
+
+# Screensaver for a portrait phone: the wordmark stacked on two lines, in
+# Omarchy's branding file, and a smaller terminal font so it fits (patch
+# 0006 lets the screensaver use the user's foot config). Seeded once.
+if omarchy-done ensure omamobile-screensaver; then
+  install -Dm644 "$share/branding/screensaver.txt" ~/.config/omarchy/branding/screensaver.txt
+  install -Dm644 "$share/branding/foot-screensaver.ini" ~/.config/foot/screensaver.ini
+fi
+
+# System > PIN sets or changes the phone's PIN (omamobile-set-pin), through
+# Omarchy's menu extension file. Added once.
+if omarchy-done ensure omamobile-menu-pin; then
+  extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
+  if [[ -f $extension ]] && ! grep -q '"system.pin"' "$extension"; then
+    sed -i '0,/^{/s//{\n  "system.pin": {"icon":"󰌾","label":"PIN","description":"Set or change the PIN that unlocks this phone","action":"omamobile-set-pin"},/' "$extension"
+  fi
+fi
+
+# Like Android, waking the phone from its screensaver shows the PIN lock
+# (patch 0006 honours the lock-after-screensaver toggle). Set once.
+if omarchy-done ensure omamobile-lock-after-screensaver; then
+  mkdir -p ~/.local/state/omarchy/toggles
+  touch ~/.local/state/omarchy/toggles/lock-after-screensaver
+fi

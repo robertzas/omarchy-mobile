@@ -4,7 +4,7 @@
 # amplifier firmware the Pixel 7 Pro (cheetah) needs out of a Google factory
 # image, on the user's own machine.
 #
-# Google's firmware is not ours to redistribute, so Omandroid never ships it.
+# Google's firmware is not ours to redistribute, so Omarchy Mobile never ships it.
 # Like LineageOS's extract-files, this pulls it from an image the user already
 # has (the factory zip from developers.google.com/android/images, or the
 # image-*.zip inside it) and renames it to what the mainline drivers request:
@@ -74,7 +74,7 @@ Usage: extract-vendor-firmware [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
   -w DIR   scratch directory for the ~1 GB vendor.img (default: a temp dir in \$TMPDIR)
   -f       skip the android-info.txt board=$DEVICE check
 
-Install on the phone (from the omandroid repo):
+Install on the phone (from the omamobile repo):
   tar -C OUTDIR -cf - usr | tools/phone-ssh 'tar -C / -xf -'
 USAGE
 }

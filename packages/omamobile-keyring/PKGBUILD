@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+pkgname=omamobile-keyring
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="The key that signs Omarchy Mobile's packages, for pacman"
+arch=(any)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+install=omamobile-keyring.install
+
+package() {
+  install -Dm644 "$startdir/omamobile.gpg" "$pkgdir/usr/share/pacman/keyrings/omamobile.gpg"
+  install -Dm644 "$startdir/omamobile-trusted" "$pkgdir/usr/share/pacman/keyrings/omamobile-trusted"
+  install -Dm644 "$startdir/omamobile-revoked" "$pkgdir/usr/share/pacman/keyrings/omamobile-revoked"
+  install -Dm644 "$startdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

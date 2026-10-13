@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+post_install() {
+  echo "omamobile-gnss: Location is off. Needs the vendor files in /usr/lib/omamobile-vendor/gnss"
+  echo "  (tools/extract-vendor-chroot -p gnss on your computer), the gnss DT overlays,"
+  echo "  then: omamobile-gnss on   (device/cheetah/GNSS-PLAN.md, G5)"
+}
+post_upgrade() {
+  systemctl daemon-reload 2>/dev/null || true
+  # 0.2.0 added the orbit download timer to the Location switch: follow
+  # the switch's current state
+  if systemctl is-enabled -q omamobile-gnss-nmea.socket 2>/dev/null; then
+    systemctl enable --now omamobile-gnss-lto.timer 2>/dev/null || true
+  fi
+  if [ "$(vercmp "$2" 0.2.0)" -lt 0 ]; then
+    echo "omamobile-gnss 0.2.0: settings in /etc/omamobile/gnss.conf; SUPL is now off"
+    echo "  by default (SUPL=1 there turns it on); orbit predictions download on a timer."
+  fi
+}
+pre_remove() {
+  /usr/bin/omamobile-gnss off 2>/dev/null || true
+}

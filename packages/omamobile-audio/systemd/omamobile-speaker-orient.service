@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# User unit, not enabled by the package: the speakers' left and right follow
+# the phone's orientation (omamobile-speaker-eq follow), as stock swaps them in
+# landscape. It listens to the sensor proxy and claims nothing; the screen's
+# auto-rotation holds the accelerometer. Enable with
+#   systemctl --user enable --now omamobile-speaker-orient
+[Unit]
+Description=Omarchy Mobile: speaker channels follow the phone's orientation
+After=pipewire.service
+PartOf=pipewire.service
+
+[Service]
+ExecStart=/usr/bin/omamobile-speaker-eq follow
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=pipewire.service

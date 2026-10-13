@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# Rotate the Hyprland screen and touch input with the phone (user service).
+# Not enabled: systemctl --user enable --now omamobile-autorotate
+[Unit]
+Description=Rotate the screen with the phone
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/omamobile-autorotate
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

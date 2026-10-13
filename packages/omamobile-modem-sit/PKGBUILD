@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+pkgname=omamobile-modem-sit
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omarchy Mobile SIT RIL for the Pixel 7 Pro's S5300: LTE registration, IMS calls and SMS, cellular data on rmnet0"
+arch=(aarch64)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(python iproute2 iputils systemd alsa-lib alsa-utils omamobile-modem)
+backup=(etc/omamobile/modem-sit.conf)
+install=omamobile-modem-sit.install
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}

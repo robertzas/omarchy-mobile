@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Rename this repository from Omandroid to Omarchy Mobile (omamobile).
+
+Kept in the tree as the record of how the rename was done (2026-10-13). It is
+idempotent: a second run finds nothing to do and says so.
+
+    tools/rename-omamobile [--dry-run]
+
+What it does, in order:
+
+ 1. Paths. `git mv` every tracked path whose name contains the old name,
+    shallowest component first, so a renamed directory takes its untracked
+    and ignored contents (build outputs, __pycache__) along with it.
+ 2. Contents. Substitutes, in the order of RULES below, in every tracked
+    text file. Binary files (a NUL in the first 8 KiB), symlinks, the
+    armoured keyring (*.gpg: its user IDs are base64, re-exported from keys/
+    instead) and the files in SKIP are left alone. Spans listed in PROTECT
+    are never rewritten, so the reserved widget prefixes keep the old name.
+ 3. Fixups. FIXUPS add the old name back where it must stay: the widget
+    owner prefixes `omandroid.` remain reserved, so old ids can't be
+    squatted by a user widget.
+ 4. Symlinks. Tracked symlinks whose target contains the old name are
+    recreated with the new target.
+
+Rules for the capitalised form, decided per occurrence class:
+  - `Omandroid` standing alone (prose, comments, pkgdesc, manifests'
+    "author", user-visible strings, the USB gadget manufacturer) becomes
+    "Omarchy Mobile";
+  - `Omandroid` inside an identifier (a letter, digit or underscore on
+    either side: FpiDeviceOmandroidUdfps and its GObject class names)
+    becomes "Omamobile".
+Everything else is mechanical: OMANDROID -> OMAMOBILE, omandroid ->
+omamobile. The two GitHub repositories and the working tree's directory get
+their public names first (derekross/omarchy-mobile, linux-omarchy-mobile,
+~/Projects/omarchy-mobile). Prose that no longer reads well after the
+substitution was edited by hand afterwards, in the same series of commits.
+"""
+import os
+import re
+import subprocess
+import sys
+
+OLD = "omandroid"
+
+# (pattern, replacement), applied in this order to each file's text.
+RULES = [
+    (re.compile(r"derekross/linux-omandroid"), "derekross/linux-omarchy-mobile"),
+    (re.compile(r"derekross/omandroid"), "derekross/omarchy-mobile"),
+    (re.compile(r"linux-omandroid-headers"), "linux-omamobile-headers"),
+    (re.compile(r"linux-omandroid"), "linux-omarchy-mobile"),
+    (re.compile(r"Projects/omandroid"), "Projects/omarchy-mobile"),
+    (re.compile(r"(?<![A-Za-z0-9_])Omandroid(?![A-Za-z0-9_])"), "Omarchy Mobile"),
+    (re.compile(r"Omandroid"), "Omamobile"),
+    (re.compile(r"OMANDROID"), "OMAMOBILE"),
+    (re.compile(r"omandroid"), "omamobile"),
+]
+
+# Text that keeps the old name on purpose: never substituted.
+PROTECT = [
+    'RESERVED = ("omarchy.", "omamobile.", "omandroid.")',
+    "the omarchy., omamobile. and omandroid. prefixes are reserved",
+    'var RESERVED_OWNERS = ["omarchy", "omamobile", "omandroid"]',
+    '({"id": "omandroid.x"}, "reserved")',
+]
+
+# (path, after substitution, final text): put the old name back.
+FIXUPS = [
+    ("packages/omamobile-shell/bin/omamobile-widget",
+     'RESERVED = ("omarchy.", "omamobile.")', PROTECT[0]),
+    ("packages/omamobile-shell/bin/omamobile-widget",
+     "the omarchy. and omamobile. prefixes are reserved", PROTECT[1]),
+    ("packages/omamobile-shell/plugins/omamobile.home/UserWidgets.js",
+     'var RESERVED_OWNERS = ["omarchy", "omamobile"]', PROTECT[2]),
+]
+
+# Files whose old-name mentions are the point: this tool and the host-side
+# runbook for the parts outside git.
+SKIP = {"tools/rename-omamobile", "docs/RENAME-HOST-STEPS.md"}
+
+DRY = "--dry-run" in sys.argv[1:]
+
+
+def git(*args, **kw):
+    return subprocess.run(["git", *args], check=True, text=True,
+                          capture_output=True, **kw).stdout
+
+
+def tracked():
+    return [p for p in git("ls-files", "-z").split("\0") if p]
+
+
+def new_name(component):
+    for pattern, repl in RULES[5:]:
+        component = pattern.sub(repl, component)
+    return component
+
+
+def rename_paths():
+    moved = 0
+    while True:
+        tops = set()
+        for path in tracked():
+            parts = path.split("/")
+            for i, part in enumerate(parts):
+                if OLD in part.lower():
+                    tops.add("/".join(parts[: i + 1]))
+                    break
+        if not tops:
+            return moved
+        for top in sorted(tops):
+            head, _, tail = top.rpartition("/")
+            dest = (head + "/" if head else "") + new_name(tail)
+            if OLD in dest.lower():
+                sys.exit("cannot rename %s: no rule for %s" % (top, tail))
+            print("  mv %s -> %s" % (top, dest))
+            moved += 1
+            if not DRY:
+                git("mv", top, dest)
+        if DRY:
+            return moved
+
+
+def substitute(text):
+    count = 0
+    pieces = re.split("(" + "|".join(re.escape(p) for p in PROTECT) + ")", text)
+    for i in range(0, len(pieces), 2):
+        for pattern, repl in RULES:
+            pieces[i], n = pattern.subn(repl, pieces[i])
+            count += n
+    return "".join(pieces), count
+
+
+def rewrite_contents():
+    files = total = 0
+    for path in tracked():
+        if path in SKIP or path.endswith(".gpg") or os.path.islink(path):
+            continue
+        if not os.path.isfile(path):
+            continue
+        with open(path, "rb") as f:
+            raw = f.read()
+        if b"\0" in raw[:8192] or OLD.encode() not in raw.lower():
+            continue
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            print("  skipped (not UTF-8): %s" % path)
+            continue
+        new, n = substitute(text)
+        if new != text:
+            files += 1
+            total += n
+            if not DRY:
+                with open(path, "w", encoding="utf-8", newline="") as f:
+                    f.write(new)
+    return files, total
+
+
+def apply_fixups():
+    done = 0
+    for path, before, after in FIXUPS:
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        if before in text and after not in text:
+            done += 1
+            if not DRY:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text.replace(before, after))
+    return done
+
+
+def relink():
+    done = 0
+    for path in tracked():
+        if not os.path.islink(path):
+            continue
+        target = os.readlink(path)
+        if OLD not in target.lower():
+            continue
+        new = new_name(target)
+        print("  ln %s -> %s" % (path, new))
+        done += 1
+        if not DRY:
+            os.unlink(path)
+            os.symlink(new, path)
+            git("add", "--", path)
+    return done
+
+
+def count_old():
+    paths = sum(OLD in p.lower() for p in tracked())
+    out = subprocess.run(["git", "grep", "-I", "-i", "-c", OLD], text=True,
+                         capture_output=True).stdout
+    hits = sum(int(line.rsplit(":", 1)[1]) for line in out.splitlines() if line)
+    return paths, len(out.splitlines()), hits
+
+
+def main():
+    os.chdir(git("rev-parse", "--show-toplevel").strip())
+    before = count_old()
+    print("before: %d paths, %d files with %d lines naming %s"
+          % (before[0], before[1], before[2], OLD))
+    moved = rename_paths()
+    files, subs = rewrite_contents()
+    fixed = apply_fixups()
+    linked = relink()
+    after = count_old()
+    print("renamed %d paths (top-level moves), rewrote %d files (%d substitutions), "
+          "%d fixups, %d symlinks%s" % (moved, files, subs, fixed, linked,
+                                        " (dry run)" if DRY else ""))
+    print("after: %d paths, %d files with %d lines naming %s"
+          % (after[0], after[1], after[2], OLD))
+    if not (moved or files or fixed or linked):
+        print("nothing to do: already renamed")
+
+
+if __name__ == "__main__":
+    main()

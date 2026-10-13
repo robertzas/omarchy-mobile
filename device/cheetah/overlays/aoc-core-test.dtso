@@ -3,7 +3,7 @@
  * Bring-up (AOC-PLAN.md, stage C5): everything the AoC core needs, i.e. the
  * GSA mailbox, Trusty, the AoC System MMU, the three AoC mailboxes and the
  * AoC node with cheetah's board id and revision. The modules stay
- * blacklisted from autoload; omandroid-aoc-start loads them in order.
+ * blacklisted from autoload; omamobile-aoc-start loads them in order.
  * Paths, not labels, so the base DTB needs no __symbols__.
  */
 /dts-v1/;

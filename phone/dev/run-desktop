@@ -19,9 +19,9 @@ rsync -a --delete "$OMARCHY_PATH/shell/" "$DEV/shell/"
 
 mkdir -p "$FAKE_HOME/.config/omarchy" "$FAKE_HOME/.local/state/omarchy"
 ln -sfn "$HOME/.local/state/omarchy/current" "$FAKE_HOME/.local/state/omarchy/current"
-ln -sfn "$ROOT/packages/omandroid-shell/plugins" "$FAKE_HOME/.config/omarchy/plugins"
+ln -sfn "$ROOT/packages/omamobile-shell/plugins" "$FAKE_HOME/.config/omarchy/plugins"
 # Copied, not linked: the shell writes to shell.json when settings change
-cp "$ROOT/packages/omandroid-shell/profile/shell.json" "$FAKE_HOME/.config/omarchy/shell.json"
+cp "$ROOT/packages/omamobile-shell/profile/shell.json" "$FAKE_HOME/.config/omarchy/shell.json"
 
 # Once the nested window appears on the desktop, float it at the phone's
 # 13:6 aspect. Uses the desktop compositor's own dispatchers; no config changes.

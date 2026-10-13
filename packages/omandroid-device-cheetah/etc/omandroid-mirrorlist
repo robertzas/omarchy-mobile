@@ -1,6 +1,0 @@
-# SPDX-License-Identifier: MIT
-# Where pacman gets Omandroid's packages ([omandroid] in /etc/pacman.conf).
-# While the project is private, the repository lives on the phone and is
-# filled from the build machine (tools/repo-push). Once it's public, this
-# becomes a URL, delivered by a package update.
-Server = file:///var/lib/omandroid/repo/$arch

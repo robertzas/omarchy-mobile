@@ -1,0 +1,55 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omamobile-device-cheetah, from a copy of this directory alone.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+for script in bin/*; do bash -n "$script" || fail "$script parses"; done
+pass "scripts parse"
+
+./build "$tmp/build" || fail "C tools compile"
+pass "C tools compile"
+
+# omamobile-bootctl against a synthetic devinfo: dump works, and a dry run
+# of mark-successful plans exactly one flag byte and writes nothing
+python3 - "$tmp/devinfo" <<'PY'
+import struct, sys
+buf = bytearray(8192)
+buf[0:4] = b"DEVI"
+struct.pack_into("<HH", buf, 4, 3, 15)
+buf[0x30:0x34] = bytes([2, 0x0a, 0, 0])   # slot a: successful, active-bit off
+buf[0x34:0x38] = bytes([1, 0x04, 0, 0])   # slot b: active, not successful
+open(sys.argv[1], "wb").write(buf)
+PY
+cp "$tmp/devinfo" "$tmp/devinfo.orig"
+"$tmp/build/omamobile-bootctl" dump "$tmp/devinfo" | grep -q 'version: 3.15' || fail "bootctl decodes devinfo"
+plan=$("$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo" b 2>&1 || true)
+grep -q '0x35: 04 -> 06' <<<"$plan" || fail "mark-successful plans one byte (0x35: 04 -> 06)" 
+cmp -s "$tmp/devinfo" "$tmp/devinfo.orig" || fail "a dry run writes nothing"
+pass "bootctl dry run plans one byte and writes nothing"
+
+./install "$tmp/root" "$tmp/build"
+for f in usr/bin/omamobile-bootctl usr/bin/reboot-to usr/bin/omamobile-boot-success usr/bin/omamobile-setup-system \
+         usr/lib/systemd/system/omamobile-boot-success.service usr/lib/systemd/network/20-usb-gadget.network \
+         usr/lib/udev/rules.d/10-omamobile-storage.rules usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf usr/lib/udev/rules.d/20-omamobile-gpu-always-on.rules \
+         usr/bin/omamobile-wlan-mac usr/lib/udev/rules.d/80-omamobile-wlan-mac.rules \
+         usr/bin/omamobile-charge-guard usr/lib/modprobe.d/omamobile-charger.conf \
+         usr/lib/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf \
+         usr/lib/udev/rules.d/72-omamobile-feedbackd.rules \
+         usr/bin/omamobile-bt-addr usr/lib/systemd/system/omamobile-bt-addr@.service usr/lib/udev/rules.d/80-omamobile-bt-addr.rules \
+         usr/lib/modprobe.d/omamobile-bluetooth.conf \
+         usr/bin/omamobile-wifi-start usr/lib/systemd/system/omamobile-wifi.service usr/lib/modprobe.d/omamobile-wifi.conf; do
+  [[ -e $tmp/root/$f ]] || fail "install stages $f"
+done
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-boot-success.service") == ../omamobile-boot-success.service ]] \
+  || fail "the boot-success unit is enabled by a vendor wants link"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-wifi.service") == ../omamobile-wifi.service ]] \
+  || fail "the Wi-Fi unit is enabled by a vendor wants link"
+grep -q 'mode=' bin/omamobile-wifi-start && fail "omamobile-wifi-start never loads the SysMMU firewall"
+grep -qx 'blacklist pcie_gs201' vendor/modprobe.d/omamobile-wifi.conf || fail "pcie_gs201 only loads through the guarded service"
+grep -qE '^options max77759_charger' vendor/modprobe.d/omamobile-charger.conf && fail "the charge guard stays off until USB-C-PLAN gate B3g passes"
+grep -qx 'blacklist max77759_charger' vendor/modprobe.d/omamobile-max77759.conf || fail "the charger stays blacklisted"
+pass "install stages the package"

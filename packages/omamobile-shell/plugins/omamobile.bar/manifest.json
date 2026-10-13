@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "omamobile.bar",
+  "name": "Mobile status bar",
+  "version": "0.1.0",
+  "author": "Omarchy Mobile",
+  "license": "MIT",
+  "description": "Phone status bar: clock on the left, connectivity and battery on the right, clear of the camera cutout. Tap or pull down to open quick settings.",
+  "kinds": ["bar"],
+  "entryPoints": {
+    "bar": "Bar.qml"
+  }
+}

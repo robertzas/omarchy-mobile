@@ -1,18 +1,18 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Copy the [omandroid] repository (out/repo, from tools/repo-build) to the
-# phone's /var/lib/omandroid/repo, where pacman reads it while the project is
+# Copy the [omamobile] repository (out/repo, from tools/repo-build) to the
+# phone's /var/lib/omamobile/repo, where pacman reads it while the project is
 # private. Then `omarchy update` on the phone installs whatever is new.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
-[[ -f out/repo/aarch64/omandroid.db ]] || { echo "Run tools/repo-build first" >&2; exit 1; }
+[[ -f out/repo/aarch64/omamobile.db ]] || { echo "Run tools/repo-build first" >&2; exit 1; }
 tar cf - -C out/repo aarch64 | tools/phone-ssh '
   set -e
-  rm -rf /var/lib/omandroid/repo.new && mkdir -p /var/lib/omandroid/repo.new
-  tar xf - -C /var/lib/omandroid/repo.new --no-same-owner
-  rm -rf /var/lib/omandroid/repo.old
-  [ -d /var/lib/omandroid/repo ] && mv /var/lib/omandroid/repo /var/lib/omandroid/repo.old
-  mv /var/lib/omandroid/repo.new /var/lib/omandroid/repo
-  rm -rf /var/lib/omandroid/repo.old
-  ls /var/lib/omandroid/repo/aarch64 | grep -c "pkg.tar.*[^g]$"'
+  rm -rf /var/lib/omamobile/repo.new && mkdir -p /var/lib/omamobile/repo.new
+  tar xf - -C /var/lib/omamobile/repo.new --no-same-owner
+  rm -rf /var/lib/omamobile/repo.old
+  [ -d /var/lib/omamobile/repo ] && mv /var/lib/omamobile/repo /var/lib/omamobile/repo.old
+  mv /var/lib/omamobile/repo.new /var/lib/omamobile/repo
+  rm -rf /var/lib/omamobile/repo.old
+  ls /var/lib/omamobile/repo/aarch64 | grep -c "pkg.tar.*[^g]$"'

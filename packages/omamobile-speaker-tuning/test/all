@@ -1,0 +1,60 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omamobile-speaker-tuning: the AoC protocol and its allowlist
+# against a fake AoC (socket pairs that check the framing and refuse other
+# blocks), the helper protocol against test/fake-waves-host (including a
+# helper that breaks it), the daemon's triggers, and the staged layout.
+# Nothing here needs the phone, Google's files or a bionic toolchain.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+export PYTHONDONTWRITEBYTECODE=1
+
+bash -n install || fail "install parses"
+bash -n lib/omamobile-waves-host-run || fail "the chroot runner parses"
+for f in bin/omamobile-speaker-tuning lib/*.py test/*.py test/fake-waves-host; do
+  python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$f" || fail "$f parses"
+done
+pass "scripts parse"
+
+out=$(python3 -W ignore::ResourceWarning -m unittest -q test/test_tuning.py 2>&1) || {
+  printf '%s\n' "$out" >&2; fail "unit tests"; }
+pass "protocol, allowlist, fake AoC, helper protocol, tuner, triggers"
+
+# The helper source: no Google or Waves headers, nothing linked but bionic.
+grep -E '^#include' bionic/omamobile-waves-host.c | grep -vE '<(dlfcn|errno|limits|pthread|stdarg|stdbool|stdint|stdio|stdlib|string|time|unistd)\.h>' &&
+  fail "the helper includes something beyond libc"
+grep -q -- '-ldl$' bionic/Makefile || fail "the helper links only libc and libdl"
+pass "helper source"
+
+# Staged layout, with a stand-in for the helper binary if it isn't built.
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/src"
+tar -C . --exclude=./pkg --exclude=./src --exclude="./*.pkg.tar.*" -cf - . | tar -C "$tmp/src" -xf -   # makepkg's own work dirs (pkg/ is not readable)
+if [[ ! -f $tmp/src/bionic/prebuilt/omamobile-waves-host ]]; then
+  mkdir -p "$tmp/src/bionic/prebuilt"; : > "$tmp/src/bionic/prebuilt/omamobile-waves-host"
+fi
+"$tmp/src/install" "$tmp/stage"
+for f in usr/bin/omamobile-speaker-tuning usr/lib/omamobile-speaker-tuning/speaker_tuning.py \
+         usr/lib/omamobile-speaker-tuning/aoc_tuning.py usr/lib/omamobile-speaker-tuning/waves_host.py \
+         usr/lib/omamobile-speaker-tuning/omamobile-waves-host-run \
+         usr/lib/omamobile-speaker-tuning/omamobile-waves-host \
+         usr/lib/systemd/system/omamobile-speaker-tuning.service etc/omamobile/speaker-tuning.conf \
+         usr/share/licenses/omamobile-speaker-tuning/LICENSE; do
+  [[ -e $tmp/stage/$f ]] || fail "staged $f"
+done
+python3 "$tmp/stage/usr/bin/omamobile-speaker-tuning" --help >/dev/null || fail "the staged daemon imports its library"
+[[ -z $(find "$tmp/stage" -name '*.so' -o -name '*.mps' -o -name '*.ini') ]] || fail "nothing of Google's or Waves' is staged"
+grep -q '^#OMAMOBILE_SPK_TUNING=off' etc/omamobile/speaker-tuning.conf || fail "tuning is off by default"
+if command -v systemd-analyze >/dev/null; then
+  systemd-analyze verify --man=no "$tmp/stage/usr/lib/systemd/system/omamobile-speaker-tuning.service" 2>&1 |
+    grep -v -e 'not executable' -e 'No such file' -e 'omamobile-speaker-watch' -e 'omamobile-aoc' -e '^$' && fail "unit verify" || true
+fi
+pass "staged layout, config and unit"
+
+# Mode off: the daemon exits at once without starting the helper.
+OMAMOBILE_SPK_TUNING=off OMAMOBILE_RUN=$tmp/run OMAMOBILE_SPK_TUNING_HELPER=/nonexistent \
+  python3 bin/omamobile-speaker-tuning run 2>/dev/null || fail "mode off exits cleanly"
+[[ $(cat "$tmp/run/speaker-tuning") == off ]] || fail "mode off writes its state"
+pass "mode off"

@@ -9,16 +9,16 @@
 # speaker filter included). The protection monitor samples both amplifiers
 # every 0.5 s; if either coil reading rises more than RISE degrees C above its
 # first reading in the burst, the player is killed and both amplifiers are
-# muted at once (omandroid-speaker-protection mute). Prints the monitor lines
+# muted at once (omamobile-speaker-protection mute). Prints the monitor lines
 # and TRIPPED or CLEAN.
 #   IMP=1   also sample the firmware's measured coil impedance (Z/CAL_R)
-#           during the burst (omandroid-speaker-protection impedance)
+#           during the burst (omamobile-speaker-protection impedance)
 #   FB=1    run the amplifiers' V/I feedback stream to the AoC for the burst
-#           (omandroid-speaker-protection feedback; needs the TX slot overlay)
-# Needs omandroid-audio 0.4.0 or later for IMP and FB.
+#           (omamobile-speaker-protection feedback; needs the TX slot overlay)
+# Needs omamobile-audio 0.4.0 or later for IMP and FB.
 set -u
 F=${F:?file} S=${S:-5} VOL=${VOL:-1.0} RISE=${RISE:-5} IMP=${IMP:-0} FB=${FB:-0}
-SP=omandroid-speaker-protection
+SP=omamobile-speaker-protection
 U=$(loginctl list-users --no-legend | awk '$2 != "root" {print $2; exit}')
 I=$(id -u "$U")
 as_user() { runuser -u "$U" -- env XDG_RUNTIME_DIR=/run/user/$I "$@"; }

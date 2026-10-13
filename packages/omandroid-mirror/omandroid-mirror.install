@@ -1,8 +1,0 @@
-# SPDX-License-Identifier: MIT
-post_install() {
-  echo "omandroid-mirror: off. On the computer: tools/phone-mirror (or on the phone:"
-  echo "  omandroid-mirror on, then a VNC viewer to 172.16.42.1:5900 over USB)."
-}
-pre_remove() {
-  /usr/bin/omandroid-mirror off >/dev/null 2>&1 || true
-}

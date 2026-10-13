@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Stock's speaker tuning (Waves MaxxAudio on the AoC), sent by
+# omamobile-speaker-tuning (device/cheetah/AOC-TUNING-RESEARCH.md). Bound to
+# the speaker protection watchdog: it runs only while the watchdog runs and
+# stops with it. With OMAMOBILE_SPK_TUNING=off (the default) it exits at
+# once. Not enabled by the package; once T4 has passed:
+#   systemctl enable omamobile-speaker-tuning
+[Unit]
+Description=Speaker tuning (Waves on the AoC)
+BindsTo=omamobile-speaker-watch.service
+After=omamobile-speaker-watch.service omamobile-aoc.service
+ConditionPathExists=/sys/bus/platform/devices/181d0000.aoc
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/omamobile/speaker.conf
+EnvironmentFile=-/etc/omamobile/speaker-tuning.conf
+ExecStart=/usr/bin/omamobile-speaker-tuning run
+Restart=on-failure
+RestartSec=10
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=omamobile-speaker-watch.service

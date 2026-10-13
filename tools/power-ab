@@ -27,7 +27,7 @@
 #   --delay-ms MS   B value for ufs-delay (default 4)
 #   --detach        re-run itself with setsid/nohup and return at once
 #
-# Output: /var/lib/omandroid/power/<time>-<test>.csv (one sample a second:
+# Output: /var/lib/omamobile/power/<time>-<test>.csv (one sample a second:
 # time, phase, voltage_now uV, current_now uA, current_avg uA) and
 # <time>-<test>.txt (mean current and power per phase, then A vs B).
 # Every setting the test changes is restored at the end, also on SIGTERM.
@@ -110,7 +110,7 @@ set_cfg() { # A|B
   esac
 }
 
-out=/var/lib/omandroid/power
+out=/var/lib/omamobile/power
 mkdir -p "$out"
 stamp=$(date +%Y%m%d-%H%M%S)
 csv="$out/$stamp-$test.csv" txt="$out/$stamp-$test.txt"

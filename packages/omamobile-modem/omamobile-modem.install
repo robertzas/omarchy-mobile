@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+post_install() {
+  echo "omamobile-modem: omamobile-modem.service is installed but not enabled."
+  echo "  It needs the modem chroot image (tools/extract-vendor-chroot -p modem), the"
+  echo "  NV checksums in /etc/omamobile/modem-nv.sha256, a kernel with CPIF and the"
+  echo "  modem-cpif-test overlay, and this phone's board id (ro.boot.cdt_hwid from its"
+  echo "  stock getprop) in /var/lib/omamobile-vendor/modem/props.conf. Follow"
+  echo "  device/cheetah/MODEM-PLAN.md M3.4 and M4.1h."
+  udevadm control --reload 2>/dev/null || true
+}
+post_upgrade() {
+  systemctl daemon-reload 2>/dev/null || true
+  grep -qs '^ro\.boot\.cdt_hwid=.' /var/lib/omamobile-vendor/modem/props.conf ||
+    echo "omamobile-modem: no ro.boot.cdt_hwid in /var/lib/omamobile-vendor/modem/props.conf: the modem won't start (MODEM-PLAN M4.1h)"
+  udevadm control --reload 2>/dev/null || true
+}
+pre_remove() {
+  systemctl disable omamobile-modem.service 2>/dev/null || true
+}

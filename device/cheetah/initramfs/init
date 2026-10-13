@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
-# Omandroid M1 "first light" init: bring up USB networking and ssh.
+# Omarchy Mobile M1 "first light" init: bring up USB networking and ssh.
 # Host side: the phone appears as a USB network adapter; ssh root@172.16.42.1
 
 export PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -30,7 +30,7 @@ fi
 # driver is built in, so disks can exist before init starts or show up while
 # it runs: do one pass now, then keep a watcher running for the life of PID 1.
 # Nothing in this initramfs runs mdev/udev, so no one else touches the disks.
-ufs_ro_log() { echo "omandroid: ufs-ro: $*" > /dev/kmsg; }
+ufs_ro_log() { echo "omamobile: ufs-ro: $*" > /dev/kmsg; }
 # Storage guard. Everything on the UFS is read-only except an allowlist of
 # partitions we own: slot B's boot images (in-place kernel updates) and
 # userdata (the Arch root). The kernel only lets a partition be written if
@@ -70,7 +70,7 @@ ufs_ro_pass() {
     elif [ ! -e "/run/ufs-ro/$name.failed" ]; then
       : > "/run/ufs-ro/$name.failed"  # keep retrying, but log once
       ufs_ro_log "FAILED to set /dev/$name read-only"
-      echo "omandroid: WARNING: /dev/$name is NOT read-only" > /dev/tty0 2>/dev/null
+      echo "omamobile: WARNING: /dev/$name is NOT read-only" > /dev/tty0 2>/dev/null
     fi
   done
 }
@@ -78,9 +78,9 @@ ufs_ro_pass
 ( while true; do ufs_ro_pass; sleep 0.2 2>/dev/null || sleep 1; done ) &
 ufs_ro_log "guard running (pid $!)"
 
-hostname omandroid
+hostname omamobile
 
-say() { echo "omandroid: $*" | tee /dev/kmsg > $SCREEN 2>/dev/null; }
+say() { echo "omamobile: $*" | tee /dev/kmsg > $SCREEN 2>/dev/null; }
 
 # The panel runs in MIPI DSI command mode: it only takes a new frame when
 # DECON0 sends one on the panel's TE pulse. ABL masks that trigger after
@@ -101,7 +101,7 @@ probe() {
       echo "dpp$n cfg $(devmem $b) base $(devmem $((b + 0x40))) $(devmem $((b + 0x44)))"
     done
   } > /run/probe.txt 2>&1
-  while read -r line; do echo "omandroid: $line" > /dev/kmsg; done < /run/probe.txt
+  while read -r line; do echo "omamobile: $line" > /dev/kmsg; done < /run/probe.txt
 }
 probe
 say "first light on $(cat /proc/sys/kernel/osrelease)"
@@ -111,9 +111,9 @@ g=/sys/kernel/config/usb_gadget/g1
 mkdir -p $g/strings/0x409 $g/configs/c.1/strings/0x409
 echo 0x1d6b > $g/idVendor          # Linux Foundation
 echo 0x0104 > $g/idProduct         # Multifunction composite gadget
-echo "Omandroid" > $g/strings/0x409/manufacturer
+echo "Omarchy Mobile" > $g/strings/0x409/manufacturer
 echo "Pixel 7 Pro (M1)" > $g/strings/0x409/product
-echo "omandroid" > $g/strings/0x409/serialnumber
+echo "omamobile" > $g/strings/0x409/serialnumber
 echo "NCM + ACM" > $g/configs/c.1/strings/0x409/configuration
 mkdir -p $g/functions/ncm.usb0 $g/functions/acm.GS0
 ln -s $g/functions/ncm.usb0 $g/configs/c.1/
@@ -150,9 +150,9 @@ mkdir -p /etc/dropbear
 dropbear -R -E -p 22 2>/dev/null && say "ssh: root@172.16.42.1"
 ( while true; do setsid getty -n -l /bin/sh 115200 ttyGS0 vt100; sleep 1; done ) &
 
-# Bring-up diagnostics on screen when the cmdline has omandroid.debug: USB log
+# Bring-up diagnostics on screen when the cmdline has omamobile.debug: USB log
 # lines, whether interrupts arrive, and what the bootloader passed in.
-grep -q omandroid.debug /proc/cmdline && {
+grep -q omamobile.debug /proc/cmdline && {
   echo "--- usb/phy/dwc3 ---"
   dmesg | grep -iE 'dwc3|phy|udc|gadget|11210000|pmu' | tail -14
   echo "--- interrupts (timer, usb) at two points ---"
@@ -165,10 +165,10 @@ grep -q omandroid.debug /proc/cmdline && {
   echo
 } > $SCREEN 2>&1
 
-# UFS probe report when the cmdline has omandroid.ufs-probe: wait for the
+# UFS probe report when the cmdline has omamobile.ufs-probe: wait for the
 # disks to settle, then list them and the GPT partition names. Read-only: it
 # only reads /proc and sysfs, after the guard above has marked the disks ro.
-grep -q omandroid.ufs-probe /proc/cmdline && (
+grep -q omamobile.ufs-probe /proc/cmdline && (
   last=-1
   for i in $(seq 1 30); do
     n=$(ls -d /sys/block/sd*/sd* 2>/dev/null | wc -l)
@@ -192,7 +192,7 @@ grep -q omandroid.ufs-probe /proc/cmdline && (
     dmesg | grep -iE 'ufs|scsi|sd[a-z]|14700000' | tail -25
   } > /run/ufs-probe.txt 2>&1
   cat /run/ufs-probe.txt > $SCREEN 2>/dev/null
-  while read -r line; do echo "omandroid: $line" > /dev/kmsg; done < /run/ufs-probe.txt
+  while read -r line; do echo "omamobile: $line" > /dev/kmsg; done < /run/ufs-probe.txt
 ) &
 
 say "ready"
@@ -208,7 +208,7 @@ say "ready"
     echo
     echo "=== USB never configured; dmesg follows ==="
     dmesg | grep -iE 'dwc3|phy|usb|udc|clk|error|fail' | tail -30
-    echo "omandroid: no USB host, crashing in 20 s so ABL falls back to slot A"
+    echo "omamobile: no USB host, crashing in 20 s so ABL falls back to slot A"
   } > $SCREEN
   sleep 20
   sync
@@ -222,11 +222,11 @@ say "ready"
 
 
 # Keep a shell on the screen too
-# Hand over to Arch on userdata, unless omandroid.initramfs is on the command
+# Hand over to Arch on userdata, unless omamobile.initramfs is on the command
 # line. Everything is checked before the irreversible exec; if anything is
 # missing we stay here in the initramfs shell.
 boot_arch() {
-  grep -q omandroid.initramfs /proc/cmdline && return 1
+  grep -q omamobile.initramfs /proc/cmdline && return 1
   local dev="" s
   for s in /sys/block/sda/sda*; do
     grep -qx PARTNAME=userdata "$s/uevent" 2>/dev/null && dev=/dev/${s##*/}

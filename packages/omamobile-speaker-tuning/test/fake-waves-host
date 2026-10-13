@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""A stand-in for omamobile-waves-host: the same line protocol, made-up
+payloads (no Waves code or data). Behaviour, for the tests:
+
+  - "version NAME": one 4-byte exchange (id 5); "version NAME fake-1.0" if
+    the reply carried data, else "fail version NAME".
+  - "flush": one exchange of 3000 bytes after a "wake" (a full upload), else
+    of 200 bytes if anything was set since the last flush, else none; then
+    "ok flush" when every reply was 0, "fail flush controller" otherwise.
+  - FAKE_WAVES_MISBEHAVE=instance|oversize|hex|junk|exit breaks the protocol
+    at the first flush; FAKE_WAVES_LOG=FILE appends every command line.
+"""
+import os
+import sys
+
+misbehave = os.environ.get('FAKE_WAVES_MISBEHAVE', '')
+logf = os.environ.get('FAKE_WAVES_LOG')
+
+
+def out(line):
+    sys.stdout.write(line + '\n')
+    sys.stdout.flush()
+
+
+def exchange(payload, inst=1):
+    out(f'send {inst} {len(payload)} {payload.hex()}')
+    line = sys.stdin.readline()
+    if not line.startswith('reply '):
+        sys.exit(3)
+    _, rc, data = line.split()
+    return int(rc), (b'' if data == '-' else bytes.fromhex(data))
+
+
+def payload(msg_id, n, state):
+    seed = repr(sorted(state.items())).encode()
+    body = (seed * (n // len(seed) + 1))[:n - 8]
+    return msg_id.to_bytes(4, 'little') + (n - 8).to_bytes(4, 'little') + body
+
+
+state, dirty, woken = {}, False, False
+out('ready 1')
+for line in sys.stdin:
+    line = line.strip()
+    if logf:
+        with open(logf, 'a') as f:
+            f.write(line + '\n')
+    cmd, *args = line.split()
+    if cmd == 'quit':
+        out('ok quit')
+        break
+    if cmd == 'version':
+        rc, data = exchange((5).to_bytes(4, 'little'))
+        out(f'version {args[0]} fake-1.0' if rc == 0 and data else f'fail version {args[0]}')
+    elif cmd in ('begin',):
+        out('ok begin')
+    elif cmd == 'wake':
+        woken = True
+        out('ok wake')
+    elif cmd in ('bypass', 'volume', 'orientation', 'route'):
+        if state.get(cmd) != args:
+            state[cmd] = args
+            dirty = True
+        out(f'ok {cmd}')
+    elif cmd == 'flush':
+        if misbehave == 'instance':
+            exchange(payload(1, 64, state), inst=2)
+        elif misbehave == 'oversize':
+            exchange(payload(1, 16385, state))
+        elif misbehave == 'hex':
+            out('send 1 4 zzzzzzzz')
+            sys.stdin.readline()
+        elif misbehave == 'junk':
+            out('hello')
+        elif misbehave == 'exit':
+            sys.exit(1)
+        ok = True
+        if woken or dirty:
+            rc, _ = exchange(payload(1, 3000 if woken else 200, state))
+            ok = rc == 0
+        woken = dirty = False
+        out('ok flush' if ok else 'fail flush controller')
+    else:
+        out(f'fail {cmd} unknown')

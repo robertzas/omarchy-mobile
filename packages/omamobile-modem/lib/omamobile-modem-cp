@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""omamobile-modem-cp: the CP (S5300) side of the modem profile.
+
+  state                    print the CP state (CPIF IOCTL_GET_CP_STATUS); exit 0 if ONLINE
+  wait-online SECONDS      wait for ONLINE; exit 1 on timeout
+  power-off                power the CP off through CPIF (allow_poweroff is
+                           set for this one request and put back); wait for OFFLINE
+  record-crash             append CPIF's crash reason, the modem's boot log
+                           request and the last CPIF kernel lines to
+                           /var/log/omamobile/modem-crashes.log (0600)
+  watch [MARKER]           remove MARKER once the CP is ONLINE; when it leaves
+                           ONLINE afterwards, record the crash once and keep
+                           running (nothing restarts or powers off the CP)
+  baseband-version FILE    the firmware version in a modem.bin's TOC
+  nv-check EFS EFS_BACKUP  the stock salted MD5 of the three NV files in the
+                           RAM copies; exit 1 on a mismatch
+
+The modem's policy (device/cheetah/MODEM-PLAN.md M2.6): once up it stays
+on; every power-off costs one recovered UFS error-handler pass. Only the
+profile's stop (and so a reboot) uses power-off, so that the CP is off
+before rfsd, its NV server, goes away.
+"""
+import fcntl
+import hashlib
+import os
+from pathlib import Path
+import struct
+import subprocess
+import sys
+import time
+
+BOOT = os.environ.get('OMAMOBILE_MODEM_BOOT', '/dev/umts_boot0')
+ALLOW = Path('/sys/module/cpif/parameters/allow_poweroff')
+CRASH_LOG = Path(os.environ.get('OMAMOBILE_MODEM_CRASH_LOG', '/var/log/omamobile/modem-crashes.log'))
+RUN = Path(os.environ.get('OMAMOBILE_MODEM_RUN', '/run/omamobile-modem'))
+
+IOCTL_POWER_OFF = 0x6f20            # _IO('o', 0x20)
+IOCTL_GET_CP_STATUS = 0x6f27        # _IO('o', 0x27)
+IOCTL_GET_CP_BOOTLOG = 0x6f47       # _IO('o', 0x47): CPIF prints the modem's boot log to kmsg
+IOCTL_GET_CP_CRASH_REASON = 0x82046f55  # _IOR('o', 0x55, struct crash_reason): u32, char[512]
+STATES = {0: 'OFFLINE', 1: 'CRASH_RESET', 2: 'CRASH_EXIT', 3: 'BOOTING', 4: 'ONLINE',
+          5: 'NV_REBUILDING', 6: 'LOADER_DONE', 7: 'SIM_ATTACH', 8: 'SIM_DETACH',
+          9: 'CRASH_WATCHDOG'}
+ONLINE = 4
+NV_SALT = b'Samsung_SIT_RIL'
+
+
+def say(*args):
+    print('omamobile-modem-cp:', *args, file=sys.stderr, flush=True)
+
+
+def ioctl(command, arg=0):
+    fd = os.open(BOOT, os.O_RDWR | os.O_CLOEXEC)
+    try:
+        return fcntl.ioctl(fd, command, arg)
+    finally:
+        os.close(fd)
+
+
+def state():
+    try:
+        return ioctl(IOCTL_GET_CP_STATUS)
+    except FileNotFoundError:
+        return 0
+
+
+def wait_for(target, seconds):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if state() == target:
+            return True
+        time.sleep(.25)
+    return False
+
+
+def power_off():
+    if state() == 0:
+        say('CP already OFFLINE')
+        return 0
+    previous = ALLOW.read_text().strip() if ALLOW.exists() else None
+    try:
+        if previous is not None:
+            ALLOW.write_text('Y')
+        ioctl(IOCTL_POWER_OFF)
+        if not wait_for(0, 15):
+            say('CP did not reach OFFLINE: rfsd is kept until reboot')
+            return 1
+        say('CP OFFLINE')
+        return 0
+    finally:
+        if previous is not None:
+            ALLOW.write_text(previous)
+
+
+def record_crash():
+    """Before anything else touches the CP, keep what it left (stock's cbd
+    would collect a dump; that path is not used here). Root-only, never in
+    the repository: it can hold firmware paths and numbers."""
+    entry = [time.strftime('%F %T') + f' CP left ONLINE (state {STATES.get(state(), "?")})']
+    try:
+        reason = bytearray(4 + 512)
+        fd = os.open(BOOT, os.O_RDWR | os.O_CLOEXEC)
+        try:
+            fcntl.ioctl(fd, IOCTL_GET_CP_CRASH_REASON, reason)
+        finally:
+            os.close(fd)
+        text = bytes(reason[4:]).split(b'\0', 1)[0].decode(errors='replace')
+        entry.append(f'crash reason type {struct.unpack_from("<I", reason)[0]}: {text}')
+    except OSError as error:
+        entry.append(f'crash reason unavailable: {error}')
+    try:
+        ioctl(IOCTL_GET_CP_BOOTLOG)
+    except OSError as error:
+        entry.append(f'boot log unavailable: {error}')
+    try:
+        kernel = subprocess.run(['dmesg'], capture_output=True, text=True, timeout=10).stdout.splitlines()
+        entry += [line for line in kernel if 'cpif' in line.lower() or 'mif:' in line][-60:]
+    except (OSError, subprocess.SubprocessError) as error:
+        entry.append(f'kernel log unavailable: {error}')
+    say(entry[0])
+    say(entry[1] if len(entry) > 1 else '')
+    CRASH_LOG.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(CRASH_LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'a') as out:
+        out.write('\n'.join(entry) + '\n\n')
+        out.flush()
+        os.fsync(out.fileno())
+
+
+def watch(marker=None):
+    was_online = False
+    crashed = False
+    while True:
+        now = state()
+        if now == ONLINE and not was_online:
+            was_online = True
+            say('CP ONLINE')
+            if marker:
+                Path(marker).unlink(missing_ok=True)
+                os.sync()
+        elif was_online and now != ONLINE and not crashed:
+            crashed = True
+            record_crash()
+            RUN.mkdir(parents=True, exist_ok=True)
+            (RUN / 'crashed').write_text(STATES.get(now, str(now)) + '\n')
+            say('the CP left ONLINE: crash recorded; nothing restarts it. '
+                'Reboot to recover (the reboot powers it off).')
+        time.sleep(.5)
+
+
+def baseband_version(path):
+    """The modem.bin TOC: 32-byte entries (name[12], file offset, load
+    address, size, CRC, entry id) in the file's first 512 bytes; entry 0 is
+    named TOC and its last word is the index of the last entry. Read the
+    way rfsd reads it at start (MODEM-PLAN.md M3.4.4): from the last entry
+    down to entry 1, the first GVERSION (the string at its offset) or INFO
+    (20 bytes in) wins, at most 31 bytes. rfsd compares that string with
+    persist.vendor.modem.baseband.version, and a difference makes it delete
+    the NV files ("image changed"): this must give exactly its string."""
+    with open(path, 'rb') as f:
+        toc = f.read(512)
+        if len(toc) < 64 or toc[:4] != b'TOC\0':
+            raise ValueError('no TOC at the start of the file')
+        last = struct.unpack_from('<I', toc, 28)[0] + 1
+        if not 1 <= last <= 15:
+            raise ValueError('unexpected TOC entry count')
+        for index in range(last, 0, -1):
+            entry = toc[index * 32:index * 32 + 32]
+            name = entry[:12].split(b'\0', 1)[0]
+            if name not in (b'GVERSION', b'INFO'):
+                continue
+            offset, size = struct.unpack_from('<I', entry, 12)[0], struct.unpack_from('<I', entry, 20)[0]
+            if not offset or not size:
+                raise ValueError(f'empty {name.decode()} entry')
+            f.seek(offset + (20 if name == b'INFO' else 0))
+            text = f.read(min(size, 31)).split(b'\0', 1)[0].decode('ascii', 'strict')
+            if not text or not text.isprintable():
+                raise ValueError(f'unexpected {name.decode()} section')
+            return text
+    raise ValueError('no GVERSION or INFO entry in the TOC')
+
+
+def nv_check(efs, efs_backup):
+    bad = 0
+    for directory, name in ((efs, 'nv_normal.bin'), (efs, 'nv_protected.bin'),
+                            (efs_backup, 'nv_protected.bak')):
+        path = Path(directory) / name
+        try:
+            digest = hashlib.md5(path.read_bytes() + NV_SALT).hexdigest().encode()
+            stored = path.with_name(name + '.md5').read_bytes().strip()
+        except OSError as error:
+            say(f'{name}: {error.strerror}')
+            bad = 1
+            continue
+        if digest != stored:
+            say(f'{name}: the stock checksum does not match')
+            bad = 1
+        else:
+            say(f'{name}: stock checksum matches')
+    return bad
+
+
+def main(argv):
+    if not argv or argv[0] in ('-h', '--help'):
+        print(__doc__)
+        return 0
+    cmd = argv[0]
+    if cmd == 'state':
+        now = state()
+        print(STATES.get(now, str(now)))
+        return 0 if now == ONLINE else 1
+    if cmd == 'wait-online' and len(argv) == 2:
+        return 0 if wait_for(ONLINE, float(argv[1])) else 1
+    if cmd == 'power-off':
+        return power_off()
+    if cmd == 'record-crash':
+        record_crash()
+        return 0
+    if cmd == 'watch':
+        watch(argv[1] if len(argv) > 1 else None)
+    if cmd == 'baseband-version' and len(argv) == 2:
+        print(baseband_version(argv[1]))
+        return 0
+    if cmd == 'nv-check' and len(argv) == 3:
+        return nv_check(argv[1], argv[2])
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

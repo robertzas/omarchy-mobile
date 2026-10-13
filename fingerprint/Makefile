@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Builds the fingerprint chroot's bionic (aarch64) programs on the computer:
 #
-#   out/omandroid-fp-shim.so   the preload shim (every Android process)
-#   out/omandroid-fp-bridge    the HAL client that fprintd's driver talks to
+#   out/omamobile-fp-shim.so   the preload shim (every Android process)
+#   out/omamobile-fp-bridge    the HAL client that fprintd's driver talks to
 #
 #   make NDK=/opt/android-ndk CHROOT=...   (Android NDK r27 or later)
 #   make CLANG=... BIONIC=... CHROOT=...   (an AOSP/LineageOS tree: its
@@ -11,14 +11,14 @@
 # CHROOT is tools/extract-fingerprint-vendor's output root
 # (out/fingerprint-vendor/root): both programs link against its libc, and
 # the bridge against its libbinder_ndk, so they match the phone exactly.
-# Installed on the phone under /usr/lib/omandroid-fp/.
+# Installed on the phone under /usr/lib/omamobile-fp/.
 
 API      ?= 35
 OUT      ?= out
 CFLAGS   ?= -O2
 WARN     := -Wall -Wextra -Werror
-SHIM_SRC := shim/omandroid-fp-shim.c
-BRIDGE_SRC := bridge/omandroid-fp-bridge.c
+SHIM_SRC := shim/omamobile-fp-shim.c
+BRIDGE_SRC := bridge/omamobile-fp-bridge.c
 
 ifndef CHROOT
 $(error set CHROOT=<extract-fingerprint-vendor output>/root)
@@ -41,16 +41,16 @@ else
 $(error set NDK=<android-ndk> or CLANG=, BIONIC= and CHROOT=)
 endif
 
-all: $(OUT)/omandroid-fp-shim.so $(OUT)/omandroid-fp-bridge
+all: $(OUT)/omamobile-fp-shim.so $(OUT)/omamobile-fp-bridge
 
-$(OUT)/omandroid-fp-shim.so: $(SHIM_SRC)
+$(OUT)/omamobile-fp-shim.so: $(SHIM_SRC)
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $(WARN) -fPIC -fvisibility=hidden -shared -nostdlib \
-		-Wl,--no-undefined -Wl,-soname,omandroid-fp-shim.so -o $@ $< \
+		-Wl,--no-undefined -Wl,-soname,omamobile-fp-shim.so -o $@ $< \
 		$(LIBC) $(LIBDL)
 
 # No crtbegin: the bridge has its own _start (see its header).
-$(OUT)/omandroid-fp-bridge: $(BRIDGE_SRC)
+$(OUT)/omamobile-fp-bridge: $(BRIDGE_SRC)
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $(WARN) -fPIE -pie -nostdlib -fno-stack-protector \
 		-Wl,--dynamic-linker=/system/bin/linker64 -Wl,-z,now \

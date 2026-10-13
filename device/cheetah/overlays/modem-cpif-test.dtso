@@ -14,7 +14,7 @@
  *
  * Binding CPIF powers nothing: it drives the ap2cp outputs low (they are
  * low already, M0.4) and waits for cbd. cpif and shm_ipc are blacklisted
- * (omandroid-cpif.conf). Applied with fdtoverlay; paths, not labels, and no
+ * (omamobile-cpif.conf). Applied with fdtoverlay; paths, not labels, and no
  * references to base nodes, so the base DTB needs no __symbols__.
  */
 /dts-v1/;

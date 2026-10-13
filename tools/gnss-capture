@@ -6,7 +6,7 @@ a GNSS run (time to first fix, satellites per constellation, accuracy).
 On the phone (stdlib only):
 
   gnss-capture record --out FILE [--seconds N] [--socket PATH]
-      Connects to omandroid-gnss's NMEA socket (which starts the receiver
+      Connects to omamobile-gnss's NMEA socket (which starts the receiver
       when Location is on), writes "<unix time> <sentence>" lines to FILE,
       and leaves after N seconds; the receiver then stops on its own about a
       minute later, which is part of what a run checks.
@@ -28,7 +28,7 @@ import socket
 import sys
 import time
 
-SOCK = "/run/omandroid-gnss/nmea.sock"
+SOCK = "/run/omamobile-gnss/nmea.sock"
 
 # NMEA talker -> constellation
 TALKERS = {"GP": "GPS", "GL": "GLONASS", "GA": "Galileo", "GB": "BeiDou",
@@ -49,7 +49,7 @@ def record(args):
         except OSError:
             time.sleep(1)
     else:
-        sys.exit(f"cannot connect to {args.socket} (omandroid-gnss on?)")
+        sys.exit(f"cannot connect to {args.socket} (omamobile-gnss on?)")
     s.settimeout(5)
     buf = b""
     with open(args.out, "a", buffering=1) as f:

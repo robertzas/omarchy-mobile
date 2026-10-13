@@ -3,7 +3,7 @@
  * Bring-up only (RADIOS-CAMERA-PLAN.md section 3, stage N2): turn on the HSI1
  * pin controller (the NFC reset line is gph1-5) and the ST54J's NFC
  * controller node at 0x08 on I2C 8, so st-nci can bind. st_nci_i2c is
- * blacklisted (omandroid-nfc.conf) and the runbook loads it by hand. The
+ * blacklisted (omamobile-nfc.conf) and the runbook loads it by hand. The
  * node's reference clock (the PMU's CLKOUT1 pad) is in the base DT and is
  * only switched on while the controller is powered up. The eSE side of the
  * chip is not described and is never touched. Applied with fdtoverlay;

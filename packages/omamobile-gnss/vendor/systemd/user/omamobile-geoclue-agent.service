@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# GeoClue's authorization agent for the desktop session. GeoClue answers no
+# client (not even GetClient) until an agent has registered for the
+# client's user, so without one every app times out. Apps listed in
+# /etc/geoclue/conf.d/90-omamobile-gnss.conf are let through without a
+# question; others get a notification. Enabled for all users by
+# "omamobile-gnss on" (systemctl --global), disabled by "off".
+[Unit]
+Description=GeoClue agent (location authorization)
+After=graphical-session.target
+PartOf=graphical-session.target
+ConditionPathExists=/usr/lib/geoclue-2.0/demos/agent
+
+[Service]
+ExecStart=/usr/lib/geoclue-2.0/demos/agent
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

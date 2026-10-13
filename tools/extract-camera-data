@@ -11,9 +11,9 @@ liblyric_hwl.so. This tool runs those functions in an AArch64 CPU emulator
 (unicorn), on the user's machine, reads back the register lists they build
 and writes them, with the mode geometry computed from the standard CCS
 registers in each list, into the data file the imx386 kernel driver loads
-(/usr/lib/firmware/omandroid/camera/imx386-uw.bin).
+(/usr/lib/firmware/omamobile/camera/imx386-uw.bin).
 
-Nothing from Google's software is stored in the Omandroid repository: this
+Nothing from Google's software is stored in the Omarchy Mobile repository: this
 tool only knows how to find the functions (CAMERA-PLAN.md section 5.3). The
 output is for the user's own phone; don't redistribute it.
 
@@ -37,13 +37,13 @@ Usage:
   tools/extract-camera-data --hal ... --sensor imx386|s5kgn1|s5k3j1|s5kgm5 [-o OUT]
       [--phy-output OUT | --no-phy] [--with-pd] [--list]
 Without --sensor it writes all four sensors' files and the PHY file into
-DIR; install them in /usr/lib/firmware/omandroid/camera/.
+DIR; install them in /usr/lib/firmware/omamobile/camera/.
 
 Needs python3 with the unicorn and pyelftools packages, for example in a
 virtual environment:
-  python3 -m venv ~/.cache/omandroid-venv
-  ~/.cache/omandroid-venv/bin/pip install unicorn pyelftools
-  ~/.cache/omandroid-venv/bin/python tools/extract-camera-data --hal ...
+  python3 -m venv ~/.cache/omamobile-venv
+  ~/.cache/omamobile-venv/bin/pip install unicorn pyelftools
+  ~/.cache/omamobile-venv/bin/python tools/extract-camera-data --hal ...
 --apex also needs unzip and debugfs (e2fsprogs).
 """
 
@@ -1116,7 +1116,7 @@ SENSORS = {
     "s5k3j1": ("s5k3j1-front.bin", lambda h, a, o: run_samsung(h, a, o, "s5k3j1")),
     "s5kgm5": ("s5kgm5-tele.bin", lambda h, a, o: run_samsung(h, a, o, "s5kgm5")),
 }
-FW_DIR = "/usr/lib/firmware/omandroid/camera"
+FW_DIR = "/usr/lib/firmware/omamobile/camera"
 
 
 def main():

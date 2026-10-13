@@ -1,7 +1,0 @@
-# SPDX-License-Identifier: MIT
-# Omandroid: let feedbackd drive the Cirrus Logic CS40L26 haptics
-# (cs40l26-vibra), in the same form as feedbackd's own 72-feedbackd.rules.
-# Before 73-seat-late.rules, which turns the uaccess tag into an ACL.
-ACTION=="remove", GOTO="omandroid_feedbackd_end"
-SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT}=="1", SUBSYSTEMS=="input", ATTRS{name}=="cs40l26_vibra", TAG+="uaccess", ENV{FEEDBACKD_TYPE}="vibra"
-LABEL="omandroid_feedbackd_end"

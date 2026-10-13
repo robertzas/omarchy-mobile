@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # phone-ssh: run a command on the phone over USB networking.
-# The host side needs 172.16.42.2/24 on the gadget link (NetworkManager profile "omandroid-phone").
+# The host side needs 172.16.42.2/24 on the gadget link (NetworkManager profile "omamobile-phone").
 exec ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
   -o ConnectTimeout=6 root@172.16.42.1 "$@"

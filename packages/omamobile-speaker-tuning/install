@@ -1,0 +1,23 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-speaker-tuning into DESTDIR. Enables nothing, and ships
+# nothing of Google's or Waves': the "waves" vendor-chroot tree is built by
+# the user from their own factory image (tools/extract-vendor-chroot -p
+# waves) and installed by hand under /usr/lib/omamobile-vendor/waves.
+# The bionic helper is built on the computer first:
+#   make -C bionic NDK=...
+#   ./install DESTDIR
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+d=${1:?Usage: ./install DESTDIR}
+[[ $d == /* && $d != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+host=bionic/prebuilt/omamobile-waves-host
+[[ -f $host ]] || { echo "no $host: make -C bionic NDK=... first" >&2; exit 1; }
+install -Dm755 bin/omamobile-speaker-tuning "$d/usr/bin/omamobile-speaker-tuning"
+for f in lib/*.py; do install -Dm644 "$f" "$d/usr/lib/omamobile-speaker-tuning/${f#lib/}"; done
+install -Dm755 lib/omamobile-waves-host-run "$d/usr/lib/omamobile-speaker-tuning/omamobile-waves-host-run"
+install -Dm755 "$host" "$d/usr/lib/omamobile-speaker-tuning/omamobile-waves-host"
+install -Dm644 systemd/omamobile-speaker-tuning.service "$d/usr/lib/systemd/system/omamobile-speaker-tuning.service"
+install -Dm644 etc/omamobile/speaker-tuning.conf "$d/etc/omamobile/speaker-tuning.conf"
+install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-speaker-tuning/LICENSE"
+install -Dm644 version "$d/usr/share/omamobile/speaker-tuning/version"

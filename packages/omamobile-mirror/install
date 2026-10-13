@@ -1,0 +1,18 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-mirror into DESTDIR. Enables nothing: mirroring runs only
+# between "omamobile-mirror on" and "off".
+#   ./install DESTDIR
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+d=${1:?Usage: ./install DESTDIR}
+[[ $d == /* && $d != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+install -Dm755 bin/omamobile-mirror "$d/usr/bin/omamobile-mirror"
+install -Dm755 lib/omamobile-mirror-run "$d/usr/lib/omamobile-mirror/omamobile-mirror-run"
+install -Dm644 systemd/user/omamobile-mirror.service "$d/usr/lib/systemd/user/omamobile-mirror.service"
+install -Dm644 systemd/system/omamobile-mirror-firewall.service "$d/usr/lib/systemd/system/omamobile-mirror-firewall.service"
+install -Dm644 polkit/50-omamobile-mirror.rules "$d/usr/share/polkit-1/rules.d/50-omamobile-mirror.rules"
+install -Dm644 share/mirror.conf.example "$d/usr/share/omamobile/mirror/mirror.conf.example"
+install -Dm644 README.md "$d/usr/share/doc/omamobile-mirror/README.md"
+install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-mirror/LICENSE"
+install -Dm644 version "$d/usr/share/omamobile/mirror/version"

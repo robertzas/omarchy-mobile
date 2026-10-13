@@ -3,7 +3,7 @@
  * Bring-up only (GNSS-PLAN.md, stages G2-G5): turn on PERIC0 USI5 in SPI mode
  * and its SPI controller, so the BCM4775x GNSS node binds (bcm4775x-gnss,
  * blacklisted from autoload: load it by hand or through
- * omandroid-gnss-start). Needs gnss-pmic-test too: the node's supplies are
+ * omamobile-gnss-start). Needs gnss-pmic-test too: the node's supplies are
  * the S2MPG13 LDO9S-LDO11S. The driver keeps the chip in standby and its
  * rails off until /dev/ttyBCM is opened. Applied with fdtoverlay; paths, not
  * labels.

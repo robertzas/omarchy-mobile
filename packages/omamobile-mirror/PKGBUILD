@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+pkgname=omamobile-mirror
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omarchy Mobile screen mirroring: the phone's screen and input on a computer over the USB cable (wayvnc)"
+arch=(any)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(bash wayvnc iproute2 systemd polkit)
+optdepends=('ufw: the port is opened on usb0 only while mirroring runs'
+            'openssh: ssh-keygen makes the RSA key for a password (or openssl)')
+install=omamobile-mirror.install
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}

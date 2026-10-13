@@ -2,7 +2,7 @@
 /*
  * Bring-up only (AUDIO-PLAN.md, gates A2-A3): the PERIC0 pin controller,
  * USI7 as SPI and the two CS35L41 speaker amplifiers (chip select 0 = top
- * speaker / earpiece, 1 = bottom loudspeaker). Needs the omandroid-audio
+ * speaker / earpiece, 1 = bottom loudspeaker). Needs the omamobile-audio
  * kernel branch.
  *
  * A2: keep snd-soc-cs35l41-spi from loading (it is not built by default) and

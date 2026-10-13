@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""omamobile-fp-ctl: talk to omamobile-fp-bridge by hand (bring-up, tests).
+
+    omamobile-fp-ctl [--socket PATH] [--timeout S] COMMAND [ARG]
+
+COMMAND is one of the bridge's: ENROLL, AUTH, LIST, DELETE <id>,
+RESETLOCKOUT, STATUS (case does not matter). Prints every line the bridge
+sends until the command's last one, then exits 0 for a success (ENROLLED,
+MATCH, LIST, DELETED, OK) and 1 otherwise. Ctrl-C or the timeout sends
+CANCEL, prints the bridge's final line and exits 1 (2 if the bridge does
+not answer the CANCEL within 5 s). Root only, like the socket. While it
+is connected, fprintd's driver cannot use the bridge (one client at a
+time).
+"""
+import socket
+import sys
+import time
+
+SOCKET = "/run/omamobile-fp/sock/bridge.sock"
+DONE_OK = ("ENROLLED", "MATCH", "LIST", "DELETED", "OK")
+DONE_FAIL = ("NOMATCH", "LOCKOUT", "ERROR")
+# After CANCEL the bridge ends the operation with its final line (ERROR 5,
+# or the result that crossed the cancel); it gives the HAL 3 s itself.
+CANCEL_WAIT = 5.0
+
+
+class Lines:
+    """Line reader on the raw socket. socket.makefile() cannot be used with
+    timeouts: after one read times out, every later read raises "cannot read
+    from timed out object", so the bridge's answer to CANCEL was lost."""
+
+    def __init__(self, sock):
+        self.sock, self.buf = sock, b""
+
+    def read(self, timeout):
+        """The next line without its newline; None on timeout, "" at EOF."""
+        deadline = time.monotonic() + timeout
+        while b"\n" not in self.buf:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return None
+            self.sock.settimeout(left)
+            try:
+                chunk = self.sock.recv(4096)
+            except (socket.timeout, TimeoutError):
+                return None
+            if not chunk:
+                return ""
+            self.buf += chunk
+        line, self.buf = self.buf.split(b"\n", 1)
+        return line.decode("ascii", "replace").strip() or " "
+
+    def send(self, text):
+        self.sock.settimeout(5)
+        self.sock.sendall(text.encode("ascii") + b"\n")
+
+
+def finished(command, line):
+    """0 or 1 when LINE ends COMMAND, None while it runs."""
+    word = line.split(" ", 1)[0]
+    if word in DONE_OK and not (word == "OK" and command not in ("RESETLOCKOUT", "STATUS")):
+        return 0
+    if word in DONE_FAIL:
+        return 1
+    return None
+
+
+def cancel(io, why):
+    """Send CANCEL, print what the bridge answers until its final line, and
+    return 1 (the command did not succeed), or 2 if the bridge went quiet."""
+    print(f"{why}: sending CANCEL")
+    try:
+        io.send("CANCEL")
+    except OSError as e:
+        print(f"cannot send CANCEL: {e}")
+        return 2
+    deadline = time.monotonic() + CANCEL_WAIT
+    while True:
+        line = io.read(max(0.0, deadline - time.monotonic()))
+        if line is None:
+            print("no answer to CANCEL")
+            return 2
+        if not line:
+            print("the bridge closed the connection")
+            return 1
+        print(f"<- {line.strip()}")
+        if finished("CANCEL", line) is not None:
+            return 1
+
+
+def main(argv):
+    path, timeout, words = SOCKET, 60.0, []
+    args = iter(argv)
+    for a in args:
+        if a == "--socket":
+            path = next(args)
+        elif a == "--timeout":
+            timeout = float(next(args))
+        elif a in ("-h", "--help"):
+            print(__doc__.strip())
+            return 0
+        else:
+            words.append(a)
+    if not words:
+        sys.exit("usage: omamobile-fp-ctl [--socket PATH] [--timeout S] COMMAND [ARG]")
+    command = " ".join([words[0].upper()] + words[1:])
+
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(path)
+    io = Lines(s)
+    try:
+        ready = io.read(5)
+        if not ready:
+            print("no READY from the bridge")
+            return 1
+        print(f"<- {ready.strip()}")  # READY x y r
+        io.send(command)
+        deadline = time.monotonic() + timeout
+        while True:
+            line = io.read(max(0.0, deadline - time.monotonic()))
+            if line is None:
+                return cancel(io, "timeout")
+            if not line:
+                print("the bridge closed the connection")
+                return 1
+            print(f"<- {line.strip()}")
+            done = finished(command, line)
+            if done is not None:
+                return done
+    except KeyboardInterrupt:
+        return cancel(io, "interrupted")
+    finally:
+        s.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

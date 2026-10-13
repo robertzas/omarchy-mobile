@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: 0BSD
 #
-# Omandroid build of libfprint for the Pixel 7 Pro: upstream libfprint with
-# one more driver, omandroid_udfps (omandroid-udfps.c), which reaches the
-# phone's under-display sensor through omandroid-fp-bridge
-# (packages/omandroid-fingerprint, device/cheetah/FINGERPRINT-PLAN.md).
+# Omarchy Mobile build of libfprint for the Pixel 7 Pro: upstream libfprint with
+# one more driver, omamobile_udfps (omamobile-udfps.c), which reaches the
+# phone's under-display sensor through omamobile-fp-bridge
+# (packages/omamobile-fingerprint, device/cheetah/FINGERPRINT-PLAN.md).
 # The driver is a "virtual" type device: it appears only when fprintd's
-# environment names the bridge's socket (FP_OMANDROID_UDFPS, set by
-# omandroid-fingerprint's fprintd drop-in), so this build behaves exactly
+# environment names the bridge's socket (FP_OMAMOBILE_UDFPS, set by
+# omamobile-fingerprint's fprintd drop-in), so this build behaves exactly
 # like upstream's anywhere else.
 #
 # Options follow Arch Linux's libfprint 1.94.100-1 (gtk-doc off here).
@@ -17,7 +17,7 @@ pkgname=libfprint
 pkgver=1.94.100
 pkgrel=1.2
 _tag=v$pkgver
-pkgdesc="Library for fingerprint readers (Omandroid: Pixel 7 Pro under-display sensor)"
+pkgdesc="Library for fingerprint readers (Omarchy Mobile: Pixel 7 Pro under-display sensor)"
 arch=(aarch64)
 url="https://fprint.freedesktop.org/"
 license=(LGPL-2.1-or-later)
@@ -25,16 +25,16 @@ depends=(gcc-libs glib2 glibc libgudev libgusb openssl pixman)
 makedepends=(git glib2-devel gobject-introspection meson)
 provides=(libfprint-2.so)
 source=("git+https://gitlab.freedesktop.org/libfprint/libfprint.git#tag=$_tag"
-        0001-add-the-omandroid_udfps-driver.patch
-        omandroid-udfps.c)
+        0001-add-the-omamobile_udfps-driver.patch
+        omamobile-udfps.c)
 sha256sums=('SKIP'
             'c1d09244cfbf5dff437cc930e504fa2b69704da1f07fa9579db5f11a5e740b3e'
             '408ef39a6e12d39966a85050a46eb74e1d1dad37218208c2b4128e9af0096064')
 
 prepare() {
   cd libfprint
-  patch -Np1 -i ../0001-add-the-omandroid_udfps-driver.patch
-  cp ../omandroid-udfps.c libfprint/drivers/
+  patch -Np1 -i ../0001-add-the-omamobile_udfps-driver.patch
+  cp ../omamobile-udfps.c libfprint/drivers/
 }
 
 build() {

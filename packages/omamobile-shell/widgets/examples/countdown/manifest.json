@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "countdown",
+  "name": "Countdown",
+  "version": "1.0.0",
+  "author": "Omarchy Mobile",
+  "description": "Days left until a date you set.",
+  "kinds": ["home-widget"],
+  "entryPoints": { "homeWidget": "Widget.qml" },
+  "homeWidget": {
+    "icon": "󰔟",
+    "size": [2, 1],
+    "min": [1, 1],
+    "max": [4, 2],
+    "capabilities": [],
+    "schema": [
+      { "key": "title", "type": "string", "label": "What's coming", "defaultValue": "New year" },
+      { "key": "date", "type": "string", "label": "Date (YYYY-MM-DD)", "defaultValue": "2027-01-01" },
+      { "key": "showWeeks", "type": "boolean", "label": "Weeks past 60 days", "defaultValue": true }
+    ]
+  }
+}

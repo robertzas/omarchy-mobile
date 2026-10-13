@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "omamobile.launcher",
+  "name": "Mobile launcher",
+  "version": "0.1.0",
+  "author": "Omarchy Mobile",
+  "license": "MIT",
+  "description": "The phone's home bar: one input at the bottom of the screen that searches apps, opens the app grid and sends a prompt to your coding agent.",
+  "kinds": [
+    "panel"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "Launcher.qml"
+  },
+  "settings": {
+    "defaults": {
+      "columns": 4,
+      "sentenceWords": 3
+    },
+    "schema": [
+      {
+        "key": "columns",
+        "type": "integer",
+        "label": "Grid columns",
+        "min": 3,
+        "max": 6
+      },
+      {
+        "key": "sentenceWords",
+        "type": "integer",
+        "label": "Words that make a prompt",
+        "min": 2,
+        "max": 8
+      }
+    ]
+  }
+}

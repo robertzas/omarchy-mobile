@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # extract-vendor-chroot: build the read-only Android tree for one of
-# Omandroid's vendor-chroot profiles (packages/omandroid-gnss/lib/omandroid-vendor-chroot)
+# Omarchy Mobile's vendor-chroot profiles (packages/omamobile-gnss/lib/omamobile-vendor-chroot)
 # out of a Google factory image for the Pixel 7 Pro (cheetah), on the user's
 # own machine.
 #
@@ -20,11 +20,11 @@
 #          device/cheetah/MODEM-PLAN.md M3.
 #  waves  Waves' speaker tuning host libraries (libmahalcontroller.so and
 #          the coefficient converter libAlgFx_HiFi3z.so) with their preset
-#          and config files, for omandroid-waves-host. Libraries only: no
+#          and config files, for omamobile-waves-host. Libraries only: no
 #          vendor or system binaries, no binder, no device nodes.
 #          device/cheetah/AOC-TUNING-RESEARCH.md.
 #
-# These binaries are Google's and not ours to redistribute, so Omandroid
+# These binaries are Google's and not ours to redistribute, so Omarchy Mobile
 # never ships them: this tool takes exactly what the profile needs from an
 # image the user already has and nothing else.
 #
@@ -108,7 +108,7 @@ profile_check() {
       for f in ma_create ma_destroy ma_initialize ma_get_version ma_set_data ma_flush \
                ma_wait_for_flush ma_on_dsp_wakeup; do
         grep -aq "$f" "$1/vendor/lib64/libmahalcontroller.so" ||
-          die "libmahalcontroller.so has no $f (not the Waves controller omandroid-waves-host knows)"
+          die "libmahalcontroller.so has no $f (not the Waves controller omamobile-waves-host knows)"
       done
       grep -q '^AlgFxPath64=/vendor/lib64/libAlgFx_HiFi3z.so' "$1/vendor/etc/waves_config.ini" ||
         die "waves_config.ini does not load /vendor/lib64/libAlgFx_HiFi3z.so"
@@ -132,9 +132,9 @@ Usage: extract-vendor-chroot -p PROFILE [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
            (default: a temp dir in \$TMPDIR)
   -f       skip the device checks
 
-Install on the phone (from the omandroid repo), e.g. for gnss:
+Install on the phone (from the omamobile repo), e.g. for gnss:
   tar -C OUTDIR -cf - root MANIFEST SOURCE |
-    tools/phone-ssh 'mkdir -p /usr/lib/omandroid-vendor/gnss && tar -C /usr/lib/omandroid-vendor/gnss -xf -'
+    tools/phone-ssh 'mkdir -p /usr/lib/omamobile-vendor/gnss && tar -C /usr/lib/omamobile-vendor/gnss -xf -'
 USAGE
 }
 

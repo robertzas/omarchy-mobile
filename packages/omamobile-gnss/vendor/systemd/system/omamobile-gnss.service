@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# GNSS: the bcm4775x-gnss driver and Broadcom's lhd/gpsd in the gnss vendor
+# chroot (device/cheetah/GNSS-PLAN.md). Never enabled on its own: the NMEA
+# bridge pulls it in while something wants positions, and it stops when the
+# bridge does (StopWhenUnneeded), which closes /dev/ttyBCM and powers the
+# chip off.
+[Unit]
+Description=Omarchy Mobile GNSS (BCM4775x, stock lhd and gpsd)
+After=network-online.target
+StopWhenUnneeded=yes
+ConditionPathExists=/usr/lib/omamobile-vendor/gnss/root
+
+[Service]
+ExecStart=/usr/lib/omamobile-vendor/omamobile-gnss-start
+# Before the stop signal: ask gpsd to end its request, so it saves its
+# state (gldata.sto) for the next start. Bounded at ~4 s.
+ExecStop=/usr/lib/omamobile-vendor/omamobile-vendor-chroot gnss stop
+TimeoutStopSec=15

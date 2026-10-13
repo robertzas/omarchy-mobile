@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""sit-sim: a scripted S5300 for testing omandroid-sitd offline.
+"""sit-sim: a scripted S5300 for testing omamobile-sitd offline.
 
 Speaks SIT as /dev/umts_ipc0 delivers it (the 12-byte request/response
 header, the 8-byte indication header, one message per read) over a
 SOCK_SEQPACKET Unix socket, and answers AT on a second one in place of
 /dev/umts_router. Point the RIL at it with
-  OMANDROID_SIT_DEVICE=unix:IPC OMANDROID_SIT_ROUTER=unix:ROUTER OMANDROID_SIT_BOOT=none
+  OMAMOBILE_SIT_DEVICE=unix:IPC OMAMOBILE_SIT_ROUTER=unix:ROUTER OMAMOBILE_SIT_BOOT=none
 
 The layouts are the ones the RIL uses on the phone (the stock 983-byte data
 call, the 292-byte data call response, IMS registration and call status),

@@ -1,0 +1,529 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Tone controls of the built-in speakers' filter (omamobile-audio's PipeWire
+filter-chain, "Speaker loudness"; device/cheetah/AOC-PLAN.md C9g). Runs as
+the desktop user, with that user's PipeWire.
+
+  omamobile-speaker-eq show
+  omamobile-speaker-eq preset default|flat|waves [--save]
+  omamobile-speaker-eq set NAME=VALUE ... [--save]
+  omamobile-speaker-eq save | reset
+  omamobile-speaker-eq orient normal|left-up|right-up|bottom-up
+  omamobile-speaker-eq follow
+  omamobile-speaker-eq measure left|right [--level DBFS] [--out DIR] [--source NODE] [--play-only]
+
+Changes apply at once, while playing, and last until PipeWire restarts;
+--save (or save) keeps the current values in
+~/.config/pipewire/pipewire.conf.d/61-omamobile-speaker-eq.conf, which then
+replaces the package's filter at the next PipeWire start; reset removes it.
+
+Names (left = top speaker / earpiece, right = bottom loudspeaker):
+  hp=HZ            high-pass corner, both channels (20-400); hp_top, hp_bottom
+  bass=DB          low-shelf gain, both (-6..+8); bass_freq=HZ (100-1000)
+  bass_top=DB, bass_bottom=DB, bass_freq_top=HZ, bass_freq_bottom=HZ
+  dip=DB           presence cut, both (-8..+3); dip_freq=HZ (1000-8000), dip_q=Q
+  treble=DB        high-shelf gain, both (-8..+3); treble_top=DB, treble_bottom=DB
+  trim_top=DB, trim_bottom=DB   channel level, cuts only (-20..0)
+  width=W          stereo width, 1 = stereo (default), 0 = both speakers mono
+  swap=0|1         left on the bottom speaker, right on the top (landscape;
+                   "orient" and "follow" set it from the phone's orientation)
+  bassmono=0|1     the bass below xover, summed to mono, to the bottom speaker
+                   only; xover=HZ (150-2000, default 500)
+  harm=G           bass harmonics, both speakers (0-2; 0 = off, the default);
+                   harm_top=G, harm_bottom=G; harm_freq=HZ (40-400): the bass
+                   below it is turned into harmonics
+  drive=DB         the limiters' input gain (0-6; 0 = only catches peaks):
+                   louder, by holding peaks at -3 dBFS
+  NODE:CONTROL=VALUE            any control of the graph, e.g. dip_l:Freq=3000
+The limiters' ceiling (-3 dBFS) is not adjustable here.
+
+Presets: default (the package file's values), flat (everything off but a
+20 Hz high-pass and the limiters: for measuring, and for A/B listening), waves
+(the same as flat: for when the AoC's own speaker processing is on, which does
+its own shaping; AOC-TUNING-RESEARCH.md T4). Presets leave width and the
+orientation swap alone.
+
+orient sets swap for an iio-sensor-proxy orientation: left-up (the phone's
+left edge up, the earpiece on the listener's right) swaps; the others don't.
+follow does that whenever the orientation changes (it listens to the sensor
+proxy's signals and claims nothing; the screen's auto-rotation claims the
+accelerometer).
+
+measure plays stepped tones on one speaker with the filter flat, records them
+with the default microphone (the phone's own) and prints the response
+(lib/speaker_response.py); the filter is restored afterwards. --play-only
+plays without recording, for a microphone elsewhere (a laptop at the
+listening position). Ask before running it: it plays about 15 s of tones
+(-30 dBFS by default).
+"""
+import json
+import math
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+
+NODE = 'effect_input.omamobile_speaker_loudness'
+OUT_NODE = 'effect_output.omamobile_speaker_loudness'
+CONF = os.environ.get('OMAMOBILE_EQ_CONF',
+                      '/usr/share/pipewire/pipewire.conf.d/60-omamobile-speaker-loudness.conf')
+LIB = os.environ.get('OMAMOBILE_AUDIO_LIB', '/usr/lib/omamobile-audio')
+USER_CONF = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'),
+                         'pipewire', 'pipewire.conf.d', '61-omamobile-speaker-eq.conf')
+LIM = 'Input gain (dB)'
+TUNABLE = ('Freq', 'Q', 'Gain', 'Mult', 'Gain 1', 'Gain 2', 'Gain 3', 'Gain 4', LIM)
+SIDES = {'top': ['l'], 'bottom': ['r'], None: ['l', 'r']}
+LIMB = {'l': 't', 'r': 'b'}
+XOVER = ('xlp1', 'xlp2', 'xhp_t1', 'xhp_t2', 'xhp_b1', 'xhp_b2')
+HSRC = ('hsrc1', 'hsrc2', 'hhp1', 'hhp2')
+# Everything off but a 20 Hz high-pass and the limiters (the input matrix,
+# i.e. width and orientation, is not part of a tone preset)
+FLAT = {'hp_l:Freq': 20.0, 'hp2_l:Freq': 20.0, 'hp_r:Freq': 20.0, 'hp2_r:Freq': 20.0,
+        'bass_l:Gain': 0.0, 'bass_r:Gain': 0.0, 'dip_l:Gain': 0.0, 'dip_r:Gain': 0.0,
+        'treble_l:Gain': 0.0, 'treble_r:Gain': 0.0, 'trim_l:Mult': 1.0, 'trim_r:Mult': 1.0,
+        'pre_t:Gain 1': 1.0, 'pre_t:Gain 2': 0.0, 'pre_t:Gain 3': 0.0,
+        'pre_b:Gain 1': 1.0, 'pre_b:Gain 2': 0.0, 'pre_b:Gain 3': 0.0, 'pre_b:Gain 4': 0.0,
+        f'lim_t:{LIM}': 0.0, f'lim_b:{LIM}': 0.0}
+NORMAL = {'mtx_t:Gain 1': 1.0, 'mtx_t:Gain 2': 0.0, 'mtx_b:Gain 1': 0.0, 'mtx_b:Gain 2': 1.0}
+# (node family, control): (min, max) the tool accepts
+LIMITS = {'hp:Freq': (20, 400), 'hp:Q': (0.5, 1.4),
+          'bass:Freq': (100, 1000), 'bass:Q': (0.4, 1.5), 'bass:Gain': (-6, 8),
+          'dip:Freq': (1000, 8000), 'dip:Q': (0.3, 4), 'dip:Gain': (-8, 3),
+          'treble:Freq': (2000, 12000), 'treble:Q': (0.4, 1.5), 'treble:Gain': (-8, 3),
+          'trim:Mult': (0.1, 1.0),
+          'mtx:Gain 1': (0, 1), 'mtx:Gain 2': (0, 1),
+          'pre:Gain 1': (0, 1), 'pre:Gain 2': (0, 1), 'pre:Gain 3': (0, 2), 'pre:Gain 4': (0, 2),
+          'xlp:Freq': (150, 2000), 'xhp:Freq': (150, 2000),
+          'hsrc:Freq': (40, 400), 'hhp:Freq': (40, 400), 'hlp:Freq': (160, 1600),
+          f'lim:{LIM}': (0, 6)}
+# iio-sensor-proxy orientations that put the earpiece on the listener's right
+SWAPPED = {'left-up'}
+
+
+def die(msg):
+    print(f'omamobile-speaker-eq: {msg}', file=sys.stderr)
+    sys.exit(1)
+
+
+def family(node_name):
+    """hp2_l -> hp, xhp_t1 -> xhp, lim_b -> lim, xlp2 -> xlp."""
+    return re.sub(r'\d*(_[lrtb]\d*)?$', '', node_name)
+
+
+NODE_RE = r'name\s*=\s*(\w+)\s+(?:plugin\s*=\s*\S+\s+)?label\s*=\s*\w+\s+control\s*=\s*\{([^}]*)\}'
+
+
+def conf_defaults(path=CONF):
+    """The control values of the package file, {"node:Control": value}."""
+    with open(path) as f:
+        text = f.read()
+    out = {}
+    for m in re.finditer(NODE_RE, text):
+        for k, v in re.findall(r'"([^"]+)"\s*=\s*(-?[0-9.]+)', m.group(2)):
+            if k in TUNABLE:
+                out[f'{m.group(1)}:{k}'] = float(v)
+    return out
+
+
+def pw(*args, check=True):
+    r = subprocess.run(list(args), capture_output=True, text=True, check=False)
+    if check and r.returncode != 0:
+        die(f'{" ".join(args[:2])} failed: {r.stderr.strip() or r.returncode}')
+    return r.stdout
+
+
+def dump():
+    try:
+        return json.loads(pw('pw-dump') or '[]')
+    except ValueError:
+        die('pw-dump gave no JSON (is PipeWire running for this user?)')
+
+
+def node(objs=None):
+    """(id, {"node:Control": value}) of the filter's input node."""
+    for o in dump() if objs is None else objs:
+        info = o.get('info') or {}
+        if (info.get('props') or {}).get('node.name') != NODE:
+            continue
+        vals = {}
+        for p in (info.get('params') or {}).get('Props') or []:
+            lst = p.get('params') if isinstance(p, dict) else None
+            if isinstance(lst, list):
+                for k, v in zip(lst[0::2], lst[1::2]):
+                    if isinstance(k, str) and ':' in k and k.split(':', 1)[1] in TUNABLE:
+                        vals[k] = v
+        return o['id'], vals
+    die(f'no {NODE} node: the speaker filter is not loaded (omamobile-audio 0.4.0 or later, PipeWire '
+        'restarted since it was installed? "journalctl --user -u pipewire -b" says why it failed)')
+
+
+def links(objs):
+    """(names of the nodes the filter's output feeds, number of streams
+    feeding the filter)."""
+    names = {o['id']: ((o.get('info') or {}).get('props') or {}).get('node.name')
+             for o in objs if o.get('type', '').endswith(':Node')}
+    ids = {v: k for k, v in names.items()}
+    out_to, into = set(), set()
+    for o in objs:
+        if not o.get('type', '').endswith(':Link'):
+            continue
+        i = o.get('info') or {}
+        if i.get('output-node-id') == ids.get(OUT_NODE):
+            out_to.add(names.get(i.get('input-node-id')) or str(i.get('input-node-id')))
+        if i.get('input-node-id') == ids.get(NODE):
+            into.add(i.get('output-node-id'))
+    return sorted(out_to), len(into)
+
+
+def adjustable(key):
+    n, c = key.split(':', 1)
+    return f'{family(n)}:{c}' in LIMITS
+
+
+def check_limits(changes):
+    for k, v in changes.items():
+        n, c = k.split(':', 1)
+        if c not in TUNABLE:
+            die(f'{k}: not adjustable here')
+        lo, hi = LIMITS.get(f'{family(n)}:{c}', (None, None))
+        if lo is None:
+            die(f'{k}: not adjustable here')
+        if not lo <= v <= hi:
+            die(f'{k}={v:g}: outside {lo:g}..{hi:g}')
+
+
+def matrix(width, swap):
+    """The input matrix for a stereo width (0..1) and a left/right swap."""
+    same, cross = (1 + width) / 2, (1 - width) / 2
+    t1, t2 = (cross, same) if swap else (same, cross)
+    return {'mtx_t:Gain 1': t1, 'mtx_t:Gain 2': t2, 'mtx_b:Gain 1': t2, 'mtx_b:Gain 2': t1}
+
+
+def width_swap(vals):
+    """(width, swap) as the input matrix stands."""
+    g1, g2 = vals.get('mtx_t:Gain 1', 1.0), vals.get('mtx_t:Gain 2', 0.0)
+    return round(abs(g1 - g2), 3), int(g2 > g1)
+
+
+def parse_set(words, cur):
+    simple = {'hp': None, 'bass': ('bass', 'Gain'), 'bass_freq': ('bass', 'Freq'),
+              'dip': ('dip', 'Gain'), 'dip_freq': ('dip', 'Freq'), 'dip_q': ('dip', 'Q'),
+              'treble': ('treble', 'Gain'), 'treble_freq': ('treble', 'Freq'), 'trim': ('trim', 'Mult'),
+              'harm': None}
+    out = {}
+    width, swap = width_swap(cur)
+    for w in words:
+        if '=' not in w:
+            die(f'{w}: expected NAME=VALUE')
+        k, v = w.split('=', 1)
+        try:
+            val = float(v)
+        except ValueError:
+            die(f'{w}: not a number')
+        if ':' in k:
+            out[k] = val
+            continue
+        if k in ('width', 'swap', 'bassmono'):
+            if k == 'width' and not 0 <= val <= 1:
+                die(f'{w}: width is 0..1')
+            if k != 'width' and val not in (0, 1):
+                die(f'{w}: {k} is 0 or 1')
+        if k == 'width':
+            width = val
+            out.update(matrix(width, swap))
+        elif k == 'swap':
+            swap = int(val)
+            out.update(matrix(width, swap))
+        elif k == 'bassmono':
+            out.update({'pre_t:Gain 1': 1 - val, 'pre_t:Gain 2': val,
+                        'pre_b:Gain 1': 1 - val, 'pre_b:Gain 2': val, 'pre_b:Gain 3': val})
+        elif k == 'xover':
+            out.update({f'{n}:Freq': val for n in XOVER})
+        elif k == 'harm_freq':
+            out.update({f'{n}:Freq': val for n in HSRC})
+            out['hlp:Freq'] = 4 * val
+        elif k == 'drive':
+            out.update({f'lim_t:{LIM}': val, f'lim_b:{LIM}': val})
+        else:
+            m = re.fullmatch(r'(hp|bass|bass_freq|dip|dip_freq|dip_q|treble|treble_freq|trim|harm)'
+                             r'(?:_(top|bottom))?', k)
+            if not m or (m.group(1) == 'trim' and not m.group(2)):
+                die(f'{k}: unknown name (see --help)')
+            name, side = m.group(1), m.group(2)
+            if name == 'trim':
+                if val > 0:
+                    die(f'{k}={v}: trims only cut (dB <= 0)')
+                val = 10 ** (val / 20)
+            for s in SIDES[side]:
+                if name == 'hp':
+                    out[f'hp_{s}:Freq'] = out[f'hp2_{s}:Freq'] = val
+                elif name == 'harm':
+                    out['pre_t:Gain 3' if s == 'l' else 'pre_b:Gain 4'] = val
+                else:
+                    n, c = simple[name]
+                    out[f'{n}_{s}:{c}'] = val
+    return out
+
+
+def apply(nid, changes):
+    check_limits(changes)
+    body = ' '.join(f'"{k}" {v:.6g}' for k, v in sorted(changes.items()))
+    pw('pw-cli', 'set-param', str(nid), 'Props', f'{{ params = [ {body} ] }}')
+    # read back: the filter answers with its new values
+    for _ in range(20):
+        _, now = node()
+        if all(abs(now.get(k, float('nan')) - v) < 1e-3 * max(1.0, abs(v)) for k, v in changes.items()):
+            return now
+        time.sleep(0.05)
+    die('PipeWire took the change but the filter did not report the new values; '
+        'nothing is known to have changed')
+
+
+def fmt(vals):
+    g = lambda k, d=float('nan'): vals.get(k, d)
+    db = lambda m: '-' if m is None else f'{20 * math.log10(max(m, 1e-6)):+.1f} dB'
+    rows = []
+    for side, s in (('top (left)', 'l'), ('bottom (right)', 'r')):
+        rows.append(f'{side:15} hp {g(f"hp_{s}:Freq"):g} Hz | bass {g(f"bass_{s}:Gain"):+g} dB at '
+                    f'{g(f"bass_{s}:Freq"):g} Hz | dip {g(f"dip_{s}:Gain"):+g} dB at {g(f"dip_{s}:Freq"):g} Hz '
+                    f'Q {g(f"dip_{s}:Q"):g} | treble {g(f"treble_{s}:Gain"):+g} dB at {g(f"treble_{s}:Freq"):g} Hz | '
+                    f'trim {db(vals.get(f"trim_{s}:Mult"))}')
+    width, swap = width_swap(vals)
+    bm = g('pre_b:Gain 3', 0.0)
+    rows.append(f'{"both":15} width {width:g} | swap {swap} | bassmono {bm:g} at {g("xlp1:Freq"):g} Hz | '
+                f'harm top {g("pre_t:Gain 3", 0.0):g} bottom {g("pre_b:Gain 4", 0.0):g} below '
+                f'{g("hsrc1:Freq"):g} Hz | drive {g(f"lim_t:{LIM}", 0.0):g}/{g(f"lim_b:{LIM}", 0.0):g} dB')
+    return '\n'.join(rows)
+
+
+def save(vals):
+    with open(CONF) as f:
+        text = f.read()
+    known = conf_defaults()
+    vals = dict(vals)
+    # orientation is state, not a setting: keep the width, never the swap
+    vals.update(matrix(width_swap(vals)[0], 0))
+    for k, v in vals.items():
+        if k not in known:          # e.g. a high-pass's unused Gain
+            continue
+        n, c = k.split(':', 1)
+        pat = re.compile(r'(name\s*=\s*' + re.escape(n) + r'\s+(?:plugin\s*=\s*\S+\s+)?label\s*=\s*\w+\s+'
+                         r'control\s*=\s*\{[^}]*"' + re.escape(c) + r'"\s*=\s*)(-?[0-9.]+)')
+        text, cnt = pat.subn(lambda m: m.group(1) + f'{v:.6g}', text)
+        if cnt != 1:
+            die(f'cannot save {k}: not found once in {CONF}')
+    text = text.replace('omamobile.speaker-eq = package', 'omamobile.speaker-eq = user')
+    if text.count('omamobile.speaker-eq = user') != 2:
+        die(f'{CONF} has no package/user switch (omamobile-audio too old?)')
+    header = ('# Written by omamobile-speaker-eq save: the speaker filter with your values.\n'
+              '# It replaces the package\'s at the next PipeWire start; omamobile-speaker-eq reset\n'
+              '# removes it. Taken from ' + CONF + '\n')
+    os.makedirs(os.path.dirname(USER_CONF), exist_ok=True)
+    tmp = USER_CONF + '.tmp'
+    with open(tmp, 'w') as f:
+        f.write(header + text)
+    os.replace(tmp, USER_CONF)
+    print(f'saved: {USER_CONF}')
+
+
+def speaker_sink(objs):
+    """(id, name) of the node the filter plays into, or of the AoC speaker sink."""
+    out_to, _ = links(objs)
+    for o in objs:
+        p = ((o.get('info') or {}).get('props') or {})
+        n = p.get('node.name') or ''
+        if (n in out_to and n != OUT_NODE) or (not out_to and n.startswith('alsa_output.')
+                                              and 'Speaker' in n and p.get('media.class') == 'Audio/Sink'):
+            return o['id'], n
+    return None, None
+
+
+def sink_gain_db(sid):
+    """The speaker sink's volume as a gain in dB (wpctl's cubic scale), or
+    None; dies when it is muted."""
+    if sid is None:
+        return None
+    r = subprocess.run(['wpctl', 'get-volume', str(sid)], capture_output=True, text=True)
+    m = re.search(r'Volume:\s*([0-9.]+)', r.stdout)
+    if not m:
+        return None
+    if 'MUTED' in r.stdout:
+        die('the speaker sink is muted: unmute it, nothing would be measured')
+    v = float(m.group(1))
+    return round(60 * math.log10(v), 1) if v > 0 else -120.0
+
+
+def measure(args):
+    side = args[0] if args else None
+    if side not in ('left', 'right'):
+        die('measure left|right [--level DBFS] [--out DIR] [--source NODE] [--play-only]')
+    play_only = '--play-only' in args
+    rest = [a for a in args[1:] if a != '--play-only']
+    opt = dict(zip(rest[0::2], rest[1::2]))
+    level = float(opt.get('--level', -30))
+    if level > -20:
+        die('measure: --level above -20 dBFS is refused')
+    out = opt.get('--out') or tempfile.mkdtemp(prefix='speaker-response-')
+    os.makedirs(out, exist_ok=True)
+    resp = [sys.executable, '-I', os.path.join(LIB, 'speaker_response.py')]
+    stim, rec, res = (os.path.join(out, f'{side}-{n}') for n in ('stimulus.wav', 'rec.wav', 'result.json'))
+    subprocess.run(resp + ['gen', stim, '--channel', side, '--level', str(level)], check=True)
+    objs = dump()
+    nid, before = node(objs)
+    sid, sname = speaker_sink(objs)
+    gain = sink_gain_db(sid)
+    print(f'speaker sink {sname or "?"}, volume {"?" if gain is None else f"{gain:+.1f} dB"}')
+    if gain is not None and gain < -20:
+        print('note: the speaker volume is low; the tones may drown in the room noise '
+              '(set it the same for both sides)')
+    flat = dict(FLAT, **NORMAL)
+    recp = None
+    played = 1
+    try:
+        apply(nid, flat)
+        if not play_only:
+            cmd = ['pw-record', '--rate', '48000', '--channels', '2', '--format', 's16']
+            if '--source' in opt:
+                cmd += ['--target', opt['--source']]
+            recp = subprocess.Popen(cmd + [rec])
+            time.sleep(0.8)
+        played = subprocess.run(['pw-play', '--target', NODE, stim], check=False).returncode
+        time.sleep(0.5)
+    finally:
+        if recp:
+            recp.terminate()
+            try:
+                recp.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                recp.kill()
+        apply(nid, {k: before[k] for k in flat if k in before})
+    if played != 0:
+        die(f'pw-play failed ({played}); the filter is restored')
+    if play_only:
+        print(f'played {stim}; analyse the other recording with: speaker_response.py analyze REC.wav '
+              f'--level {level:g} --json {side}-result.json')
+        return 0
+    extra = ['--source', opt.get('--source', 'default')]
+    if gain is not None:
+        extra += ['--sink-gain-db', str(gain)]
+    r = subprocess.run(resp + ['analyze', rec, '--level', str(level), '--json', res] + extra, check=False)
+    print(f'files in {out}; with both sides measured: {" ".join(resp[2:])} suggest '
+          f'{os.path.join(out, "left-result.json")} {os.path.join(out, "right-result.json")}')
+    return r.returncode
+
+
+def orientation_swap(name):
+    if name not in ('normal', 'left-up', 'right-up', 'bottom-up'):
+        die(f'{name}: not an orientation (normal, left-up, right-up, bottom-up)')
+    return int(name in SWAPPED)
+
+
+def orient(name):
+    nid, vals = node()
+    swap = orientation_swap(name)
+    if width_swap(vals)[1] != swap:
+        apply(nid, matrix(width_swap(vals)[0], swap))
+    print(f'{name}: swap {swap}')
+
+
+SP = ('net.hadess.SensorProxy', '/net/hadess/SensorProxy')
+
+
+def follow():
+    """Set the swap from the sensor proxy's AccelerometerOrientation, now
+    and on every change; retries while the filter or the proxy is away."""
+    def current():
+        r = subprocess.run(['gdbus', 'call', '--system', '--dest', SP[0], '--object-path', SP[1],
+                            '--method', 'org.freedesktop.DBus.Properties.Get', SP[0],
+                            'AccelerometerOrientation'], capture_output=True, text=True)
+        m = re.search(r"'([a-z-]+)'", r.stdout)
+        return m.group(1) if m else None
+
+    def try_orient(name):
+        try:
+            orient(name)
+        except SystemExit:
+            print(f'follow: could not apply {name}; will retry', file=sys.stderr, flush=True)
+            return False
+        sys.stdout.flush()
+        return True
+
+    while True:
+        name = current()
+        ok = try_orient(name) if name and name != 'undefined' else True
+        mon = subprocess.Popen(['gdbus', 'monitor', '--system', '--dest', SP[0], '--object-path', SP[1]],
+                               stdout=subprocess.PIPE, text=True)
+        for line in mon.stdout:
+            m = re.search(r"'AccelerometerOrientation': <'([a-z-]+)'>", line)
+            if m and m.group(1) != 'undefined':
+                name = m.group(1)
+                ok = try_orient(name)
+            elif not ok and name:
+                ok = try_orient(name)
+        mon.wait()
+        if os.environ.get('OMAMOBILE_EQ_FOLLOW_ONCE') == '1':     # tests
+            return
+        time.sleep(5)            # the proxy went away (or gdbus failed): start again
+
+
+def main(argv):
+    if not argv or argv[0] in ('-h', '--help'):
+        print(__doc__)
+        return 0
+    cmd, rest = argv[0], argv[1:]
+    keep = '--save' in rest
+    rest = [a for a in rest if a != '--save']
+    if cmd == 'reset':
+        if os.path.exists(USER_CONF):
+            os.unlink(USER_CONF)
+            print(f'removed {USER_CONF}')
+        cmd, rest = 'preset', ['default']
+    if cmd == 'measure':
+        return measure(rest)
+    if cmd == 'orient':
+        orient(rest[0] if rest else '')
+        return 0
+    if cmd == 'follow':
+        follow()
+        return 0
+    objs = dump()
+    nid, vals = node(objs)
+    if cmd == 'show':
+        print(f'node {nid} ({NODE}){"; your saved values: " + USER_CONF if os.path.exists(USER_CONF) else ""}')
+        print(fmt(vals))
+        out_to, streams = links(objs)
+        if out_to:
+            print(f'in the path: plays into {", ".join(out_to)}; {streams} stream link(s) into the filter')
+        else:
+            print('NOT in the path: the filter\'s output is linked to nothing (the smart filter found no '
+                  'speaker sink by its target name?); sound bypasses it')
+        return 0
+    if cmd == 'save':
+        save(vals)
+        return 0
+    if cmd == 'preset':
+        name = rest[0] if rest else None
+        if name == 'default':
+            changes = {k: v for k, v in conf_defaults().items()
+                       if not k.startswith('mtx_') and adjustable(k)}
+        elif name in ('flat', 'waves'):
+            changes = dict(FLAT)
+        else:
+            die('preset default|flat|waves')
+    elif cmd == 'set':
+        changes = parse_set(rest, vals)
+        if not changes:
+            die('set NAME=VALUE ...')
+    else:
+        die(f'{cmd}: unknown command (see --help)')
+    now = apply(nid, changes)
+    print(fmt(now))
+    if keep:
+        save(now)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

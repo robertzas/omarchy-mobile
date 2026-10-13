@@ -1,11 +1,11 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# omandroid: set up, sync and build Omandroid (LineageOS + Omarchy) in a container.
+# omamobile: set up, sync and build Omarchy Mobile (LineageOS + Omarchy) in a container.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
-source "$ROOT/omandroid.conf"
-[[ -f "$ROOT/omandroid.local.conf" ]] && source "$ROOT/omandroid.local.conf"
+source "$ROOT/omamobile.conf"
+[[ -f "$ROOT/omamobile.local.conf" ]] && source "$ROOT/omamobile.local.conf"
 
 usage() {
   cat <<EOF
@@ -14,7 +14,7 @@ Usage: lineage-ref <command>
   doctor   Check the host has what the build needs
   image    Build the Ubuntu build-environment image
   sync     Download or update the LineageOS source ($BRANCH) into $SRC_DIR
-  build    Build Omandroid for $DEVICE ($VARIANT)
+  build    Build Omarchy Mobile for $DEVICE ($VARIANT)
   shell    Open a shell in the build environment, in the source tree
 EOF
 }
@@ -27,13 +27,13 @@ in_container() {
   local tty=()
   [[ -t 0 && -t 1 ]] && tty=(-it)
   # Create the mount point ourselves, or Docker makes it (and vendor/) root-owned.
-  mkdir -p "$SRC_DIR/vendor/omandroid" "$CCACHE_DIR"
+  mkdir -p "$SRC_DIR/vendor/omamobile" "$CCACHE_DIR"
   docker run --rm "${tty[@]}" \
-    --hostname omandroid-build \
+    --hostname omamobile-build \
     -v "$SRC_DIR:$SRC_DIR" \
-    -v "$ROOT/vendor/omandroid:$SRC_DIR/vendor/omandroid" \
+    -v "$ROOT/vendor/omamobile:$SRC_DIR/vendor/omamobile" \
     -v "$CCACHE_DIR:/ccache" \
-    -v "$ROOT/manifests:/omandroid-manifests:ro" \
+    -v "$ROOT/manifests:/omamobile-manifests:ro" \
     -e GIT_NAME="$(git config --global user.name)" \
     -e GIT_EMAIL="$(git config --global user.email)" \
     -w "$SRC_DIR" \
@@ -76,7 +76,7 @@ cmd_sync() {
     set -e
     [[ -d .repo/manifests ]] || repo init -u https://github.com/LineageOS/android.git -b $BRANCH --git-lfs --no-clone-bundle
     mkdir -p .repo/local_manifests
-    cp /omandroid-manifests/*.xml .repo/local_manifests/
+    cp /omamobile-manifests/*.xml .repo/local_manifests/
     repo sync
     source build/envsetup.sh
     breakfast $DEVICE $VARIANT

@@ -63,7 +63,7 @@ Physical recovery, in order:
   4. If slot B itself no longer gets USB (only after an overlay DTB): the
      initramfs crashes after 45 s without a configured gadget and, after
      ABL's retries, ABL boots stock Android on slot A. From there:
-     adb reboot bootloader, then flash the previous images (bin/omandroid flash
+     adb reboot bootloader, then flash the previous images (bin/omamobile flash
      with the out dir whose DTB has no usbc overlay).
   5. Fastboot by hand: hold Power ~30 s (off), then Volume Down + Power for
      ~20 s until "Fastboot Mode".

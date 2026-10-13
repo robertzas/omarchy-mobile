@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: MIT
+// Screen mirroring: let the active local user start and stop
+// omamobile-mirror-firewall.service, which opens TCP 5900 on usb0 (the USB
+// link) in ufw while mirroring runs. Nothing else.
+polkit.addRule(function(action, subject) {
+  if (action.id == "org.freedesktop.systemd1.manage-units" &&
+      subject.local && subject.active &&
+      action.lookup("unit") == "omamobile-mirror-firewall.service" &&
+      (action.lookup("verb") == "start" || action.lookup("verb") == "stop")) {
+    return polkit.Result.YES;
+  }
+});

@@ -1,0 +1,510 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Bring up the Pixel 7 Pro's speaker amplifiers with protection, hang-safe
+# (device/cheetah/AOC-PLAN.md stages C8, C8f and C9; AUDIO-PLAN.md section 4).
+#
+# The two CS35L41 amplifiers (Top = chip select 0, the top speaker and
+# earpiece; Bottom = chip select 1, the loudspeaker) run Cirrus's speaker
+# protection firmware on their DSPs, as stock does: the firmware models the
+# voice coil's temperature and excursion from the amplifier's own voltage and
+# current sense (internal: DSP1 RX3/RX4 are VMON/IMON), and needs the coil
+# resistance measured at the factory.
+#
+# start (the service; also a working restart and recovery):
+#   1. Load the amplifier driver (blacklisted for autoload, so this is the only
+#      way the AoC sound card comes up), or, if it is already bound, unbind and
+#      rebind both amplifiers: the probe resets the chips, so the DSPs start
+#      from scratch whatever state they were left in. Wait for the card.
+#   2. Mute both amplifiers at once (Digital PCM Volume 0).
+#   3. Keep both amplifiers out of runtime suspend (power/control "on"): the
+#      mainline driver hibernates a DSP that has run, and this stock firmware
+#      does not come back from it (C8e, 2026-10-12: "Wake failed", "CSPL Error
+#      Detected", then the PCM cannot open). The udev rule does the same at
+#      every bind; this checks it.
+#   4. Check that the kernel's volume limits are in force and the configured
+#      levels are within this stage's ceilings (stage c9 also needs the kernel's
+#      speaker_protection=1 and a verification stamp for this firmware), that
+#      the protection firmware and both tunings are installed, and read the
+#      factory calibration from persist with debugfs (read-only).
+#   5. Load the firmware into both DSPs, write the calibration into their CAL_*
+#      controls and read it back.
+#   6. Route the DAC through the DSP (PCM Source DSP, both DSP inputs from the
+#      amplifier's own slot, as stock) and set the analog gain.
+#   7. Health check: both amplifiers runtime-active and held, the DSP controls
+#      there, no amplifier error in the kernel log since step 1. Only then
+#      unmute to the configured digital level.
+# Any failure leaves both amplifiers muted: never unprotected. A marker is
+# written and synced before step 1 and removed at the end; if a boot hangs in
+# here, the next one finds it, leaves the amplifier driver alone and fails.
+#
+#   omamobile-speaker-protection start [--retry]    (the service)
+#   omamobile-speaker-protection watch              (omamobile-speaker-watch.service)
+#   omamobile-speaker-protection status | monitor [SECONDS] | health
+#   omamobile-speaker-protection verify             (during playback; C9a)
+#   omamobile-speaker-protection signal tone|multitone FILE [options]
+#   omamobile-speaker-protection mute [--reason TEXT]
+#   omamobile-speaker-protection impedance [--rounds N]
+#                           during playback: the coil impedance the protection
+#                           firmware measures, as a ratio to the factory CAL_R
+#                           (its real-time logger, as stock samples it)
+#   omamobile-speaker-protection feedback start [--seconds S] | stop | status
+#                           the amplifiers' VMON/IMON stream to the AoC, as stock
+#                           runs it with every speaker stream (hostless capture
+#                           PCM 15; AOC-PLAN.md C9d-7). OMAMOBILE_SPK_FEEDBACK=1
+#                           makes the watchdog run it with every speaker stream
+#
+# Levels come from the environment (the services read /etc/omamobile/speaker.conf):
+#   OMAMOBILE_SPK_STAGE     media (default: 737 / 10 on both), c8 (bring-up:
+#                           657, analog 6 top / 10 bottom) or c9 (stock 817 / 17)
+#   OMAMOBILE_SPK_DIGITAL   Digital PCM Volume after unmute (media 737, else 657)
+#   OMAMOBILE_SPK_ANALOG    Analog PCM Volume (media 10, else 6)
+#   OMAMOBILE_SPK_TOP_DIGITAL, _TOP_ANALOG, _BOTTOM_DIGITAL, _BOTTOM_ANALOG
+#                           per amplifier, overriding the two above
+# Values above the stage's ceilings are refused. Never print or log the
+# calibration values: the repository and its logs are public.
+set -uo pipefail
+
+KERNEL_DIGITAL_MAX=817
+
+STAGE=${OMAMOBILE_SPK_STAGE:-media}
+case $STAGE in
+  # media (the default): the everyday level until stock's gains are proven
+  # (AOC-PLAN.md C9d-2): digital -10 dB, analog 10.5 dB on both, inside
+  # AUDIO-PLAN.md section 4's limits even without protection (digital <= 817,
+  # analog <= 10), and 17 dB below stock's media output
+  media) DIGITAL_CEIL=737 ANALOG_CEIL_TOP=10 ANALOG_CEIL_BOTTOM=10 ;;
+  # c8: bring-up, AUDIO-PLAN.md section 4 (the top amplifier drives the earpiece: 6)
+  c8) DIGITAL_CEIL=657 ANALOG_CEIL_TOP=6 ANALOG_CEIL_BOTTOM=10 ;;
+  # c9: stock (mixer_paths.xml: Digital PCM Volume 817, AMP PCM Gain 17 on
+  # both), only under verified protection
+  c9) DIGITAL_CEIL=817 ANALOG_CEIL_TOP=17 ANALOG_CEIL_BOTTOM=17 ;;
+  *) DIGITAL_CEIL=0 ANALOG_CEIL_TOP=0 ANALOG_CEIL_BOTTOM=0 ;;
+esac
+analog_ceil() { [[ $1 == Top ]] && echo "$ANALOG_CEIL_TOP" || echo "$ANALOG_CEIL_BOTTOM"; }
+
+if [[ $STAGE == media ]]; then
+  DIGITAL=${OMAMOBILE_SPK_DIGITAL:-737} ANALOG=${OMAMOBILE_SPK_ANALOG:-10}
+else
+  DIGITAL=${OMAMOBILE_SPK_DIGITAL:-657} ANALOG=${OMAMOBILE_SPK_ANALOG:-6}
+fi
+
+# The DT's cirrus,subsystem-id; with the "Top"/"Bottom" name prefixes it makes
+# the firmware names mainline wm_adsp requests.
+SYSTEM=cheetah
+AMPS=(Top Bottom)
+SUFFIX=(top bottom)
+NODES=(amplifier@0 amplifier@1)
+# persist:/audio/speaker.cal: one record of six little-endian u32 per amplifier,
+# in amplifier index order (the stock HAL's index 0 is "Left/Top", 1
+# "Right/Bottom"): CAL_R, CAL_STATUS, CAL_CHECKSUM (= CAL_R + CAL_STATUS),
+# CAL_AMBIENT, then the stock amplifier gain and digital volume (unused here).
+CAL_PATH=/audio/speaker.cal
+CAL_WORDS=6
+
+# Paths, overridable for the tests
+ASOUND=${OMAMOBILE_ASOUND:-/proc/asound}
+SYSBLOCK=${OMAMOBILE_SYSBLOCK:-/sys/class/block}
+SPIDEVS=${OMAMOBILE_SPIDEVS:-/sys/bus/spi/devices}
+SPIDRV=${OMAMOBILE_SPIDRV:-/sys/bus/spi/drivers/cs35l41}
+SYSMODULE=${OMAMOBILE_SYSMODULE:-/sys/module}
+DEVDIR=${OMAMOBILE_DEVDIR:-/dev}
+FW_DIRS=${OMAMOBILE_FW_DIRS:-/usr/lib/firmware/updates /usr/lib/firmware}
+STATE=${OMAMOBILE_STATE:-/var/lib/omamobile}
+RUN=${OMAMOBILE_RUN:-/run/omamobile}
+LIB=${OMAMOBILE_AUDIO_LIB:-/usr/lib/omamobile-audio}
+CARD_WAIT=${OMAMOBILE_CARD_WAIT:-20}
+CTL_WAIT=${OMAMOBILE_CTL_WAIT:-10}
+
+marker=$STATE/speaker-protection-started
+stamp=$STATE/speaker-protection-verified
+status_file=$RUN/speaker-protection
+cal=$RUN/speaker.cal
+card=
+
+export OMAMOBILE_SPK_STAGE=$STAGE OMAMOBILE_SPK_SCRIPT=${OMAMOBILE_SPK_SCRIPT:-$0}
+
+log() { echo "omamobile-speaker: $*"; }
+
+ctl() { amixer -c "$card" "$@"; }
+ctl_set() { ctl -q cset "name=$1" "$2" >/dev/null 2>&1; }
+ctl_values() { ctl cget "name=$1" 2>/dev/null | sed -n 's/^ *: values=//p'; }
+ctl_max() { ctl cget "name=$1" 2>/dev/null | sed -n '/; type=/s/.*,max=\([0-9-]*\).*/\1/p'; }
+# the selected item's name of an enumerated control
+ctl_enum() {
+  local out idx
+  out=$(ctl cget "name=$1" 2>/dev/null) || return 1
+  idx=$(sed -n 's/^ *: values=//p' <<<"$out")
+  [[ -n $idx ]] && sed -n "s/^ *; Item #$idx '\(.*\)'\$/\1/p" <<<"$out"
+}
+# The full name of a DSP firmware control: "<amp> DSP1 <fw> <alg> <name>",
+# preferring the protection algorithm (cd) when another one has the same name.
+dsp_ctl() {
+  local all
+  all=$(ctl controls 2>/dev/null | sed -n "s/^numid=[0-9]*,iface=[A-Z]*,name='\($1 DSP1 .* $2\)'\$/\1/p")
+  [[ -n $all ]] || return 1
+  grep -m1 " cd $2\$" <<<"$all" || head -n1 <<<"$all"
+}
+# bytes control value <-> integer (cs_dsp words are big-endian)
+be_bytes() { printf '0x%02x,0x%02x,0x%02x,0x%02x' $(($1 >> 24 & 255)) $(($1 >> 16 & 255)) $(($1 >> 8 & 255)) $(($1 & 255)); }
+
+dsp() { python3 -I "$LIB/speaker_dsp.py" "$@"; }
+
+find_card() {
+  [[ -r $ASOUND/cards ]] || return 1
+  card=$(awk '/\]: aoc-snd-card - /{print $1; exit}' "$ASOUND/cards")
+  [[ -n $card ]]
+}
+
+# amp_dev INDEX: the SPI device name of amplifier INDEX (from its DT node)
+amp_dev() {
+  local d
+  for d in "$SPIDEVS"/*; do
+    [[ $(readlink -f "$d/of_node" 2>/dev/null) == */"${NODES[$1]}" ]] && { echo "${d##*/}"; return 0; }
+  done
+  return 1
+}
+
+set_status() {
+  mkdir -p "$RUN" && echo "$*" > "$status_file" 2>/dev/null
+}
+
+# Digital PCM Volume 0 is mute (cs35l41's TLV). Returns non-zero unless both
+# amplifiers read back 0.
+mute() {
+  local p ok=0
+  [[ -n $card ]] || find_card || { log "no AoC sound card: nothing to mute (no card, no sound)"; return 0; }
+  for p in "${AMPS[@]}"; do
+    ctl_set "$p Digital PCM Volume" 0
+    if [[ $(ctl_values "$p Digital PCM Volume") != 0 ]]; then
+      log "could not mute the $p amplifier"
+      ok=1
+    fi
+  done
+  return $ok
+}
+
+finish() { rm -f "$marker"; sync -f "$STATE" 2>/dev/null || sync; }
+
+fail() {
+  log "$*"
+  if mute; then
+    log "speaker protection did not start: both amplifiers muted"
+    set_status "muted: $*"
+  else
+    log "speaker protection did not start AND MUTING FAILED: unbind the amplifiers (see AOC-PLAN.md C8f)"
+    set_status "unprotected, mute failed: $*"
+  fi
+  finish
+  exit 1
+}
+
+fw_file() {
+  local d e
+  for d in $FW_DIRS; do
+    for e in '' .zst .xz; do
+      [[ -e $d/cirrus/$1$e ]] && { echo "$d/cirrus/$1$e"; return 0; }
+    done
+  done
+  return 1
+}
+fw_files() {
+  local n=cs35l41-dsp1-spk-prot-$SYSTEM s
+  fw_file "$n.wmfw" || return 1
+  for s in "${SUFFIX[@]}"; do fw_file "$n-$s.bin" || return 1; done
+}
+# what a verification stamp covers: the firmware and both tunings
+fw_digest() { local f; f=$(fw_files) || return 1; sha256sum $f | awk '{print $1}' | sha256sum | cut -c1-64; }
+
+# Copy persist's speaker.cal to $cal and check both records. Sets the arrays
+# cal_r, cal_status, cal_checksum, cal_ambient. Logs no values.
+read_calibration() {
+  local dev w i
+  dev=$(grep -l '^PARTNAME=persist$' "$SYSBLOCK"/*/uevent 2>/dev/null | head -n1)
+  [[ -n $dev ]] || { log "no persist partition"; return 1; }
+  dev=${dev%/uevent}
+  dev=$DEVDIR/${dev##*/}
+  command -v debugfs >/dev/null || { log "no debugfs (e2fsprogs)"; return 1; }
+  mkdir -p "$RUN"
+  # debugfs opens the device read-only unless given -w
+  (umask 077 && debugfs -R "cat $CAL_PATH" "$dev" > "$cal" 2>/dev/null)
+  if (($(stat -c %s "$cal" 2>/dev/null || echo 0) < ${#AMPS[@]} * CAL_WORDS * 4)); then
+    log "persist:$CAL_PATH is missing or short"
+    return 1
+  fi
+  mapfile -t w < <(od -An -tu4 -v -N $((${#AMPS[@]} * CAL_WORDS * 4)) "$cal" | tr -s ' ' '\n' | sed '/^$/d')
+  for i in "${!AMPS[@]}"; do
+    cal_r[i]=${w[i * CAL_WORDS]} cal_status[i]=${w[i * CAL_WORDS + 1]}
+    cal_checksum[i]=${w[i * CAL_WORDS + 2]} cal_ambient[i]=${w[i * CAL_WORDS + 3]}
+    if ((cal_status[i] != 1)); then
+      log "calibration record $i (${AMPS[i]}): status is not 1 (not calibrated)"; return 1
+    fi
+    if ((cal_checksum[i] != cal_r[i] + cal_status[i])); then
+      log "calibration record $i (${AMPS[i]}): bad checksum"; return 1
+    fi
+    if ((cal_r[i] <= 0 || cal_r[i] >= 1 << 24)); then
+      log "calibration record $i (${AMPS[i]}): resistance out of range"; return 1
+    fi
+    if ((cal_ambient[i] > 60)); then
+      log "calibration record $i (${AMPS[i]}): ambient temperature out of range"; return 1
+    fi
+  done
+  log "factory calibration read from persist (read-only): both records valid"
+}
+
+# per-amplifier levels: level Top|Bottom DIGITAL|ANALOG
+level() {
+  local v="OMAMOBILE_SPK_${1^^}_$2" d
+  [[ $2 == DIGITAL ]] && d=$DIGITAL || d=$ANALOG
+  echo "${!v:-$d}"
+}
+
+check_limits() {
+  local p m kmax prot v
+  ((DIGITAL_CEIL > 0)) || { log "OMAMOBILE_SPK_STAGE=$STAGE is not media, c8 or c9"; return 1; }
+  prot=$(cat "$SYSMODULE/aoc_alsa_dev/parameters/speaker_protection" 2>/dev/null)
+  # aoc_speaker_limits(): Analog 10, or 17 with speaker_protection=1
+  [[ $prot == Y ]] && kmax=17 || kmax=10
+  if [[ $STAGE == c9 ]]; then
+    [[ $prot == Y ]] || { log "stage c9 needs aoc_alsa_dev speaker_protection=1 (it reads '${prot:-missing}')"; return 1; }
+    [[ -r $stamp ]] || { log "stage c9 needs a verification stamp (AOC-PLAN.md C9a: omamobile-speaker-protection verify)"; return 1; }
+    [[ $(sed -n 's/^firmware //p' "$stamp") == "$(fw_digest)" ]] ||
+      { log "the verification stamp is for other firmware or tunings: verify again (C9a)"; return 1; }
+  fi
+  for p in "${AMPS[@]}"; do
+    for v in DIGITAL ANALOG; do
+      m=$(level "$p" "$v")
+      [[ $m =~ ^[0-9]+$ ]] || { log "$p ${v,,} level '$m' is not a number"; return 1; }
+    done
+    m=$(level "$p" DIGITAL)
+    ((m >= 1 && m <= DIGITAL_CEIL)) || { log "$p digital level $m is outside 1..$DIGITAL_CEIL (stage $STAGE)"; return 1; }
+    m=$(level "$p" ANALOG)
+    ((m <= $(analog_ceil "$p") && m <= kmax)) || { log "$p analog level $m is above $(analog_ceil "$p") (stage $STAGE) or the kernel's $kmax"; return 1; }
+    m=$(ctl_max "$p Digital PCM Volume")
+    [[ -n $m ]] && ((m <= KERNEL_DIGITAL_MAX)) ||
+      { log "the kernel's limit on $p Digital PCM Volume is not in force (max ${m:-missing}, want <= $KERNEL_DIGITAL_MAX)"; return 1; }
+    m=$(ctl_max "$p Analog PCM Volume")
+    [[ -n $m ]] && ((m <= kmax)) ||
+      { log "the kernel's limit on $p Analog PCM Volume is not in force (max ${m:-missing}, want <= $kmax)"; return 1; }
+  done
+}
+
+check_firmware() {
+  local i n
+  n=cs35l41-dsp1-spk-prot-$SYSTEM
+  fw_file "$n.wmfw" >/dev/null || { log "no cirrus/$n.wmfw (tools/extract-vendor-firmware)"; return 1; }
+  for i in "${!AMPS[@]}"; do
+    fw_file "$n-${SUFFIX[i]}.bin" >/dev/null || { log "no cirrus/$n-${SUFFIX[i]}.bin (tools/extract-vendor-firmware)"; return 1; }
+  done
+}
+
+# Keep the amplifiers runtime-active: no runtime suspend, so no hibernate.
+hold_awake() {
+  local i d c s
+  for i in "${!AMPS[@]}"; do
+    d=$(amp_dev "$i") || { log "no SPI device for ${AMPS[i]} (${NODES[i]})"; return 1; }
+    echo on > "$SPIDEVS/$d/power/control" 2>/dev/null
+    for _ in $(seq 25); do
+      c=$(cat "$SPIDEVS/$d/power/control" 2>/dev/null) s=$(cat "$SPIDEVS/$d/power/runtime_status" 2>/dev/null)
+      [[ $c == on && $s == active ]] && break
+      sleep 0.2
+    done
+    [[ $c == on && $s == active ]] || { log "${AMPS[i]} ($d) not held awake: control $c, runtime_status $s"; return 1; }
+  done
+  log "both amplifiers held awake (power/control on, no runtime hibernate)"
+}
+
+# Unbind and rebind both amplifiers: their probe resets the chips, the card
+# goes away and comes back, and the DSPs start without firmware.
+rebind() {
+  local i d
+  log "the amplifier driver is already bound: rebinding both amplifiers to reset them"
+  for i in "${!AMPS[@]}"; do
+    d=$(amp_dev "$i") || return 1
+    [[ -e $SPIDRV/$d ]] && { echo "$d" > "$SPIDRV/unbind" || return 1; }
+  done
+  for _ in $(seq $((CARD_WAIT * 5))); do find_card || break; sleep 0.2; done
+  for i in "${!AMPS[@]}"; do
+    d=$(amp_dev "$i") || return 1
+    echo "$d" > "$SPIDRV/bind" || return 1
+  done
+  card=
+}
+
+start() {
+  local p i c f v want since
+  if [[ -e $marker ]]; then
+    log "the last start ($(cat "$marker" 2>/dev/null)) never finished; the amplifiers stay off this boot."
+    log "after checking the previous boot's log, retry with: omamobile-speaker-protection start --retry"
+    # The driver stays unloaded, so normally there is no card; if someone
+    # loaded it by hand, mute what is there.
+    find_card && mute
+    set_status "off: the last start never finished"
+    exit 1
+  fi
+  mkdir -p "$STATE"
+  date -Is > "$marker"
+  sync -f "$marker" 2>/dev/null || sync
+  # the kernel log's clock (CLOCK_MONOTONIC; /proc/uptime also counts suspend)
+  since=$(python3 -c 'import time; print(time.monotonic())')
+
+  # 1. The amplifiers, fresh, then the card
+  mkdir -p "$RUN" && echo "$since" > "$RUN/speaker-protection-since"
+  if compgen -G "$SPIDRV/spi*" >/dev/null; then
+    find_card && mute
+    rebind || fail "rebinding the amplifiers failed"
+  else
+    modprobe snd_soc_cs35l41_spi || fail "snd_soc_cs35l41_spi failed to load"
+  fi
+  for ((i = 0; i < CARD_WAIT * 5; i++)); do find_card && break; sleep 0.2; done
+  find_card || fail "no AoC sound card after ${CARD_WAIT} s (both amplifiers probed? the AoC up?)"
+  log "AoC sound card $card"
+
+  # 2. Mute before anything else
+  mute || fail "muting failed"
+
+  # 3. No runtime hibernate
+  hold_awake || fail "stopped: the amplifiers could not be held awake"
+
+  # 4. Checks
+  check_limits || fail "stopped at the limits check"
+  check_firmware || fail "stopped at the firmware check"
+  read_calibration || fail "stopped at the calibration check"
+
+  # 5. Firmware into both DSPs, then the calibration
+  for p in "${AMPS[@]}"; do
+    ctl_set "$p DSP1 Firmware" Protection
+    [[ $(ctl_enum "$p DSP1 Firmware") == Protection ]] || fail "$p DSP1 Firmware is not Protection"
+    ctl_set "$p DSP1 Preload Switch" on || fail "$p DSP1 Preload Switch failed"
+  done
+  for p in "${AMPS[@]}"; do
+    for ((i = 0; i < CTL_WAIT * 5; i++)); do dsp_ctl "$p" CAL_R >/dev/null && break; sleep 0.2; done
+    dsp_ctl "$p" CAL_R >/dev/null || fail "$p: no CAL_R control after ${CTL_WAIT} s (protection firmware not loaded; see dmesg)"
+  done
+  for i in "${!AMPS[@]}"; do
+    p=${AMPS[i]}
+    # the order mainline cs-amp-lib writes them in; OMAMOBILE_SPK_CAL_ORDER=stock
+    # writes them in the stock HAL's order, ambient last (AOC-PLAN C9d-8,
+    # a prepared test for the gain-17 runaway)
+    order=(CAL_AMBIENT:${cal_ambient[i]} CAL_R:${cal_r[i]} CAL_STATUS:${cal_status[i]} CAL_CHECKSUM:${cal_checksum[i]})
+    if [[ ${OMAMOBILE_SPK_CAL_ORDER:-mainline} == stock ]]; then
+      order=("${order[@]:1}" "${order[0]}")
+    fi
+    for f in "${order[@]}"; do
+      c=$(dsp_ctl "$p" "${f%%:*}") || fail "$p: no ${f%%:*} control"
+      want=$(be_bytes "${f#*:}")
+      ctl_set "$c" "$want" || fail "$p: writing ${f%%:*} failed"
+      v=$(ctl_values "$c")
+      [[ $v == "$want" ]] || fail "$p: ${f%%:*} did not read back"
+    done
+  done
+  log "calibration written to both DSPs and read back"
+
+  # 6. DAC through the DSP, analog gain
+  for p in "${AMPS[@]}"; do
+    ctl_set "$p DSP RX1 Source" ASPRX1 || fail "$p DSP RX1 Source failed"
+    ctl_set "$p DSP RX2 Source" ASPRX1 || fail "$p DSP RX2 Source failed"
+    ctl_set "$p PCM Source" DSP || fail "$p PCM Source failed"
+    [[ $(ctl_enum "$p PCM Source") == DSP ]] || fail "$p PCM Source is not DSP"
+    # DRE (dynamic range enhancement), on in stock's mixer_paths.xml init
+    # ("DRE DRE Switch" 1): lowers the amplifier's noise floor on quiet
+    # signals. On by default since C9d-5 (cleaner by ear on the bottom
+    # speaker); OMAMOBILE_SPK_DRE=0 leaves it off.
+    if [[ ${OMAMOBILE_SPK_DRE:-1} == 1 ]]; then
+      ctl_set "$p DRE Switch" on || fail "$p DRE Switch failed"
+      [[ $(ctl_values "$p DRE Switch") == on ]] || fail "$p DRE Switch did not read back"
+    fi
+    # The amplifier's hardware noise gate, as stock's DT sets it
+    # (cirrus,hw-noise-gate-select = 63: every gate source): mutes the
+    # output stage while the signal is below the gate threshold. On by
+    # default since C9d-5; OMAMOBILE_SPK_NOISE_GATE=0 leaves it off.
+    if [[ ${OMAMOBILE_SPK_NOISE_GATE:-1} == 1 ]]; then
+      ctl_set "$p HW Noise Gate Enable" 63 || fail "$p HW Noise Gate Enable failed"
+      [[ $(ctl_values "$p HW Noise Gate Enable") == 63 ]] || fail "$p HW Noise Gate Enable did not read back"
+    fi
+    ctl_set "$p Analog PCM Volume" "$(level "$p" ANALOG)" || fail "$p Analog PCM Volume failed"
+    v=$(ctl_values "$p Analog PCM Volume")
+    [[ $v =~ ^[0-9]+$ ]] && ((v <= $(analog_ceil "$p"))) || fail "$p Analog PCM Volume reads ${v:-nothing}"
+  done
+
+  # 7. Health, then unmute last
+  dsp health --since "$since" || fail "stopped at the health check"
+  for p in "${AMPS[@]}"; do
+    ctl_set "$p Digital PCM Volume" "$(level "$p" DIGITAL)" || fail "$p Digital PCM Volume failed"
+    v=$(ctl_values "$p Digital PCM Volume")
+    [[ $v =~ ^[0-9]+$ ]] && ((v <= DIGITAL_CEIL)) || fail "$p Digital PCM Volume reads ${v:-nothing}"
+  done
+
+  v="Top $(level Top DIGITAL)/$(level Top ANALOG), Bottom $(level Bottom DIGITAL)/$(level Bottom ANALOG)"
+  set_status "ok: stage $STAGE, protection firmware with factory calibration, PCM Source DSP, held awake, digital/analog $v"
+  log "speaker protection on (stage $STAGE): both amplifiers through the DSP, digital/analog $v"
+  finish
+}
+
+# Read-only report. Prints the DSP state but never the calibration values.
+status() {
+  local p i c v name d
+  cat "$status_file" 2>/dev/null || echo "no state ($status_file)"
+  [[ -e $marker ]] && echo "marker present: $(cat "$marker" 2>/dev/null) (a start never finished)"
+  [[ -r $stamp ]] && echo "verified: $(sed -n 's/^date //p' "$stamp") ($(sed -n 's/^firmware //p' "$stamp" | cut -c1-12)…, current firmware $(fw_digest | cut -c1-12)…)"
+  find_card || { echo "no AoC sound card"; return 1; }
+  local have_cal=0
+  read_calibration >/dev/null 2>&1 && have_cal=1
+  for i in "${!AMPS[@]}"; do
+    p=${AMPS[i]}
+    d=$(amp_dev "$i")
+    printf '%s (%s, power/control %s, %s): PCM Source %s, Digital %s (max %s), Analog %s (max %s), DSP1 Firmware %s, Preload %s\n' \
+      "$p" "$d" "$(cat "$SPIDEVS/$d/power/control" 2>/dev/null)" "$(cat "$SPIDEVS/$d/power/runtime_status" 2>/dev/null)" \
+      "$(ctl_enum "$p PCM Source")" "$(ctl_values "$p Digital PCM Volume")" "$(ctl_max "$p Digital PCM Volume")" \
+      "$(ctl_values "$p Analog PCM Volume")" "$(ctl_max "$p Analog PCM Volume")" \
+      "$(ctl_enum "$p DSP1 Firmware")" "$(ctl_values "$p DSP1 Preload Switch")"
+    if ((have_cal)) && c=$(dsp_ctl "$p" CAL_R); then
+      v=match
+      for name in CAL_R:${cal_r[i]} CAL_STATUS:${cal_status[i]} CAL_CHECKSUM:${cal_checksum[i]} CAL_AMBIENT:${cal_ambient[i]}; do
+        c=$(dsp_ctl "$p" "${name%%:*}") && [[ $(ctl_values "$c") == "$(be_bytes "${name#*:}")" ]] || v=MISMATCH
+      done
+      echo "  calibration in the DSP vs persist: $v"
+    fi
+  done
+  dsp status
+}
+
+# Run during playback (C9a). Writes the stamp stage c9 needs.
+verify() {
+  local digest
+  digest=$(fw_digest) || { echo "no firmware"; return 1; }
+  dsp verify "$@" || return 1
+  mkdir -p "$STATE"
+  printf 'date %s\nkernel %s\nfirmware %s\n' "$(date -Is)" "$(uname -r)" "$digest" > "$stamp"
+  sync -f "$stamp" 2>/dev/null || sync
+  echo "stamp written: $stamp"
+}
+
+case ${1:-} in
+  start|restart|recover)
+    [[ ${2:-} == --retry ]] && rm -f "$marker"
+    start ;;
+  watch) find_card || { log "watchdog: no AoC sound card"; exit 1; }; dsp --card "$card" watch ;;
+  status) status ;;
+  health) dsp health ;;
+  monitor) dsp monitor --duration "${2:-10}" --interval "${3:-1}" ;;
+  verify) shift; verify "$@" ;;
+  signal) shift; dsp signal "$@" ;;
+  impedance) shift; find_card || { echo "no AoC sound card"; exit 1; }; dsp --card "$card" impedance "$@" ;;
+  feedback) shift; find_card || { echo "no AoC sound card"; exit 1; }; dsp --card "$card" feedback "$@" ;;
+  mute)
+    reason="by request"
+    [[ ${2:-} == --reason ]] && reason=${3:-}
+    if mute; then
+      set_status "muted: $reason"
+      log "both amplifiers muted ($reason)"
+    else
+      set_status "MUTE FAILED: $reason"
+      exit 1
+    fi ;;
+  *)
+    echo "Usage: omamobile-speaker-protection start [--retry] | watch | status | health | monitor [SECONDS [INTERVAL]]" >&2
+    echo "       | verify | signal tone|multitone FILE [--level DBFS --seconds S --channels both|left|right] | mute [--reason TEXT]" >&2
+    echo "       | impedance [--rounds N] [--no-arm]   (during playback: the firmware's measured coil impedance / CAL_R)" >&2
+    echo "       | feedback start [--seconds S]|stop|status   (the amplifiers' V/I stream to the AoC, AOC-PLAN C9d-7)" >&2
+    exit 2 ;;
+esac

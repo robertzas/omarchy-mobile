@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+post_install() {
+  echo "omamobile-modem-sit: omamobile-sitd is installed but not enabled. It needs the"
+  echo "  modem ONLINE first (omamobile-modem.service, MODEM-PLAN M3.4) and the"
+  echo "  carrier's APN in /etc/omamobile/modem-sit.conf; then MODEM-PLAN M4."
+}
+post_upgrade() {
+  systemctl daemon-reload 2>/dev/null || true
+  if [[ $(vercmp "$2" 0.2.0) -lt 0 ]]; then
+    echo "omamobile-modem-sit 0.2.0 replaces the 0.1 client: check /etc/omamobile/modem-sit.conf.pacnew"
+  fi
+}
+pre_remove() {
+  systemctl disable --now omamobile-sit-data.service omamobile-sitd.service 2>/dev/null || true
+}

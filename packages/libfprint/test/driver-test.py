@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Offline test of libfprint's omandroid_udfps driver against a fake bridge.
+"""Offline test of libfprint's omamobile_udfps driver against a fake bridge.
 
     driver-test.py              (needs FPrint-2.0 from the libfprint build:
                                  GI_TYPELIB_PATH and LD_LIBRARY_PATH)
 
-Starts a fake omandroid-fp-bridge on a Unix socket that speaks the bridge's
+Starts a fake omamobile-fp-bridge on a Unix socket that speaks the bridge's
 line protocol with scripted HAL answers, points the driver at it
-(FP_OMANDROID_UDFPS), and runs enroll, list, verify (match and no match),
+(FP_OMAMOBILE_UDFPS), and runs enroll, list, verify (match and no match),
 identify, cancel, a lockout, delete and a bridge that goes away. No phone,
 no HAL: this checks the driver's side of the protocol only.
 """
@@ -109,15 +109,15 @@ def check(what, ok):
 
 
 def main():
-    tmp = tempfile.mkdtemp(prefix="omandroid-udfps-")
+    tmp = tempfile.mkdtemp(prefix="omamobile-udfps-")
     path = os.path.join(tmp, "bridge.sock")
     bridge = FakeBridge(path)
     bridge.start()
-    os.environ["FP_OMANDROID_UDFPS"] = path
+    os.environ["FP_OMAMOBILE_UDFPS"] = path
 
     ctx = FPrint.Context()
-    devices = [d for d in ctx.get_devices() if d.get_driver() == "omandroid_udfps"]
-    check("device found through FP_OMANDROID_UDFPS", len(devices) == 1)
+    devices = [d for d in ctx.get_devices() if d.get_driver() == "omamobile_udfps"]
+    check("device found through FP_OMAMOBILE_UDFPS", len(devices) == 1)
     if not devices:
         return 1
     dev = devices[0]

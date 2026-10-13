@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Omandroid build environment: Ubuntu LTS with the LineageOS build packages.
+# Omarchy Mobile build environment: Ubuntu LTS with the LineageOS build packages.
 FROM ubuntu:24.04
 
 ARG UID=1000

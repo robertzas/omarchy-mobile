@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""omamobile-sit: calls, SMS and status through omamobile-sitd's socket.
+
+  omamobile-sit status [--json]        registration, IMS voice/SMS, data, calls
+  omamobile-sit watch                  the public status, one JSON line per change
+  omamobile-sit dial NUMBER            an IMS voice call (international form)
+  omamobile-sit answer [ID]            the ringing call (or call ID)
+  omamobile-sit hangup [ID]            the current call (or call ID)
+  omamobile-sit dtmf KEYS [ID]         touch tones in the active call
+  omamobile-sit mute on|off            the microphone during a call
+  omamobile-sit sms send NUMBER TEXT   one SMS (several parts if needed)
+  omamobile-sit sms list [--json]      received, not yet deleted
+  omamobile-sit sms delete ID
+  omamobile-sit data on|off            the cellular fallback route (rmnet0)
+  omamobile-sit radio on|off           AT+CFUN 1/0 (registration and bearers go
+                                       with "off"; a restart needs a reboot)
+
+Root and members of the [control] group (/etc/omamobile/modem-sit.conf,
+default wheel) may use it; "watch" and "status --json" fall back to the
+world-readable /run/omamobile-sit/state.json.
+"""
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+import uuid
+
+RUN = os.environ.get('OMAMOBILE_SIT_RUN', '/run/omamobile-sit')
+
+
+def request(action, timeout=25, **args):
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(timeout)
+        client.connect(os.path.join(RUN, 'socket'))
+        client.sendall(json.dumps(dict(action=action, **args)).encode() + b'\n')
+        data = b''
+        while b'\n' not in data:
+            chunk = client.recv(65536)
+            if not chunk:
+                raise RuntimeError('omamobile-sitd disconnected')
+            data += chunk
+    reply = json.loads(data)
+    if not reply.get('ok'):
+        raise RuntimeError(reply.get('error') or 'request failed')
+    return reply['result']
+
+
+def public_state():
+    try:
+        with open(os.path.join(RUN, 'state.json')) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def live_call(state, wanted=('ringing-in', 'waiting', 'active', 'dialing', 'ringing-out', 'held')):
+    for call in state['calls']:
+        if call['state'] in wanted:
+            return call['id']
+    raise RuntimeError('no such call')
+
+
+def show(status):
+    m = status['modem']
+    print(f"stage: {m.get('stage')}")
+    print(f"network: {m.get('registration')} {m.get('tech')} {m.get('operator')}".rstrip())
+    print(f"IMS voice: {'yes' if m.get('voice') else 'no'}, SMS: {'yes' if m.get('sms') else 'no'}, "
+          f"data bearer: {'up' if m.get('data') else 'down'}")
+    for call in status.get('calls', []):
+        print(f"call {call.get('id', '')}: {call['direction']} {call['state']}")
+
+
+def main(argv):
+    if not argv or argv[0] in ('-h', '--help'):
+        print(__doc__)
+        return 0
+    cmd, rest = argv[0], argv[1:]
+    try:
+        if cmd == 'status':
+            try:
+                status = request('status')
+            except (OSError, RuntimeError):
+                status = public_state()
+                if status is None:
+                    print(json.dumps({'daemon': 'absent'}) if '--json' in rest else 'omamobile-sitd is not running')
+                    return 1
+            if '--json' in rest:
+                print(json.dumps(status))
+            else:
+                show(status)
+            return 0
+        if cmd == 'watch':
+            last = None
+            while True:
+                state = public_state() or {'daemon': 'absent'}
+                compare = {k: v for k, v in state.items() if k != 'updated'}
+                if compare != last:
+                    print(json.dumps(state), flush=True)
+                    last = compare
+                time.sleep(1)
+        if cmd == 'dial' and len(rest) == 1:
+            print(request('dial', number=rest[0])['call'])
+            return 0
+        if cmd in ('answer', 'hangup') and len(rest) <= 1:
+            ident = rest[0] if rest else live_call(request('status'), ('ringing-in', 'waiting') if cmd == 'answer'
+                                                     else ('ringing-in', 'waiting', 'active', 'dialing', 'ringing-out', 'held'))
+            request('accept' if cmd == 'answer' else 'hangup', id=ident)
+            return 0
+        if cmd == 'dtmf' and 1 <= len(rest) <= 2:
+            ident = rest[1] if len(rest) == 2 else live_call(request('status'), ('active',))
+            request('dtmf', id=ident, keys=rest[0])
+            return 0
+        if cmd == 'mute' and rest in (['on'], ['off']):
+            request('audio', what='mute', value=rest[0])
+            return 0
+        if cmd == 'sms' and rest[:1] == ['send'] and len(rest) == 3:
+            key = uuid.uuid4().hex
+            result = request('sms-send', timeout=300, request_id=key, number=rest[1], text=rest[2])
+            print(result['state'] + (': ' + result['error'] if result.get('error') else ''))
+            return 0 if result['state'] == 'sent' else 1
+        if cmd == 'sms' and rest[:1] == ['list']:
+            messages = request('sms-list')
+            if '--json' in rest:
+                print(json.dumps(messages))
+            for m in messages if '--json' not in rest else []:
+                print(f"{m['id']}  {m['timestamp']}  {m['number']}\n  {m['text']}")
+            return 0
+        if cmd == 'sms' and rest[:1] == ['delete'] and len(rest) == 2:
+            request('sms-delete', id=rest[1])
+            return 0
+        if cmd == 'radio' and rest in (['on'], ['off']):
+            print(request('radio', timeout=60, on=rest[0] == 'on')['radio'])
+            return 0
+        if cmd == 'data' and rest in (['on'], ['off']):
+            verb = 'start' if rest[0] == 'on' else 'stop'
+            return subprocess.run(['systemctl', verb, 'omamobile-sit-data.service']).returncode
+    except (OSError, RuntimeError, ValueError) as error:
+        print('omamobile-sit:', error, file=sys.stderr)
+        return 1
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

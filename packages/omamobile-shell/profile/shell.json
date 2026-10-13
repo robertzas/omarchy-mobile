@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "bar": {
+    "id": "omamobile.bar",
+    "position": "top",
+    "transparent": false,
+    "clockFormat": "HH:mm",
+    "showBatteryPercent": true,
+    "quickSettings": "omamobile.quicksettings",
+    "layout": {
+      "left": [],
+      "center": [],
+      "right": []
+    }
+  },
+  "plugins": [
+    {
+      "id": "omamobile.quicksettings"
+    },
+    {
+      "id": "omamobile.home"
+    },
+    {
+      "id": "omamobile.launcher"
+    },
+    {
+      "id": "omamobile.switcher"
+    },
+    {
+      "id": "omamobile.fingerprint"
+    },
+    {
+      "id": "omamobile.keyboard"
+    }
+  ]
+}

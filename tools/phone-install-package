@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Build one of our packages natively on the phone and install it with pacman.
-#   tools/phone-install-package packages/omandroid-shell
+#   tools/phone-install-package packages/omamobile-shell
 # Until there's a package repository for `omarchy update`, this is how new
 # versions reach the phone.
 set -euo pipefail
@@ -12,18 +12,18 @@ name=$(basename "$dir")
 [[ -f $dir/PKGBUILD ]] || { echo "No PKGBUILD in $dir" >&2; exit 1; }
 
 ssh=tools/phone-ssh
-build=/home/omandroid/build/pkgs
+build=/home/omamobile/build/pkgs
 
-"$ssh" "rm -rf $build/$name && mkdir -p $build && chown omandroid: $build"
+"$ssh" "rm -rf $build/$name && mkdir -p $build && chown omamobile: $build"
 # makepkg's own work dirs (pkg/, src/ at the top) and old packages stay home.
 tar cf - --exclude="./$name/pkg" --exclude="./$name/src/build" --exclude="*.pkg.tar.*" \
-  -C "$(dirname "$dir")" "./$name" | "$ssh" "tar xf - -C $build --no-same-owner && chown -R omandroid: $build/$name"
+  -C "$(dirname "$dir")" "./$name" | "$ssh" "tar xf - -C $build --no-same-owner && chown -R omamobile: $build/$name"
 # Build-only dependencies (makedepends, checkdepends) that aren't installed
 # yet go in for the build and out again afterwards, like makepkg -s -r
 # (makepkg runs as the user, so pacman runs here as root). Runtime
 # depends are pacman -U's job below. Without this, qt6-tools stayed after a
 # libcamera build and put four Qt developer apps in the phone's drawer.
-srcinfo=$("$ssh" "su - omandroid -c 'cd $build/$name && makepkg --printsrcinfo'")
+srcinfo=$("$ssh" "su - omamobile -c 'cd $build/$name && makepkg --printsrcinfo'")
 want=$(awk '$1 ~ /^(depends|makedepends|checkdepends)$/ {print $3}' <<<"$srcinfo" | sort -u | tr '\n' ' ')
 buildonly=$(awk '$1 ~ /^(makedepends|checkdepends)$/ {print $3}' <<<"$srcinfo" | sort -u | tr '\n' ' ')
 missing=""
@@ -41,5 +41,5 @@ cleanup() {
   return 0
 }
 trap cleanup EXIT
-"$ssh" "su - omandroid -c 'cd $build/$name && makepkg -f --noconfirm' 2>&1 | tail -2"
+"$ssh" "su - omamobile -c 'cd $build/$name && makepkg -f --noconfirm' 2>&1 | tail -2"
 "$ssh" "OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U --noconfirm $build/$name/$name-*.pkg.tar.* 2>&1 | grep -E '^error|installing|upgrading|reinstalling' ; pacman -Q $name"

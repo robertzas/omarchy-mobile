@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Serves the GNSS engine's NMEA to GeoClue (Unix socket, from
+# omamobile-gnss-nmea.socket) and gpsd (pty). Started when GeoClue connects
+# (or by "omamobile-gnss force"); exits a minute after the last client goes,
+# which stops the GNSS stack with it.
+[Unit]
+Description=Omarchy Mobile GNSS NMEA bridge
+BindsTo=omamobile-gnss.service
+After=omamobile-gnss.service
+Requires=omamobile-gnss-nmea.socket
+After=omamobile-gnss-nmea.socket
+
+[Service]
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 150); do [ -p /var/lib/omamobile-vendor/gnss/data/vendor/gps/nmea_out ] && exit 0; sleep 0.2; done; exit 1'
+ExecStart=/usr/lib/omamobile-vendor/omamobile-gnss-nmea --idle-exit 60
+ProtectSystem=strict
+ReadWritePaths=-/var/lib/omamobile-vendor/gnss/data/vendor/gps -/run/omamobile-gnss

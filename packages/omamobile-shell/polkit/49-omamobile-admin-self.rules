@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: MIT
+// Omarchy Mobile: when a wheel member is asked to authenticate as an
+// administrator, ask for their own password. Arch Linux ARM's base image
+// leaves a second wheel account (alarm), and the shell's polkit prompt took
+// the first wheel member, so the phone's owner was asked for alarm's
+// password and the PIN always failed.
+polkit.addAdminRule(function(action, subject) {
+    if (subject.isInGroup("wheel"))
+        return ["unix-user:" + subject.user];
+});

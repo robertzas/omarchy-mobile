@@ -4,10 +4,10 @@
 # the Pixel 7 Pro (cheetah) out of a Google factory image, on the user's own
 # machine.
 #
-# Fingerprint on Omandroid runs Google's own fingerprint HAL against the
+# Fingerprint on Omarchy Mobile runs Google's own fingerprint HAL against the
 # Goodix trusted application (g7.app) in Trusty, inside a small chroot
 # (device/cheetah/FINGERPRINT-RESEARCH.md). Those binaries are Google's and
-# not ours to redistribute, so Omandroid never ships them: this tool pulls
+# not ours to redistribute, so Omarchy Mobile never ships them: this tool pulls
 # exactly what the chroot needs from an image the user already has (the
 # factory zip from developers.google.com/android/images, or the
 # image-*.zip inside it) and nothing else.
@@ -25,8 +25,8 @@
 #   OUT/root/{system,vendor,apex/com.android.runtime}
 #   OUT/MANIFEST         one line per file: sha256, mode, path
 #   OUT/SOURCE           the vendor build fingerprint it came from
-# Install it on the phone under /usr/lib/omandroid-fp/root (see
-# tools/omandroid-fp-chroot). Nothing here touches the phone.
+# Install it on the phone under /usr/lib/omamobile-fp/root (see
+# tools/omamobile-fp-chroot). Nothing here touches the phone.
 #
 # Needs: unzip, debugfs (e2fsprogs), readelf (binutils) or llvm-readelf,
 # sha256sum; simg2img and lpunpack (android-tools) for sparse or super images.
@@ -66,9 +66,9 @@ Usage: extract-fingerprint-vendor [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
            (default: a temp dir in \$TMPDIR)
   -f       skip the device checks
 
-Install on the phone (from the omandroid repo):
+Install on the phone (from the omamobile repo):
   tar -C OUTDIR -cf - root MANIFEST SOURCE |
-    tools/phone-ssh 'mkdir -p /usr/lib/omandroid-fp && tar -C /usr/lib/omandroid-fp -xf -'
+    tools/phone-ssh 'mkdir -p /usr/lib/omamobile-fp && tar -C /usr/lib/omamobile-fp -xf -'
 USAGE
 }
 

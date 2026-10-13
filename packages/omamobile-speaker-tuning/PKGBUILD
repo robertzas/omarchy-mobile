@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+pkgname=omamobile-speaker-tuning
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omarchy Mobile speaker tuning for the Pixel 7 Pro: Waves on the AoC, configured from the user's own vendor files"
+arch=(aarch64)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(bash python python-gobject coreutils util-linux alsa-utils systemd omamobile-audio)
+backup=(etc/omamobile/speaker-tuning.conf)
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}

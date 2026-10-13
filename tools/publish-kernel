@@ -1,19 +1,19 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Publish our kernel branch to github.com/derekross/linux-omandroid.
+# Publish our kernel branch to github.com/derekross/linux-omarchy-mobile.
 #
 # Linux's full history is too big for a private repository (and a private repo
 # can't be a fork of Linus's tree), so the published branch starts from one
 # commit holding the exact upstream tag's tree, with our commits replayed on
 # top unchanged. The trees are identical to the local branch, which keeps the
 # real upstream history for sending patches.
-#   tools/publish-kernel [branch] [upstream-tag]   (defaults: omandroid v7.3-rc6)
+#   tools/publish-kernel [branch] [upstream-tag]   (defaults: omamobile v7.3-rc6)
 set -euo pipefail
 
 linux=${KERNEL_DIR:-$HOME/android/mainline/linux}
-branch=${1:-omandroid}
+branch=${1:-omamobile}
 tag=${2:-v7.3-rc6}
-remote=git@github.com:derekross/linux-omandroid.git
+remote=git@github.com:derekross/linux-omarchy-mobile.git
 
 cd "$linux"
 [[ -z $(git status --porcelain --untracked-files=no) ]] || { echo "$linux has uncommitted changes" >&2; exit 1; }
@@ -24,7 +24,7 @@ base=$(GIT_AUTHOR_NAME="Linus Torvalds" GIT_AUTHOR_EMAIL="torvalds@linux-foundat
   git commit-tree "$tree" -m "Linux ${tag#v}
 
 The tree of Linus Torvalds' $tag tag ($(git rev-parse "$tag^{commit}")),
-squashed so this repository stays small. Omandroid's changes follow as
+squashed so this repository stays small. Omarchy Mobile's changes follow as
 individual commits; they apply unchanged on top of the upstream tag.")
 
 # Replay in a throwaway worktree, so no checkout in use changes.

@@ -1,0 +1,114 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Open web links read from NFC tags in the logged-in user's browser.
+
+neard publishes each NDEF record it reads as an org.neard.Record object on the
+system bus. Only root may call neard, so this runs as a root service: it
+watches for new records, keeps http and https URIs only, and opens each one
+in the active graphical session through that user's systemd manager (which
+has the session's WAYLAND_DISPLAY), with omamobile-launch: on the browser's
+own screen, as every launch on the phone. A tag that stays on the phone is read
+once; neard reads it again only after it is lifted and tapped again.
+"""
+import subprocess
+import sys
+import time
+
+import gi
+
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib  # noqa: E402
+
+NEARD = "org.neard"
+RECORD = "org.neard.Record"
+ADAPTER = "org.neard.Adapter"
+REPEAT_SECONDS = 3.0
+
+last = {"uri": None, "time": 0.0}
+
+
+def log(message):
+    print(f"omamobile-nfc-open: {message}", flush=True)
+
+
+def session_user():
+    """The user of the active graphical session, or None."""
+    out = subprocess.run(["loginctl", "list-sessions", "--no-legend"],
+                         capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        fields = line.split()
+        if len(fields) < 3 or fields[2] == "root":
+            continue
+        props = subprocess.run(
+            ["loginctl", "show-session", fields[0], "-p", "Type", "-p", "Active"],
+            capture_output=True, text=True).stdout
+        if "Type=wayland" in props and "Active=yes" in props:
+            return fields[2]
+    return None
+
+
+def open_uri(uri):
+    if not (uri.startswith("https://") or uri.startswith("http://")):
+        log(f"ignoring a non-web URI ({uri.split(':', 1)[0]})")
+        return
+    now = time.monotonic()
+    if uri == last["uri"] and now - last["time"] < REPEAT_SECONDS:
+        return
+    last.update(uri=uri, time=now)
+    user = session_user()
+    if not user:
+        log("no active graphical session; not opening")
+        return
+    log(f"opening a tag's link for {user}")
+    subprocess.run(["systemd-run", "--quiet", "--collect", f"--machine={user}@.host",
+                    "--user", "omamobile-launch", "url", uri], check=False)
+
+
+def on_interfaces_added(_conn, _sender, _path, _iface, _signal, params, _data):
+    _obj, interfaces = params.unpack()
+    record = interfaces.get(RECORD)
+    if record and record.get("Type") == "URI" and record.get("URI"):
+        open_uri(record["URI"])
+
+
+def start_polling(bus):
+    """Power the first adapter and start a poll loop (neard's ConstantPoll
+    keeps it going after each tag)."""
+    try:
+        objects = bus.call_sync(NEARD, "/", "org.freedesktop.DBus.ObjectManager",
+                                "GetManagedObjects", None, None,
+                                Gio.DBusCallFlags.NONE, -1, None).unpack()[0]
+    except GLib.Error as error:
+        log(f"neard not answering yet: {error.message}")
+        return True
+    for path, interfaces in objects.items():
+        adapter = interfaces.get(ADAPTER)
+        if adapter is None:
+            continue
+        if not adapter.get("Powered"):
+            bus.call_sync(NEARD, path, "org.freedesktop.DBus.Properties", "Set",
+                          GLib.Variant("(ssv)", (ADAPTER, "Powered", GLib.Variant("b", True))),
+                          None, Gio.DBusCallFlags.NONE, -1, None)
+        if not adapter.get("Polling"):
+            try:
+                bus.call_sync(NEARD, path, ADAPTER, "StartPollLoop",
+                              GLib.Variant("(s)", ("Initiator",)), None,
+                              Gio.DBusCallFlags.NONE, -1, None)
+                log(f"polling on {path}")
+            except GLib.Error as error:
+                log(f"could not start polling on {path}: {error.message}")
+        return False
+    return True
+
+
+def main():
+    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    bus.signal_subscribe(NEARD, "org.freedesktop.DBus.ObjectManager", "InterfacesAdded",
+                         None, None, Gio.DBusSignalFlags.NONE, on_interfaces_added, None)
+    if start_polling(bus):
+        GLib.timeout_add_seconds(2, start_polling, bus)
+    GLib.MainLoop().run()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

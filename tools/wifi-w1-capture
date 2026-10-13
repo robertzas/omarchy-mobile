@@ -157,11 +157,11 @@ say "phone check"
 phone 'uname -r' || die "phone not reachable over $SSH"
 pre=$(phone 'set -e
   ls /sys/bus/platform/devices/ | grep -cE "^(14520000\.pcie|14550000\.phy)$" || true
-  grep -c . /usr/lib/modprobe.d/omandroid-wifi.conf 2>/dev/null || echo 0
+  grep -c . /usr/lib/modprobe.d/omamobile-wifi.conf 2>/dev/null || echo 0
   lsmod | grep -c "^pcie_gs201" || true')
 read -r ndev nblk nloaded <<<"$(echo $pre)"
 [[ "$ndev" == 2 ]] || die "14520000.pcie and 14550000.phy must exist (W1.2 DTB with the overlay); found $ndev"
-[[ "$nblk" != 0 ]] || warn "omandroid-wifi.conf blacklist missing on the phone (W1.0)"
+[[ "$nblk" != 0 ]] || warn "omamobile-wifi.conf blacklist missing on the phone (W1.0)"
 if [[ "$nloaded" != 0 ]]; then
   say "pcie_gs201 is loaded; unloading it (and brcmfmac) first"
   phone 'modprobe -r brcmfmac 2>/dev/null; modprobe -r pcie_gs201' || die "could not unload pcie_gs201"

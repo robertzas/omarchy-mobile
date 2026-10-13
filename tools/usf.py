@@ -1,1 +1,1 @@
-../packages/omandroid-sensors/lib/usf.py
+../packages/omamobile-sensors/lib/usf.py

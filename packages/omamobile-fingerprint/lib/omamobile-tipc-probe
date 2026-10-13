@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""omamobile-tipc-probe: check which Trusty IPC ports accept a connection.
+
+    omamobile-tipc-probe [--dev /dev/trusty-ipc-dev0] PORT...
+
+For each PORT, open the Trusty IPC device, connect (TIPC_IOC_CONNECT) and
+close again, without sending a message: Trusty's services see a client come
+and go. Prints "PORT: open" or "PORT: <error>". Exit status 0 if every port
+accepted.
+
+Never probe com.android.trusty.storage.proxy: a connection there is how
+storageproxyd announces itself, and Trusty's storage would start talking
+to the prober.
+
+Used by the fingerprint bring-up (device/cheetah/FINGERPRINT-PLAN.md, F2b)
+and by omamobile-fp-chroot to tell whether g7.app is already loaded (its
+port exists) before asking the app loader again.
+"""
+import errno
+import fcntl
+import os
+import sys
+
+# _IOW('r', 0x80, char *): include/uapi/linux/trusty/ipc.h
+TIPC_IOC_CONNECT = (1 << 30) | (8 << 16) | (ord("r") << 8) | 0x80
+
+# Ports stock Android's services connect to (strings in their binaries).
+KNOWN = {
+    "apploader": "com.android.trusty.apploader",
+    "keymint": "com.android.trusty.keymaster",
+    "gatekeeper": "com.android.trusty.gatekeeper",
+    "goodix": "com.goodix.fingerprint.test",
+}
+
+
+def probe(dev, port):
+    fd = os.open(dev, os.O_RDWR | os.O_CLOEXEC)
+    try:
+        # bytes: fcntl passes a pointer to a copy, which is what the
+        # driver's strncpy_from_user() reads
+        fcntl.ioctl(fd, TIPC_IOC_CONNECT, port.encode() + b"\0")
+        return None
+    except OSError as e:
+        return errno.errorcode.get(e.errno, str(e.errno))
+    finally:
+        os.close(fd)
+
+
+def main(argv):
+    dev = "/dev/trusty-ipc-dev0"
+    ports = []
+    args = iter(argv)
+    for a in args:
+        if a == "--dev":
+            dev = next(args, None) or sys.exit("--dev needs a path")
+        elif a in ("-h", "--help"):
+            print(__doc__.strip())
+            print("\nShort names: " + ", ".join(f"{k}={v}" for k, v in KNOWN.items()))
+            return 0
+        else:
+            ports.append(KNOWN.get(a, a))
+    if not ports:
+        sys.exit("usage: omamobile-tipc-probe [--dev DEV] PORT...")
+    ok = True
+    for port in ports:
+        if port.startswith("com.android.trusty.storage"):
+            print(f"{port}: refused to probe (storageproxyd's port)")
+            ok = False
+            continue
+        err = probe(dev, port)
+        print(f"{port}: {'open' if err is None else err}")
+        ok = ok and err is None
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

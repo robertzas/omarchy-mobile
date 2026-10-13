@@ -1,0 +1,27 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-gnss into DESTDIR. Activates nothing: Location stays off
+# until "omamobile-gnss on". Google's Android files are not part of the
+# package; tools/extract-vendor-chroot -p gnss makes them from the user's
+# own factory image (/usr/lib/omamobile-vendor/gnss/{root,MANIFEST,SOURCE,STUBS}).
+#   ./install DESTDIR
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+d=${1:?Usage: ./install DESTDIR}
+[[ $d == /* && $d != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+v=$d/usr/lib/omamobile-vendor
+install -Dm755 bin/omamobile-gnss "$d/usr/bin/omamobile-gnss"
+for f in lib/*; do install -Dm755 "$f" "$v/${f#lib/}"; done
+chmod 644 "$v/omamobile-gnss-conf"	# sourced, not run
+install -Dm644 profiles/gnss.conf "$v/profiles/gnss.conf"
+install -Dm644 gnss/props.conf "$v/gnss/props.conf"
+install -Dm644 bionic/prebuilt/omamobile-fp-shim.so "$v/omamobile-fp-shim.so"
+for f in bionic/prebuilt/stubs/*.so; do install -Dm644 "$f" "$v/stubs/${f##*/}"; done
+for f in vendor/systemd/system/*; do install -Dm644 "$f" "$d/usr/lib/systemd/system/${f##*/}"; done
+install -Dm644 vendor/systemd/user/omamobile-geoclue-agent.service "$d/usr/lib/systemd/user/omamobile-geoclue-agent.service"
+install -Dm644 vendor/modprobe.d/omamobile-gnss.conf "$d/usr/lib/modprobe.d/omamobile-gnss.conf"
+install -Dm644 polkit/50-omamobile-gnss.rules "$d/usr/share/polkit-1/rules.d/50-omamobile-gnss.rules"
+install -Dm644 etc/geoclue/conf.d/90-omamobile-gnss.conf "$d/etc/geoclue/conf.d/90-omamobile-gnss.conf"
+install -Dm644 etc/omamobile/gnss.conf "$d/etc/omamobile/gnss.conf"
+install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-gnss/LICENSE"
+install -Dm644 version "$d/usr/share/omamobile/gnss/version"

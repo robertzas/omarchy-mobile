@@ -1,0 +1,35 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Static checks for omamobile-fingerprint: syntax, the prebuilt bionic
+# programs, and the staged layout.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { echo "FAIL: $*" >&2; exit 1; }
+for f in lib/omamobile-fp-chroot install; do bash -n "$f" || fail "syntax: $f"; done
+for f in lib/omamobile-tipc-probe lib/omamobile-fp-ctl; do
+  python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$f" || fail "python: $f"
+done
+for f in prebuilt/omamobile-fp-shim.so prebuilt/omamobile-fp-bridge; do
+  [[ -f $f ]] || fail "$f missing: build it on the computer first (fingerprint/Makefile)"
+  [[ $(head -c 20 "$f" | od -An -tx1 | tr -d ' \n') == 7f454c46020101* ]] || fail "$f is not a 64-bit ELF"
+  [[ $(od -An -tx1 -j18 -N2 "$f" | tr -d ' \n') == b700 ]] || fail "$f is not aarch64"
+done
+grep -c /system/bin/linker64 prebuilt/omamobile-fp-bridge >/dev/null ||
+  fail "the bridge is not a bionic executable"
+stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
+./install "$stage"
+for f in usr/lib/omamobile-fp/omamobile-fp-chroot usr/lib/omamobile-fp/omamobile-tipc-probe \
+         usr/lib/omamobile-fp/omamobile-fp-ctl \
+         usr/lib/omamobile-fp/props.conf usr/lib/omamobile-fp/omamobile-fp-shim.so \
+         usr/lib/omamobile-fp/omamobile-fp-bridge usr/lib/systemd/system/omamobile-fp.service \
+         usr/lib/systemd/system/fprintd.service.d/omamobile-udfps.conf; do
+  [[ -e $stage/$f ]] || fail "not staged: $f"
+done
+# nothing Google's may be staged
+[[ -z $(find "$stage" -path '*/root/*' -print -quit) ]] || fail "vendor files staged"
+if command -v systemd-analyze >/dev/null; then
+  out=$(systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/omamobile-fp.service" 2>&1 || true)
+  out=$(grep -v -e 'not executable' -e 'No such file' -e 'is not a regular file' -e '^$' <<<"$out" || true)
+  [[ -z $out ]] || fail "unit: $out"
+fi
+echo "omamobile-fingerprint: ok"

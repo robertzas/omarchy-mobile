@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# omamobile-sitd: the SIT RIL service (lib/service.py). Runs from the package
+# tree and from a staged tree too: a copy next to bin/ wins over the
+# installed one.
+import os
+import sys
+
+here = os.path.dirname(os.path.realpath(__file__))
+for d in (os.path.join(here, "..", "lib"), os.path.join(here, "..", "lib", "omamobile-sit"),
+          "/usr/lib/omamobile-sit"):
+    if os.path.exists(os.path.join(d, "service.py")):
+        sys.path.insert(0, d)
+        break
+import service  # noqa: E402
+
+service.main()

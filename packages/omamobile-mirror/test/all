@@ -1,0 +1,187 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Checks for omamobile-mirror: syntax, the staged layout, and the scripts
+# against fake wayvnc, ip, systemctl, loginctl, ufw and ssh-keygen: the
+# wayvnc argv (address, port, frame rate), the refusal to listen anywhere
+# but 172.16.42.1, the firewall rule's scope, and on/off idempotence.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+pkg=$PWD
+fail() { echo "FAIL: $*" >&2; exit 1; }
+for f in bin/omamobile-mirror lib/omamobile-mirror-run install omamobile-mirror.install; do
+  bash -n "$f" || fail "syntax: $f"
+done
+
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+
+# Staged layout; nothing enabled
+./install "$t/stage"
+for f in usr/bin/omamobile-mirror usr/lib/omamobile-mirror/omamobile-mirror-run \
+         usr/lib/systemd/user/omamobile-mirror.service usr/lib/systemd/system/omamobile-mirror-firewall.service \
+         usr/share/polkit-1/rules.d/50-omamobile-mirror.rules usr/share/omamobile/mirror/mirror.conf.example \
+         usr/share/licenses/omamobile-mirror/LICENSE usr/share/omamobile/mirror/version; do
+  [[ -e $t/stage/$f ]] || fail "not staged: $f"
+done
+[[ -z $(find "$t/stage" -path '*.wants/*') ]] || fail "something is enabled by default"
+grep -q '^\[Install\]' systemd/user/omamobile-mirror.service systemd/system/omamobile-mirror-firewall.service &&
+  fail "mirroring units must not be installable"
+grep -n '0\.0\.0\.0\|\[::\]' bin/omamobile-mirror lib/omamobile-mirror-run && fail "a wildcard address in the scripts"
+
+# Fakes
+fb=$t/bin; mkdir -p "$fb" "$t/state" "$t/home/.config/omamobile" "$t/run"
+log=$t/calls
+cat > "$fb/wayvnc" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$@" > "$T/wayvnc.argv"
+for a; do [[ $a == --config=* ]] && cp "${a#--config=}" "$T/wayvnc.conf"; done
+exit 0
+EOF
+cat > "$fb/ip" <<'EOF'
+#!/bin/bash
+[[ -e $T/nolink ]] && exit 0
+echo "3: usb0    inet 172.16.42.1/24 brd 172.16.42.255 scope global usb0\       valid_lft forever preferred_lft forever"
+EOF
+cat > "$fb/systemctl" <<'EOF'
+#!/bin/bash
+echo "systemctl $*" >> "$T/calls"
+args=()
+for a; do case $a in --user|-M|*@) ;; *) args+=("$a") ;; esac; done
+verb=${args[0]} unit=${args[1]:-}
+case $verb in
+  start) [[ -e $T/fail-$unit ]] && exit 1; : > "$T/state/$unit" ;;
+  stop) rm -f "$T/state/$unit" ;;
+  is-active) if [[ -e $T/state/$unit ]]; then echo active; else echo inactive; exit 3; fi ;;
+esac
+EOF
+cat > "$fb/loginctl" <<'EOF'
+#!/bin/bash
+case $1 in
+  list-sessions) echo "c1 1000 alice seat0 tty1"; echo "4 0 root - pts/0" ;;
+  show-session) [[ $2 == c1 ]] && printf 'Name=alice\nType=wayland\nActive=yes\nClass=user\n' ||
+                  printf 'Name=root\nType=tty\nActive=yes\nClass=user\n' ;;
+esac
+EOF
+cat > "$fb/ufw" <<'EOF'
+#!/bin/bash
+echo "ufw $*" >> "$T/calls"
+if [[ $1 == status ]]; then
+  [[ -e $T/ufw-off ]] && { echo "Status: inactive"; exit 0; }
+  echo "Status: active"
+  [[ -e $T/ufw-rule ]] && echo "172.16.42.1 5900/tcp on usb0      ALLOW       Anywhere                   # omamobile-mirror"
+  exit 0
+fi
+[[ $1 == allow ]] && : > "$T/ufw-rule"
+[[ $1 == --force && $2 == delete ]] && rm -f "$T/ufw-rule"
+exit 0
+EOF
+cat > "$fb/ssh-keygen" <<'EOF'
+#!/bin/bash
+while [[ $# -gt 0 ]]; do [[ $1 == -f ]] && { echo KEY > "$2"; echo PUB > "$2.pub"; }; shift; done
+EOF
+chmod 755 "$fb"/*
+export T=$t PATH="$fb:$PATH" HOME=$t/home XDG_CONFIG_HOME=$t/home/.config XDG_RUNTIME_DIR=$t/run WAYLAND_DISPLAY=wayland-1
+conf=$t/home/.config/omamobile/mirror.conf
+run=$pkg/lib/omamobile-mirror-run
+mir=$pkg/bin/omamobile-mirror
+
+# wayvnc argv: defaults
+: > "$conf"
+"$run" || fail "run with defaults"
+argv=$(cat "$t/wayvnc.argv")
+[[ $(tail -n1 "$t/wayvnc.argv") == 172.16.42.1:5900 ]] || fail "listen address/port: $argv"
+grep -qx -- '--max-fps=30' "$t/wayvnc.argv" || fail "default fps: $argv"
+grep -qx -- '--name=Omarchy Mobile phone' "$t/wayvnc.argv" || fail "desktop name: $argv"
+grep -qx -- '--disable-input' "$t/wayvnc.argv" && fail "input must be on by default"
+grep -qx 'address=172.16.42.1' "$t/wayvnc.conf" || fail "config address"
+grep -qx 'port=5900' "$t/wayvnc.conf" || fail "config port"
+grep -q 'enable_auth' "$t/wayvnc.conf" && fail "auth on without a password file"
+[[ $(stat -c %a "$t/run/omamobile-mirror") == 700 ]] || fail "runtime dir mode"
+
+# Settings
+printf 'FPS=15\nVIEW_ONLY=1\nCURSOR=1\nOUTPUT=DSI-1  # the panel\nKEYBOARD=de\n' > "$conf"
+"$run" || fail "run with settings"
+for a in --max-fps=15 --disable-input --render-cursor --output=DSI-1 --keyboard=de; do
+  grep -qx -- "$a" "$t/wayvnc.argv" || fail "missing $a: $(cat "$t/wayvnc.argv")"
+done
+
+# Refusals: wayvnc must not run
+refuse() { # $1 conf text, $2 what
+  printf '%s\n' "$1" > "$conf"; rm -f "$t/wayvnc.argv"
+  if "$run" 2>"$t/err"; then fail "accepted $2"; fi
+  [[ ! -e $t/wayvnc.argv ]] || fail "wayvnc ran with $2"
+}
+for a in 0.0.0.0 192.168.1.20 '::' 172.16.42.2 'tcp:0.0.0.0'; do refuse "ADDRESS=$a" "ADDRESS=$a"; done
+grep -q 'refusing to listen' "$t/err" || fail "refusal message"
+refuse 'FPS=0' 'FPS=0'; refuse 'FPS=500' 'FPS=500'; refuse 'FPS=30;rm' 'a bad FPS'
+refuse 'VIEW_ONLY=yes' 'VIEW_ONLY=yes'; refuse 'OUTPUT=$(id)' 'a bad OUTPUT'
+printf 'ADDRESS=172.16.42.1\n' > "$conf"; "$run" || fail "ADDRESS=172.16.42.1 refused"
+: > "$conf"; : > "$t/nolink"; rm -f "$t/wayvnc.argv"
+if "$run" 2>/dev/null; then fail "ran without the USB address"; fi
+rm -f "$t/nolink"
+
+# Password: RSA-AES, file permissions checked, key made once
+pw=$t/home/.config/omamobile/mirror.password
+echo 'secret pass' > "$pw"; chmod 644 "$pw"
+printf 'PASSWORD_FILE=~/.config/omamobile/mirror.password\n' > "$conf"
+if "$run" 2>/dev/null; then fail "accepted a world-readable password file"; fi
+chmod 600 "$pw"
+"$run" || fail "run with a password"
+grep -qx 'enable_auth=true' "$t/wayvnc.conf" || fail "auth not enabled"
+grep -qx 'password=secret pass' "$t/wayvnc.conf" || fail "password"
+grep -qx 'username=omamobile' "$t/wayvnc.conf" || fail "username"
+grep -qx "rsa_private_key_file=$t/home/.config/omamobile/mirror-rsa.pem" "$t/wayvnc.conf" || fail "rsa key"
+[[ -s $t/home/.config/omamobile/mirror-rsa.pem && ! -e $t/home/.config/omamobile/mirror-rsa.pem.pub ]] || fail "key file"
+[[ $(stat -c %a "$t/run/omamobile-mirror/wayvnc.conf") == 600 ]] || fail "wayvnc.conf readable by others"
+: > "$conf"
+
+# Firewall: only usb0, only 172.16.42.1:5900/tcp
+: > "$log"
+OMAMOBILE_MIRROR_ASSUME_ROOT=0 "$mir" firewall open >/dev/null
+grep -qx "ufw allow in on usb0 to 172.16.42.1 port 5900 proto tcp comment omamobile-mirror" "$log" ||
+  fail "firewall rule: $(cat "$log")"
+[[ $(grep -c '^ufw allow' "$log") == 1 ]] || fail "more than one rule"
+OMAMOBILE_MIRROR_ASSUME_ROOT=0 "$mir" firewall close
+grep -qx "ufw --force delete allow in on usb0 to 172.16.42.1 port 5900 proto tcp" "$log" || fail "firewall close"
+: > "$t/ufw-off"; : > "$log"
+OMAMOBILE_MIRROR_ASSUME_ROOT=0 "$mir" firewall open >/dev/null
+grep -q '^ufw allow' "$log" && fail "rule added while ufw is inactive"
+rm -f "$t/ufw-off"
+if "$mir" firewall open 2>/dev/null; then fail "firewall as a user"; fi
+
+# on/off as root (tools/phone-ssh): the session user's manager, idempotent
+: > "$log"
+OMAMOBILE_MIRROR_ASSUME_ROOT=0 "$mir" on > "$t/out" || fail "on"
+grep -qx "systemctl --user -M alice@ start omamobile-mirror.service" "$log" || fail "user unit: $(cat "$log")"
+grep -qx "systemctl start omamobile-mirror-firewall.service" "$log" || fail "firewall unit"
+grep -q '^mirroring: yes' "$t/out" || fail "status after on: $(cat "$t/out")"
+grep -q '^user: *alice' "$t/out" || fail "session user"
+OMAMOBILE_MIRROR_ASSUME_ROOT=0 "$mir" on > "$t/out" || fail "second on"
+[[ $(grep -c 'start omamobile-mirror.service' "$log") == 1 ]] || fail "second on started wayvnc again"
+grep -q 'already on' "$t/out" || fail "second on message"
+OMAMOBILE_MIRROR_ASSUME_ROOT=0 "$mir" status --json | grep -q '"running":true,"address":"172.16.42.1","port":5900' || fail "json"
+: > "$t/ufw-rule"
+OMAMOBILE_MIRROR_ASSUME_ROOT=0 "$mir" off >/dev/null || fail "off"
+[[ ! -e $t/state/omamobile-mirror.service && ! -e $t/state/omamobile-mirror-firewall.service ]] || fail "off left units"
+[[ ! -e $t/ufw-rule ]] || fail "off left the ufw rule"
+OMAMOBILE_MIRROR_ASSUME_ROOT=0 "$mir" off >/dev/null || fail "second off"
+OMAMOBILE_MIRROR_ASSUME_ROOT=0 "$mir" status | grep -q '^mirroring: no' || fail "status after off"
+
+# on as the user; a failed start closes the firewall again
+: > "$log"
+"$mir" on >/dev/null || fail "on as user"
+grep -qx "systemctl --user start omamobile-mirror.service" "$log" || fail "user on: $(cat "$log")"
+"$mir" off >/dev/null
+: > "$t/fail-omamobile-mirror.service"
+if "$mir" on 2>/dev/null; then fail "on succeeded with wayvnc failing"; fi
+[[ ! -e $t/state/omamobile-mirror-firewall.service ]] || fail "firewall left open after a failed start"
+rm -f "$t/fail-omamobile-mirror.service"
+: > "$t/nolink"
+if "$mir" on 2>/dev/null; then fail "on without the USB link"; fi
+rm -f "$t/nolink"
+
+# Laptop tool
+# (in the repository only: the package builds on the phone without it)
+if [[ -e $pkg/../../tools/phone-mirror ]]; then
+  bash -n "$pkg/../../tools/phone-mirror" || fail "syntax: tools/phone-mirror"
+fi
+echo "omamobile-mirror: all checks passed"

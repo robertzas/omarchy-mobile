@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+pkgname=omamobile-modem
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omarchy Mobile modem runtime for the Pixel 7 Pro: stock rfsd and cbd in a vendor chroot on RAM copies of NV"
+arch=(aarch64)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(bash python util-linux coreutils kmod systemd omamobile-gnss omamobile-device-cheetah)
+install=omamobile-modem.install
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}
