@@ -1,12 +1,16 @@
 <!-- SPDX-License-Identifier: MIT -->
 # AoC speaker tuning (C10-tuning): research, design and runbook
 
-Status (2026-10-12): **research and design only; nothing has run on the
-phone.** Static analysis of the stock libraries from the user's own factory
-image, the AoC firmware's strings and Google's GPL AoC driver. Follows
-`AOC-PLAN.md` C9 ("C10-tuning"), which another agent owns; this file does
-not change it. Nothing here goes into `packages/omandroid-audio` until the
-runbook's read-only steps have passed and the package owner takes it.
+Status (2026-10-12): **T1 done offline (laptop only); nothing has run on
+the phone.** Static analysis of the stock libraries from the user's own
+factory image (CP2A.260705.006), the AoC firmware's strings and Google's
+GPL AoC driver, then the Waves controller itself run under qemu with a fake
+sender (T1.4). The code is its own package,
+`packages/omandroid-speaker-tuning` 0.1.0 (helper, chroot runner, daemon,
+unit; disabled, mode `off`), plus the `waves` profile of
+`tools/extract-vendor-chroot`; `packages/omandroid-audio` is untouched.
+Follows `AOC-PLAN.md` C9 ("C10-tuning"), which another agent owns; this
+file does not change it. Next: T2 (on the phone, no AoC writes).
 
 Path abbreviations as in `AOC-PLAN.md`: `V/` is the extracted stock vendor
 tree (`~/android/omandroid/vendor/google/cheetah/proprietary/vendor`), `GA/`
@@ -129,19 +133,32 @@ code):
 - block **16**: `audio_platform_configuration.xml` gives the speaker back
   end `OUT_SPEAKER_BE_CFG` the interface `TDM_RX_0`, `block_id="16"`;
   `GA/alsa/aoc_alsa_hw.c` says "Sink 0-4 with block ID from 16-20"; the
-  "AoC Speaker Mixer ASP Mode" control is block 16.
+  "AoC Speaker Mixer ASP Mode" control is block 16. (T1: the platform
+  library's "mixer tuning" path takes the first block id configured for
+  the back end, H.)
 - component **2**: `xlate_id` maps `TUNING_COMPONENT_WAVES` to 2, and the
-  platform library's built-in table gives the same default.
+  platform library's built-in table gives the same default (entry 0 of its
+  component table; the Waves module asks for component 0, which the table
+  translates, H).
 - `tuning_id="2"` on `OUT_SPEAKER_BE_CFG` is what the Waves sender logs
   as "tuning_id" next to the instance. It is the back end's tuning
   selector; for the speaker there is no playback `.gatf` in `V/etc/aoc/`
   (only `recording.gatf`, `smartfeature.gstf` and Fortemedia's voice
   `.dat` files), so Waves is the speaker's only AoC tuning (M).
 - Waves instance **1** (`Sink=SPK:1`, `SPEAKER_INSTANCE = INSTANCE:1`).
-  The instance travels inside the Waves payload, not in the AoC command
-  (M).
-- The Waves messages are exchanged as `SET_GET` bulk (the sender passes
-  reply pointers and reads a status back) (M).
+  The instance is an argument of the controller's sender, never part of
+  the AoC command (H, T1).
+- The Waves messages are exchanged as `SET_GET_PARAM_BULK` (0x00d5) with
+  no extra header in the bulk buffer: the bulk payload is exactly the
+  controller's buffer, `tx_size` its length, `rx_size` 0 (H, T1).
+- Stock opens the three devices **for each exchange** and closes them
+  after (`audio_output_tuning` `O_RDWR`, `audio_bulk_tx` `O_WRONLY`,
+  `audio_bulk_rx` `O_RDONLY`, all `O_NONBLOCK`). It waits for the reply
+  with a 500 ms `select`, after which the exchange counts as -110; it
+  accepts only a 26-byte reply with the same command ID; a non-zero
+  `rx_size` (offset 24) in a successful reply means that many bytes
+  (at most 16384) are waiting on `audio_bulk_rx`, which stock copies back
+  to the controller when they fit its reply buffer (H, T1).
 
 **ASP Mode** (H, `GA/alsa/aoc_alsa_ctl.c`, `aoc_alsa_hw.c`; present in
 `L/`): "AoC Speaker Mixer ASP Mode" is `SET_PARAMETER`/`GET_PARAMETER`
@@ -207,7 +224,7 @@ plus bionic and `liblog` from the system image.
   `ASP_ON` as "Waves is active" (H): then it leaves the channel swap to
   Waves. Our speaker service must do the same when tuning is on.
 
-### 2.6 Licence or key check
+### 2.6 Licence or key check (see also 2.7: initialisation needs no reply)
 
 - No licence, serial, expiry, activation or signature strings in
   `libmahalcontroller.so`, `libAlgFx_HiFi3z.so` or `audio_waves_aoc.so`,
@@ -225,9 +242,54 @@ plus bionic and `liblog` from the system image.
   binaries and data, so as with GNSS and fingerprint the user extracts
   them from their own image and we ship only our glue.
 
+### 2.7 The Waves controller's API (T1; H unless marked)
+
+From `libmahalcontroller.so`'s exports, the calls in `audio_waves_aoc.so`
+and the controller run under qemu (T1.4). In our words; nothing of the
+libraries is reproduced.
+
+- **Exports.** 22 plain C functions named `ma_*`. Stock `dlopen`s
+  `/vendor/lib64/libmahalcontroller.so` and looks up 15 of them; the
+  helper needs 8. Every call takes the controller handle (a 64-bit value)
+  and returns a `bool`; all but create/destroy/initialise take the Waves
+  instance (`u32`, 1 for the speaker) second.
+- **Create and initialise**: `ma_create(&handle, user)`, then
+  `ma_initialize(handle, mps_path, "", ini_path, sender)` with
+  `/vendor/etc/waves_preset.mps` and `/vendor/etc/waves_config.ini` (stock
+  passes an empty string third). The controller loads
+  `libAlgFx_HiFi3z.so` itself, from the `.ini`'s `AlgFxPath64`.
+- **The sender**: `int sender(handle, instance, buf, len, reply,
+  &reply_len, user)`, 0 for success. The controller calls it from inside
+  `ma_flush` and `ma_get_version`, on the calling thread (observed). Stock's
+  sender returns -22 without sending when that instance's sink is not
+  active, retries once on -110, and copies a returned bulk reply into
+  `reply` only when it fits `reply_len`.
+- **Stock's send sequence** for a changed sink (`set_waves_tuning_from_sink`):
+  `ma_get_version(handle, 1, "dsp", buf, 256)` once (failure tolerated),
+  `ma_wait_for_flush`, `ma_on_dsp_wakeup` if the sink is not initialised
+  yet (first time, and after an AoC restart), then `ma_set_data` for bypass,
+  volume and orientation, the custom actions, and `ma_flush`.
+- **`ma_set_data(handle, instance, type, data, size)`** types: 0 volume
+  (`double`), 1 orientation (`u32` degrees), 3 output mode (`u32`; stock's
+  test path only), 6 bypass (`u8`), and the custom action's own number:
+  **258** with three `u32`s, the speaker back end's `audio_devices_t`,
+  Android's `audio_mode_t` and the throttle state (0 enabled, 1 disabled,
+  2 bypassed), exactly the `.ini`'s `[CUSTOM_ACTION_258]` numbers. The
+  module confirms the action with `ma_is_feature_supported(handle,
+  "CUSTOM_ACTION_258")` first.
+- Not used by us: `ma_set_linklaws_value` (custom actions' and AMCS's
+  link-law values, phase 2), `ma_set_parameters_array` and the text
+  command interface `ma_set_command`/`ma_get_command` (stock: tests and
+  calibration dumps), `ma_register_notifier`, and the direct setters
+  (`ma_set_orientation`, `ma_set_volume`, `ma_set_bypass`, ...), which stock
+  never calls.
+- **Message format** seen at the sender: a `u32` Waves message ID, then
+  (for parameter messages) a `u32` length of the rest. ID 5 is the 4-byte
+  version query, ID 1 a parameter/coefficient upload.
+
 ---
 
-## 3. Design (proposal for `packages/omandroid-audio`; not built)
+## 3. Design (built in T1: `packages/omandroid-speaker-tuning`)
 
 ### 3.1 Pieces
 
@@ -238,34 +300,49 @@ plus bionic and `liblog` from the system image.
  │  dlopen libmahalcontroller.so (Waves)         │                  │ (ours, Python, root, systemd)│
  │   └─ dlopen libAlgFx_HiFi3z.so (Waves)        │                  │  owns /dev/acd-audio_output_ │
  │  reads waves_preset.mps, waves_config.ini     │                  │  tuning, audio_bulk_tx/_rx   │
- │  no /dev, no network, no AoC access           │                  │  policy, triggers, allowlist │
+ │  no network, no AoC; /dev: null zero urandom  │                  │  policy, triggers, allowlist │
  └──────────────────────────────────────────────┘                  └──────────────────────────────┘
 ```
 
-1. **`omandroid-waves-host`**: a small bionic program of ours (MIT),
-   built like the GNSS shim (`packages/omandroid-gnss/bionic`, NDK or an
-   AOSP clang). It `dlopen`s Waves' controller at run time (nothing of
-   Google's is linked at build time), creates and initialises it with the
-   `.mps`, the `.ini` and a sender callback, and turns line commands from
-   stdin (`route <device> <mode> <throttle>`, `orientation <deg>`,
-   `volume <index>`, `dsp-wakeup`, `flush`, `version`) into the
-   controller's API. Its sender writes each buffer as a frame
-   (`instance`, length, bytes) to stdout and blocks for the reply frame
-   (`status`, length, bytes) from stdin. It cannot touch the AoC: the
-   chroot binds no `/dev/acd-*`.
-2. **A `waves` profile** for `tools/extract-vendor-chroot` and
-   `omandroid-vendor-chroot`: the two Waves libraries, the two config
-   files and the runtime APEX's bionic, plus `liblog`. Built on the laptop
-   from the user's factory image, installed by hand (like `gnss`).
+1. **`omandroid-waves-host`** (`bionic/omandroid-waves-host.c`): a small
+   bionic program of ours (MIT), built with the NDK
+   (`make -C packages/omandroid-speaker-tuning/bionic NDK=...`; links only
+   libc and libdl). It `dlopen`s Waves' controller at run time, creates
+   and initialises it with the `.mps`, the `.ini` and its sender, and turns
+   line commands from stdin into the API of 2.7: `version NAME`, `begin`
+   (wait_for_flush), `wake` (on_dsp_wakeup), `bypass 0|1`, `volume V`,
+   `orientation 0|90|180|270`, `route DEV MODE THROTTLE` (custom action
+   258), `flush`, `quit`; answers `ok CMD` / `fail CMD ...`. Its sender
+   writes `send INSTANCE LEN HEX` and blocks (10 s) for `reply RC HEX|-`.
+   Waves' own stdout and liblog output go to stderr. It cannot touch the
+   AoC: the chroot has no `/dev/acd-*`.
+2. **The `waves` profile** of `tools/extract-vendor-chroot`: the two Waves
+   libraries, `waves_preset.mps`, `waves_config.ini`, the runtime APEX's
+   linker and bionic, `liblog` and its `libc++` (14 files, 17 MB from
+   CP2A.260705.006); the profile check refuses a controller without the
+   eight entry points or an `.ini` without instance 1 and custom action 258.
+   Built on the laptop, installed by hand under
+   `/usr/lib/omandroid-vendor/waves` (like `gnss`). It is run by the
+   package's own runner, `omandroid-waves-host-run`, not by
+   `omandroid-vendor-chroot` (that one supervises daemons; the helper is a
+   filter on stdin/stdout): a read-only tmpfs root with the image, the
+   helper, `/proc`, a private `/tmp` and a `/dev` holding only `null`,
+   `zero` and `urandom`; new mount, PID, network (empty), IPC and UTS
+   namespaces; the helper runs as `nobody` with `no_new_privs`, as PID 1
+   of its namespace.
 3. **`omandroid-speaker-tuning`** (Python, `BindsTo=` and `After=`
    `omandroid-speaker-watch.service`, `After=omandroid-aoc.service`):
-   - the only opener of the three AoC devices; implements section 2.2
-     (16 KiB bulk buffer, command, reply, one retry on timeout, one
-     exchange at a time);
-   - **allowlist**: only `0x00d5`/`0x00d2` to block 16, component 2, and
-     `GET_PARAMETER` of block 16 component 2 key 0; payload ≤ 16384;
-     anything else from the helper is refused and logged, and the helper
-     restarted;
+   - the only opener of the three AoC devices (`lib/aoc_tuning.py`);
+     implements section 2.2 as stock does (open per exchange, 16 KiB bulk
+     buffer, command, 500 ms reply wait, one retry on -110, one exchange at
+     a time);
+   - **allowlist**: only `0x00d5` to block 16, component 2, with a payload
+     of 1..16384 bytes, and the read-only `GET_PARAMETER` of block 16
+     component 2 key 0 (ASP Mode); anything else is refused before a device
+     is opened. A helper frame for another instance, over 16 KiB, with bad
+     hex or a line we don't know is a protocol violation: logged, the
+     helper stopped and started again at the next trigger (three failures
+     in a row stop sending until an AoC restart or a unit restart);
    - **triggers**: speaker playback start (the speaker EPs' PCM `RUNNING`
      in `/proc/asound/card*/pcm*p/sub0/status` and "Audio DSP State" =
      `Playback`) → send the current route and orientation; orientation
@@ -275,17 +352,35 @@ plus bionic and `liblog` from the system image.
      1 s hysteresis, only while playing; AoC restart (the AoC's
      `restart_count` or the online marker in `/run/omandroid/`) →
      `dsp-wakeup`; PipeWire sink volume → `volume` (phase 2);
-   - **policy** from `/etc/omandroid/speaker.conf`:
-     `OMANDROID_SPK_TUNING=off|throttle|music` (default `off`);
-     `throttle` sends `SPEAKER_MUSIC_THROTTLE` (device 0x2, mode 0,
-     throttle state 0), `music` sends `SPEAKER_MUSIC` (throttle 1);
+   - **policy** from `/etc/omandroid/speaker.conf` or the package's
+     `/etc/omandroid/speaker-tuning.conf`:
+     `OMANDROID_SPK_TUNING=off|throttle|music` (default `off`: the unit
+     exits at once); `throttle` sends `SPEAKER_MUSIC_THROTTLE` (route 2 0 0),
+     `music` sends `SPEAKER_MUSIC` (route 2 0 1);
+     `OMANDROID_SPK_TUNING_VOLUME` (0..1, default 1.0) and
+     `OMANDROID_SPK_TUNING_LEFT_UP` (90 or 270);
+   - **gates**: every exchange needs `omandroid-speaker-watch` active
+     (`systemctl is-active`), and `music` also the C9 verification stamp
+     (`/var/lib/omandroid/speaker-protection-verified`); otherwise nothing
+     is sent and the state says `blocked <reason>`;
    - **state for the watchdog**: writes `/run/omandroid/speaker-tuning`
-     (`off`, `sending`, `active <preset> <angle>`, `failed <reason>`) and
-     never sends while the watchdog's protection-verified stamp is absent;
-   - **logs** command IDs, sizes, SHA-256 of payloads and AoC return codes
-     only. An optional `--record DIR` keeps the exchanges under
-     `/var/lib/omandroid/speaker-tuning/` (root, 0700) for T5's
-     determinism check; never in `logs/`, never committed.
+     (`off`, `idle`, `stream`, `sending`, `active <preset> <angle>`,
+     `failed <reason>`, `blocked <reason>`);
+   - **logs** the AoC command ID, block, component, the Waves message ID,
+     sizes, the first 16 hex digits of SHA-256 and return codes only. An
+     optional `--record DIR` keeps the exchanges (directory 0700, files
+     0600) for T5's determinism check; use
+     `/var/lib/omandroid/speaker-tuning/`, never `logs/`, never committed;
+   - `run --dry-run [--dry-reply RC] [--once] [--mode M] [--angle DEG]`
+     starts the helper and the controller but opens no AoC device, logs
+     what it would send and answers the controller with RC (default -110);
+     `--once` sends one state now and exits; `status` prints the state and
+     the setup;
+   - tests (`test/all`): the protocol and allowlist against a fake AoC
+     (SOCK_SEQPACKET socket pairs that check the 16 KiB padding and the
+     framing and refuse other blocks), the helper protocol against
+     `test/fake-waves-host` (including one that breaks it), the tuner and
+     the triggers.
 4. **Watchdog hooks** (for the package owner to decide): at stream start
    `omandroid-speaker-watch` reads ASP Mode; `ASP_ON` while the tuning
    state is not `active`, or `failed`, is a mute condition. With Waves
@@ -334,9 +429,9 @@ Each step: one change, the watchdog active from T4 on, `monitor` running
 during every sound (as in C9's rules), the AoC log recorded for any step
 that sends. Results go into this file with the date and `uname -r`.
 
-**Prerequisites.** C8f passed (T0-T3); C9 passed (T5 onwards); the AoC up
-through `omandroid-aoc.service`; the backups are not involved (no NV,
-radio or Trusty work).
+**Prerequisites.** C8f passed (T0-T4; T2 needs only the AoC up); C9
+passed (T5 onwards); the AoC up through `omandroid-aoc.service`; the
+backups are not involved (no NV, radio or Trusty work).
 
 ### T0 read-only facts (risk none; no sound)
 
@@ -378,26 +473,145 @@ controller refuses to initialise without a reply it cannot get offline
 (then T2 runs on the phone with the AoC still untouched, and T3 sends
 the handshake first).
 
+**T1 result (2026-10-12, laptop; no phone, no kernel involved): passed.**
+Steps 1-3 as section 2.7 and 3.1; `test/all` passes; the helper builds
+with `-Wall -Wextra -Werror` (NDK r23, API 30). Step 4 ran the helper in
+the `waves` tree from CP2A.260705.006 under `qemu-aarch64` (user mode, in
+an unprivileged user namespace through the package's own runner), with
+replies "0, no data" unless noted:
+
+- The controller initialises with no reply from a DSP: no handshake is
+  needed before tuning (open question 3 answered).
+- `version dsp`: one exchange, Waves ID 5, 4 bytes (sha256 `2594b6a92ebfb1c3`);
+  with no reply payload the controller reports no version ("wrong id 0")
+  and carries on, as stock tolerates.
+- The first `flush` after start, and every `flush` after a `wake`: one
+  exchange, Waves ID 1, **11204 bytes** (under the 16 KiB limit), sha256
+  `5d5ade25887b684d`, the same on every run: the output is deterministic
+  (section 3.2 replay becomes possible, T5 confirms on the phone).
+- The full image is identical for `SPEAKER_MUSIC` and
+  `SPEAKER_MUSIC_THROTTLE` and for orientations 0, 90 and 180, and
+  switching between those sends nothing: in this `.mps` the two sound
+  modes and the orientation subtypes carry the same parameters for the
+  internal speaker, as far as the controller's host side goes (M;
+  open question 7). `SPEAKER_SAFE_MUSIC` (route 1 0 1) gives a different
+  full image (`8dd3cc562471a383`) and a 5084-5484-byte update when
+  switched to or from.
+- Volume changes send 596-644-byte updates (the volume link laws); a
+  step that stays in the same range sends nothing.
+- `ma_flush` returns success even when every exchange failed (the
+  controller logs "SendBufferToDsp fail"): the daemon judges a batch by
+  the exchanges' return codes, never by `ok flush`.
+- The whole path through the daemon (`run --dry-run --once`, and a live
+  `Tuner` against the fake AoC): version query, then the 11204-byte
+  upload as one `0x00d5` exchange to block 16 component 2, zero-padded to
+  16 KiB, no allowlist violation; after a simulated AoC restart the full
+  upload again.
+
 ### T2 helper on the phone, no AoC writes (risk none)
 
-Install the chroot tree and the helper; run the daemon in `--dry-run`:
-it starts the helper, plays the route/orientation sequence, logs what it
-would send (command, block, component, sizes, hashes) and answers the
-helper with a timeout. Expect the same frames as T1.4. Pass: only block
-16 / component 2 traffic; payloads ≤ 16 KiB. Stop: anything outside the
-allowlist; the helper crashing. Rollback: stop the unit.
+Nothing here opens an AoC device or plays a sound; the package's unit
+stays disabled. Laptop, from the omandroid repo:
+
+```sh
+make -C packages/omandroid-speaker-tuning/bionic NDK=$HOME/android/omandroid/out-kernel/google/gs-6.1/prebuilts/ndk-r23
+tools/extract-vendor-chroot -p waves -o ~/android/vendor-chroot-work/waves \
+  ~/android/factory/cheetah-cp2a.260705.006-factory-23d564ad.zip
+packages/omandroid-speaker-tuning/test/all
+```
+
+1. Install the tree and the package (risk none; installs a disabled unit):
+   ```sh
+   tar -C ~/android/vendor-chroot-work/waves -cf - root MANIFEST SOURCE |
+     tools/phone-ssh 'mkdir -p /usr/lib/omandroid-vendor/waves && tar --no-same-owner -C /usr/lib/omandroid-vendor/waves -xf -'
+   tools/phone-install-package packages/omandroid-speaker-tuning
+   tools/phone-ssh 'cat /usr/lib/omandroid-vendor/waves/SOURCE; /usr/lib/omandroid-speaker-tuning/omandroid-waves-host-run check;
+     systemctl is-enabled omandroid-speaker-tuning; omandroid-speaker-tuning status'
+   ```
+   Expect: the CP2A.260705.006 fingerprint, "preconditions met",
+   `disabled`, state "not running", mode `off`. Stop: the check fails
+   (re-run the extraction; send its output). Rollback:
+   `pacman -R omandroid-speaker-tuning; rm -r /usr/lib/omandroid-vendor/waves`.
+2. Dry runs (risk none: no AoC device is opened):
+   ```sh
+   tools/phone-ssh 'uname -r; fuser -v /dev/acd-audio_output_tuning /dev/acd-audio_bulk_tx /dev/acd-audio_bulk_rx 2>&1;
+     export OMANDROID_RUN=/tmp/spk-t2;
+     omandroid-speaker-tuning run --dry-run --dry-reply 0 --once --mode throttle; echo "exit $?";
+     omandroid-speaker-tuning run --dry-run --once --mode music --angle 90; echo "exit $?";
+     fuser -v /dev/acd-audio_output_tuning /dev/acd-audio_bulk_tx /dev/acd-audio_bulk_rx 2>&1; dmesg | tail -5'
+   ```
+   Expect, first run: "dry run: no AoC device is opened"; exchange 1
+   "waves id 5, 4 bytes, sha256 2594b6a92ebfb1c3"; exchange 2 "waves id 1,
+   11204 bytes, sha256 5d5ade25887b684d", both "dry run, not sent";
+   "state: active SPEAKER_MUSIC_THROTTLE 0 (dry run)"; exit 0. Second run
+   (the default dry answer, a timeout): the same two exchanges, the
+   helper's "SendBufferToDsp fail" notes, "state: failed 2 exchange(s)
+   not accepted", exit 1, no crash. `fuser` lists no opener before or
+   after; no new AoC lines in `dmesg`.
+   Pass: the same sizes and hashes as T1 (the same image gives the same
+   bytes; a different hash at the same size means a different `.mps`,
+   `.ini` or library: record it, not a stop), only block 16 / component 2,
+   nothing over 16 KiB. Stop: the helper dies on a signal, "broke the
+   protocol", an exchange over 16 KiB, any opener of the devices, any AoC
+   error in `dmesg`. Rollback: none (each run exits); `rm -r /tmp/spk-t2`.
+3. Stream detection, still dry (risk low: one C8-level tone through the
+   protection stack; announce it). Needs omandroid-speaker-protection and
+   its watchdog active, as after C8f:
+   ```sh
+   U='U=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}"); I=$(id -u $U); as_user() { runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/$I "$@"; }'
+   tools/phone-ssh 'omandroid-speaker-protection signal tone /tmp/t2.wav --level -23 --seconds 3'
+   tools/phone-ssh "$U"'; (OMANDROID_RUN=/tmp/spk-t2 OMANDROID_SPK_TUNING=throttle timeout 15 omandroid-speaker-tuning run --dry-run --dry-reply 0 > /tmp/t2-run.log 2>&1 &);
+     sleep 3; as_user timeout 6 pw-play /tmp/t2.wav; sleep 3; cat /tmp/t2-run.log; omandroid-speaker-protection health'
+   ```
+   Expect: "state: idle", then at the tone "sending (stream start)" with
+   the same two exchanges, "active SPEAKER_MUSIC_THROTTLE 0 (dry run)",
+   and after it "idle (...)"; the tone sounds as before; "healthy". If
+   SensorProxy is up, turning the phone during the tone gives one more
+   "sending (orientation ...)" after a second. Stop: no "stream start"
+   (record `cat /proc/asound/cards` and the PCM status files), an
+   amplifier or watchdog event. Rollback: none (the run ends after 15 s).
 
 ### T3 first write: ASP Mode and one exchange (risk low; announce it, no sound)
 
-1. With nothing playing, write ASP Mode to its T0 value (a no-op write)
-   and read it back. Then `ASP_BYPASS` and back to the T0 value. Expect
-   the values to stick. This proves the rollback lever before any tuning.
-2. If T1/T2 showed a handshake (a version or state query), send that one
-   exchange with `AOCLOG=1` recording. Expect reply 0 and no "Could not
-   configure WAVES".
+Prerequisites: T0 and T2 passed; protection and its watchdog active
+(C8f), nothing playing; the AoC log recorded (`AOCLOG=1` as in
+`tools/aoc-audio-diag`, or `cat /dev/acd-logging` in a second terminal);
+a log stream to the laptop for `dmesg`. Each step is one change.
 
-Stop: a negative reply, an AoC watchdog or crash, any AoC log error.
-Rollback: write the T0 value; worst case reboot (AoC RAM only).
+1. ASP Mode, the rollback lever (no tuning yet):
+   ```sh
+   tools/phone-ssh 'C=$(awk "/aoc/{print \$1; exit}" /proc/asound/cards); N="AoC Speaker Mixer ASP Mode";
+     V=$(amixer -c $C cget name="$N" | sed -n "s/.*: values=//p"); echo "T0 value $V";
+     amixer -q -c $C cset name="$N" $V; amixer -c $C cget name="$N" | tail -1;
+     amixer -q -c $C cset name="$N" 2; amixer -c $C cget name="$N" | tail -1;
+     amixer -q -c $C cset name="$N" $V; amixer -c $C cget name="$N" | tail -1; dmesg | tail -3'
+   ```
+   Expect each read to show the value just written (V, 2 = `ASP_BYPASS`,
+   V). Stop: a write error, a value that does not stick, an AoC error.
+   Rollback: write V back.
+2. The first exchange, with nothing playing: one live `--once`. The
+   controller sends the version query and the full upload; with the DSP
+   idle the AoC may refuse the upload (stock never sends outside
+   playback), which is information, not damage: tuning lives in AoC RAM.
+   ```sh
+   tools/phone-ssh 'systemctl is-active omandroid-speaker-watch; mkdir -p -m 0700 /var/lib/omandroid/speaker-tuning;
+     OMANDROID_RUN=/tmp/spk-t3 omandroid-speaker-tuning run --once --mode throttle --record /var/lib/omandroid/speaker-tuning/t3;
+     echo "exit $?"; C=$(awk "/aoc/{print \$1; exit}" /proc/asound/cards);
+     amixer -c $C cget name="AoC Speaker Mixer ASP Mode" | tail -1; dmesg | tail -5'
+   ```
+   Expect: "exchange 1: ... waves id 5, 4 bytes ...: rc 0" (with a reply
+   of a few bytes, and a "DSP Waves version: ..." line if the AoC answers
+   the query), then "exchange 2: ... 11204 bytes ...: rc N". Record N, the
+   reply sizes, ASP Mode afterwards, and the AoC log's lines around
+   "WAVES"/"asp" (no payloads). Pass: rc 0 for the version query; for the
+   upload rc 0 or a clean refusal (negative rc with no AoC error beyond
+   it); no AoC watchdog or crash. Stop: the AoC restarts or crashes,
+   "Could not configure WAVES" with ASP Mode left changed, any `dmesg`
+   error. Rollback: ASP Mode back to V (step 1); worst case reboot (AoC
+   RAM only).
+3. Only if step 2 refused the upload outside playback: repeat it during a
+   C8-level tone (as T2.3, `--once` started one second after `pw-play`).
+   Expect rc 0. The audible change and the levels belong to T4.
 
 ### T4 Waves on, throttle preset, C8 levels (risk medium; announce it)
 
@@ -434,11 +648,14 @@ temperature rules.
 
 ### T6 at boot and in real use (risk medium)
 
-Enable the unit with `OMANDROID_SPK_TUNING` at the T5 result; 15 minutes
-of mixed media at normal volume, rotations, an AoC restart (a reboot).
-Pass: `active` after every stream start, no mute, temperatures back to
-ambient after. Then hand the result to the `omandroid-audio` owner for
-packaging (version bump; nothing enabled that is not hang-safe).
+Set `OMANDROID_SPK_TUNING` to the T5 result in
+`/etc/omandroid/speaker-tuning.conf` and `systemctl enable --now
+omandroid-speaker-tuning` (it starts and stops with the watchdog); 15
+minutes of mixed media at normal volume, rotations, an AoC restart (a
+reboot). Pass: `active` after every stream start, no mute, temperatures
+back to ambient after. Then the package's default and the watchdog hooks
+of section 3.1 item 4 are settled with the `omandroid-audio` owner
+(version bump; nothing enabled that is not hang-safe).
 
 ---
 
@@ -450,9 +667,17 @@ packaging (version bump; nothing enabled that is not hang-safe).
    or `ASP_ON` with default coefficients? (T0) And does `ASP_BYPASS` take
    Waves out of the path immediately? (T3)
 3. Does the controller need a reply (version, meters) before it emits the
-   tuning? (T1.4, T2)
+   tuning? **No** (T1.4): it sends the full upload with no reply at all.
+   What the AoC returns to the version query, and whether the controller
+   then sends anything else, is T3.2.
 4. Which `SensorProxy` side (`left-up`/`right-up`) is stock's 90°? (T4.3)
 5. Volume link laws: how much of stock's sound depends on feeding the
    stream volume into Waves? Phase 2, after T5.
 6. `audio_output_tuning_ext` (service 8): unused by the stock libraries
    we read; leave closed.
+7. The orientation subtypes and the two sound modes gave identical
+   uploads in T1.4. Does the AoC's Waves chain swap left and right by
+   itself (ASP Mode `ASP_ON`, section 2.5), or does the swap depend on
+   state the controller only sends after a reply? T4.3 listens; with the
+   daemon running, a turn costs nothing when the controller has nothing
+   to send.
