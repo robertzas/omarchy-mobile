@@ -42,7 +42,7 @@ Omandroid runs native Omarchy on Google Pixel phones: Arch Linux ARM, Hyprland a
 - `docker`: kernel builds run in the [`docker/Dockerfile`](docker/Dockerfile) environment (Ubuntu 24.04).
 - `adb`, `fastboot` (`android-tools`), `lz4`, `zstd`, `cpio`, `python3`, `ssh`, plus `unzip`, `debugfs` (e2fsprogs), `simg2img`/`lpunpack` and `erofs-utils` for firmware extraction.
 - **Android's prebuilt clang and the AOSP boot-image tools.** `bin/omandroid` takes clang from `CLANG_DIR`, and `mkbootimg` and `mkdtboimg.py` from `SRC_DIR` (`system/tools/mkbootimg`, `system/libufdt`). Today these come from a LineageOS checkout (`bin/lineage-ref sync`, about 400 GB). A smaller setup also works: the AOSP `platform/prebuilts/clang/host/linux-x86`, `platform/system/tools/mkbootimg` and `platform/system/libufdt` projects under `~/android`, with `CLANG_DIR` and `SRC_DIR` set in `omandroid.local.conf`. The initramfs build links against that clang's Android compiler-rt builtins. A lighter toolchain setup would make a good PR.
-- **The kernel tree.** Clone [derekross/linux-omandroid](https://github.com/derekross/linux-omandroid) (branch `omandroid`) to `~/android/mainline/linux`, or set `KERNEL_DIR`.
+- **The kernel tree.** Clone [derekross/linux-omandroid](https://github.com/derekross/linux-omandroid) to `~/android/mainline/linux`, or set `KERNEL_DIR`. Branch `omandroid-int` is what the phone runs today (every subsystem merged, work in progress included, as one snapshot commit); branch `omandroid` holds the curated, upstream-ready commits and lags behind it. Build `omandroid-int` to match this repository's packages and overlays; base your own kernel work on `omandroid`.
 - **Google's GPL kernel for your device**, as a reference for registers, clocks and power sequences (manifests at `android.googlesource.com/kernel/manifest`, branches named `android-gs-<family>-…`). The postmarketOS Tensor kernel is a useful second reference.
 - **The host side of USB networking:** give the laptop `172.16.42.2/24` on the phone's USB network interface. A NetworkManager profile with a manual address works (see "Host setup" in [NOTES.md](device/cheetah/NOTES.md)).
 
@@ -188,7 +188,7 @@ The same SoC does **not** mean the same board. The panel, touch controller, PMIC
 
 ### 5.3 Write the board DTS
 
-- Start from the SoC `.dtsi` (`arch/arm64/boot/dts/exynos/google/gs201.dtsi` or `gs101.dtsi`) and from the live stock DT. Add `<soc>-<codename>.dts` with `compatible = "google,<soc>-<codename>", "google,<soc>"`, plus its entry in `Documentation/devicetree/bindings/arm/google.yaml`.
+- The board DTS lives in the **kernel repository** ([linux-omandroid](https://github.com/derekross/linux-omandroid)), not here. Start from the SoC `.dtsi` (`arch/arm64/boot/dts/exynos/google/gs201.dtsi` or `gs101.dtsi`) and from the live stock DT. Add `<soc>-<codename>.dts` with `compatible = "google,<soc>-<codename>", "google,<soc>"`, plus its entry in `Documentation/devicetree/bindings/arm/google.yaml`.
 - Read [BRINGUP-M1.md](device/cheetah/BRINGUP-M1.md) §1 (the boot chain) and §4 (the minimal DTS) first. The Pixel bootloader has rules of its own:
   - It picks the base DTB by `/soc_id`. Ship one copy per silicon revision.
   - It requires `/chosen/bootargs` and an empty `/ect` node.
@@ -247,11 +247,13 @@ Findings that matter beyond one subsystem go into `device/<codename>/NOTES.md`, 
 | Change | Repository | Branch or path |
 | --- | --- | --- |
 | Kernel: drivers, bindings, DTS | [derekross/linux-omandroid](https://github.com/derekross/linux-omandroid) | a topic branch off `omandroid`, one subsystem per branch (`omandroid-<subsystem>`) |
-| Device notes, plans, overlays | this repository | `device/<codename>/` |
+| Device notes, plans, bring-up overlays | this repository | `device/<codename>/`, overlays in `device/<codename>/overlays/` |
 | Device support package | this repository | `packages/omandroid-device-<codename>/` |
 | Shell, sensors, GNSS, Mesa, Hyprland | this repository | `packages/<name>/` |
 | Omarchy changes | upstream [Omarchy](https://github.com/omacom/omarchy) first | `patches/omarchy/` while they wait |
 | Tools | this repository | `tools/`, `bin/` |
+
+**Device tree nodes go in the kernel; overlays only switch them on.** A new block (a sensor, a regulator, a bus) is described in the board DTS in linux-omandroid with `status = "disabled"`, next to its binding and driver. The `.dtso` files in this repository's `device/<codename>/overlays/` only set nodes to `"okay"` (and add bring-up-only tweaks) for one gated test boot; once a node is proven, it is enabled in the DTS itself and its overlay goes away. A driver, binding or DTS change never belongs in this repository, and a bring-up overlay never belongs in the kernel.
 
 ### 6.2 Kernel patches, upstream-style
 
