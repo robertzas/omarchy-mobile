@@ -11,9 +11,12 @@ setting, D-PHY included, now comes from the per-phone data file
 kernel from this branch: runbook P comes first.** On the phone (2026-10-13): P passed (the ultrawide unchanged with the
 PHY file), CAM-M passed M.1-M.4 (the S5KGN1 answers, its C-PHY link
 counts 30 fps), M.5's first DMA in the 2032x1536 mode stopped with
-`LASTADDR`; next CAM-M.5b (the 2016x1136 mode). Kernel branch
-`omandroid-camera` head `cb502b561` (error-bit counters on top of
-`c91185280`, which int `937d47233` has; `cb502b561` is not merged);
+`LASTADDR`, and so did 2016x1136 (M.5b, either start value); next
+CAM-M.5c (error-bit counts, then LRTE at its reset value) with CAM7 in
+parallel. Kernel branch
+`omandroid-camera` head `32e190c83` (`cb502b561` error-bit counters,
+`32e190c83` LRTE parameter and last-packet log, on top of `c91185280`,
+which int has; the two are not merged);
 libcamera 0.7.2-4.6 (patches 0013-0014: the front and
 telephoto sensors, a near-size mode rule) built and checked offline, the
 phone still runs 4.4. Ultrawide quality: CAM5.3, Snapshot CAM5.4, what to
@@ -2468,6 +2471,82 @@ tools/camera-stage --watchdog x --cmd 'LINK=1 SENSOR=s5kgn1 W=4080 H=3072 DMA=1 
   passing mode.
 - **Rollback:** reboot; all parameters are per load.
 
+**CAM-M.5b results (2026-10-13, int `8070cddd9` =
+`7.3.0-rc6-omandroid-push1-00448-g8070cddd92a6`: `937d47233` + the modem
+PCIe speed fix; `camera-main`; `cb502b561` not in it yet; logs
+`logs/camera-20261013-141*.log`):**
+- **M.5b-0 (2016x1136, link only):** "link 1 on: 2016x1136 DT 0x2b, 3
+  C-PHY trios ... CAM 533000000 Hz"; FS 144 FE 144; 28786 link
+  interrupts, every one with an error (about 200 a frame, M.4: 216), the
+  last 0x8. link+0x6a0 read **0x09d82b00**: 0x09d8 = 2520, exactly one
+  2016-pixel RAW10 line, with data identifier 0x2b (VC 0, RAW10). M.4's
+  0x00014100 reads the same way as a VC 1 frame end (identifier 0x41,
+  frame number 1). So 0x6a0 holds the last packet header the link took
+  [I], and **the GN1 does send a second stream on VC 1**; its VC 0 lines
+  have the right length.
+- **M.5b-1 (fresh boot, DMA):** "WDMA error 0x00008000: CTRL 0x00000001
+  FMT 0x00000007 ADDR1 0xee500000 RESOL 0x047007e0 STRIDE 0x00000a00,
+  2016x1136, 2560 bytes a line, 2908160 a frame"; FS 144 FE 144, link
+  errors 25273, WDMA done 0, errors 250 (last `LASTADDR`), no data.
+- **M.5b-2 (fresh boot, `wdma_ctrl=3`, read back 3):** the same, 251
+  WDMA errors, 23079 link errors.
+- **So neither the 2032x1536 mode nor the start value is the cause.**
+  Stopped as the runbook says.
+
+**Why, second pass (offline):**
+- Lines on VC 0 are the right length (0x6a0), the channel registers are
+  as programmed, and the same WDMA settings write whole frames from the
+  ultrawide. What the WDMA sees from link 1 is therefore more than the
+  VC 0 RAW10 lines: extra bytes or lines from somewhere in the C-PHY
+  path. Our link set-up matches the one that captured whole GN1 frames
+  elsewhere (section 4.4) in every register but one: **LRTE_CONFIG
+  (0x600)**. We write 0x7fff (taken as stock's), which clears the upper
+  spacer field (30:16) of a register that resets to 0x7fff7fff [I]; the
+  working set-up wrote 0x7fff7fff (its reset value) for the GN1. LRTE
+  spacers exist on C-PHY only, which fits a failure on C-PHY that the
+  D-PHY ultrawide never shows. Our note that stock "leaves 0x600 at its
+  default" (4.3, RE2) and the 0x7fff in the driver disagree; the test
+  decides.
+- The ~200 link errors a frame are probably the VC 1 stream's packets
+  (no channel takes VC 1: `ERR_WRONG_CONFIG`), harmless as on the
+  ultrawide; the per-bit counters will show whether anything else
+  (resolution mismatches, overflow) is among them.
+- CAM 664 MHz stays the change after this one: an overflow would show
+  as `ERR_OVER` (INT0) or `FIFO_FULL`, which the counters will tell.
+- Kernel (on `omandroid-camera`, not merged): `cb502b561` (per-bit error
+  counters) and `32e190c83` (`lrte_config=` parameter, 0 = unchanged; the
+  first WDMA error's log line adds the link's last packet header, its
+  frame counter and the LRTE value). Defaults unchanged: on its own the
+  kernel changes nothing on the wire.
+
+### CAM-M.5c: error bits, then LRTE at its reset value. Risk: medium (DMA in c-2)
+
+```sh
+# M.5c-K kernel: int + omandroid-camera 32e190c83 (cb502b561, 32e190c83), the
+#   same overlays (ASK FIRST: flashes and reboots)
+tools/phone-ssh 'uname -r; modinfo -p gs201_csis | grep -E "lrte_config|wdma_ctrl"'
+# M.5c-0 (this boot, link only) which link errors, at the driver's LRTE (0x7fff)
+tools/camera-stage --watchdog x --cmd 'modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 1; LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=0 bash -s' --script tools/camera-cap-test
+tools/phone-ssh 'dmesg | grep -E "error bits|stopped" | tail -4'
+#   record: the INT0/INT1 bit counts (expect b3 ERR_WRONG_CONFIG dominant); any INT1 b5/b6
+#   (H/V resolution mismatch) or INT0 b4 (overflow) is the lead
+# M.5c-1 (same boot, link only) the same with LRTE at its reset value
+tools/camera-stage --watchdog x --cmd 'LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=0 CSIS_OPTS=lrte_config=0x7fff7fff bash -s' --script tools/camera-cap-test
+tools/phone-ssh 'dmesg | grep -E "error bits|stopped" | tail -4'
+#   record: the bit counts again, and link1+0x600 in the scan (0x7fff7fff); pass: FS/FE ~30/s
+# M.5c-2 (next boot) DMA with LRTE at its reset value
+tools/camera-stage --watchdog x --cmd 'modprobe sec_acpm; modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 1; LINK=1 SENSOR=s5kgn1 W=2016 H=1136 DMA=1 FRAMES=4 CSIS_OPTS=lrte_config=0x7fff7fff bash -s' --script tools/camera-cap-test
+tools/phone-ssh 'cat /tmp/cam-2016x1136.raw' > logs/camm-bars.raw
+tools/raw10-stats logs/camm-bars.raw --width 2016 --height 1136 --stride 2560 --bars 8
+#   pass: wdma_done 4, errors 0, 11 632 640 bytes, eight bars
+#   stop: LASTADDR again: record the WDMA error line (last packet, FRM_CNT) and the bit counts;
+#   next single change (one boot later): CAM 664 MHz, CSIS_OPTS=cam_khz_cphy=664000
+```
+
+- If M.5c-2 passes: 0x7fff7fff becomes the C-PHY default in the driver
+  (a small commit), then M.5b-3 (4080x3072), M.6, M.7.
+- **Rollback:** reboot; parameters are per load; the previous int kernel.
+
 ### CAM5.3: ultrawide quick wins. Risk: low to medium
 
 ```sh
@@ -2659,8 +2738,15 @@ tools/phone-ssh 'cam -l; LIBCAMERA_LOG_LEVELS=IPASoftAf:0 cam -cN --capture=120 
 1. **P** (files, no reboot; then the merged kernel with today's overlays,
    one reboot; the ultrawide must be unchanged).
 2. **CAM5.3-1** (libcamera 0.7.2-4.6 instead of 4.5; no reboot) and CAM5.3-2.
-3. **CAM-M** (reboot with `camera-main`), M.2-M.8.
-4. **CAM7** (reboot with `camera-front`), F.2-F.7.
+3. **CAM-M** (reboot with `camera-main`), M.2-M.8. (2026-10-13: at M.5c.)
+4. **CAM7** (reboot with `camera-front`), F.2-F.7. **Independent of
+   CAM-M:** link 0, D-PHY, its own bus and sensor; the kernel the phone
+   runs (`8070cddd9`) already has it. It can run while CAM-M waits:
+   after M.5c-K, the next boot adds `camera-front` to the same overlays
+   (one change: the overlay) for F.2-F.3, then F.4 and F.5 each on a
+   fresh boot, interleaved with M.5c-2 (one DMA step per boot, never
+   two cameras' DMA steps in one boot). F.1 (read-only) can run on any
+   boot now.
 5. **CAM-T** (reboot with `camera-tele`), T.2-T.7.
 6. CAM5.3-3/-4 (ultrawide lens, full resolution) and CAM5.4 (Snapshot)
    whenever convenient; loading at boot only after all four pass.
