@@ -837,6 +837,120 @@ nmcli -t -f DEVICE,STATE dev | grep "^wl"'
   in commonring" (firmware wedged: reboot, record); no wake.
 - **Rollback:** unload Wi-Fi before sleeping again; previous images.
 
+**S5a result (2026-10-12, 7.3.0-rc6-omandroid-push1-00363-g7987ffb1fd0b, int
+`7987ffb1f` = int + `omandroid-wifi-d3` `812288601`): passed.** Wi-Fi
+connected at boot, ping 0% loss, only the known `ROAM_TRIGGER -52` and
+p2p-dev -5 lines.
+
+**S5b result (same kernel, `debug=0x80000`, `rtcwake -m freeze -s 30` with
+Wi-Fi connected): failed, and Wi-Fi stayed dead until a reboot.**
+(`logs/s5b-journal-full.txt` on the laptop.)
+
+- `brcmf_pcie_pm_enter_D3` sent the D3 inform as a control message (H2D
+  control ring host w 19 → 20, doorbell rung). Within about a millisecond
+  the dongle **stopped its H2D and D2H receive DMA engines** (`ctrl
+  0x05200801` → `0x00000000`) and rang D2H doorbell 0 (`mailboxint` 0x1),
+  but its control completion ring never moved (D2H w 3, in host memory and
+  in TCM). No D3 ACK reached the driver. "Timeout on response for entering
+  D3 substate", `pci_pm_suspend` -5, suspend aborted.
+- After that the dongle's own function interrupt status (DAR `0xA10`) read
+  `0x100` = `PCIE_INT_MB_FN0_0`, a host-to-dongle mailbox interrupt it never
+  serviced, and the H2D control write index climbed (50, 51, ...) while the
+  dongle's read index stayed at 19: every command timed out. The dongle was
+  in D3 and nothing brought it back.
+- **Why no ACK.** Broadcom's driver (Google's GPL bcmdhd for this chip,
+  `dhd_pcie.c`, `dhdpcie_bus_process_mailbox_intr()`) reads the
+  shared-memory D2H mailbox (`dhdpcie_read_handle_mb_data()`, for shared
+  version >= 6) whenever FN0_0/FN0_1 (0x100/0x200) is set, also on core rev
+  >= 64 where those bits double as D2H4 doorbells, and in its no-interrupt
+  D3 path polls that mailbox every millisecond. brcmfmac's rev >= 64
+  register sets had `int_fn0 = 0`: it never looked there. The control-ring
+  ACK path it does have saw nothing.
+- **The "12 ms" timeout was not 12 ms.** printk time on this kernel is the
+  MCT FRC (`sched_clock: 32 bits at 25MHz`, registered after the arch timer,
+  and preferred for its higher rate), while jiffies and ktime run on the arch
+  counter. In the suspend window the two disagree: the freezer measured 3 ms
+  and 1 ms (ktime) where printk shows 0.2 ms and 0.06 ms, and the poll
+  worker's 50 jiffies-timed passes fit in "10 ms" of printk time. The wall
+  clock agreed with the RTC across S3b (31 s), so ktime is right and **printk
+  timestamps around suspend are not**. The 2 s wait most likely ran in full.
+  The MCT as `sched_clock` on arm64 is an upstream matter (`exynos_mct.c`
+  registers it unconditionally); for now, read durations from the driver's
+  own ktime-based numbers, not from dmesg timestamps.
+- **Fixed on `omandroid-wifi-d3`, `e20614037`** (on top of `812288601`;
+  builds, W=1 and checkpatch clean apart from the sign-off):
+  - rev >= 64 register sets read the shared-memory mailbox on FN0 (under
+    `rx_lock`);
+  - the D3 wait polls that mailbox and the control completion ring every
+    2 ms besides the wake-up, for up to 2 s (jiffies);
+  - after the ACK, device interrupts are masked and cleared until resume,
+    as Broadcom's driver does;
+  - **a missed ACK no longer kills Wi-Fi**: host-ready doorbell, then a bus
+    reset (firmware reload, no memory dump) through a new
+    `brcmf_bus_request_reset()`, as Broadcom's driver reloads after a D3 ACK
+    timeout. Re-sending a host-ready alone isn't enough: a D3 inform still
+    queued would put the dongle to sleep again;
+  - a failed send restarts the firmware console timer (it was left off);
+  - hot resume reads the mailbox and the rings once and restarts the poll;
+  - one `dev_dbg()` line per D3 entry ("D3 ACK by control message|shared-memory
+    mailbox after N us"), per hot resume ("hot resume") and per lost state
+    ("probing again"). `CONFIG_BRCMDBG` builds define `DEBUG`, so these print
+    with **no `debug` flag at all**; the error line carries the measured
+    wait in ms and `mailboxint`.
+
+**Quieter debugging.** `debug=0x80000` also enables the bring-up ring dumps
+(every doorbell and index update), which overflowed the kernel log during
+S5b. For S5b-2 leave `debug` at 0: the new `dev_dbg` lines and the error
+lines are enough. If more is needed, `debug=0x40000` (MSGBUF: one line per
+message, including `MSGBUF_TYPE_D2H_MAILBOX_DATA`) with the link idle, set
+just before the freeze and cleared right after. Never 0x80000 across a
+suspend.
+
+**S5b-2 (flash `e20614037`; attended; medium risk).** Merge and build as in
+S5 (`git merge omandroid-wifi-d3` in `wt-int`; it merges cleanly into int
+`23c286942`), keep the DTB, push.
+
+1. **Awake regression (read-only, low risk):** as S5a, plus no
+   `D2H_MB_DATA` surprises: `dmesg | grep -iE "brcmf.*(error|fail|timeout|halt)"`
+   empty after 10 minutes of use (FN0 interrupts now read the shared-memory
+   mailbox while awake too). **Stop:** Wi-Fi down, firmware halt, ping
+   loss. **Rollback:** previous images.
+2. **The recovery path, awake (medium risk: first bus reset on this chip):**
+
+   ```sh
+   tools/phone-ssh 'ls /sys/kernel/debug/ieee80211/phy0/reset && echo 1 > /sys/kernel/debug/ieee80211/phy0/reset
+   sleep 20; dmesg | grep -iE "brcmf|ieee80211" | tail -20; nmcli -t -f DEVICE,STATE dev | grep "^wl"'
+   ```
+
+   **Pass:** the firmware reloads and Wi-Fi reconnects by itself within
+   about 20 s. **Stop:** no interface or a hang (then `systemctl restart
+   omandroid-wifi` after `modprobe -r brcmfmac_wcc brcmfmac pcie_gs201`, or
+   reboot). If this fails, a missed ACK would still leave Wi-Fi dead, so
+   keep the sleep hook's unload mode and stop before step 3.
+3. **One freeze with Wi-Fi connected, `debug` 0:**
+
+   ```sh
+   tools/phone-ssh 'echo 0 > /sys/module/brcmfmac/parameters/debug'
+   tools/phone-ssh "$(freeze_cmd s5b2 30)"
+   # reconnect after about 60 s
+   tools/phone-ssh 'grep -E "rc=|wakeup_irq" /var/lib/omandroid/suspend/s5b2-*.log
+   dmesg | grep -E "D3 ACK by|hot resume|probing again|D3 substate|D3 inform|Firmware has halted" | tail
+   nmcli -t -f DEVICE,STATE dev | grep "^wl"; cat /sys/power/suspend_stats/last_failed_dev'
+   ```
+
+   - **Pass:** `rc=0`, woken by the RTC after about 30 s; "D3 ACK by ...
+     after N us" (record which path and N); "hot resume"; Wi-Fi reconnects
+     within about 10 s and pings.
+   - **Partial:** `rc` non-zero with "Timeout on response for entering D3
+     substate (N ms, mailboxint ...)", then the firmware reload brings Wi-Fi
+     back by itself: the recovery works but the ACK still isn't found.
+     Record N and `mailboxint`, stop, and keep unload mode.
+   - **Stop:** Wi-Fi doesn't come back after a failed suspend (the reset
+     didn't work), "probing again" fails, or no wake.
+   - **Rollback:** `modprobe -r brcmfmac_wcc brcmfmac pcie_gs201; systemctl
+     restart omandroid-wifi`; previous images.
+4. Then S5c.
+
 **S5c, 10 then 20 cycles with Wi-Fi loaded:** S4's loop without the
 `modprobe -r`, adding `nmcli -t -f STATE general` to each log line.
 
