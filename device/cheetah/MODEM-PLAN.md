@@ -1,17 +1,17 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Modem plan (cheetah / gs201): S5300 on PCIe GEN4A_0
 
-Status (2026-10-12): **M0 passed; M2 link works (Gen1 x1, 144d:a5a5).
-M2.4 left the PHY out of isolation (fixed offline, `c22dc53b3`) and UFS
-logged two recovered LINERESETs around modem power changes (analysis and
-the M2.5 measurement below). Offline, M3.2 is done (the link API for CPIF,
-link-down and completion-timeout interrupts, the lines handed to CPIF) and
-M3.3 has its first stage: Google's CPIF builds as `cpif.ko` + `shm_ipc.ko`
-(boot, IPC and RFS over the legacy buffers; section 2.1). Next on the
-phone: M2.5, M3.1, then M3.3-B (bind only, no firmware).**
-Kernel branch `omandroid-modem` in `~/android/mainline/wt-modem`, build in
-`~/android/mainline/out-modem` (last full build in
-`logs/kernel-modem6.log`; release in section 2.1).
+Status (2026-10-12): **M0, M2.5 and M3.1 passed** (link at stock timing,
+PHY re-isolated, the modem enumerates as 144d:a5a5). **Every modem
+power-off is followed by one recovered UFS error-handler pass**, so the
+modem now stays on once up (M2.6: analysis, policy, a one-power-off
+measurement). Offline: M3.2 done; CPIF stage 1 (boot, IPC, RFS) builds;
+the modem profile is ready for M3.4. Next on the phone: M2.6, M3.3-B
+(bind only), M3.4 (boot from a RAM copy, modem left on), then
+MODEM-CLIENT.md M4.0.
+Kernel branch `omandroid-modem` in `~/android/mainline/wt-modem` (head
+`781b9c3d8`), build in `~/android/mainline/out-modem` (last full build
+`7.3.0-rc6-omandroid-push1-00349-g781b9c3d8523`, `logs/kernel-modem7.log`).
 Everything new is disabled by default. RADIOS-CAMERA-PLAN.md section 1 is
 the survey this follows.
 
@@ -253,6 +253,22 @@ cp2ap-phone-active as EINT (function 0xf) with pull-down (`pin-pud = 1`),
 ps-hold and cp2ap-cp-wrst with pull-down. M0.3 found ABL leaves gpa8-3
 (cp2ap-wakeup) at `PUD` 0x3. Irrelevant for bind and boot with the AP
 awake; needed before any suspend with the modem on (M3.4+).
+
+**After M2.5 (2026-10-12, on int `606b84c7a`, back-merged as a fast forward):**
+
+| Commit | What |
+|---|---|
+| `4bcede988` PCI: dwc: gs201-cp: power the modem off as stock does, and trace the lines | `cp_off` = stock's sequence (pda-active untouched), `pda_off`, `trace_lines` |
+| `1aa72188d` soc: google: cpif: keep the modem on unless a power-off is allowed | `allow_poweroff` (default off), `trace_lines` |
+| `d01e1ebbe` soc: google: cpif: s51xx: map the doorbell only inside the bridge window | stock maps BAR0 + offset from the window start even when the window is unassigned |
+| `781b9c3d8` PCI: dwc: gs201-cp: add a slow power-off step to tell the edges apart | `cp_off_slow`, 1 s between edges |
+
+Same checks as below: full build exits 0 (`logs/kernel-modem7.log`),
+`W=1` clean, checkpatch clean on the changes. Repo:
+`packages/omandroid-modem/profiles/modem.conf` binds `by-name/modem`
+(rfsd and cbd open it unsuffixed), `/dev/kmsg`, CPIF's sysfs device,
+`/chosen/plat` and `/chosen/config` read-only, and a stand-in
+`/sys/power/wake_lock`, and refuses to start without CPIF's device.
 
 **Checks (2026-10-12):**
 - full build exits 0: `logs/kernel-modem6.log` (release in the last line
@@ -568,6 +584,108 @@ human to force a restart.
 | 2 and 3, at `cp_off` | The modem's power-down disturbs UFS | Fix 2: power off only at shutdown; repeat 3 without the load to see whether an idle (hibernated) UFS link is immune |
 | 1 | Not the modem | Stop modem work; investigate UFS on its own |
 
+### M2.6: the modem power-off and UFS (after the M2.5 result)
+
+**What M2.5 found** (result below, in M3): every modem power-off is
+followed, 0.08-0.15 s after "modem power-off sequence", by one recovered
+UFS error-handler pass (`saved_uic_err 0x40`, a PA LINERESET) and
+thousands of Data Link Layer errors (76021 over three power-offs, 12 PHY
+Adapter). Power-on, a 60 s link under load and `link_down` before the
+power-off were not separated in time from it, so M2.5 cannot say whether
+`link_down` alone disturbs UFS. No I/O errors, resets or aborts.
+
+**Our sequence against stock's, edge by edge** (`CP/modem_ctrl_s5100.c`):
+
+| | stock `power_off_cp()` (cbd's POWER_OFF) | stock `power_shutdown_cp()` (shutdown) | ours, M2.5 (`link_down` + `cp_off`) |
+|---|---|---|---|
+| before the lines | state OFFLINE; link off first (`pcie_clean_dislink()` -> `s5100_poweroff_pcie()`: ap2cp-wakeup 0 + 5 ms, PME_Turn_Off, PERST# low, LTSSM off, soft reset, PHY powered down, **not isolated**) | cp2ap interrupts off; waits up to 3 s for phone-active high (CP running); the link stays up | `link_down`: PERST# low, LTSSM off, soft reset, PHY powered down **and isolated** (no PME_Turn_Off in the debugfs step) |
+| lines (`gpio_power_off_cp()`) | wakeup 1, 10 ms, wakeup 0, nreset 0, cp-wrst 0, pwr-on 0, 30 ms, pm-wrst 0, 50 ms | the same | the same |
+| after | nothing | link off afterwards | **pda-active 0** (never in stock: stock drives it low only for AP suspend) |
+
+There is no graceful shutdown handshake in stock's kernel driver: cbd/RIL
+may turn the radio off first, then the same line sequence cuts the
+modem's power. The only differences were the trailing pda-active edge
+and the PHY isolation. The PHY can't be the cause: in M2.5.2 it was never
+released (no link) and the error came anyway. The timing argues against
+pda-active too (it came at +90 ms, one error at +80 ms), which leaves the
+modem's own power-down (pwr-on at +10 ms, pm-wrst at +40 ms): its PMIC
+turning its rails off. Stock reaches that edge only at shutdown and in
+crash recovery, so it would not show there.
+
+**Changes (offline, kernel `4bcede988`, `1aa72188d`, `781b9c3d8`):**
+- `cp_off` is now stock's sequence exactly: pda-active stays high; a
+  separate `pda_off` step (only with the modem off) drives it low, so
+  each edge is measured on its own. Module removal still leaves all lines
+  low.
+- `trace_lines=1` (`pcie-gs201-cp` and `cpif`) logs every output edge with
+  its time.
+- `cp_off_slow`: the same edges, same order, 1 s apart: a diagnostic to
+  attribute the disturbance to one edge.
+- **Policy: the modem stays on once it is up.** CPIF refuses cbd's
+  `IOCTL_POWER_OFF` unless loaded with `allow_poweroff=1` ("power off
+  refused, the modem stays on"); stopping the modem profile leaves it on.
+  The modem is powered off only by: shutdown/reboot (stock's
+  `power_shutdown_cp()`, one UFS event per reboot, as now), crash
+  recovery (cbd's reset: a power cycle), and an explicit, attended
+  request (`allow_poweroff=1` and the profile's stop, or `cp_off` on the
+  link driver when it owns the lines). Restarting cbd power-cycles the
+  modem (its POWER_ON starts with the off sequence): don't, reboot
+  instead.
+
+**M2.6 runbook: one power-off with the new sequence, edges apart in time.**
+Kernel: int with `omandroid-modem` at `781b9c3d8` or later; overlays as
+M2.5 (`modem-link-test`, not `modem-cpif-test`). **Risk: medium**: one
+deliberate modem power-off, which so far always gave one recovered UFS
+handler pass; the root disk is under load as in M2.5 for an A/B
+comparison. Attended; kmsg streamed (`tools/phone-ssh dmesg -w | tee
+logs/m2.6-kmsg.log`).
+
+```sh
+# M2.6.0 load with tracing (reads only), baseline
+tools/phone-ssh 'modprobe pcie-gs201-cp allow_hw=1 watch_lines=1 trace_lines=1;
+  cat /sys/bus/platform/devices/14700000.ufs/auto_hibern8 2>&1; dmesg | grep -c ufshcd_err_handler;
+  cat /sys/kernel/debug/ufshcd/14700000.ufs/stats; test -f /var/tmp/ufsload || head -c 1G /dev/zero > /var/tmp/ufsload'
+#   record: auto_hibern8, the err_handler count, the stats
+
+# M2.6.1 dead-man, then one power cycle with each transition 5 s apart, under load
+tools/phone-ssh 'systemd-run --unit=x-modem-off --on-active=100 sh -c "C=/sys/kernel/debug/gs201-pcie-cp/ctl; echo link_down > \$C; echo cp_off > \$C"'
+tools/phone-ssh 'C=/sys/kernel/debug/gs201-pcie-cp/ctl; S=/sys/kernel/debug/ufshcd/14700000.ufs/stats
+  (timeout 50 sh -c "while :; do dd if=/var/tmp/ufsload of=/dev/null bs=1M iflag=direct status=none; done") &
+  echo cp_on > $C; sleep 0.2; echo link_up > $C; sleep 20
+  echo "== link_down"; echo link_down > $C; sleep 5; grep -E "Data Link|PHY Adapter" $S
+  echo "== cp_off";    echo cp_off > $C;    sleep 5; grep -E "Data Link|PHY Adapter" $S
+  echo "== pda_off";   echo pda_off > $C;   sleep 5; grep -E "Data Link|PHY Adapter" $S; wait
+  systemctl stop x-modem-off.timer
+  dmesg | grep -E "pcie-cp|ufshcd_err_handler|saved_err" | tail -40; cat /sys/kernel/debug/gs201-pcie-cp/status'
+#   expect: "link up: Gen1 x1"; at link_down "PHY isolated (PMU 0x3ec0 = 0x0)"; the traced edges
+#   "ap2cp-wakeup = 1", "... = 0", "ap2cp-nreset = 0", "ap2cp-cp-wrst = 0", "ap2cp-cp-pwr-on = 0",
+#   "ap2cp-pm-wrst = 0", then 5 s later "ap2cp-pda-active = 0"; status: outputs 0, PMU 0x0
+#   record: the time of every ufshcd_err_handler and the stats after each phase
+```
+
+| UFS errors after | Meaning | Next |
+|---|---|---|
+| `link_down` | taking the link down (PERST#, PHY power-down or isolation) disturbs UFS: CPIF does that whenever the modem idles | offline: stop isolating at runtime (stock doesn't), measure again; before M3.4 |
+| `cp_off` only | the modem's power-down itself; stock's sequence doesn't avoid it | keep the policy; optional M2.6.2 attributes the edge; go on to M3.3-B |
+| `pda_off` only | the extra pda-active edge was the cause; fixed by matching stock | go on |
+| none | the M2.5 events needed the old edge timing, or chance | keep the policy; go on |
+
+```sh
+# M2.6.2 OPTIONAL, only on the human's go (a second power-off): which edge
+tools/phone-ssh 'systemd-run --unit=x-modem-off --on-active=100 sh -c "C=/sys/kernel/debug/gs201-pcie-cp/ctl; echo link_down > \$C; echo cp_off > \$C"'
+tools/phone-ssh 'C=/sys/kernel/debug/gs201-pcie-cp/ctl
+  (timeout 30 sh -c "while :; do dd if=/var/tmp/ufsload of=/dev/null bs=1M iflag=direct status=none; done") &
+  echo cp_on > $C; sleep 2; echo cp_off_slow > $C; sleep 3; wait; systemctl stop x-modem-off.timer
+  dmesg | grep -E "pcie-cp|ufshcd_err_handler" | tail -20'
+#   record: which traced edge (1 s apart) the ufshcd_err_handler follows
+tools/phone-ssh 'rmmod pcie_gs201_cp; rm -f /var/tmp/ufsload'
+```
+
+**Stop** as M2.5 (an I/O error, Host Resets or SCSI aborts going up,
+"link broken", an ext4 error): no more modem power until analysed.
+**Rollback:** `link_down`, `cp_off`, `systemctl stop x-modem-off.timer`,
+`rmmod pcie_gs201_cp` (leaves all lines low).
+
 ### M3: boot the modem
 
 **Goal:** the S5300 boots its stock firmware from a RAM copy of
@@ -851,10 +969,160 @@ it, it must not happen); a CP2AP input high while the modem is unpowered
 sets a flag, and its shutdown runs the power-off line sequence on an
 already unpowered modem. Then images without `modem-cpif-test`: `cp
 "$D.default" "$D"; bin/omandroid images && bin/omandroid push`.
-**Next (M3.4, a separate runbook after this passes):** `pcie-gs201-cp
-allow_hw=1`, the modem profile's RAM copies, `rfsd`, then `cbd` for the
-BOOT stage at Gen1, under the M2.5 power rules (dead-man, attended, UFS
-check after each step) and the M3.5 checksums after every run.
+**Next:** M3.4 below, on a fresh boot (`allow_hw` is fixed at load time,
+and CPIF can't be unloaded): the modem was never powered in M3.3-B, so
+that reboot costs no UFS event.
+
+#### M3.4: boot the S5300 firmware from a RAM copy, and leave it on
+
+**What it does:** the stock `cbd` and `rfsd` run in the modem vendor
+chroot (`packages/omandroid-modem/profiles/modem.conf`) on RAM copies of
+`modem_a`, `efs`, `efs_backup`, `modem_userdata` and `persist/modem`,
+each checked against the human's off-repo backup before any daemon runs.
+cbd powers the modem through CPIF, trains the link at Gen1, hands the ROM
+the BOOT image over PCIe (`/dev/umts_boot0`), then the main firmware at
+Gen3, and the CP reaches ONLINE with rfsd serving NV from the copies.
+The radio stays off (nothing sends SIT). **The modem is left on at the
+end**, until the next reboot, unless the human says otherwise: every
+power-off costs a UFS error-handler pass (M2.5/M2.6).
+
+**Never:** a real NV or firmware partition in the chroot, a write to one,
+`rmmod cpif`, restarting cbd (a power cycle), or stopping the profile
+while the modem runs (rfsd gone: the modem loses its NV; reboot instead).
+
+**Before (offline / laptop):**
+1. M2.6 done (its table decides whether `link_down` disturbs UFS: if it
+   does, the runtime-isolation change comes first, because CPIF takes the
+   link down between the BOOT and main stages and whenever the modem
+   idles).
+2. M3.3-B passed (bind, no power).
+3. Kernel: int with `omandroid-modem` at `781b9c3d8` or later, built, the
+   modules tarball pushed with the images.
+4. The modem chroot image, from the user's own factory image, never
+   committed: `tools/extract-vendor-chroot -p modem -o
+   ~/android/vendor-chroot-work/modem <image-cheetah-...zip>` (2026-10-12:
+   22 files, 7.9 MB, CP2A.260705.006).
+5. The checksum file for the phone, from the newest off-repo backup (the
+   two 2026-10-12 backups hold the same sums): only the five lines the
+   profile reads, never committed:
+   `grep -E ' (modem_a|efs|efs_backup|modem_userdata|persist)\.img$' ~/android/reference/cheetah-modem-nv-backup-20261012-1402/SHA256SUMS > /tmp/modem-nv.sha256`
+
+**What cbd needs, read from the binaries (2026-10-12):** `/dev/umts_boot0`,
+`/dev/block/by-name/modem` and `modem_a` (both bound to the RAM copy),
+`/mnt/vendor/modem_img/images/default/...` (the image's ext4),
+`/mnt/vendor/efs/nv_*.bin` (the RAM copy: cbd writes NV files there),
+`/sys/devices/platform/cpif/sim/ds_detect`,
+`/sys/firmware/devicetree/base/chosen/{plat,config}` (bound read-only if
+the bootloader put them in our DTB; the profile says so if not),
+`/sys/power/wake_lock` (a stand-in: no `CONFIG_PM_WAKELOCKS`), and the
+properties `ro.boot.cdt_hwid` / `persist.vendor.modem.cdt_hwid` (the
+board's hardware id; without them cbd falls back to the default hardware
+config). rfsd needs `/dev/umts_rfs0`, `/mnt/vendor/efs*` and
+`by-name/modem`. cbd can ask the kernel to panic
+(`IOCTL_TRIGGER_KERNEL_PANIC`): the port only logs it.
+
+**Risk: medium-high**: the first boot of the modem's firmware from Linux.
+The modem becomes a bus master with no IOMMU (M3.6) and DMAs into the
+reserved regions; a crash makes cbd collect a dump and reset the modem (a
+power cycle: one UFS handler pass); the root disk's link has been shown
+to take recovered errors around modem power changes. Attended throughout;
+kmsg streamed.
+
+```sh
+# M3.4.0 install the profile and the image (no hardware access; asks the human: writes /usr/lib)
+tar -C ~/android/vendor-chroot-work/modem -cf - root MANIFEST SOURCE STUBS |
+  tools/phone-ssh 'mkdir -p /usr/lib/omandroid-vendor/modem && tar --no-same-owner -C /usr/lib/omandroid-vendor/modem -xf -'
+tools/phone-ssh 'install -Dm644 /dev/stdin /usr/lib/omandroid-vendor/profiles/modem.conf' < packages/omandroid-modem/profiles/modem.conf
+tools/phone-ssh 'install -Dm644 /dev/stdin /usr/lib/omandroid-vendor/modem/props.conf' < packages/omandroid-modem/modem/props.conf
+tools/phone-ssh 'install -Dm600 /dev/stdin /etc/omandroid/modem-nv.sha256' < /tmp/modem-nv.sha256; rm /tmp/modem-nv.sha256
+tools/phone-ssh 'cat /usr/lib/omandroid-vendor/modem/SOURCE; ls /usr/lib/omandroid-vendor/omandroid-vendor-chroot; wc -l /etc/omandroid/modem-nv.sha256'
+#   pass: the CP2A source line; the runner (from omandroid-gnss) present; 5 lines
+# Optional, if cbd later logs that it can't find its hardware config: the human copies the
+# ro.boot.cdt_hwid value from the stock capture's getprop into
+# /var/lib/omandroid-vendor/modem/props.conf as ro.boot.cdt_hwid=... and
+# persist.vendor.modem.cdt_hwid=... (per-phone, never in the repo).
+
+# M3.4.1 read-only: the six partitions against the backup, ro=1, nothing mounted
+tools/phone-ssh 'for p in efs efs_backup modem_userdata persist modem_a modem_b; do
+  d=$(grep -lx "PARTNAME=$p" /sys/class/block/*/uevent | head -1 | cut -d/ -f5);
+  echo "$(sha256sum < /dev/$d | cut -d" " -f1)  $p.img ro=$(cat /sys/class/block/$d/ro)"; done' > logs/m3.4-before.sha256
+grep -E ' (efs|efs_backup|modem_userdata|persist|modem_a|modem_b)\.img$' \
+  ~/android/reference/cheetah-modem-nv-backup-20261012-1402/SHA256SUMS | sort -k2 |
+  diff - <(sed 's/ ro=.*//' logs/m3.4-before.sha256 | sort -k2); grep -c 'ro=1' logs/m3.4-before.sha256
+#   pass: no diff; 5 (persist is the one writable partition, and the profile never sees it)
+#   stop: any mismatch: a stock boot changed NV; take a fresh read-only backup first (AGENTS)
+
+# M3.4.2 boot with the CPIF overlay (as M3.3-B.1; asks the human: reboots), then load, link enabled
+ov gnss-pmic-test gnss-test aoc-boot-test modem-cpif-test && bin/omandroid push
+tools/phone-ssh dmesg -w | tee logs/m3.4-kmsg.log        # second terminal, until the end
+tools/phone-ssh 'modprobe pcie-gs201-cp allow_hw=1; modprobe shm_ipc; modprobe cpif trace_lines=1;
+  cat /sys/module/cpif/parameters/allow_poweroff; cat /sys/devices/platform/cpif/modem_state;
+  /usr/lib/omandroid-vendor/omandroid-vendor-chroot modem check; dmesg | grep -c ufshcd_err_handler'
+#   pass: as M3.3-B.2-B.4 but "steps enabled"; allow_poweroff N; modem_state OFFLINE;
+#   "check" ends with "preconditions met"; record the err_handler count
+
+# M3.4.3 rfsd only (no modem power): the RAM copies and the chroot
+tools/phone-ssh 'systemd-run --unit=omandroid-modem-rfsd -E OMANDROID_MODEM_STAGE=rfsd \
+  /usr/lib/omandroid-vendor/omandroid-vendor-chroot modem start; sleep 20;
+  journalctl -u omandroid-modem-rfsd --no-pager | tail -20; cat /sys/devices/platform/cpif/modem_state'
+#   pass: "modem_a: RAM copy matches the backup" and the same for efs, efs_backup, modem_userdata,
+#   persist; "starting rfsd"; "running"; rfsd opens umts_rfs0 and waits; modem_state OFFLINE;
+#   no "no /chosen/..." warning (record it if there is one); AP2CP lines still low
+#   stop: "differs from the backup": the profile stops by itself before rfsd; take a fresh backup
+tools/phone-ssh 'systemctl stop omandroid-modem-rfsd; losetup -l; grep -c modem-nv /proc/mounts'
+#   pass: no loop devices left from the profile, no modem-nv mount (the namespace took them)
+
+# M3.4.4 cbd: the modem powers on and boots (announce: the modem starts; it stays on)
+tools/phone-ssh 'systemd-run --unit=omandroid-modem /usr/lib/omandroid-vendor/omandroid-vendor-chroot modem start'
+#   watch the kmsg terminal; expect, in this order (about 10-30 s):
+#   - "IOCTL_POWER_ON", the traced power-on edges (pm-wrst, pwr-on, nreset, cp-wrst = 1);
+#   - "link up: Gen1 x1", "secure ATU SMC: 0x0", the bus scan with 0001:01:00.0 144d:a5a5,
+#     then the s51xx probe: "db_addr : 0x14e60000 , val : 0x14e00000, offset : 0x60000",
+#     the doorbell mapped inside the bridge window, 4 MSI vectors;
+#   - cbd's boot steps (its log in kmsg and in journalctl -u omandroid-modem), the boot stage
+#     changing in CPIF's log, a link_down and "link up: Gen3 x2" for the main firmware;
+#   - CPIF "ONLINE" / modem_state ONLINE.
+tools/phone-ssh 'cat /sys/devices/platform/cpif/modem_state; cat /sys/devices/platform/cpif/power_stats;
+  journalctl -u omandroid-modem --no-pager | tail -40; dmesg | grep -c ufshcd_err_handler;
+  cat /sys/kernel/debug/gs201-pcie-cp/status | grep -E "LTSSM|faults"'
+#   pass: modem_state ONLINE; rfsd logs NV file requests (names only); "faults: 0x0";
+#   the err_handler count as in M3.4.2 (power-on and a running link were clean in M2.5)
+#   record: the Gen/width of the main link, the time from POWER_ON to ONLINE, cbd's last lines
+
+# M3.4.5 leave it on; M3.5: the real partitions unchanged (read-only)
+tools/phone-ssh 'sleep 120; cat /sys/devices/platform/cpif/modem_state; dmesg | grep -cE "link down|completion timeout";
+  dmesg | grep -c ufshcd_err_handler'
+#   pass: still ONLINE; 0 link faults (CPIF may cycle the link when the modem idles: record any
+#   link_down/link up pairs and the UFS count around them); err_handler count unchanged
+#   then repeat the M3.4.1 checksum commands into logs/m3.4-after.sha256 and diff: pass, no change
+```
+
+**Stop** (record, then `reboot-to omandroid`, which powers the modem off
+through CPIF's shutdown: expect one UFS handler pass):
+- an Oops, a panic line, the watchdog;
+- "doorbell ... outside the bridge window" (the s51xx probe refused: the
+  bus has no memory window; send the log);
+- `modem_state` CRASH_EXIT or CRASH_RESET, or cbd starting a dump: let
+  cbd finish the dump (it lands in the chroot's `/data/vendor/ssrdump`
+  under `/var/lib/omandroid-vendor/modem`), then stop. Don't let it retry
+  in a loop: a crash reset is a power cycle;
+- no ONLINE 60 s after "link up: Gen1";
+- repeated "link down" or "completion timeout" events;
+- UFS beyond recovered handler passes (I/O error, resets, aborts), or any
+  handler pass while the modem is up and not changing power;
+- a checksum change in M3.5 (stop all modem work; NV was written).
+
+**Rollback:** reboot (above). For a boot without CPIF: images without
+`modem-cpif-test` (`cp "$D.default" "$D"; bin/omandroid images && bin/omandroid push`).
+The RAM copies vanish with the profile; nothing persistent changed
+except `/var/lib/omandroid-vendor/modem` (the chroot's /data: logs, dumps).
+
+**Hand-over to M4** (`device/cheetah/MODEM-CLIENT.md`, section 4): with
+M3.4.5 passed and the modem left ONLINE in the `omandroid-modem` unit,
+start at M4.0 (install `omandroid-modem-sit`, enable nothing), then M4.1
+and M4.2, whose precondition is exactly this state: the modem profile
+running and CP ONLINE. Keep the M3.4 kmsg stream; M4 checks the
+`ufshcd_err_handler` count after each step the same way.
 
 ## 4. Risks
 
