@@ -1,6 +1,19 @@
 # Display driver plan: DECON0 → DSIM0 → S6E3HC4 (cheetah / gs201)
 
-Status: D1b, D2, D5a-c and D4a-1/2 pass on the phone (brightness, flip-only
+Status (2026-10-12): **our flip-only KMS driver, gs-decon, runs the display
+by default** at 120 Hz (with a 60 Hz mode), with brightness over DSI and a
+real screen-off. D1b, D2, D5a-c, D4a-1/2, D5d/D6 and D3b-1/D3b-2 passed on
+the phone. omandroid-device-cheetah 0.1.16+ sets `gs_decon screen_off=2`
+(trigger masked and the panel asleep on DPMS off; commit `1aa851d`), with
+hyprland 0.56.2-5.1 (the DPMS retry) and omandroid-shell 0.1.20+ (the power
+key with the panel off). Kernel: `omandroid-display` @ `43918aeb7` and
+`omandroid-display2` @ `5f4808c32` (`wt-display2`, `out-display2`), both
+merged into `omandroid-int`. **Next:** D3b-3 (screen-off power at each
+`screen_off`), D3b-4 (soak), then D4a-3 (trigger masked between flips,
+vblank from TE) and the panel's 10 Hz idle. Sections 1-5 are the original
+research; the results follow in date order from "G0 status".
+
+Earlier status (historical, superseded by the status above): D1b, D2, D5a-c and D4a-1/2 pass on the phone (brightness, flip-only
 KMS under Hyprland, 120 Hz by hand). D5d/D6 (gs-decon by default, 120 Hz as a
 KMS mode) is built offline in branch `omandroid-display2`
 (`~/android/mainline/wt-display2`); see "D5d/D6" at the end for the design and
@@ -15,7 +28,7 @@ Goal, in order of value:
    simpledrm; later suspend/resume and the local-HBM hook for the
    under-display fingerprint sensor.
 
-Today simpledrm scans out ABL's framebuffer at `0xfac00000`, and the
+When this plan was written, simpledrm scanned out ABL's framebuffer at `0xfac00000`, and the
 initramfs writes `TRIG_CON = 0x3061` (`device/cheetah/initramfs/init:90`) so
 DECON0 sends a frame on every panel TE pulse (NOTES.md, "Display").
 
@@ -518,6 +531,9 @@ Rules for every gate:
 ---
 
 ## G0 status (2026-10-11, offline; nothing was run on the phone)
+
+> **Historical.** Superseded by the D1a, D1b/D2 and D6 results below and the
+> status at the top.
 
 ### Kernel: `omandroid-display` in `wt-display`, on `omandroid` @ `a3061be71`
 

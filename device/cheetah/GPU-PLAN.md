@@ -1,11 +1,22 @@
 # GPU acceleration plan: Mali-G710 on Panthor + Mesa (cheetah / gs201)
 
-Status: G0, G1 and G2 done (2026-10-11). Hyprland renders on the Mali-G710; see "G2 result" at the end. Written 2026-10-11 against
+Status (2026-10-12): **Hyprland renders on the Mali-G710 by default, with
+frequency scaling.** G0-G3 passed ("G2 result" at the end): Panthor
+autoloads at boot, and patched Mesa (`packages/mesa` 26.2.4-1.1) gives
+OpenGL ES 3.1 and PanVK Vulkan 1.4. DVFS runs through ACPM (`ACPM-PLAN.md`
+A1-A5, omandroid-device-cheetah 0.1.13+): 151 MHz idle, capped at 572 MHz
+until there is a GPU thermal limit. Scan-out is now gs-decon
+(`DISPLAY-PLAN.md` D6), not simpledrm. Kernel: `omandroid-gpu` @ `1f1b44ac6`
+(`wt-gpu`), merged into `omandroid-int`. **Next:** G4 (a real G3D power
+domain; the GPU stays powered through `20-omandroid-gpu-always-on.rules`),
+the thermal limit that lifts the cap, and upstreaming the G710 Mesa entry.
+
+Earlier status (historical, superseded by the status above): G0, G1 and G2 done (2026-10-11). Hyprland renders on the Mali-G710; see "G2 result" at the end. Written 2026-10-11 against
 `omandroid` @ `cbde67d76` (Linux 7.3-rc6), Arch `mesa 1:26.2.4-1`,
 `linux-firmware-other 20260916-1`.
 
 Goal: Hyprland renders on the GPU through Mesa Panfrost (GL/GLES) and PanVK
-(Vulkan), using the upstream Panthor kernel driver. Today it uses Mesa
+(Vulkan), using the upstream Panthor kernel driver. When this was written it used Mesa
 `kms_swrast` on simpledrm (`/chosen/framebuffer@fac00000`).
 
 Path abbreviations used below:
@@ -555,6 +566,9 @@ power management takes another 2–3 weeks.
 ---
 
 ## G0 status (2026-10-11, offline; nothing was run on the phone)
+
+> **Historical.** Superseded by the G2 result below, `ACPM-PLAN.md` and the
+> status at the top.
 
 ### Kernel: `omandroid-gpu` in `wt-gpu`, rebased onto `omandroid` @ `1f151cd80` (touch included)
 

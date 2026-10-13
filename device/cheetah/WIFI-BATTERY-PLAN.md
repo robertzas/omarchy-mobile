@@ -1,7 +1,20 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Wi-Fi, Bluetooth and battery plan (cheetah / gs201)
 
-Status: W0/B0 (offline prep) done, see "G0 status". B1 done on the phone.
+Status (2026-10-12): **Wi-Fi and the battery gauge work by default.** Wi-Fi:
+W1-W3 passed (WPA2 on 5 GHz, about 19 MB/s; 9.14-9.16), and W4 ended in the
+decision of 9.21: brcmfmac comes up at boot behind the restricted DMA pool,
+without the SysMMU, which can't tell PCIe from UFS
+(`omandroid-wifi.service`, omandroid-device-cheetah 0.1.12+). Battery: B1
+and B1b passed (stock's battery model loaded at probe; NOTES.md). Charging
+(B2-B4) continues in `USB-C-PLAN.md`, Bluetooth in `BLUETOOTH-PLAN.md`.
+Kernel: `omandroid-wifi` @ `a3061be71` (`wt-wifi`) and `omandroid-w4` @
+`242602382` (`wt-pcie`, on the `omandroid-pcie` work), both merged into
+`omandroid-int`. **Next:** the D3 handshake for suspend, branch
+`omandroid-wifi-d3` @ `e20614037` (`wt-wifi-d3`; built, not merged;
+`SUSPEND-PLAN.md` S5); 6 GHz is future work.
+
+Earlier status (historical, superseded by the status above): W0/B0 (offline prep) done, see "G0 status". B1 done on the phone.
 PCIe drivers for Wi-Fi (W0b) built offline (section 7). **W1 hung the phone
 twice on 2026-10-11; the cause is found and fixed offline, and W1.3 now runs
 in stages with a log capture tool: see section 8, which replaces the W1.3
@@ -519,6 +532,9 @@ Top risks:
 
 ## G0 status (2026-10-11, offline; nothing was run on the phone)
 
+> **Historical.** Superseded by the B1 and B1b results, sections 8 and 9
+> (W1-W4, decision 9.21) and the status at the top.
+
 ### Kernel: `omandroid-wifi` in `wt-wifi`, on `omandroid` @ `0e73f9013`
 
 | Commit | What | State |
@@ -774,6 +790,8 @@ enables the alert pin.
 ---
 
 ## 7. PCIe for Wi-Fi: W0b status (2026-10-11, offline; nothing was run on the phone)
+
+> **Historical.** Superseded by sections 8 and 9 (W1-W4 on the phone).
 
 Kernel branch `omandroid-pcie` in `/home/raven/android/mainline/wt-pcie`
 (on top of the BCM4389 and MAX77759 commits), built into

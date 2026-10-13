@@ -2,8 +2,12 @@
 # AoC speaker tuning (C10-tuning): research, design and runbook
 
 Status (2026-10-12): **T1 done offline; T2 and T3.1 passed on the phone;
-T3.2 showed the AoC answers but 0.1.1 discarded its replies (reply
-matching fixed in 0.1.2); next T3b, the first exchange during playback.**
+T3.2 showed the AoC answers, but 0.1.1 discarded its replies.
+omandroid-speaker-tuning 0.1.2 matches replies by command ID and sends only
+during playback; next is T3b, the first exchange during a C8 tone.** T4
+follows T3b; T5 onwards (`SPEAKER_MUSIC` at stock's levels) also waits for
+`AOC-PLAN.md` C9. The package stays disabled (mode `off`); omandroid-audio
+0.3.0 is unchanged.
 Sources: static analysis of the stock libraries from the user's own
 factory image (CP2A.260705.006), the AoC firmware's strings and Google's
 GPL AoC driver, the Waves controller run under qemu with a fake sender

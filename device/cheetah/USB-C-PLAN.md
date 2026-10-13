@@ -1,6 +1,20 @@
 # USB-C and charging plan: gates B3 (charger) and B4 (Type-C) (cheetah / gs201)
 
-Follows `WIFI-BATTERY-PLAN.md` sections 4-5 (MAX77759 wiring, gates B1/B1b
+Status (2026-10-12): **charging works by hand; Type-C has not run yet.**
+B3.3 passed on the phone under the dead-man switch (NOTES.md: 500 mA input,
+4450 mV float, 93 to 96 % in 10 minutes). USB comes back after a replug
+through `omandroid-usb-rescue.service` (the R1 fix, omandroid-device-cheetah
+0.1.15+). The battery temperature guard (B3g) is built, not run: kernel
+`omandroid-chgguard` @ `37a83337c` (`temp_guard`, default off) and
+`omandroid-charge-guard` (device-cheetah 0.1.14+), so the charger stays
+blacklisted at boot and the bootloader's settings apply. Kernel:
+`omandroid-usbc` @ `c86bd2db7` (`wt-usbc`, `out-usbc`) and
+`omandroid-chgguard`, both merged into `omandroid-int`. **Next:** the B3g
+runbook, then B4a and B4b (Type-C and the role switch), which retire the
+rescue service; B4c (host mode) is design only. Open: the gauge current
+above the 500 mA input limit in B3.3 (NOTES.md).
+
+Earlier status (historical, superseded by the status above): Follows `WIFI-BATTERY-PLAN.md` sections 4-5 (MAX77759 wiring, gates B1/B1b
 done, B2 pending). Written 2026-10-12, offline: nothing here has run on the
 phone yet. Kernel: branch `omandroid-usbc` in `~/android/mainline/wt-usbc`,
 out dir `~/android/mainline/out-usbc`.

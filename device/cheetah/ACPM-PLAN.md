@@ -1,6 +1,18 @@
 # ACPM plan: gs201 firmware power manager, GPU DVFS first (cheetah / gs201)
 
-Status (2026-10-12): kernel side written and built offline, **nothing run on the
+Status (2026-10-12): **A0-A5 passed on the phone; GPU DVFS through ACPM is
+on by default** (NOTES.md, "everything working so far comes up at boot";
+omandroid-device-cheetah 0.1.13, `39e72a9`). A1 first failed with "Channel 3
+queues outside the SRAM" (a type-2 buffer channel in DRAM); the driver now
+skips unusable channels (`0a050ad`: 14 of 15 usable; DVFS on channel 0, PMIC
+2, thermal 9). Panthor idles at 151 MHz, capped at 572 MHz. Kernel:
+`omandroid-acpm` @ `a7a72e9f4` (`wt-acpm`, `out-acpm`), merged into
+`omandroid-int`. The S2MPG12 PMIC core and its RTC on this link have since
+come up in `SUSPEND-PLAN.md` S3b (`sec_acpm`, not yet loaded at every boot).
+**Next** (section 8): ACPM thermal and the GPU cooling that lifts the cap,
+CPU DVFS, MIF devfreq.
+
+Earlier status (historical, superseded by the status above): kernel side written and built offline, **nothing run on the
 phone yet**. Branch `omandroid-acpm` in `~/android/mainline/wt-acpm`, images in
 `~/android/mainline/out-acpm/images`. The runbook is section 7.
 

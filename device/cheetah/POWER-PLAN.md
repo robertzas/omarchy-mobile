@@ -1,7 +1,17 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Power plan before suspend: CPU idle C2 and UFS Hibern8 (cheetah / gs201)
 
-Status (2026-10-12): P0, C1 and C2 pass on the phone (section 7); the C2
+Status (2026-10-12): **C2 idle on all cores is on by default.** P0, C1 (the
+MCT) and C2 passed on the phone (section 7), and `omandroid-power-on` @
+`241736cc0` (the MCT and C2 enabled in the default DTB) is merged into
+`omandroid-int`, with `omandroid-power` @ `20bd72c37` (`wt-power`,
+`out-power`). Little-cores-only C2 can't work (1.5), and the UFS controller
+has no auto-hibernate, so U1 is skipped. **Next (the cable out):** the B0
+baseline, `power-ab c2` and U2; the 30-minute C2 soak's result is not
+recorded in section 7. Cluster power-down (1.6) is not built; suspend is
+`SUSPEND-PLAN.md`.
+
+Earlier status (historical, superseded by the status above): P0, C1 and C2 pass on the phone (section 7); the C2
 soak and the battery measurements (B0, `power-ab c2`) are pending. Kernel
 branch `omandroid-power` in `wt-power`, built into
 `~/android/mainline/out-power`: the C2 states and the MCT are

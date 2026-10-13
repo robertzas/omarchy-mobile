@@ -1,7 +1,25 @@
 <!-- SPDX-License-Identifier: MIT -->
 # AoC plan (cheetah / gs201): audio and sensor DSP bring-up
 
-Status (2026-10-12): **C1, C2, C3 and C4a passed on the phone; C4b (start)
+Status (2026-10-12): **the AoC starts at every boot and serves audio and
+sensors.** On the phone: C1-C4a, C4t (the start through Trusty), C5 (core,
+IPC and character devices), C6 (sensors at every boot, auto-rotate), C7 (the
+AoC sound card: both speakers with stock's channel map, the microphones), C8
+(speaker protection, UCM, PipeWire) and C8f (the amplifiers across idle)
+passed; C9a-C9d-2 ran. The everyday level is stage `media` (737/10 on both
+amplifiers, media delta on), about 17 dB below stock. **Next:** C9d-3
+(stock's gains, 817/17, with the protection sensing the coil), then C9e
+(balance) and C9f (real use); stock's loudness (Waves on the AoC) is
+`AOC-TUNING-RESEARCH.md`. Kernel: `omandroid-aoc` @ `829fd316a` (`wt-aoc`,
+`out-aoc`) and `omandroid-audio-amp` @ `60d3ca176` (amplifier hibernate fix,
+`wt-audio-amp`), both merged into `omandroid-int`. Packages:
+omandroid-device-cheetah 0.1.25 (`omandroid-aoc.service`, start script,
+sensor-rail cycle), omandroid-sensors 0.1.3, omandroid-audio 0.3.0,
+omandroid-speaker-tuning 0.1.2 (off by default). The "Checkpoint" section
+below is the running log of C5-C9: its first lists are the state before C5,
+and each stage's results follow its runbook.
+
+Earlier status (historical, superseded by the status above): **C1, C2, C3 and C4a passed on the phone; C4b (start)
 did not finish** (section 0.2): the GSA accepted `START` but reported state
 4, and the firmware never wrote its control block. C4b-2 (diagnostics,
 setup re-apply, release reset) ran cleanly: the mailbox `START` cannot
@@ -31,6 +49,12 @@ Path abbreviations (as in the other plans):
 ---
 
 ## Checkpoint 2026-10-12
+
+> **Historical.** The "Done", "Half-done" and "Next steps" lists that
+> open this section are the state before C5 (kernel `f716b607e`). The
+> results recorded under each numbered step (C6b-C6e, C7d, C8, C8f,
+> C9a-C9d-2) and the status at the top supersede them. The numbered
+> steps remain the runbook.
 
 **Done on the phone:** C1 (GSA mailbox), C2 (read-only probes), C3 (rails
 read: all five off at hand-off), C4a (load), C4t (**AoC firmware online**:
@@ -925,7 +949,8 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      awake, a level above the ceilings, or a DSP not running the protection
      with its calibration during playback. Its tests cover each case.
 
-   **Checkpoint 2026-10-12 (amp hibernate fix / C9).** Done: the kernel
+   **Checkpoint 2026-10-12 (amp hibernate fix / C9; historical, superseded
+   by the C8f result and the C9 results below).** Done: the kernel
    fix (branch above, built), omandroid-audio 0.2.0, extract-vendor-firmware
    with the media deltas (`231936e`). Ready: C8f below. Next: C9 (stock
    gains and balance under verified protection), after C8f passes.
@@ -2140,7 +2165,7 @@ a boot.
 Send the logs (`logs/aoc-*-diag.log`, `-c4b.log`, `-ramdump.log`,
 `-release.log`).
 
-### C4t: start through Trusty (next)
+### C4t: start through Trusty (passed 2026-10-12; see the Checkpoint and NOTES.md)
 
 Rebuild int with `omandroid-aoc` @ `7bea582c5` (merge again; adds the
 mailbox view) and push with **both** overlays, `aoc-boot-test` and

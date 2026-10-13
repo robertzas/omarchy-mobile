@@ -1,7 +1,20 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Audio plan (cheetah / gs201): amplifiers, AoC, USB-C, Bluetooth, PipeWire
 
-Status: **offline research done, 2026-10-12. Nothing has run on the phone.**
+Status (2026-10-12): **this plan's research is done, and its stages continue
+in other plans.** Working: Bluetooth A2DP (A1, through `BLUETOOTH-PLAN.md`
+BT3), and the built-in speakers and microphones through the AoC (A6, carried
+out as `AOC-PLAN.md` C5-C9): both CS35L41 amplifiers in stereo under
+Google's speaker protection at stage `media`, about 17 dB below stock, and
+the microphones at stock's gain (omandroid-audio 0.3.0). Not done: headset
+calls over HFP/HSP (the BCM4389's SCO routing, A1), USB-C audio (A4, needs
+`USB-C-PLAN.md` B4b and B4c), the UAC2 gadget (A5) and the earpiece path
+(designed in `AOC-PLAN.md`, built with the modem). **Next** is in
+`AOC-PLAN.md` C9 and `AOC-TUNING-RESEARCH.md`. Kernel: `omandroid-audio` @
+`c115ad543` (`wt-audio`, `out-audio`), merged into `omandroid-int`. Section
+4's limits still apply.
+
+Earlier status (historical, superseded by the status above): **offline research done, 2026-10-12. Nothing has run on the phone.**
 Kernel branch `omandroid-audio` in `~/android/mainline/wt-audio` (out dir
 `out-audio`), on `omandroid-haptics` @ `ebcd2674f` because it needs the
 PERIC0 pin controller that branch adds. Two DT commits, everything new

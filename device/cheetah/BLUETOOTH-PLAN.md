@@ -1,7 +1,19 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Bluetooth plan (cheetah / gs201): BCM4389 on the APM UART
 
-Status: **BT0 (offline) done, 2026-10-12. Nothing has run on the phone.**
+Status (2026-10-12): **Bluetooth works and is on by default.** BT1.1-BT1.3
+(the CMU_APM clocks, UART loopback, HCI_Reset: Bluetooth 5.2) and BT3 passed
+on the phone (NOTES.md). The controller comes up at boot from the default
+DTB with the bootloader's address (`omandroid-bt-addr` powers it on first),
+pairs from the shell's Bluetooth panel (omandroid-shell 0.1.11+,
+`omandroid-bt-agent`) and plays A2DP through PipeWire. Kernel:
+`omandroid-bt` @ `ff4788789` (`wt-bt`, `out-bt`), merged into
+`omandroid-int`; omandroid-device-cheetah 0.1.25. **Next:** headset calls
+(HFP/HSP), which need the SCO routing moved from PCM to HCI (`AUDIO-PLAN.md`
+A1). BT3's low-power checks and Bluetooth across suspend (`SUSPEND-PLAN.md`)
+are not recorded here.
+
+Earlier status (historical, superseded by the status above): **BT0 (offline) done, 2026-10-12. Nothing has run on the phone.**
 Kernel branch `omandroid-bt` in `~/android/mainline/wt-bt` (out dir
 `out-bt`), on `omandroid` @ `e7cb10fe5`. Everything new is off by default;
 bring-up uses the overlays in `device/cheetah/overlays/bt-*.dtso` and

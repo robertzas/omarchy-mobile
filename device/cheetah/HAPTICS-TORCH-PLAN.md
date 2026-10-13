@@ -1,7 +1,17 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Haptics and torch plan (cheetah / gs201)
 
-Status: offline work done (drivers, DT, overlays, firmware extraction), built,
+Status (2026-10-12): **haptics and the torch work and load at boot from the
+default DTB.** H1-H3 and T1-T3 passed on the phone (NOTES.md): the CS40L26
+runs firmware 7.2.91 and buzzes, the LM3644TT gives 17 torch steps with no
+fault flags. H2 needed two kernel fixes (the i2c-exynos5 timeout now scales
+with the message length; cs_dsp's write sequence accepts 1, "changed"). H4:
+feedbackd uses the CS40L26 through the device package's udev rule
+(`74a5f74`). T4: the shell's torch tile works (omandroid-shell 0.1.10+).
+Kernel: `omandroid-haptics` @ `d609c1b3e` (`wt-haptics`), merged into
+`omandroid-int`. Open: T5 (stock's torch current, before any higher cap).
+
+Earlier status (historical, superseded by the status above): offline work done (drivers, DT, overlays, firmware extraction), built,
 **nothing tested on the phone yet**. Build: release
 `7.3.0-rc6-omandroid-push1-00065-gebcd2674f279`, images in
 `~/android/mainline/out-haptics/images` (`logs/haptics-*.log`); both drivers
