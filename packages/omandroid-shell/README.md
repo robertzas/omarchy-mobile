@@ -7,9 +7,11 @@ Omandroid's phone profile for Omarchy's own shell. It isn't a fork: these are or
 | `plugins/omandroid.bar` | Phone status bar (a full `bar` plugin) |
 | `plugins/omandroid.quicksettings` | Pull-down quick settings |
 | `plugins/omandroid.launcher` | Home bar: app search, app grid and a prompt to the user's Omarchy default agent |
+| `plugins/omandroid.keyboard` | Hide button above the on-screen keyboard |
 | `plugins/omandroid.fingerprint` | The under-display fingerprint sensor: target during verification, enrollment screen |
 | `profile/shell.json` | The phone layout the setup seeds once |
 | `bin/omandroid-setup-user` | Omandroid's per-user setup (Omarchy lifecycle `setup-user`) |
+| `bin/omandroid-osk-watch` | Reports squeekboard's visibility (sm.puri.OSK0) to the fingerprint plugin |
 | `bin/omandroid-fp-enroll` | fprintd enrollment helper the fingerprint screen runs (JSON lines) |
 | `bin/omandroid-bt-agent` | BlueZ pairing agent and discovery helper the quick-settings Bluetooth panel runs while open |
 

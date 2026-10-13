@@ -72,6 +72,21 @@ grep -c 'omandroid.fingerprint' plugins/omandroid.quicksettings/QuickSettings.qm
   || fail "quick settings opens fingerprint setup"
 pass "fingerprint target wiring"
 
+# The on-screen keyboard watcher (squeekboard's sm.puri.OSK0 Visible).
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omandroid-osk-watch || fail "omandroid-osk-watch parses"
+python3 -B -c '
+import importlib.machinery, importlib.util
+loader = importlib.machinery.SourceFileLoader("osk", "bin/omandroid-osk-watch")
+spec = importlib.util.spec_from_loader("osk", loader); m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+assert m.line_for(True) == "visible true" and m.line_for(0) == "visible false"
+assert m.NAME == "sm.puri.OSK0" and m.PATH == "/sm/puri/OSK0"
+' || fail "omandroid-osk-watch lines"
+grep -c "omandroid-osk-watch" plugins/omandroid.fingerprint/Fingerprint.qml >/dev/null || fail "the fingerprint plugin runs the keyboard watcher"
+grep -c "omandroid-osk-watch" plugins/omandroid.keyboard/Keyboard.qml >/dev/null || fail "the keyboard button follows the watcher"
+grep -c 'namespace = "^omandroid-osk-hide\$" }, above_lock = 2' hypr/phone.lua >/dev/null || fail "the hide button works over the lock"
+python3 -c 'import json; assert {"id": "omandroid.keyboard"} in json.load(open("profile/shell.json"))["plugins"]' || fail "the profile enables the keyboard button"
+pass "on-screen keyboard watcher"
+
 # PIN or password: the choice is recorded per user, never the secret, and
 # mirrored to Omarchy's credential-password toggle.
 bash -n bin/omandroid-set-pin || fail "omandroid-set-pin parses"

@@ -14,9 +14,10 @@ logical at scale 3).
 | Plugin | Kind | What it is |
 | --- | --- | --- |
 | `omandroid.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings |
-| `omandroid.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: nine tiles, brightness and volume; Wi-Fi picker and Bluetooth panel |
+| `omandroid.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: ten tiles, brightness and volume; Wi-Fi picker and Bluetooth panel |
 | `omandroid.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
 | `omandroid.fingerprint` | `panel` (keepLoaded) | Fingerprint target over the sensor during verification, desktop guard, and the enrollment screen |
+| `omandroid.keyboard` | `panel` (keepLoaded) | A hide button right above the on-screen keyboard while it is up (also over the lock) |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
 
 ## Enabling
@@ -79,7 +80,7 @@ hardware keys:
 
 A sheet that slides down from the top edge over the status bar, styled as an
 Omarchy popup (popups background and border). It has a clock and date header,
-nine tiles in two columns, then brightness and volume sliders. Tap the
+ten tiles in two columns, then brightness and volume sliders. Tap the
 scrim, swipe the sheet up, or press Escape to close it.
 
 | Tile | Backend |
@@ -92,6 +93,7 @@ scrim, swipe the sheet up, or press Escape to close it.
 | Rotation lock | `omandroid-autorotate` (omandroid-sensors): locked by `~/.local/state/omandroid/rotation-lock`; unlocking also enables the service. "No sensor" while the sensor proxy has no accelerometer |
 | Torch | **Stub**: the flash LED has no mainline driver; once a `*:flash`/`*:torch` LED appears in `/sys/class/leds`, drive it with `brightnessctl -d` |
 | Do not disturb | The notification service's `notifications` IPC target on this shell instance |
+| Keyboard | Shows or folds the on-screen keyboard (squeekboard's `sm.puri.OSK0` `SetVisible`); "No keyboard" without it on the session bus |
 | Fingerprint | Opens fingerprint setup (`omandroid.fingerprint`); the status counts this user's fingerprints through fprintd (`omandroid-fp-enroll list`); "No sensor" without fprintd or its device |
 | Brightness slider | `brightnessctl --class=backlight` (the panel backlight; dimmed when there is none) |
 | Volume slider | PipeWire default sink; tap the speaker glyph to mute |
@@ -191,7 +193,7 @@ IPC:
 | `omarchy-shell shell summon omandroid.quicksettings '{"page":"bluetooth"}'` | Open the Bluetooth panel |
 | `omarchy-shell shell call omandroid.quicksettings openBluetooth ''` | The same; returns the panel's state, or `unavailable` |
 | `omarchy-shell shell call omandroid.quicksettings bluetoothPanel ''` | JSON: panel open, adapter name, power, discovering, visible, helper, paired, available (with RSSI and type), unnamed count, action, failure, sheet, pairing phase |
-| `omarchy-shell shell call omandroid.quicksettings toggleTile <name>` | Same as tapping a tile. Names: `wifi`, `bluetooth`, `mobile-data`, `rotation-lock`, `location`, `nfc`, `torch`, `dnd`, `fingerprint`. Returns the new state, `unavailable` or `unknown` |
+| `omarchy-shell shell call omandroid.quicksettings toggleTile <name>` | Same as tapping a tile. Names: `wifi`, `bluetooth`, `mobile-data`, `rotation-lock`, `location`, `nfc`, `torch`, `dnd`, `fingerprint`, `keyboard`. Returns the new state, `unavailable` or `unknown` |
 
 ## omandroid.launcher
 
@@ -306,7 +308,9 @@ scale 3) and follow Hyprland's transform for the panel (0-3, as
 shape hides the target. Before the bridge has written its file once, the
 enrollment screen uses stock cheetah's sensor (717, 2360, radius 121).
 
-On-screen keyboard. While squeekboard's `osk` layer is up, the target hides
+On-screen keyboard. While squeekboard is unfolded (its `sm.puri.OSK0`
+`Visible` on the session bus, through `bin/omandroid-osk-watch`; Hyprland's
+layer events did not arrive while locked), the target hides
 (it would sit on the keys) and the plugin keeps
 `/run/omandroid-fp-ui/inhibit/osk-<user>` fresh (every 5 s; removed when the
 keyboard hides), so the bridge takes no key over the sensor for a finger: no
@@ -336,6 +340,20 @@ IPC:
 The desktop harness can fake the bridge: `OMANDROID_FP_UI_STATE=<file>`
 points the plugin at another state file, and a stub `omandroid-fp-enroll`
 earlier in `PATH` stands in for fprintd.
+
+## omandroid.keyboard
+
+While squeekboard is unfolded (`sm.puri.OSK0` `Visible`, through
+`bin/omandroid-osk-watch`), a small keyboard-close button sits right above the
+keyboard's top-right corner; a tap folds it (`SetVisible false`). The window
+is the button only (anchored bottom-right with normal exclusion, so the
+compositor puts it just above the keyboard's reserved area), on the overlay
+layer, without keyboard focus; `hypr/phone.lua` lets it work over the lock
+(`above_lock = 2`). Quick settings has a Keyboard tile that shows or folds the
+keyboard on demand (showing closes the sheet).
+
+IPC: `omarchy-shell shell call omandroid.keyboard showKeyboard|hideKeyboard|toggleKeyboard|state ''`
+(not `show`/`hide`: the IPC command line takes `show` for itself).
 
 ## Testing in the desktop harness
 

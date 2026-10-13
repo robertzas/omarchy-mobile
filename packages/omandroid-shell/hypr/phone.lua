@@ -61,3 +61,5 @@ hl.layer_rule({ match = { namespace = "^omandroid-fingerprint$" }, above_lock = 
 -- (patches/omarchy/0011), and a session lock otherwise hides every other
 -- surface, keyboards included.
 hl.layer_rule({ match = { namespace = "^osk$" }, above_lock = 2 })
+-- ...and its hide button (omandroid.keyboard) with it.
+hl.layer_rule({ match = { namespace = "^omandroid-osk-hide$" }, above_lock = 2, no_anim = true })

@@ -25,6 +25,9 @@
     },
     {
       "id": "omandroid.fingerprint"
+    },
+    {
+      "id": "omandroid.keyboard"
     }
   ]
 }

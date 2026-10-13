@@ -837,6 +837,45 @@ seconds: no desktop menu; lift, then a long press on the wallpaper opens the
 menu again. `omarchy-shell shell call omandroid.fingerprint state ''` shows
 `contact` and `holdGuard`. Rollback: the previous packages.
 
+### F17b: the keyboard signal from squeekboard itself (omandroid-shell 0.1.40)
+
+F17 on the phone (fingerprint 0.1.6, shell 0.1.39): with the keyboard up over
+the lock, `inhibit/` stayed empty and the keys lit LHBM and started AUTHs.
+The plugin never saw the keyboard: Hyprland's `openlayer`/`closelayer` did
+not reach it while the session was locked. It now asks squeekboard:
+`bin/omandroid-osk-watch` follows `sm.puri.OSK0`'s `Visible` property on the
+session bus (squeekboard's own interface, `data/dbus/sm.puri.OSK0.xml`
+upstream), and its owner coming and going, and prints `visible true|false`;
+the plugin runs it for its whole life (restarted after 3 s if it exits). The
+layer events stay as `lastLayerEvent` in the state call, with `osk` and
+`oskWatch`. Harness, with a fake `sm.puri.OSK0` on the session bus and the
+session locked: `osk` true and `inhibit/osk-<user>` made while Visible,
+removed after.
+
+```sh
+tools/phone-install-package packages/omandroid-shell
+tools/phone-ssh 'su - <user> -c omarchy-restart-shell'
+```
+
+Then lock, ABC, keys over the sensor: no circle, the bridge logs the
+"ignored" line, `ls /run/omandroid-fp-ui/inhibit` shows `osk-<user>` while
+the keyboard is up. If it stays empty: `omarchy-shell shell call
+omandroid.fingerprint state ''` (`oskWatch`, `osk`) and, as the user,
+`busctl --user get-property sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 Visible`.
+
+### F16b: no keyboard over the lock in PIN mode (0011 updated)
+
+With the keyboard allowed above the lock (F16), a PIN user's lock showed
+squeekboard at once: the toggles load after the view, so the first focus
+went to the text field, which asked for the keyboard. 0011 now moves focus
+to the pad's key handler whenever the pad shows, disables the field under
+the pad (it only shows the dots), and folds a visible keyboard on the way
+back to the pad (`busctl --user call sm.puri.OSK0 ... SetVisible b false`,
+harmless without squeekboard). Harness: in PIN mode, typed "ab12" gives two
+dots (the field has no focus); in password mode, typed letters reach the
+field. Phone delta on top of the 0011 delta as applied:
+`0011b-delta-for-phone.patch` (LockView.qml `d434c511…` to `e5abfba4…`).
+
 ## 7. Results
 
 | Step | Date | `uname -r` | Result |

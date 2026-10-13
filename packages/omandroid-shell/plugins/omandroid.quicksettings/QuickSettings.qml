@@ -55,6 +55,7 @@ Item {
     location.refresh()
     nfc.refresh()
     fingerprint.refresh()
+    keyboard.refresh()
     clockFormatRead.running = true
   }
 
@@ -114,7 +115,7 @@ Item {
     var tilesByName = {
       "wifi": wifi, "bluetooth": bluetooth, "mobile-data": mobileData,
       "rotation-lock": rotationLock, "torch": torch, "dnd": dnd, "location": location,
-      "nfc": nfc, "fingerprint": fingerprint
+      "nfc": nfc, "fingerprint": fingerprint, "keyboard": keyboard
     }
     var target = tilesByName[String(name || "")]
     if (!target) return "unknown"
@@ -493,6 +494,44 @@ Item {
     onExited: function(exitCode) { if (exitCode !== 0) fingerprint.available = false }
   }
 
+  // The on-screen keyboard (squeekboard, sm.puri.OSK0 on the session bus):
+  // show it on demand, or fold it. Showing closes the sheet so the keys can
+  // be used.
+  QtObject {
+    id: keyboard
+
+    property bool available: false
+    property bool enabled: false
+    readonly property string status: !available ? "No keyboard" : enabled ? "Shown" : "Hidden"
+
+    function refresh() {
+      if (!keyboardRead.running) keyboardRead.running = true
+    }
+
+    function toggle() {
+      if (!available) return
+      var show = !enabled
+      Quickshell.execDetached(["busctl", "--user", "call", "sm.puri.OSK0", "/sm/puri/OSK0",
+                               "sm.puri.OSK0", "SetVisible", "b", show ? "true" : "false"])
+      enabled = show
+      if (show) root.dismiss()
+    }
+  }
+
+  Process {
+    id: keyboardRead
+    command: ["busctl", "--user", "get-property", "sm.puri.OSK0", "/sm/puri/OSK0", "sm.puri.OSK0", "Visible"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var t = String(text || "").trim()
+        keyboard.available = t.indexOf("b ") === 0
+        keyboard.enabled = t === "b true"
+      }
+    }
+    onExited: function(exitCode) { if (exitCode !== 0) keyboard.available = false }
+  }
+
   // The rear flash LED in torch mode (leds-lm3644, white:torch). "100%" is
   // the device tree's torch cap, not the chip's maximum. brightnessctl goes
   // through logind's SetBrightness when it can't write sysfs itself, which
@@ -851,6 +890,16 @@ Item {
             active: fingerprint.enabled
             available: fingerprint.available
             onClicked: fingerprint.toggle()
+          }
+
+          Tile {
+            width: tiles.tileWidth
+            icon: "󰌌"
+            label: "Keyboard"
+            status: keyboard.status
+            active: keyboard.enabled
+            available: keyboard.available
+            onClicked: keyboard.toggle()
           }
         }
 

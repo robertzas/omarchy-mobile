@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Report whether the on-screen keyboard (squeekboard) is unfolded.
+
+squeekboard exports sm.puri.OSK0 on the session bus with a Visible
+property. The omandroid.fingerprint shell plugin runs this and reads one
+line per change:
+
+    visible true
+    visible false
+
+It starts with the current state (false while no keyboard is on the bus),
+follows the keyboard going away and coming back, and exits when stdout
+closes. Hyprland's layer events did not reach the plugin while the session
+was locked, which is exactly when a password is typed over the sensor.
+"""
+
+import sys
+
+NAME = "sm.puri.OSK0"
+PATH = "/sm/puri/OSK0"
+IFACE = "sm.puri.OSK0"
+PROPS = "org.freedesktop.DBus.Properties"
+
+
+def line_for(visible):
+    return "visible %s" % ("true" if visible else "false")
+
+
+def main():
+    import dbus
+    import dbus.mainloop.glib
+    from gi.repository import GLib
+
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    bus = dbus.SessionBus()
+    loop = GLib.MainLoop()
+    last = [None]
+
+    def report(visible):
+        visible = bool(visible)
+        if visible == last[0]:
+            return
+        last[0] = visible
+        try:
+            sys.stdout.write(line_for(visible) + "\n")
+            sys.stdout.flush()
+        except (BrokenPipeError, OSError):
+            loop.quit()
+
+    def query():
+        try:
+            obj = bus.get_object(NAME, PATH, introspect=False)
+            report(obj.Get(IFACE, "Visible", dbus_interface=PROPS))
+        except dbus.DBusException:
+            report(False)
+
+    def changed(interface, props, invalidated):
+        if interface != IFACE:
+            return
+        if "Visible" in props:
+            report(props["Visible"])
+        elif "Visible" in invalidated:
+            query()
+
+    def owner_changed(name, old, new):
+        if name == NAME:
+            query() if new else report(False)
+
+    bus.add_signal_receiver(changed, signal_name="PropertiesChanged",
+                            dbus_interface=PROPS, path=PATH)
+    bus.add_signal_receiver(owner_changed, signal_name="NameOwnerChanged",
+                            dbus_interface="org.freedesktop.DBus",
+                            arg0=NAME)
+    query()
+    loop.run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

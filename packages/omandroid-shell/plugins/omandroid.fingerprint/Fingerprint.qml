@@ -71,6 +71,8 @@ Item {
       transform: outputTransform,
       target: target.visible,
       osk: oskOpen,
+      oskWatch: oskWatch.running,
+      lastLayerEvent: lastLayerEvent,
       contact: contactDown,
       holdGuard: holdGuard,
       inhibit: inhibitPath,
@@ -140,14 +142,42 @@ Item {
   // while it is up the target steps aside, as Android hides its icon behind
   // the bouncer's keyboard (on the lock, a password user types on it while
   // the fingerprint conversation runs).
+  //
+  // Visibility comes from squeekboard itself (sm.puri.OSK0's Visible on the
+  // session bus, through bin/omandroid-osk-watch): Hyprland's layer events
+  // did not reach the plugin while the session was locked, which is when a
+  // password is typed over the sensor. They are kept for the state call only.
   property bool oskOpen: false
+  property string lastLayerEvent: ""
   Connections {
     target: Hyprland
     function onRawEvent(event) {
-      if (!event || String(event.data || "") !== "osk") return
-      if (event.name === "openlayer") root.oskOpen = true
-      else if (event.name === "closelayer") root.oskOpen = false
+      if (event && (event.name === "openlayer" || event.name === "closelayer"))
+        root.lastLayerEvent = event.name + " " + String(event.data || "")
     }
+  }
+
+  Process {
+    id: oskWatch
+    command: ["omandroid-osk-watch"]
+    running: true
+    stdout: SplitParser {
+      onRead: function(line) {
+        var words = String(line).trim().split(" ")
+        if (words[0] === "visible") root.oskOpen = words[1] === "true"
+      }
+    }
+    onExited: {
+      root.oskOpen = false
+      oskWatchRestart.restart()
+    }
+  }
+
+  // The watcher should never end; if it does, start it again.
+  Timer {
+    id: oskWatchRestart
+    interval: 3000
+    onTriggered: oskWatch.running = true
   }
 
   // ...and the bridge must not take its keys there for a finger: it reads

@@ -48,6 +48,9 @@ PY
 if omarchy-done ensure omandroid-fingerprint-plugin; then
   add_plugin omandroid.fingerprint
 fi
+if omarchy-done ensure omandroid-keyboard-plugin; then
+  add_plugin omandroid.keyboard
+fi
 
 # PIN or password (omandroid-set-pin records it): phones set up before the
 # choice existed used a PIN with the lock's number pad, so record that, once.

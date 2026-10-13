@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "omandroid.keyboard",
+  "name": "Keyboard hide button",
+  "version": "0.1.0",
+  "author": "Omandroid",
+  "license": "MIT",
+  "description": "A small button just above the on-screen keyboard that folds it away, also over the lock screen.",
+  "kinds": ["panel"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "Keyboard.qml"
+  }
+}
