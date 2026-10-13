@@ -119,9 +119,14 @@ Item {
 
   // ---------------------------------------------------------------- actions
 
+  // Not AppLibrary.launch: omandroid-launch starts the app the same way
+  // (uwsm-app -- gtk-launch) on a new empty workspace, or focuses it on its
+  // own if it is already open. Omarchy's "Launching…" feedback stays.
   function launchApp(entry) {
-    if (!entry || !appLibrary) return
-    appLibrary.launch(entry.id, appLibrary.entryName(entry))
+    if (!entry || !entry.id) return
+    if (appLibrary && typeof appLibrary.beginLaunchFeedback === "function")
+      appLibrary.beginLaunchFeedback(appLibrary.entryName(entry))
+    Quickshell.execDetached(LauncherModel.appArgv(entry.id))
     dismiss()
   }
 

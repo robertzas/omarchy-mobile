@@ -247,8 +247,9 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
   as a single argv element (no shell parsing), then closes the drawer.
 
 Apps come from Omarchy's application library (`services/AppLibrary.qml`): the
-same entries, hidden-entry filters, icon index and `uwsm-app -- gtk-launch`
-launch path as the Omarchy menu.
+same entries, hidden-entry filters and icon index as the Omarchy menu. They
+start the same way too (`uwsm-app -- gtk-launch`), but through
+`omandroid-launch`, so each app gets a screen of its own (below).
 
 Settings: defaults are in `manifest.json` under `settings.defaults`; override
 any of them on the plugin's entry in `shell.json`, which the launcher watches:
@@ -280,6 +281,38 @@ IPC:
 Long-press an app in the drawer to put it on the home screen
 (`omandroid.home addApp`).
 
+## One app per screen
+
+As on Android, every app gets the whole screen. Each launch from the phone
+shell goes to a new empty workspace, and an app that is already open is
+brought back instead of opening a second window beside the one you're
+looking at. `bin/omandroid-launch` does it for every path: the drawer and
+search results, home-screen apps, widgets (`host.launch`, `host.openUrl`, the
+ported widgets' links and "↗" buttons, a text widget's tap), the agent
+prompt, NFC links and the Create-a-widget agent.
+
+* **New apps** start through Hyprland's exec with a per-launch rule,
+  `hyprctl eval 'hl.exec_cmd(CMD, { workspace = "empty" })'` (Hyprland 0.56's
+  Lua API; `hl.exec_cmd(cmd, rules)` in `/usr/share/hypr/stubs/hl.meta.lua`).
+  The rule follows the started process (Hyprland's `HL_EXEC_RULE_TOKEN` in its
+  environment, through `uwsm-app` and `gtk-launch`), so the app's own dialogs
+  open on its screen and nothing else moves. Apps that slip past the token
+  (D-Bus activated ones such as Files) still land on an empty screen: a launch
+  from a screen that holds windows first goes to an empty workspace.
+* **Open apps** are focused on their own screen instead: a window whose class
+  matches the desktop entry (`StartupWMClass`, the desktop id, its last
+  reverse-DNS part, Exec's program; web apps by their `chrome-<host>_` class).
+  Terminals (and `omandroid-launch app --new`) always open a new window, each
+  on its own screen. Links open in the running browser, shown first.
+* **Together on request.** In recent apps, hold a card: **Show with…** lists
+  the apps on other screens and moves this one onto the one you pick, where
+  the two tile as Omarchy tiles them; **Move to its own screen** (shown when
+  the app shares one) gives it a new empty workspace. Both act on the
+  window's Hyprland address (`hl.dsp.window.move({ window = "address:…",
+  workspace = … })`). Empty workspaces go away as Hyprland's always do.
+* **Keyboards** keep Omarchy's workspace bindings (Super+1…9, Super+Shift+1…9
+  and the rest) unchanged.
+
 ## omandroid.home
 
 Home screens, after Android launchers (Omalauncher's widget pages, the Pixel
@@ -293,8 +326,8 @@ wallpaper, swiped sideways, with page dots above the dock.
   apps goes back to it) is marked in the Pages sheet.
 * **Grid.** 4 columns by 6 rows by default (3-6 by 4-8, set in Pages). Apps
   take one cell, widgets a span within their own limits.
-* **Apps** launch the way the drawer and the Omarchy menu do
-  (`AppLibrary.launch`: `uwsm-app -- gtk-launch`). An app that is no longer
+* **Apps** launch the way the drawer does (`omandroid-launch app`: Omarchy's
+  `uwsm-app -- gtk-launch`, on a screen of their own). An app that is no longer
   installed stays, dimmed, until you remove it: its package may come back.
 * **Edit mode.** Long-press anywhere (empty space, an app, a widget). Then
   drag an item to move it (dropped on an item of the same size, the two swap;

@@ -178,7 +178,7 @@ Item {
             anchors.fill: parent
             anchors.margins: -Style.spacing.lg
             enabled: !widget.editing
-            onClicked: actionView.modelData.act === "refresh" ? widget.refresh(true) : Qt.openUrlExternally("https://github.com/" + widget.repo + "/commits/" + widget.branch)
+            onClicked: actionView.modelData.act === "refresh" ? widget.refresh(true) : widget.host.openUrl("https://github.com/" + widget.repo + "/commits/" + widget.branch)
           }
         }
       }
@@ -287,7 +287,7 @@ Item {
         MouseArea {
           anchors.fill: parent
           enabled: !widget.editing && widget.expanded
-          onClicked: Qt.openUrlExternally(commit.modelData.url)
+          onClicked: widget.host.openUrl(commit.modelData.url)
         }
       }
     }

@@ -162,6 +162,6 @@ Item {
   MouseArea {
     anchors.fill: parent
     enabled: !widget.editing
-    onClicked: Qt.openUrlExternally("https://wttr.in/" + Wttr.encodeCity(widget.city))
+    onClicked: widget.host.openUrl("https://wttr.in/" + Wttr.encodeCity(widget.city))
   }
 }

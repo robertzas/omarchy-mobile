@@ -2,6 +2,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import "HomeModel.js" as HomeModel
 import "UserWidgets.js" as UserWidgets
 
 // What a user widget gets as `host` (WIDGETS.md is the contract): who it is,
@@ -80,7 +81,20 @@ QtObject {
       return false
     }
     lastLaunch = Date.now()
-    Quickshell.execDetached(argv.map(String))
+    // Through omandroid-launch: what it opens gets a screen of its own.
+    Quickshell.execDetached(HomeModel.commandLaunchArgv(argv))
+    return true
+  }
+
+  // openUrl(url): open a web link in the browser, on its own screen (the
+  // browser's, if it is running). Needs no capability, like a link would;
+  // at most once a second.
+  property var lastOpen: 0
+  function openUrl(url) {
+    var text = String(url || "").trim()
+    if (!/^https?:\/\/\S+$/i.test(text) || Date.now() - lastOpen < 1000) return false
+    lastOpen = Date.now()
+    Quickshell.execDetached(HomeModel.urlLaunchArgv(text))
     return true
   }
 

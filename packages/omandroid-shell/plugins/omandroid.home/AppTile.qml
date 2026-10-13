@@ -4,8 +4,9 @@ import Quickshell
 import qs.Commons
 import qs.Commons as Commons
 
-// An app shortcut: icon over its name, launched the way the app drawer and
-// the Omarchy menu launch apps (AppLibrary.launch: uwsm-app -- gtk-launch).
+// An app shortcut: icon over its name, launched the way the app drawer
+// launches apps (omandroid-launch: uwsm-app -- gtk-launch on a new empty
+// workspace, or the app's open window focused).
 // An app that is no longer installed stays, dimmed, until it is removed in
 // edit mode (it may come back with its package).
 Item {

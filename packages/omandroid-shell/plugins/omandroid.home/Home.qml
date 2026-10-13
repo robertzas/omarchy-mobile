@@ -523,10 +523,15 @@ Item {
     return "editing"
   }
 
+  // Through omandroid-launch, as the drawer does: the app starts the way
+  // Omarchy starts it (uwsm-app -- gtk-launch) on a new empty workspace, or
+  // is focused on its own if it is already open.
   function launch(appId) {
     var entry = entryFor(appId)
-    if (!entry || !appLibrary) return false
-    appLibrary.launch(entry.id, appLibrary.entryName(entry))
+    if (!entry || !entry.id) return false
+    if (appLibrary && typeof appLibrary.beginLaunchFeedback === "function")
+      appLibrary.beginLaunchFeedback(appLibrary.entryName(entry))
+    Quickshell.execDetached(HomeModel.appLaunchArgv(entry.id))
     return true
   }
 

@@ -342,7 +342,7 @@ Item {
         MouseArea {
           anchors.fill: parent
           enabled: !widget.editing
-          onClicked: Qt.openUrlExternally("https://globe.adsbexchange.com/?icao=" + rowView.modelData.id)
+          onClicked: widget.host.openUrl("https://globe.adsbexchange.com/?icao=" + rowView.modelData.id)
         }
       }
     }
@@ -361,7 +361,7 @@ Item {
           anchors.fill: parent
           anchors.margins: -Style.spacing.lg
           enabled: !widget.editing && widget.place !== null
-          onClicked: Qt.openUrlExternally("https://globe.adsbexchange.com/?lat=" + widget.place.lat + "&lon=" + widget.place.lon + "&zoom=9")
+          onClicked: widget.host.openUrl("https://globe.adsbexchange.com/?lat=" + widget.place.lat + "&lon=" + widget.place.lon + "&zoom=9")
         }
       }
     }

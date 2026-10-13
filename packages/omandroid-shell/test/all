@@ -190,11 +190,47 @@ grep -c 'UserWidgetCell.qml' plugins/omandroid.home/Home.qml >/dev/null || fail 
 grep -c 'omarchy-agent-prompt' bin/omandroid-widget >/dev/null || fail "widgets are made with Omarchy's default agent"
 pass "user widgets"
 
+# One app per screen: every launch from the phone shell goes through
+# omandroid-launch, which gives what it starts a new empty workspace by a
+# per-launch Hyprland exec rule, or focuses the app's open window.
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omandroid-launch || fail "omandroid-launch parses"
+python3 -B test/launch.py || fail "omandroid-launch"
+# Nothing launches around it: not Omarchy's AppLibrary.launch, not Qt's
+# openUrlExternally (a link opened wherever the browser was), not a bare
+# gtk-launch or the agent prompt.
+if grep -rnE 'appLibrary\.launch\(|openUrlExternally|"gtk-launch"|execArgv\(\["omarchy-agent-prompt"' plugins widgets --include=*.qml --include=*.js; then
+  fail "every launch path goes through omandroid-launch"
+fi
+grep -c 'Quickshell.execDetached(LauncherModel.appArgv(entry.id))' plugins/omandroid.launcher/Launcher.qml >/dev/null || fail "the drawer launches through omandroid-launch"
+grep -c 'Quickshell.execDetached(HomeModel.appLaunchArgv(entry.id))' plugins/omandroid.home/Home.qml >/dev/null || fail "home-screen apps launch through omandroid-launch"
+grep -c 'tile.home.launch(tile.entry.app)' plugins/omandroid.home/AppTile.qml >/dev/null || fail "app tiles launch through the home screen"
+grep -c 'Quickshell.execDetached(HomeModel.commandLaunchArgv(argv))' plugins/omandroid.home/WidgetHost.qml >/dev/null || fail "widgets' host.launch goes through omandroid-launch"
+grep -c 'Quickshell.execDetached(HomeModel.urlLaunchArgv(text))' plugins/omandroid.home/WidgetHost.qml >/dev/null || fail "widgets' host.openUrl goes through omandroid-launch"
+grep -c 'HomeModel.commandLaunchArgv(\["sh", "-c", tap\])' plugins/omandroid.home/CommandWidget.qml >/dev/null || fail "the text widget's tap goes through omandroid-launch"
+grep -c '"omandroid-launch", "url", uri' bin/omandroid-nfc-open >/dev/null || fail "NFC links open through omandroid-launch"
+grep -c '"omandroid-launch", "empty"' bin/omandroid-widget >/dev/null || fail "the widget agent's terminal gets an empty workspace"
+grep -c '"omandroid-launch", "show-with"' plugins/omandroid.switcher/Switcher.qml >/dev/null || fail "the switcher shows apps together"
+grep -c '"omandroid-launch", "own-screen"' plugins/omandroid.switcher/Switcher.qml >/dev/null || fail "the switcher moves apps to their own screen"
+if command -v node >/dev/null; then
+  node -e '
+const L = require("./plugins/omandroid.launcher/LauncherModel.js")
+const H = require("./plugins/omandroid.home/HomeModel.js")
+const eq = (a, b) => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(JSON.stringify(a) + " != " + JSON.stringify(b)) }
+eq(L.appArgv("org.telegram.desktop"), ["omandroid-launch", "app", "org.telegram.desktop"])
+eq(L.promptArgv("  fix it  "), ["omandroid-launch", "cmd", "--", "omarchy-agent-prompt", "fix it"])
+eq(H.appLaunchArgv("foot"), ["omandroid-launch", "app", "foot"])
+eq(H.commandLaunchArgv(["a", 1]), ["omandroid-launch", "cmd", "--", "a", "1"])
+eq(H.urlLaunchArgv("https://x"), ["omandroid-launch", "url", "https://x"])
+' || fail "launch argv"
+fi
+pass "one app per screen"
+
 bash -n bin/omandroid-setup-user || fail "omandroid-setup-user parses"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ./install "$tmp/root"
 [[ -x $tmp/root/usr/bin/omandroid-setup-user && -f $tmp/root/usr/share/omandroid/shell/profile/shell.json ]] \
   || fail "install stages the setup script and the profile"
+[[ -x $tmp/root/usr/bin/omandroid-launch ]] || fail "install stages omandroid-launch"
 [[ -x $tmp/root/usr/bin/omandroid-widget && -f $tmp/root/usr/share/omandroid/shell/WIDGETS.md \
    && -f $tmp/root/usr/share/omandroid/shell/widget-template/manifest.json \
    && -f $tmp/root/usr/share/omandroid/shell/widget-examples/countdown/Widget.qml ]] \

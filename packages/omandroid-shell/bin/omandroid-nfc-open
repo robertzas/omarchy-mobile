@@ -6,7 +6,8 @@ neard publishes each NDEF record it reads as an org.neard.Record object on the
 system bus. Only root may call neard, so this runs as a root service: it
 watches for new records, keeps http and https URIs only, and opens each one
 in the active graphical session through that user's systemd manager (which
-has the session's WAYLAND_DISPLAY). A tag that stays on the phone is read
+has the session's WAYLAND_DISPLAY), with omandroid-launch: on the browser's
+own screen, as every launch on the phone. A tag that stays on the phone is read
 once; neard reads it again only after it is lifted and tapped again.
 """
 import subprocess
@@ -60,7 +61,7 @@ def open_uri(uri):
         return
     log(f"opening a tag's link for {user}")
     subprocess.run(["systemd-run", "--quiet", "--collect", f"--machine={user}@.host",
-                    "--user", "xdg-open", uri], check=False)
+                    "--user", "omandroid-launch", "url", uri], check=False)
 
 
 def on_interfaces_added(_conn, _sender, _path, _iface, _signal, params, _data):

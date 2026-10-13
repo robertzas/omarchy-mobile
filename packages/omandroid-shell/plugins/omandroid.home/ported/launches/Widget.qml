@@ -137,7 +137,7 @@ Item {
         MouseArea {
           anchors.fill: parent
           enabled: !widget.editing
-          onClicked: Qt.openUrlExternally(rowView.modelData.url)
+          onClicked: widget.host.openUrl(rowView.modelData.url)
         }
       }
     }
@@ -150,6 +150,6 @@ Item {
     width: content.width
     height: where.y + where.height
     enabled: !widget.editing
-    onClicked: Qt.openUrlExternally(widget.next ? widget.next.url : "https://spacelaunchnow.me")
+    onClicked: widget.host.openUrl(widget.next ? widget.next.url : "https://spacelaunchnow.me")
   }
 }

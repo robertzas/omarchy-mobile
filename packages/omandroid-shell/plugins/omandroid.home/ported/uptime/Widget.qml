@@ -203,7 +203,7 @@ Item {
         MouseArea {
           anchors.fill: parent
           enabled: !widget.editing
-          onClicked: Qt.openUrlExternally(site.modelData.url)
+          onClicked: widget.host.openUrl(site.modelData.url)
         }
       }
     }

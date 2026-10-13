@@ -422,7 +422,7 @@ Item {
           MouseArea {
             anchors.fill: parent
             enabled: !widget.editing && line.kind === "link"
-            onClicked: Qt.openUrlExternally(line.modelData.url)
+            onClicked: widget.host.openUrl(line.modelData.url)
           }
         }
         Row {

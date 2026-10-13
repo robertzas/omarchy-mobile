@@ -341,7 +341,7 @@ Item {
           MouseArea {
             anchors.fill: parent
             enabled: !widget.editing
-            onClicked: Qt.openUrlExternally("https://www.coingecko.com/en/coins/bitcoin")
+            onClicked: widget.host.openUrl("https://www.coingecko.com/en/coins/bitcoin")
           }
         }
         Label {

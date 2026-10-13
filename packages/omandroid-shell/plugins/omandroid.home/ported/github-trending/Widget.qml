@@ -93,7 +93,7 @@ Item {
         anchors.fill: parent
         anchors.margins: -Style.spacing.md
         enabled: !widget.editing
-        onClicked: Qt.openUrlExternally("https://github.com/trending")
+        onClicked: widget.host.openUrl("https://github.com/trending")
       }
     }
 
@@ -126,7 +126,7 @@ Item {
         MouseArea {
           anchors.fill: parent
           enabled: !widget.editing
-          onClicked: Qt.openUrlExternally(repo.modelData.url)
+          onClicked: widget.host.openUrl(repo.modelData.url)
         }
 
         Column {

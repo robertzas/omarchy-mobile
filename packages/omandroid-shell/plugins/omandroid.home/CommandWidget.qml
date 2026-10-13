@@ -94,7 +94,8 @@ Item {
     enabled: !widget.editing
     onClicked: {
       var tap = String(widget.config.tap || "").trim()
-      if (tap) Quickshell.execDetached(["sh", "-c", tap])
+      // Through omandroid-launch: a window the tap opens gets its own screen.
+      if (tap) Quickshell.execDetached(HomeModel.commandLaunchArgv(["sh", "-c", tap]))
       else if (!widget.command && !widget.config.text && widget.home) widget.home.openSettings(widget.entry.id)
       else widget.run(true)
     }

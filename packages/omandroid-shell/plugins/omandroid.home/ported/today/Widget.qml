@@ -505,7 +505,7 @@ Item {
           MouseArea {
             anchors.fill: parent
             enabled: !widget.editing
-            onClicked: Qt.openUrlExternally("https://www.yr.no/en/forecast/daily-table/" + widget.area.latitude + "," + widget.area.longitude)
+            onClicked: widget.host.openUrl("https://www.yr.no/en/forecast/daily-table/" + widget.area.latitude + "," + widget.area.longitude)
           }
         }
         Label {

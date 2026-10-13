@@ -61,10 +61,19 @@ function agentName(id) {
   return id ? (AGENT_NAMES[id] || id) : ""
 }
 
+// Every launch goes through omandroid-launch (bin/), which gives what it
+// starts a new empty workspace of its own, or focuses an app that is already
+// open there: one app per screen, as on Android.
+var LAUNCH = "omandroid-launch"
+
+function appArgv(desktopId) {
+  return [LAUNCH, "app", String(desktopId || "")]
+}
+
 // Omarchy launches the user's chosen agent, in its own terminal, with the
 // prompt as one argument. Without a chosen agent, open Omarchy's picker.
 function promptArgv(prompt) {
-  return ["omarchy-agent-prompt", String(prompt || "").trim()]
+  return [LAUNCH, "cmd", "--", "omarchy-agent-prompt", String(prompt || "").trim()]
 }
 
 var PICK_AGENT_ARGV = ["omarchy", "menu", "summon", "setup.default.agent"]
@@ -77,6 +86,8 @@ if (typeof module !== "undefined") {
     looksLikePrompt: looksLikePrompt,
     agentId: agentId,
     agentName: agentName,
+    LAUNCH: LAUNCH,
+    appArgv: appArgv,
     promptArgv: promptArgv,
     PICK_AGENT_ARGV: PICK_AGENT_ARGV
   }

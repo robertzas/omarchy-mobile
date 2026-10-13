@@ -180,7 +180,7 @@ Item {
         MouseArea {
           anchors.fill: parent
           enabled: !widget.editing
-          onClicked: Qt.openUrlExternally(post.modelData.url)
+          onClicked: widget.host.openUrl(post.modelData.url)
         }
       }
     }

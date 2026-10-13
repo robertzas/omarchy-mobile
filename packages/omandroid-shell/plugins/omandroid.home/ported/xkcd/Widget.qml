@@ -116,6 +116,6 @@ Item {
   MouseArea {
     anchors.fill: parent
     enabled: !widget.editing
-    onClicked: Qt.openUrlExternally(widget.comic ? "https://xkcd.com/" + widget.comic.num + "/" : "https://xkcd.com/")
+    onClicked: widget.host.openUrl(widget.comic ? "https://xkcd.com/" + widget.comic.num + "/" : "https://xkcd.com/")
   }
 }

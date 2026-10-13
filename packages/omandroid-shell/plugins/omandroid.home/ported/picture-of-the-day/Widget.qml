@@ -139,6 +139,6 @@ Item {
   MouseArea {
     anchors.fill: parent
     enabled: !widget.editing
-    onClicked: Qt.openUrlExternally(widget.pic && widget.pic.url ? widget.pic.url : "https://commons.wikimedia.org/wiki/Commons:Picture_of_the_day")
+    onClicked: widget.host.openUrl(widget.pic && widget.pic.url ? widget.pic.url : "https://commons.wikimedia.org/wiki/Commons:Picture_of_the_day")
   }
 }

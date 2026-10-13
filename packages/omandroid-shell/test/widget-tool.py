@@ -309,6 +309,8 @@ AGENT_FAKES = {
     # Omarchy's own: prints the chosen agent, or nothing.
     "omarchy-default-agent": '[[ -f "$HOME/agent" ]] && cat "$HOME/agent"; exit 0',
     "omarchy-agent": 'echo "omarchy-agent $*" >> "$HOME/calls"',
+    # One app per screen: the terminal maps on an empty workspace.
+    "omandroid-launch": 'echo "omandroid-launch $*" >> "$HOME/calls"',
     "omarchy-agent-prompt": '''{ echo "cwd=$PWD"; echo "argc=$#"; printf '%s' "$1" > "$HOME/prompt"; } >> "$HOME/calls"
 case $(cat "$HOME/agent") in
   missing) echo "missing is not installed. Choose an installed agent with: omarchy default agent <name>" >&2; exit 1 ;;
@@ -370,6 +372,7 @@ def agent_gets_the_prompt_as_one_argument_in_the_folder():
             log = calls(s)
             assert "cwd=" + os.path.join(s.widgets, "tester.moon") in log, log
             assert "argc=1" in log, log
+            assert log.index("omandroid-launch empty") < log.index("argc=1"), log
             assert open(os.path.join(s.root, "prompt")).read() == NASTY
             assert not os.path.exists(os.path.join(s.root, "pwned"))
 

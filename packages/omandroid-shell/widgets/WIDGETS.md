@@ -135,7 +135,8 @@ Declare these properties. The home screen sets them before
 | `host.openSettings()` | Open this placement's settings sheet |
 | `host.cached`, `host.setCached(value)` | A value kept across layout edits (every edit rebuilds the page and your widget with it): show the last result at once instead of fetching again |
 | `host.run(argv, callback, { timeout })` | Run a program (needs `"commands"`); see below |
-| `host.launch(argv)` | Start something detached, such as an app (needs `"commands"`, at most once a second) |
+| `host.launch(argv)` | Start something detached, such as an app (needs `"commands"`, at most once a second). A window it opens gets a new screen (workspace) of its own, as every launch on the phone does |
+| `host.openUrl(url)` | Open an `http(s)` link in the browser, on the browser's own screen (no capability needed, at most once a second). Use it instead of `Qt.openUrlExternally`, which opens the link wherever the browser happens to be |
 | `host.busy`, `host.canRunCommands` | A command is running; the manifest declares `"commands"` |
 
 A minimal widget:

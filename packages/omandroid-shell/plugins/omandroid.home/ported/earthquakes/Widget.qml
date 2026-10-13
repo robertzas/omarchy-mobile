@@ -120,7 +120,7 @@ Item {
         width: parent.width
         height: parent.height
         enabled: !widget.editing
-        onClicked: Qt.openUrlExternally("https://earthquake.usgs.gov/earthquakes/map/")
+        onClicked: widget.host.openUrl("https://earthquake.usgs.gov/earthquakes/map/")
       }
     }
 
@@ -185,7 +185,7 @@ Item {
         MouseArea {
           anchors.fill: parent
           enabled: !widget.editing
-          onClicked: Qt.openUrlExternally(quake.modelData.url)
+          onClicked: widget.host.openUrl(quake.modelData.url)
         }
       }
     }

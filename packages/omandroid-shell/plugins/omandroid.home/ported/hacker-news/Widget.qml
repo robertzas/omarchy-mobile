@@ -78,7 +78,7 @@ Item {
         anchors.fill: parent
         anchors.margins: -Style.spacing.md
         enabled: !widget.editing
-        onClicked: Qt.openUrlExternally("https://news.ycombinator.com")
+        onClicked: widget.host.openUrl("https://news.ycombinator.com")
       }
     }
 
@@ -121,7 +121,7 @@ Item {
           MouseArea {
             anchors.fill: parent
             enabled: !widget.editing
-            onClicked: Qt.openUrlExternally(story.modelData.url)
+            onClicked: widget.host.openUrl(story.modelData.url)
           }
         }
         Row {
@@ -146,7 +146,7 @@ Item {
               anchors.fill: parent
               anchors.margins: -Style.spacing.sm
               enabled: !widget.editing
-              onClicked: Qt.openUrlExternally(story.modelData.item)
+              onClicked: widget.host.openUrl(story.modelData.item)
             }
           }
           Text {

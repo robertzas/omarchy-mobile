@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
+pragma ComponentBehavior: Bound
 import QtQuick
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
@@ -11,9 +13,15 @@ import qs.Ui
 // to close it. Home shows the home screen (an empty workspace) and leaves the
 // apps open. Summoned by swiping up on the dock (omandroid.launcher).
 //
+// Every app has a screen (workspace) of its own (omandroid-launch). Hold a
+// card for the two ways to change that: "Show with…" puts the app on another
+// app's screen, where the two tile as Omarchy tiles them, and "Move to its
+// own screen" gives it one back.
+//
 // Windows come from the Wayland foreign-toplevel list, which gives each one
-// activate() and close(), so nothing here needs Hyprland's dispatcher except
-// Home.
+// activate() and close(). Home and the hold actions need Hyprland: the
+// actions find a window's Hyprland address and workspace through
+// Quickshell.Hyprland and run omandroid-launch with them.
 Item {
   id: root
 
@@ -34,7 +42,10 @@ Item {
 
   // Host lifecycle (`shell summon` / `shell hide`).
   function open(payloadJson) { opened = true }
-  function close() { opened = false }
+  function close() {
+    opened = false
+    closeActions()
+  }
 
   function dismiss() {
     if (shell && typeof shell.hide === "function") shell.hide(pluginId)
@@ -56,6 +67,88 @@ Item {
   function closeAll() {
     var list = ToplevelManager.toplevels.values.slice()
     for (var i = 0; i < list.length; i++) list[i].close()
+  }
+
+  // ---------------------------------------------------------------- hold actions
+
+  // The window whose actions are open, and which page: "menu" or "pick"
+  // (the apps it can share a screen with).
+  property var actionTarget: null
+  property string actionPage: "menu"
+  readonly property bool actionsOpen: actionTarget !== null && windows.indexOf(actionTarget) >= 0
+
+  // Hyprland's view of a Wayland toplevel: its address and workspace. By the
+  // toplevel mapping when Hyprland offers it, else by class and title.
+  function hyprlandFor(toplevel) {
+    if (!toplevel) return null
+    var list = Hyprland.toplevels.values
+    var fallback = null
+    for (var i = 0; i < list.length; i++) {
+      const candidate = list[i]
+      if (candidate.wayland === toplevel) return candidate
+      const ipc = candidate.lastIpcObject || ({})
+      if (!fallback && candidate.title === toplevel.title && ipc["class"] === toplevel.appId) fallback = candidate
+    }
+    return fallback
+  }
+
+  function addressOf(toplevel) {
+    var hypr = hyprlandFor(toplevel)
+    return hypr && hypr.address ? String(hypr.address) : ""
+  }
+
+  function workspaceOf(toplevel) {
+    var hypr = hyprlandFor(toplevel)
+    return hypr && hypr.workspace ? hypr.workspace.id : null
+  }
+
+  // Other open windows on the same screen.
+  function screenMates(toplevel) {
+    var ws = workspaceOf(toplevel)
+    if (ws === null || ws === undefined) return []
+    return windows.filter(function(other) { return other !== toplevel && workspaceOf(other) === ws })
+  }
+
+  // Windows on other screens, which this one can join.
+  function partners(toplevel) {
+    var ws = workspaceOf(toplevel)
+    return windows.filter(function(other) {
+      return other !== toplevel && (ws === null || ws === undefined || workspaceOf(other) !== ws)
+    })
+  }
+
+  function openActions(toplevel) {
+    if (!toplevel) return
+    Hyprland.refreshToplevels()
+    actionPage = "menu"
+    actionTarget = toplevel
+  }
+
+  function closeActions() {
+    actionTarget = null
+    actionPage = "menu"
+  }
+
+  // This window onto other's screen: omandroid-launch moves it there by
+  // address and tiles the two.
+  function showWith(toplevel, other) {
+    var a = addressOf(toplevel)
+    var b = addressOf(other)
+    if (a && b) Quickshell.execDetached(["omandroid-launch", "show-with", a, b])
+    closeActions()
+    dismiss()
+  }
+
+  function moveToOwnScreen(toplevel) {
+    var a = addressOf(toplevel)
+    if (a) Quickshell.execDetached(["omandroid-launch", "own-screen", a])
+    closeActions()
+    dismiss()
+  }
+
+  function windowLabel(toplevel) {
+    if (!toplevel) return ""
+    return (toplevel.appId || "App") + (toplevel.title ? "  " + toplevel.title : "")
   }
 
   readonly property color foreground: Commons.Color.menu.text
@@ -89,7 +182,10 @@ Item {
     Item {
       anchors.fill: parent
       focus: root.opened
-      Keys.onEscapePressed: root.dismiss()
+      Keys.onEscapePressed: {
+        if (root.actionsOpen) root.closeActions()
+        else root.dismiss()
+      }
     }
 
     Text {
@@ -166,8 +262,11 @@ Item {
             live: true
           }
 
-          // Tap to switch.
-          TapHandler { onTapped: root.switchTo(slot.modelData) }
+          // Tap to switch; hold for "Show with…" and "Move to its own screen".
+          TapHandler {
+            onTapped: root.switchTo(slot.modelData)
+            onLongPressed: root.openActions(slot.modelData)
+          }
 
           // Flick up to close; anything shorter springs back.
           DragHandler {
@@ -215,6 +314,7 @@ Item {
         ]
 
         delegate: BorderSurface {
+          id: bottomButton
           required property var modelData
           visible: modelData.visible
           width: Math.max(root.touch * 2.6, label.implicitWidth + Style.space(32))
@@ -226,7 +326,7 @@ Item {
             id: label
             anchors.centerIn: parent
             textFormat: Text.PlainText
-            text: modelData.label
+            text: bottomButton.modelData.label
             color: root.foreground
             font.family: Style.font.family
             font.pixelSize: Style.font.body
@@ -234,10 +334,152 @@ Item {
 
           TapHandler {
             id: tap
-            onTapped: modelData.action === "home" ? root.goHome() : root.closeAll()
+            onTapped: bottomButton.modelData.action === "home" ? root.goHome() : root.closeAll()
           }
         }
       }
+    }
+
+    // Hold actions: a sheet over the cards. Tapping outside it closes it.
+    Item {
+      id: actionLayer
+      anchors.fill: parent
+      visible: root.actionsOpen
+
+      Rectangle {
+        anchors.fill: parent
+        color: Commons.Color.menu.background
+        opacity: 0.6
+      }
+
+      MouseArea {
+        anchors.fill: parent
+        onClicked: root.closeActions()
+      }
+
+      BorderSurface {
+        id: actionCard
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: Style.space(16)
+        anchors.bottomMargin: Style.space(28)
+        height: actionColumn.implicitHeight + Style.space(24)
+        radius: Style.cornerRadius
+        color: Commons.Color.background
+
+        // Swallows taps between the rows, so they don't close the sheet.
+        MouseArea { anchors.fill: parent }
+
+        Column {
+          id: actionColumn
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          anchors.margins: Style.space(12)
+          spacing: Style.space(6)
+
+          Text {
+            width: parent.width
+            textFormat: Text.PlainText
+            text: root.actionPage === "pick" ? "Show with…" : root.windowLabel(root.actionTarget)
+            elide: Text.ElideRight
+            color: Qt.darker(root.foreground, 1.3)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.body
+            bottomPadding: Style.space(6)
+          }
+
+          // The menu.
+          SheetRow {
+            visible: root.actionPage === "menu"
+            enabled: root.actionsOpen && root.partners(root.actionTarget).length > 0
+            text: "Show with…"
+            hint: enabled ? "Share the screen with another open app" : "No other app is open"
+            onActivated: root.actionPage = "pick"
+          }
+
+          SheetRow {
+            visible: root.actionPage === "menu" && root.actionsOpen && root.screenMates(root.actionTarget).length > 0
+            text: "Move to its own screen"
+            hint: "Stop sharing the screen"
+            onActivated: root.moveToOwnScreen(root.actionTarget)
+          }
+
+          // The apps to share a screen with.
+          Repeater {
+            model: root.actionPage === "pick" && root.actionsOpen ? root.partners(root.actionTarget) : []
+
+            delegate: SheetRow {
+              required property var modelData
+              text: modelData.appId || "App"
+              hint: modelData.title || ""
+              onActivated: root.showWith(root.actionTarget, modelData)
+            }
+          }
+
+          SheetRow {
+            text: root.actionPage === "pick" ? "Back" : "Cancel"
+            onActivated: {
+              if (root.actionPage === "pick") root.actionPage = "menu"
+              else root.closeActions()
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // One row of the hold-actions sheet: a label over a hint.
+  component SheetRow: Rectangle {
+    id: sheetRow
+
+    property string text: ""
+    property string hint: ""
+    signal activated()
+
+    width: parent ? parent.width : 0
+    height: Math.max(root.touch, rowText.implicitHeight + (rowHint.visible ? rowHint.implicitHeight : 0) + Style.space(16))
+    radius: Style.cornerRadius
+    color: rowTap.pressed ? (Commons.Color.menu.selected || Commons.Color.background) : "transparent"
+    opacity: enabled ? 1 : 0.45
+
+    Column {
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(12)
+      anchors.rightMargin: Style.space(12)
+
+      Text {
+        id: rowText
+        width: parent.width
+        textFormat: Text.PlainText
+        text: sheetRow.text
+        elide: Text.ElideRight
+        color: root.foreground
+        font.family: Style.font.family
+        font.pixelSize: Style.font.subtitle
+      }
+
+      Text {
+        id: rowHint
+        width: parent.width
+        visible: sheetRow.hint.length > 0
+        textFormat: Text.PlainText
+        text: sheetRow.hint
+        elide: Text.ElideRight
+        color: Qt.darker(root.foreground, 1.4)
+        font.family: Style.font.family
+        font.pixelSize: Style.font.caption
+      }
+    }
+
+    MouseArea {
+      id: rowTap
+      anchors.fill: parent
+      enabled: sheetRow.enabled
+      onClicked: sheetRow.activated()
     }
   }
 }

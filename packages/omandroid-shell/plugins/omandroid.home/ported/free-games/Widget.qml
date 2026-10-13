@@ -144,7 +144,7 @@ Item {
         anchors.fill: parent
         anchors.margins: -Style.spacing.md
         enabled: !widget.editing
-        onClicked: Qt.openUrlExternally("https://store.epicgames.com/free-games")
+        onClicked: widget.host.openUrl("https://store.epicgames.com/free-games")
       }
     }
 
@@ -222,7 +222,7 @@ Item {
         MouseArea {
           anchors.fill: parent
           enabled: !widget.editing && rowView.modelData.kind !== "heading"
-          onClicked: Qt.openUrlExternally(rowView.modelData.game.url)
+          onClicked: widget.host.openUrl(rowView.modelData.game.url)
         }
       }
     }

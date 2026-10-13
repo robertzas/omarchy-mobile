@@ -95,7 +95,7 @@ Item {
         anchors.fill: parent
         anchors.margins: -Style.spacing.md
         enabled: !widget.editing
-        onClicked: Qt.openUrlExternally("https://github.com/notifications")
+        onClicked: widget.host.openUrl("https://github.com/notifications")
       }
     }
 
@@ -198,7 +198,7 @@ Item {
         MouseArea {
           anchors.fill: parent
           enabled: !widget.editing
-          onClicked: Qt.openUrlExternally(pr.modelData.url)
+          onClicked: widget.host.openUrl(pr.modelData.url)
         }
       }
     }

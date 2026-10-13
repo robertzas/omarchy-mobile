@@ -122,7 +122,7 @@ Item {
         anchors.fill: parent
         anchors.margins: -Style.spacing.md
         enabled: !widget.editing
-        onClicked: Qt.openUrlExternally("https://en.m.wikipedia.org")
+        onClicked: widget.host.openUrl("https://en.m.wikipedia.org")
       }
     }
 
@@ -146,7 +146,7 @@ Item {
           MouseArea {
             anchors.fill: parent
             enabled: !widget.editing
-            onClicked: Qt.openUrlExternally(widget.wp.tfa.url)
+            onClicked: widget.host.openUrl(widget.wp.tfa.url)
           }
           Column {
             id: tfa
@@ -216,7 +216,7 @@ Item {
             MouseArea {
               anchors.fill: parent
               enabled: !widget.editing
-              onClicked: Qt.openUrlExternally(article.modelData.url)
+              onClicked: widget.host.openUrl(article.modelData.url)
             }
           }
         }

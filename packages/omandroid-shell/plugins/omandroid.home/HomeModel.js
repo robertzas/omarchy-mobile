@@ -702,8 +702,26 @@ function commandText(output, maxLines) {
   return lines.slice(0, Math.max(1, maxLines || 1)).join("\n")
 }
 
+// Every launch from the home screen goes through omandroid-launch (bin/):
+// one app per screen, as on Android. Apps by desktop id; commands (a
+// widget's host.launch, a text widget's tap) and links as argv.
+var LAUNCH = "omandroid-launch"
+
+function appLaunchArgv(desktopId) {
+  return [LAUNCH, "app", String(desktopId || "")]
+}
+
+function commandLaunchArgv(argv) {
+  return [LAUNCH, "cmd", "--"].concat((argv || []).map(String))
+}
+
+function urlLaunchArgv(url) {
+  return [LAUNCH, "url", String(url || "")]
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
+    LAUNCH: LAUNCH, appLaunchArgv: appLaunchArgv, commandLaunchArgv: commandLaunchArgv, urlLaunchArgv: urlLaunchArgv,
     VERSION: VERSION, GRID: GRID, LIMITS: LIMITS, REGISTRY: REGISTRY, DEFAULT_APPS: DEFAULT_APPS,
     WIDGET_ORDER: WIDGET_ORDER, PORTED: PORTED, PORTED_ORDER: PORTED_ORDER,
     USER_PREFIX: USER_PREFIX, USER_ID_RE: USER_ID_RE, MISSING_SPEC: MISSING_SPEC, isUserType: isUserType,
