@@ -973,6 +973,24 @@ already unpowered modem. Then images without `modem-cpif-test`: `cp
 and CPIF can't be unloaded): the modem was never powered in M3.3-B, so
 that reboot costs no UFS event.
 
+
+**M3.3-B result (2026-10-12, 7.3.0-rc6-omandroid-push1-00349-g781b9c3d8523,
+int with omandroid-modem 781b9c3d8; overlays incl. `modem-cpif-test`;
+unattended): passed.** Before: none of the three modules loaded, no
+`/dev/umts_*`, err_handler count 0. `modprobe pcie-gs201-cp` (no
+`allow_hw`): "steps disabled (allow_hw=0), modem lines left to the modem
+driver"; status "modem lines: owned by the modem driver", PMU 0x3ec0 0x0,
+"state: cp 0, phy 0/0, link 0, atu 0", "faults: 0x0, ctrl irq off".
+`modprobe shm_ipc`: rmem 1 cp-msi@f6200000 0x1000, rmem 2 cp-rmem1@e8000000
+0x2000000, then IPC 0xea400000 0x800000, PKTPROC 0xe8000000 0x1c00000,
+PKTPROC_UL 0xe9c00000 0x400000, MSI 0xf6200000 0x1000. `modprobe cpif`
+rc 0: "num_iodevs:52", "PCIe Channel Number:0", no failure marker, no Oops,
+no map failure, no power-on. Devices: umts_boot0, dm0, ipc0, ipc1,
+loopback, rcs0/1, rfs0, router, toe0, wfc0/1; 30 rmnet interfaces; 0 cp2ap
+interrupts requested; link state unchanged; `cpif ... [permanent]`; UFS
+err_handler count still 0. M3.4 (the first firmware boot) waits for the
+human.
+
 #### M3.4: boot the S5300 firmware from a RAM copy, and leave it on
 
 **What it does:** the stock `cbd` and `rfsd` run in the modem vendor
