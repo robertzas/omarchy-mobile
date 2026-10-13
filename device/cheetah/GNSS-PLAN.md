@@ -542,7 +542,7 @@ tools/phone-ssh 'sleep 150; omamobile-gnss status; cat /sys/kernel/debug/spi5.0/
 #   pass: receiver no, powered 0, vdd_gnss_* disabled; where-am-i printed a location
 #   if there was a fix (indoors it may only show Wi-Fi/IP sources or nothing)
 # 4. the switch as the desktop user (polkit), then off
-tools/phone-ssh 'su - omamobile -c "omamobile-gnss off; omamobile-gnss status --json; omamobile-gnss on; omamobile-gnss status --json"'
+tools/phone-ssh 'su - "$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}")" -c "omamobile-gnss off; omamobile-gnss status --json; omamobile-gnss on; omamobile-gnss status --json"'
 tools/phone-ssh 'omamobile-gnss force; sleep 30; omamobile-gnss status; omamobile-gnss unforce; sleep 80; omamobile-gnss status'
 #   expect: force runs it with no client; after unforce it stops within ~65 s
 tools/phone-ssh 'omamobile-gnss off; omamobile-gnss status'
@@ -550,7 +550,7 @@ tools/phone-ssh 'omamobile-gnss off; omamobile-gnss status'
 ```
 
 The `su` step: polkit allows only the active local session. Over ssh the
-`omamobile` user is not active, so the call may be refused there. If so,
+phone's user is not active, so the call may be refused there. If so,
 try it in a terminal on the phone. Root over ssh skips polkit.
 
 **Quick-settings tile (for the shell):**
@@ -633,7 +633,7 @@ tools/phone-ssh 'sleep 150; omamobile-gnss status; cat /tmp/g5-wai.txt | tail -2
 #   pass: receiver no, chip powered no. where-am-i shows a location only with a fix (or
 #   from GeoClue's Wi-Fi/IP sources); indoors "no location" is fine here.
 # 3. the desktop user's session: the agent there, the polkit switch, where-am-i as the user
-tools/phone-ssh 'u=omamobile; id=$(id -u $u); e="XDG_RUNTIME_DIR=/run/user/$id DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$id/bus";
+tools/phone-ssh 'u=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}"); id=$(id -u $u); e="XDG_RUNTIME_DIR=/run/user/$id DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$id/bus";
   su $u -c "env $e systemctl --user start omamobile-geoclue-agent; env $e systemctl --user --no-pager status omamobile-geoclue-agent | head -5";
   su $u -c "env $e omamobile-gnss off; omamobile-gnss status --json; env $e omamobile-gnss on; omamobile-gnss status --json";
   su $u -c "env $e timeout 60 /usr/lib/geoclue-2.0/demos/where-am-i -a 8 -t 50" > /tmp/g5-user.txt 2>&1;

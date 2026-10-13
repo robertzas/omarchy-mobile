@@ -12,18 +12,25 @@ name=$(basename "$dir")
 [[ -f $dir/PKGBUILD ]] || { echo "No PKGBUILD in $dir" >&2; exit 1; }
 
 ssh=tools/phone-ssh
-build=/home/omamobile/build/pkgs
+# The phone's account: whoever is logged in on its screen (as tools/acpm-stage
+# and tools/speaker-trip-burst find it), or PHONE_USER=<name>. makepkg runs
+# as that user, in its home; no account name is built in.
+phone_user=${PHONE_USER:-$("$ssh" "loginctl list-users --no-legend | awk '\$2 != \"root\" {print \$2; exit}'")}
+[[ -n $phone_user ]] || { echo "No user is logged in on the phone: log in on its screen, or set PHONE_USER=<name>" >&2; exit 1; }
+phone_home=$("$ssh" "getent passwd '$phone_user' | cut -d: -f6")
+[[ -n $phone_home ]] || { echo "No account '$phone_user' on the phone" >&2; exit 1; }
+build=$phone_home/build/pkgs
 
-"$ssh" "rm -rf $build/$name && mkdir -p $build && chown omamobile: $build"
+"$ssh" "rm -rf $build/$name && mkdir -p $build && chown '$phone_user': $build"
 # makepkg's own work dirs (pkg/, src/ at the top) and old packages stay home.
 tar cf - --exclude="./$name/pkg" --exclude="./$name/src/build" --exclude="*.pkg.tar.*" \
-  -C "$(dirname "$dir")" "./$name" | "$ssh" "tar xf - -C $build --no-same-owner && chown -R omamobile: $build/$name"
+  -C "$(dirname "$dir")" "./$name" | "$ssh" "tar xf - -C $build --no-same-owner && chown -R '$phone_user': $build/$name"
 # Build-only dependencies (makedepends, checkdepends) that aren't installed
 # yet go in for the build and out again afterwards, like makepkg -s -r
 # (makepkg runs as the user, so pacman runs here as root). Runtime
 # depends are pacman -U's job below. Without this, qt6-tools stayed after a
 # libcamera build and put four Qt developer apps in the phone's drawer.
-srcinfo=$("$ssh" "su - omamobile -c 'cd $build/$name && makepkg --printsrcinfo'")
+srcinfo=$("$ssh" "su - '$phone_user' -c 'cd $build/$name && makepkg --printsrcinfo'")
 want=$(awk '$1 ~ /^(depends|makedepends|checkdepends)$/ {print $3}' <<<"$srcinfo" | sort -u | tr '\n' ' ')
 buildonly=$(awk '$1 ~ /^(makedepends|checkdepends)$/ {print $3}' <<<"$srcinfo" | sort -u | tr '\n' ' ')
 missing=""
@@ -41,5 +48,5 @@ cleanup() {
   return 0
 }
 trap cleanup EXIT
-"$ssh" "su - omamobile -c 'cd $build/$name && makepkg -f --noconfirm' 2>&1 | tail -2"
+"$ssh" "su - '$phone_user' -c 'cd $build/$name && makepkg -f --noconfirm' 2>&1 | tail -2"
 "$ssh" "OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U --noconfirm $build/$name/$name-*.pkg.tar.* 2>&1 | grep -E '^error|installing|upgrading|reinstalling' ; pacman -Q $name"

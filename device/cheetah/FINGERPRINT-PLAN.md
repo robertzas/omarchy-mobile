@@ -506,14 +506,14 @@ tools/phone-ssh '/usr/lib/omamobile-fp/omamobile-fp-ctl auth'            # enrol
 tools/phone-ssh '/usr/lib/omamobile-fp/omamobile-fp-ctl auth'            # another finger: NOMATCH
 tools/phone-install-package packages/libfprint                           # our libfprint (builds on the phone)
 tools/phone-ssh 'OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -S --needed --noconfirm fprintd; systemctl daemon-reload'
-tools/phone-ssh 'fprintd-list omamobile; fprintd-enroll -f right-thumb omamobile; fprintd-verify omamobile'
+tools/phone-ssh 'U=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}"); fprintd-list $U; fprintd-enroll -f right-thumb $U; fprintd-verify $U'
 ```
 
 Expect fprintd to list the device "Pixel 7 Pro under-display fingerprint
 sensor (Omarchy Mobile)"; enroll with ~20 stages; verify-match. **Stop** if
 fprintd sees no device (the drop-in, `systemctl show fprintd -p Environment`)
 or Omarchy's `libfprint-git` replaced ours (`pacman -Q libfprint`).
-Rollback: `fprintd-delete omamobile`.
+Rollback: `fprintd-delete <user>`.
 
 ### F10: the lock screen
 

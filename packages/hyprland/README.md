@@ -61,8 +61,8 @@ Hyprland is C++ with heavy templates (glaze, hyprutils). Estimate for the phone 
   -j4 and about 7 GB at -j6. -j8 (makepkg's `nproc` default in upstream's
   Makefile) leaves too little for a running session.
 
-Build as the `omamobile` user, which `tools/phone-install-package` and
-`tools/repo-build` also use. Use `MAKEFLAGS=-j4` with the session running, or
+Build as the phone's user (the one logged in on its screen), as `tools/phone-install-package` and
+`tools/repo-build` also do. Use `MAKEFLAGS=-j4` with the session running, or
 `-j6` with the session stopped (`systemctl stop sddm`).
 
 ```sh
@@ -91,10 +91,13 @@ Then pick one of these:
    the two files.
 
    ```sh
-   tools/phone-ssh 'rm -rf /home/omamobile/build/pkgs/hyprland && mkdir -p /home/omamobile/build/pkgs'
-   tar cf - -C packages ./hyprland | tools/phone-ssh 'tar xf - -C /home/omamobile/build/pkgs --no-same-owner && chown -R omamobile: /home/omamobile/build/pkgs/hyprland'
-   tools/phone-ssh "su - omamobile -c 'cd build/pkgs/hyprland && MAKEFLAGS=-j4 makepkg -f --noconfirm' 2>&1 | tail -3"
-   tools/phone-ssh 'OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U --noconfirm $(ls /home/omamobile/build/pkgs/hyprland/hyprland-0.56.2-5.1-aarch64.pkg.tar.* | grep -v "\.sig$")'
+   # the account logged in on the phone's screen
+   U=$(tools/phone-ssh "loginctl list-users --no-legend | awk '\$2 != \"root\" {print \$2; exit}'")
+   H=$(tools/phone-ssh "getent passwd $U | cut -d: -f6")
+   tools/phone-ssh "rm -rf $H/build/pkgs/hyprland && mkdir -p $H/build/pkgs"
+   tar cf - -C packages ./hyprland | tools/phone-ssh "tar xf - -C $H/build/pkgs --no-same-owner && chown -R $U: $H/build/pkgs/hyprland"
+   tools/phone-ssh "su - $U -c 'cd build/pkgs/hyprland && MAKEFLAGS=-j4 makepkg -f --noconfirm' 2>&1 | tail -3"
+   tools/phone-ssh "OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U --noconfirm \$(ls $H/build/pkgs/hyprland/hyprland-0.56.2-5.1-aarch64.pkg.tar.* | grep -v '\.sig\$')"
    ```
 
    (`tools/phone-install-package packages/hyprland` also works. It
