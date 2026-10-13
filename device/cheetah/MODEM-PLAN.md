@@ -1,27 +1,25 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Modem plan (cheetah / gs201): S5300 on PCIe GEN4A_0
 
-Status (2026-10-13): **the modem boots to ONLINE (M3.4.5b passed, M3.4.6
-passed)** on int `a0a2d81c1` (7.3.0-rc6-omandroid-push1-00419-ga0a2d81c16c6)
-with `omandroid-modem` 0.1.2/0.1.3: one power-on, the doorbell found in the
-assigned BAR0, CP ONLINE about 8 s after POWER_ON, ten minutes ONLINE with
-no link faults and no UFS handler pass, NV unchanged (M3.5). The main link
-trains at Gen1 x2, not Gen3 x2 (open item, section 6.2). Earlier: M0, M2.5,
-M3.1, M3.3-B, M3.4.0-M3.4.4 passed; the first M3.4.5 run failed on the
-s51xx probe (no memory window; see "M3.4.5, first run"). **Every modem
-power-off is followed by one recovered UFS error-handler pass**, so the
-modem stays on once up (M2.6). **M4.1 (first SIT request) got no
-reply** (GET_SIM_STATUS timed out, CP still ONLINE, UFS 0). **M4.1b
-(2026-10-13) showed the modem never takes a frame from either legacy
-transmit buffer and sends nothing after ONLINE**; the doorbell, the shared
-memory and coherency check out, and the one remaining difference from
-stock and the working stack is the packet processor. Next on the phone:
-M4.1c (the same kernel with `modem-cpif-pktproc`; a reboot), held for the
-human. Section 6.3 lists what our CPIF port
-still lacks for data and suspend.
+Status (2026-10-13): **IPC works: the CP serves SIT (M4.1h passed).**
+The modem boots to ONLINE (M3.4.5b, M3.4.6) and, since M4.1h, answers
+SIT requests (no SIM: "SIM card state 0 applications []", radio state 3
+= POWER_OFF) and cycles its idle link as stock does, with no UFS handler
+pass so far. What it took, M4.1-M4.1h: the link at Gen3 x2 (`02cc44421`),
+stock's BAR layout (`7a7af33a2`), and above all **this phone's board id
+(`ro.boot.cdt_hwid`)**, without which the main firmware hung after
+INIT_END; `omandroid-modem` 0.1.4 requires it. **Never touch the modem's
+BARs from userspace while CPIF may have the link down** (section 4: a
+read of BAR0 with the link powered down hung the SoC, M4.1h). Earlier:
+M0, M2.5, M3.1, M3.3-B, M3.4.0-M3.4.4 passed. **Every modem power-off is
+followed by one recovered UFS error-handler pass**, so the modem stays
+on once up (M2.6). Next on the phone: M4.1i (a clean repeat with the
+full probe and ten minutes of idle link cycling, counting UFS passes),
+held for the human; M4.2 needs a SIM. Section 6.3 lists what our CPIF
+port still lacks for data and suspend.
 Kernel branch `omandroid-modem` in `~/android/mainline/wt-modem` (head
-`151fa8928`, section 6.3, M3.4.5b and M4.1b), build in `~/android/mainline/out-modem` (last
-full build `7.3.0-rc6-omandroid-push1-00365-g151fa8928ac4`, W=1 clean on
+`7a7af33a2`, section 6.3, M3.4.5b and M4.1b-M4.1h), build in `~/android/mainline/out-modem` (last
+full build `7.3.0-rc6-omandroid-push1-00367-g7a7af33a2ac5`, W=1 clean on
 the touched files).
 Everything new is disabled by default. RADIOS-CAMERA-PLAN.md section 1 is
 the survey this follows.
@@ -1712,6 +1710,483 @@ tools/phone-ssh 'C=/sys/devices/platform/cpif; cat $C/legacy_queues $C/info_regi
 # UFS after every step: unchanged, except a pass at a link power change (record it)
 ```
 
+**M4.1c, results (2026-10-13, int `937d47233`,
+`7.3.0-rc6-omandroid-push1-00446-g937d47233338`, overlays as M4.1b plus
+`modem-cpif-pktproc`; logs `logs/cam-m41c-kmsg.log`, `logs/m4.1c-*`):
+FAILED, unchanged.** The packet processor came up as on stock
+("pktproc_get_info: version:2 cp_base:0x20000000 mode:1 num_queue:4",
+UL 2 queues, MSI blocks 1-4, no "legacy buffers only"), one POWER_ON,
+ONLINE, UFS 0, "capability part:0 AP:0x00000003 CP:0x00000007". A minute
+after ONLINE: every legacy head and tail 0, both wakeup lines 1,
+`ap2cp_msg` 0xC2, `cp2ap_msg` 0xC8, MSI count 2052 as at the boot,
+cp2ap_wakeup interrupts 0. Probe: TimeoutError; after it FMT "tx head:24
+tail:0", `ap2cp_msg` 0x82. So the packet processor was not it (keep the
+overlay: it is stock's configuration). (Its downlink rings come out at
+4468 descriptors of 1584 bytes, stock's at 3456 of 2048 because stock
+sizes them for its IOMMU; the CP reads the count from the info region.)
+
+**Stock's own CP boot, read offline (2026-10-13) from the stock capture's
+dmesg** (`~/android/reference/cheetah-stock-cp2a-root/dmesg.txt`,
+private): the AP side runs the same steps in the same order and with the
+same timing as ours: IOCTL_HANDOVER_BLOCK_INFO, POWER_ON,
+START_CP_BOOTLOADER, ds_det 1, the ROM link, "set_cp_rom_boot_img:
+boot_img addr:0xEA410000 size:0x16800", boot_stage 0xFF then 0x3FFF, the
+ROM link down, CP2AP_WAKEUP 0 -> 1, the boot loader link,
+COMPLETE_NORMAL_BOOTUP, INIT_START about 1.05 s later, PIF_INIT_DONE,
+PHONE_START 0.5 ms later, the same capabilities, INIT_END, ONLINE. Then
+on stock: rild's first umts_ipc0/1 writes 66 ms after ONLINE (with the
+same one-off "wait for INIT_END done (150ms) cnt:1 last:0 cmd:0xC2" line
+as ours); at +2.4 s the FMT transmit buffer is busy enough to fill
+("NOSPC FMT_TX ... in:1656 out:1696"), so the CP is taking frames; from
++3.9 s the CP drops CP2AP_WAKEUP and CPIF powers the link down and up
+again and again ("Reserve doorbell interrupt: PCI not powered on", a new
+L0 each time). Ours: the CP takes nothing and holds CP2AP_WAKEUP high for
+good. So the CP stops between INIT_END and its IPC service, and the AP's
+sequence up to there matches stock's.
+
+What differs before that point is the boot loader link: **Gen1 x2 on
+every one of our boots** ("link at Gen1, below Gen3: retrying" twice,
+then the last try kept, each retry with a PERST# cycle under the boot
+loader), where stock's boot loader link and the working stack's are
+Gen3 x2. Upstream `dw_pcie_setup_rc()`, which Google's establish_link
+runs, ends by setting `PORT_LOGIC_SPEED_CHANGE` (DBI 0x80C bit 17; the
+working stack's host writes it too); without it a DesignWare port stays
+at 2.5 GT/s whatever Link Control 2 says. Our root-port setup
+(`1fc15c4a6`) stopped one write short. Whether the CP's IPC waits on the
+Gen3 link is not proven, but it is the one difference left on the path,
+the modem never asked for anything else, and a CP that holds its wakeup
+line high while waiting on a link change fits. `02cc44421` sets the bit
+(nothing changes for the ROM link, whose target is Gen1).
+
+Checked and the same as stock: the modem's GPIOs (stock's
+`gpio_ap2cp_*`/`gpio_cp2ap_*` and our board node name the same pins);
+`AP2CP_AP_ACTIVE` (PDA active) set high at the boot start by the same
+code; `ap2cp_united_status` 0x4000 (only ds_det; stock's CPIF writes no
+AP-status or PDA bits there either, those masks are parsed and never
+used); `ap2cp_kerneltime` is written only at suspend, resume and LCD
+events on stock too. The CP's own log: cbd clears the CP boot log at
+ONLINE (`IOCTL_CLR_CP_BOOTLOG`), and `IOCTL_GET_CP_BOOTLOG` (0x6F47 on
+umts_boot0) prints whatever the CP wrote there since to the kernel log;
+umts_dm0 needs a DM start request from a client, which we don't send.
+
+```sh
+# M4.1d the boot loader link at Gen3 (asks the human: reboot; announce: the modem powers on and the link
+# then may cycle on its own; risk: medium: a new link speed under the modem, and from here CPIF's idle
+# link power-downs, which may each cost a UFS handler pass (M2.5/M2.6))
+# Before (laptop): the human merges omandroid-modem (02cc44421 or later) into omandroid-int, builds it.
+# 1. the same overlays as M4.1c (modem-cpif-test, modem-cpif-pktproc after it), push, reboot;
+#    kmsg terminal into logs/m4.1d-kmsg.log; pass: lsmod 0, err_handler 0
+# 2. the modem to ONLINE (M3.4.5b step 4). Expect: the ROM link "link up: Gen1 x1 (target Gen1), try 1";
+#    the boot loader link "link up: Gen3 x2 (target Gen3), try 1" and NO "below Gen3: retrying";
+#    then as M4.1c (pktproc lines, AP:0x00000003 CP:0x00000007, INIT_END, ONLINE)
+#    stop: "no L0", "link did not settle", the boot loader link failing (cbd's attempt fails at once:
+#      0.1.2 stops it); the CP not ONLINE; an Oops. Rollback: images/kernel without 02cc44421; reboot
+# 3. the first minute after ONLINE (read-only), the UFS count before and after:
+tools/phone-ssh 'dmesg | grep -c ufshcd_err_handler; sleep 60; C=/sys/devices/platform/cpif;
+  cat $C/legacy_queues $C/info_region; cat /sys/kernel/debug/gs201-pcie-cp/status | grep -E "state|link Gen";
+  grep -E "mif_cp2ap|cp2ap_wakeup|phone_active|DW-PCI-MSI" /proc/interrupts; dmesg | grep -c ufshcd_err_handler' | tee logs/m4.1d-before.txt
+#   expect (stock's pattern): cp2ap_wakeup interrupts above 0, CP2AP_WAKEUP at 0 when idle, link power-downs
+#   and new link ups in the kmsg ("PHY isolated", "link up: Gen3 x2"), MSI counts rising, maybe an rx head
+#   off 0 (an indication or an RFS request)
+#   stop: UFS handler passes climbing with each link cycle (more than 3 in the minute): reboot now, record
+#     the count per cycle; the policy question (keep the link up while the modem runs) goes offline
+# 4. the probe, no SIM, and the after-state, as M4.1c step 4 (logs/m4.1d-probe.log, m4.1d-after.txt)
+#   pass: "SIT GET_SIM_STATUS: error=<n> length=<n>"; with no SIM "SIM card state 0 applications []" (or
+#     "SIM status layout unexpected, length <n>", or "modem rejected request with error <n>"); FMT tx
+#     tail == head. If the link was down, expect "Reserve doorbell interrupt: PCI not powered on" first
+#   fail: TimeoutError with "tx head:24 tail:0" again. Then, read-only, before anything else:
+tools/phone-ssh 'python3 -c "import fcntl, os
+fd = os.open(\"/dev/umts_boot0\", os.O_RDWR)
+try: fcntl.ioctl(fd, 0x6F47)
+except OSError as e: print(e)
+finally: os.close(fd)"; dmesg | grep -A2 "CP boot log" | tail -5'
+#     ("Invalid CP boot log[0]" = the CP wrote nothing since ONLINE; any text: check it for identifiers,
+#     quote only error words). Keep the modem up, send the logs
+# 5. AT on the RAW buffer, as M4.1b step 6: "+CFUN: 0" and OK
+# UFS after every step: unchanged except passes at link power changes (record each)
+```
+
+**M4.1d, results (2026-10-13, int `8070cddd9`,
+`7.3.0-rc6-omandroid-push1-00448-g8070cddd92a6` = `937d47233` +
+`02cc44421`; overlays as M4.1c plus camera-main; logs `logs/m4.1d-*`):
+the link fix works, the IPC doesn't.** ROM link "Gen1 x1 (target Gen1),
+try 1", boot loader link "**link up: Gen3 x2 (target Gen3), try 1**", no
+"below Gen3: retrying"; one POWER_ON, ONLINE, UFS 0 throughout. A minute
+after ONLINE: every legacy head and tail 0, both wakeup lines 1, link
+powered; cp2ap_wakeup interrupts 0, mif_cp2ap_msg 2052 as at the boot,
+mif_cp2ap_status 0; no link cycle. Probe: TimeoutError, FMT "tx head:24
+tail:0". `IOCTL_GET_CP_BOOTLOG`: "Invalid CP boot log[0]" (the CP wrote
+nothing there since ONLINE). AT: no reply, NORM_RAW "tx head:24 tail:0".
+Keep `02cc44421`: Gen3 x2 is stock's link.
+
+**Stock's window after ONLINE, read again:** stock's CP doesn't answer at
+once either. rild writes umts_ipc0/1 and oem_ipc3 at +66 ms, and at
++2.4 s the FMT transmit buffer is still full ("NOSPC FMT_TX{qsize:4096
+in:1656 out:1696 space:39"): the CP took nothing for at least 2.4 s. At
++3.9 s "check_legacy_tx_pending: idx: 0, head: 2552, tail: 2456": the
+tail has moved, so the CP started taking frames between +2.4 s and
++3.9 s, and at the same time dropped CP2AP_WAKEUP for the first time (the
+link cycle starts there). Stock's interrupt counts, captured later:
+mif_cp2ap_msg 2710 (ours stays at 2052), cp2ap_wakeup 31, the four packet
+queue blocks 0. So on stock the CP spends 2-4 s in its own start-up after
+INIT_END, then serves IPC and goes idle; ours never leaves that phase,
+and never sends a single message (no RFS request, no indication, no
+status) or drops its wakeup line.
+
+**Ruled out since M4.1c:** the link speed (now Gen3 x2); the packet
+processor; the AP's sequence up to ONLINE (step for step and timing as
+stock); the GPIOs; the AP-status bits; the boot log (empty). Not yet
+seen: whether the CP's PCIe controller accepts the doorbell writes after
+its main firmware took over. Before ONLINE every stage could be polling
+shared memory (the ROM's mailbox, PIF_INIT_DONE answered within 0.9 ms),
+so a doorbell that stopped working when the firmware re-initialised its
+endpoint would show exactly this: the init handshake passes, every later
+doorbell (INIT_END, the data sends, the link-ack) goes nowhere. A posted
+write the endpoint rejects leaves "UnsupReq+" in its Device Status; a
+read it rejects leaves "<MAbort+" at the root port. Both are in config
+space, readable now without touching the modem.
+
+```sh
+# M4.1e the endpoint's view of the doorbell (read-only; risk: low; no reboot, on the ONLINE modem;
+# config-space reads over the up link only, nothing written)
+# 1. config space of the modem's function and of its root port, before
+tools/phone-ssh 'command -v lspci >/dev/null || { echo "no lspci (pacman -S pciutils, asks the human)"; exit 1; }
+  lspci -vvv -s 0001:01:00.0; lspci -vvv -s 0001:00:00.0; lspci -xxxx -s 0001:01:00.0' | tee logs/m4.1e-before.txt
+#   read and record, for the modem's function: "Control: ... Mem+ BusMaster+"; "Region 0: Memory at 40000000
+#   (64-bit, non-prefetchable) [size=...]" (record the size: the main firmware's BAR0) and Regions 2-5;
+#   "MSI: Enable+ Count=4/..." with "Address: 00000000f6200000"; "DevSta: ... UnsupReq-/+"; the class.
+#   For the root port: "Secondary status: ... <TAbort- <MAbort-", "DevSta", "LnkSta: Speed 8GT/s, Width x2"
+# 2. one doorbell: the read-only AT query (as M4.1b step 6), then the same reads
+tools/phone-ssh 'cd /usr/lib/omandroid-sit && timeout 20 python3 -c "import os, at, paths
+fd = paths.open_channel(paths.ROUTER)
+try: print(repr(at.exchange(fd, at.COMMANDS[\"radio-state\"], 8)))
+finally: os.close(fd)"; lspci -vvv -s 0001:01:00.0; lspci -vvv -s 0001:00:00.0' | tee logs/m4.1e-after.txt
+#   decide:
+#   - the function's BAR0 no longer at 0x14e00000/CPU 0x40000000, Mem- or BusMaster-, MSI Enable-, or
+#     UnsupReq+ (new after the doorbell) or <MAbort+ at the root port: the endpoint the main firmware set up
+#     does not take our doorbell. Next (offline): restore or re-probe the endpoint's config after ONLINE
+#   - all as at the probe (BAR0 at 0x14e00000, Mem+ BusMaster+, MSI on, no UnsupReq/MAbort): the doorbell is
+#     accepted by the PCIe side and the CP's firmware ignores it. Next (one change, a reboot): make the first
+#     IPC come as stock's does, umts_ipc0 open before the boot and a request within 100 ms of ONLINE
+#   stop: an Oops or a CP crash (reading config space should cause neither)
+#   rollback: none (nothing written); the modem stays ONLINE
+```
+
+**M4.1e, results (2026-10-13, int `0470612d2`,
+`7.3.0-rc6-omandroid-push1-00451-g0470612d2158`, modem ONLINE, boot loader
+link Gen3 x2, UFS 0; logs `logs/m4.1e-before.txt`, `m4.1e-after.txt`).**
+Clean before, and unchanged by the one AT query: the modem's function
+Mem+ BusMaster+, Region 0 at 0x40000000 (64-bit, 1M), Regions 2-5 at
+0x40100000, 0x40200000, 0x40300000, 0x40400000 (32-bit, 1M each), MSI
+Enable+ 4/32 at 0xf6200000, DevSta and the AER status registers clear,
+link 8GT/s x2; the root port's window 0x40000000-0x405fffff (6M, as
+stock's). **Changed by the one doorbell: the modem's Status ">TAbort+"
+(Signaled Target Abort) and the root port's Secondary status "<TAbort+"
+(Received Target Abort).** So the modem's endpoint completes our doorbell
+access (CPIF writes the doorbell, then reads it back) with a Completer
+Abort. Both bits were clear before the query although INIT_END and the
+link-ack went through the same doorbell, with the same read-back, during
+the boot: the endpoint changed after INIT_END, when the main firmware
+starts its IPC.
+
+**Why (offline):** stock's s51xx probe writes `pci_db_addr` into BAR0,
+then "disables" BARs 0-5 by rewriting their resources and calling
+`pci_assign_resource()`; stock's own log shows the result: "BAR 0:
+assigned [mem 0x40000000 64bit]", "BAR 2: assigned [mem 0x40000001]",
+BAR 3 0x40000002, BAR 4 0x40000003, BAR 5 0x40000004, then BAR 0 again at
+0x40000005-0x40001005. Each register takes the address down to the BAR's
+1 MiB alignment, so on stock **all five BARs decode the same 1 MiB at bus
+0x14e00000**, and the doorbell at 0x14e60000 falls in every one of them.
+`d1fe3981d` kept the PCI core's assignment instead (BARs 2-5 in their own
+windows), which serves the boot stages through BAR0 but evidently not the
+main firmware's IPC. Which BAR or translation the firmware uses can't be
+read from the AP; stock's layout works, so `7a7af33a2` restores it:
+BARs 2-5 released from the PCI core and pointed at BAR0's bus address in
+the probe (before the configuration is saved) and after every restore.
+
+```sh
+# M4.1f-live OPTIONAL, on the modem ONLINE now, no reboot (asks the human: writes the modem's PCI config
+# space; risk: low-medium: the modem then sees stock's BAR layout; if its firmware fixed its doorbell
+# mapping at start the test is merely negative)
+tools/phone-ssh 'C=/sys/devices/platform/cpif; cat $C/legacy_queues; grep -E "mif_cp2ap|cp2ap_wakeup" /proc/interrupts;
+  setpci -s 0001:01:00.0 BASE_ADDRESS_2=14e00000 BASE_ADDRESS_3=14e00000 BASE_ADDRESS_4=14e00000 BASE_ADDRESS_5=14e00000;
+  lspci -b -vvv -s 0001:01:00.0 | grep -E "Region|Status:"' | tee logs/m4.1f-live-1.txt
+#   expect (-b shows the bus addresses in the registers): Regions 0 and 2-5 "at 14e00000"; the TAbort bits as
+#   M4.1e left them (status is not cleared here)
+# then one doorbell: the AT query of M4.1b step 6, and the state after
+tools/phone-ssh 'cd /usr/lib/omandroid-sit && timeout 20 python3 -c "import os, at, paths
+fd = paths.open_channel(paths.ROUTER)
+try: print(repr(at.exchange(fd, at.COMMANDS[\"radio-state\"], 8)))
+finally: os.close(fd)"; C=/sys/devices/platform/cpif; cat $C/legacy_queues;
+  grep -E "mif_cp2ap|cp2ap_wakeup" /proc/interrupts' | tee logs/m4.1f-live-2.txt
+#   pass: "+CFUN: 0" and OK, or at least NORM_RAW tx tail == head (the modem took the frame) and the MSI count
+#     rising; then the SIT probe (M4.1b step 4) too, without SIM: "SIT GET_SIM_STATUS: error=<n> ..."
+#   negative: no reply and "tx tail" unchanged: the firmware keeps the mapping it set up at INIT_END; M4.1f
+#     (the reboot) decides
+#   stop: a CP crash (modem_state not ONLINE, a crash file), an Oops
+#   rollback (either way, before anything else):
+#   setpci -s 0001:01:00.0 BASE_ADDRESS_2=14f00000 BASE_ADDRESS_3=15000000 BASE_ADDRESS_4=15100000 BASE_ADDRESS_5=15200000
+#   (a positive result can stay as it is: it is the layout the fixed kernel sets)
+
+# M4.1f the fixed kernel (asks the human: reboot; announce: the modem powers on; risk: medium)
+# Before (laptop): the human merges omandroid-modem (7a7af33a2 or later) into omandroid-int, builds it.
+# 1. same overlays as M4.1d, push, reboot, kmsg terminal into logs/m4.1f-kmsg.log; lsmod 0, err_handler 0
+# 2. the modem to ONLINE (M3.4.5b step 4). Expect, new: "BARs 2-5 on BAR0's bus address 0x14e00000, as stock"
+#    after the doorbell line; the two links as M4.1d (Gen1 x1, then Gen3 x2, try 1); ONLINE
+#    stop: the probe refusing, the CP not ONLINE, an Oops. Rollback: the M4.1d kernel
+# 3. read-only, before any IPC:
+tools/phone-ssh 'lspci -b -vvv -s 0001:01:00.0 | grep -E "Region|Status:"; C=/sys/devices/platform/cpif;
+  sleep 10; cat $C/legacy_queues; grep -E "mif_cp2ap|cp2ap_wakeup|phone_active" /proc/interrupts;
+  dmesg | grep -c ufshcd_err_handler' | tee logs/m4.1f-before.txt
+#   expect: Regions 0 and 2-5 all "at 14e00000" (bus view); Status ">TAbort-"; and now possibly stock's pattern by itself
+#   within seconds of ONLINE: an rx head off 0 (an RFS request or an indication), the MSI count rising,
+#   cp2ap_wakeup interrupts, link power-downs ("PHY isolated", "link up: Gen3 x2" again)
+#   stop: UFS handler passes climbing with each link cycle (more than 3 in a minute): reboot, record per cycle
+# 4. the probe, no SIM (M4.1b step 4) and the state after; lspci status again
+#   pass: "SIT GET_SIM_STATUS: error=<n> length=<n>"; with no SIM "SIM card state 0 applications []" (or the
+#     short layout / "modem rejected request with error <n>"); FMT tx tail == head; ">TAbort-" still
+#   fail: TimeoutError and ">TAbort+" again: the doorbell is still refused; keep the modem up, send the logs
+# 5. AT on the RAW buffer: "+CFUN: 0" and OK
+# UFS after every step: unchanged except a pass at a link power change (record each)
+```
+
+**M4.1f, results (2026-10-13, int `dd6026712`,
+`7.3.0-rc6-omandroid-push1-00455-gdd6026712200` = `0470612d2` +
+`7a7af33a2`, overlays as M4.1d; no kmsg stream this boot).** "BARs 2-5 on
+BAR0's bus address 0x14e00000, as stock"; ROM link Gen1 x1, boot loader
+link Gen3 x2, both at try 1; ONLINE, UFS 0; `lspci -b`: Regions 0 and 2-5
+at 14e00000, ">TAbort-". About 65 s after ONLINE: every legacy head and
+tail 0, both wakeup lines 1, link powered, cp2ap_wakeup interrupts 0,
+mif_cp2ap_msg 2052. Probe: TimeoutError, FMT "tx head:24 tail:0",
+**">TAbort-" now** (the doorbell read-back completes), MSI count
+unchanged. Keep `7a7af33a2` (stock's layout, and the abort is gone); it
+did not make the CP take frames.
+
+Where that leaves it: the AP side now matches stock in every register and
+step we can see (link Gen3 x2, BAR layout, MSI, doorbell address and
+value, shared-memory layout and coherency, the INIT handshake), and the
+CP passed INIT_END (it changed its endpoint after it, M4.1e) but never
+sends a message, never drops its wakeup line and never takes a frame. The
+AP can't see inside the CP; the next steps ask the CP directly:
+- the doorbell register itself, read back once (CPIF reads it after
+  every doorbell and throws the value away): a value still holding our
+  last doorbell (0x10000) means the CP's firmware never serviced the
+  interrupt; 0 means it did, and the frames are ignored above that;
+- a forced CP crash (`IOCTL_TRIGGER_CP_CRASH`): on the S5300 that goes
+  out on the AP2CP_DUMP_NOTI line, not the doorbell. A CRASH_ACK back (an
+  MSI, "CP_CRASH_ACK") proves the firmware alive with working MSIs, which
+  puts the fault on the doorbell side; "No CRASH_ACK from CP" means the
+  firmware hangs as a whole after INIT_END.
+
+```sh
+# M4.1g-1 read-only, on the modem ONLINE now (risk: was "low"; it is NOT: see the warning below; one 32-bit
+# read of the modem's doorbell register, the access CPIF already makes after every doorbell, and config/log reads)
+# !!! DO NOT RUN THIS AGAIN as written. A read of the modem's BAR space while CPIF has the link powered
+# !!! down (idle cycling, from M4.1h on) hangs the SoC hard: M4.1h, 2026-10-13, watchdog reset after ~2 min,
+# !!! no pstore (section 4). It ran safely here only because this CP never idled. Any BAR access from
+# !!! userspace needs, in the same shell and immediately before it: pcie_powered_on:1 in legacy_queues AND
+# !!! "link 1" in the host's debugfs status; even then CPIF can power the link down in between, so prefer
+# !!! CPIF's own paths (its doorbell read-back runs under its own locks) and config space (lspci/setpci
+# !!! go through the host's guarded config accessors and are safe with the link down).
+tools/phone-ssh 'dmesg | grep -nE "link down|PHY isolated|no L2 idle|link up|secure ATU" | tail -8;
+  C=/sys/devices/platform/cpif; grep -q "pcie_powered_on:1" $C/legacy_queues &&
+  grep -q "link 1" /sys/kernel/debug/gs201-pcie-cp/status || { echo "link down: no BAR access"; exit 1; };
+  python3 -c "import mmap, os, ctypes
+fd = os.open(\"/sys/bus/pci/devices/0001:01:00.0/resource0\", os.O_RDWR | os.O_SYNC)
+m = mmap.mmap(fd, 0x61000, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE)
+r = ctypes.c_uint32.from_buffer(m, 0x60000)
+print(\"doorbell reads %#010x\" % r.value)
+del r; m.close(); os.close(fd)";
+  lspci -vvv -s 0001:01:00.0 | grep -E "Status:|Masking|Pending|DevSta|UESta"; lspci -vvv -s 0001:00:00.0 | grep -E "Secondary status|UESta|DevSta";
+  C=/sys/devices/platform/cpif; cat $C/legacy_queues; cat /sys/kernel/debug/gs201-pcie-cp/status | grep -E "state|link Gen|faults"' | tee logs/m4.1g-1.txt
+#   record: the link lines (the one "PHY isolated" should be the ROM link's end at the boot, before the Gen3
+#   link up; anything after ONLINE is new); the doorbell value; MSI Pending (a set bit 0/1 = an MSI the CP
+#   raised that never got out); the error bits
+#   note: the mapping is writable only because ctypes needs that for a 32-bit load; the script only reads.
+#   Never use devmem for this (AGENTS: a second argument writes)
+#   stop: an Oops, a CP crash; rollback: none
+
+# M4.1g-2 the forced CP crash (asks the human; do it last on this boot, right before the planned reboot;
+# risk: medium: the modem goes to its crash state and stays there until the reboot, which powers it off
+# as always (one UFS pass); no NV is written (the crash dump is not collected: no cbd runs))
+tools/phone-ssh 'grep -E "mif_cp2ap|phone_active|cp2ap_wakeup" /proc/interrupts; python3 -c "import fcntl, os
+fd = os.open(\"/dev/umts_boot0\", os.O_RDWR)
+try: fcntl.ioctl(fd, 0x6F34, 0)
+finally: os.close(fd)"; sleep 12; dmesg | grep -E "cpif|s51xx" | tail -25;
+  grep -E "mif_cp2ap|phone_active|cp2ap_wakeup" /proc/interrupts; cat /sys/devices/platform/cpif/modem_state;
+  cat /sys/devices/platform/cpif/legacy_queues; dmesg | grep -c ufshcd_err_handler' | tee logs/m4.1g-2.txt
+#   expect: "trigger_cp_crash_internal: +++", "SET GPIO AP2CP_DUMP_NOTI = 1", "CP_CRASH_REQ by ...";
+#   then either "CP_CRASH_ACK" (an MSI: mif_cp2ap_msg above 2052) and/or a phone_active interrupt and
+#   modem_state CRASH_EXIT: the firmware is alive and its MSIs work -> the doorbell side is the fault;
+#   or "ERR! No CRASH_ACK from CP" after the timeout: the firmware hangs after INIT_END
+#   (the modem unit's watcher records a crash; that is expected here)
+#   stop: an Oops; UFS beyond 0 before the reboot
+#   rollback: the reboot (planned anyway)
+```
+
+**M4.1g, results (2026-10-13, int `dd6026712`, `...00455`; logs
+`logs/m4.1g-1.txt`, `m4.1g-2.txt`).**
+- M4.1g-1 (read-only): the only link events of the boot are the ROM link
+  (Gen1 x1, try 1), its end ("no L2 idle, LTSSM 0x11", "PHY isolated"),
+  and the boot loader link (Gen3 x2, try 1); nothing after ONLINE.
+  **"doorbell reads 0x00010000"**: our last doorbell still sits in the
+  modem's doorbell register, never serviced. ">TAbort-"; MSI Masking
+  fffffffc, Pending 0; DevSta, UESta, root port secondary status clean;
+  FMT tx 24/0; both wakeup lines 1; host "phy 1/1, link 1, atu 1",
+  faults 0, Gen3 x2.
+- M4.1g-2 (forced crash): "trigger_cp_crash_internal: +++", "SET GPIO
+  AP2CP_DUMP_NOTI = 1", "CP_CRASH_REQ by 9", then after 5 s **"ERR! No
+  CRASH_ACK from CP"**, ONLINE -> CRASH_EXIT. No MSI (2052), no
+  phone_active or cp2ap_wakeup edge, magic 0xBDBD (CPIF's crash magic,
+  written by the AP), UFS 0. The phone was rebooted after (CP off).
+
+So the CP's firmware stops answering anything, its doorbell interrupt and
+its DUMP_NOTI line alike, somewhere after INIT_END, without signalling a
+crash (phone_active stays high). Stock's CP spends the same 2-4 s after
+INIT_END in its own start-up before serving IPC (M4.1d); ours hangs in it.
+A hang without a crash report is what a CP core stalled on a bus access,
+or stuck in hardware bring-up, looks like.
+
+**What its start-up depends on that differs from the working stack:**
+- **The board's hardware id (`ro.boot.cdt_hwid`).** The working stack
+  copies it from the phone's own stock properties (section 6.1); we left
+  it optional and never set it, and cbd says so on every boot: "CDT
+  property invalid", "WRN! cannot fetch cdt values", "WRN! cdt value
+  rfid has not been set. Use handover_table", "WRN! cdt value hwinfo has
+  not been set", "rfid:0". cbd hands the CP its RF id and hardware info
+  in the handover block (IOCTL_HANDOVER_BLOCK_INFO, just before
+  POWER_ON); the boot stages don't use them, the main firmware's RF and
+  board bring-up after INIT_END does. An RF configuration for the wrong
+  (or no) board variant hanging the CP in that bring-up fits everything
+  seen. This is the first change: runtime only, one property file.
+- Later, one per boot, if that is not it: the AoC voice window (stock's
+  `cp_aoc_rmem` 0x197fd000 and CPIF's 0x195fd000; we leave both out, and
+  a CP read into AoC SRAM that never completes would stall it); the
+  firmware version (the working stack ran g5300q-240919-241106, ours is
+  the factory image's g5300q-260317-260505: a newer firmware may need what
+  the older didn't); `ro.vendor.cbd.modem_type=s5100sit` (the working
+  stack sets it; we pass `-t s5100sit` to cbd instead).
+- Ruled out by now: the link (Gen3 x2), the BAR layout, MSI, the
+  doorbell's address and value, the shared memory's layout and coherency,
+  the packet processor, the AP's sequence and timing to ONLINE, the GPIO
+  pins, the AP-status bits, rfsd (the CP never got as far as asking it).
+
+```sh
+# M4.1h the board id for cbd (asks the human: writes /var/lib/omandroid-vendor/modem/props.conf, a reboot;
+# announce: the modem powers on; risk: medium: the CP gets a hardware id it never had under Linux; it is the
+# one stock and the working stack hand it). The value is per phone: never in the repo, a log excerpt or here.
+# Before (laptop, private): the value from this phone's own stock getprop capture
+#   (~/android/reference/cheetah-stock-cp2a/getprop.txt, "[ro.boot.cdt_hwid]"); don't print it
+grep -F '[ro.boot.cdt_hwid]' ~/android/reference/cheetah-stock-cp2a/getprop.txt |
+  sed -E 's/^\[ro\.boot\.cdt_hwid\]: \[(.*)\]$/ro.boot.cdt_hwid=\1\npersist.vendor.modem.cdt_hwid=\1/' |
+  tools/phone-ssh 'install -d -m 700 /var/lib/omandroid-vendor/modem; f=/var/lib/omandroid-vendor/modem/props.conf;
+    touch $f; chmod 600 $f; grep -v cdt_hwid $f > $f.new || true; cat >> $f.new; mv $f.new $f;
+    grep -c "^ro.boot.cdt_hwid=." $f; grep -c "^persist.vendor.modem.cdt_hwid=." $f'
+#   pass: 1 and 1 (counts only; the value is not shown)
+# 1. reboot as M4.1f (same kernel, same overlays); kmsg terminal; lsmod 0, err_handler 0
+# 2. the modem to ONLINE (M3.4.5b step 4). In the unit's journal, check cbd's lines, without quoting values:
+tools/phone-ssh 'journalctl -u omandroid-modem --no-pager | grep -E "\[cbd\]" | grep -ciE "CDT property invalid|cannot fetch cdt|has not been set"'
+#   pass: 0 (cbd found the CDT values); "rfid:" no longer 0 (look, don't paste); ONLINE as before
+#   stop: cbd refuses or fails earlier than before (record the step names, not values); the CP not ONLINE
+#   rollback: remove the two lines from the props file; reboot
+# 3. a minute after ONLINE, read-only, as M4.1f step 3 (legacy_queues, interrupts, link lines, UFS)
+#   expect if it was this: stock's pattern by itself (an rx head off 0, MSIs above the boot's count,
+#   cp2ap_wakeup interrupts, link power-downs); UFS check as before
+# 4. the probe, no SIM, and the after-state (M4.1f step 4); 5. AT on the RAW buffer
+#   pass: a "SIT GET_SIM_STATUS: error=<n> length=<n>" line; FMT tx tail == head
+#   fail: TimeoutError again: read the doorbell register (M4.1g-1) and stop; the AoC window is next
+# UFS after every step: unchanged except a pass at a link power change (record each)
+```
+
+**M4.1h, results (2026-10-13, int `aca2c8163`,
+`7.3.0-rc6-omandroid-push1-00457`, same kernel and overlays as M4.1g, a
+fresh boot, the board id in `/var/lib/omandroid-vendor/modem/props.conf`;
+log `logs/m4.1h-probe.log`): PASSED, IPC works.**
+- cbd: "cdt property fetched from ro.boot.cdt_hwid", "Update handover
+  block info", "handover block v1"; still "WRN! cdt value rfid has not
+  been set. Use handover_table.", "WRN! cdt value hwinfo has not been
+  set.", "rfid:0" (see below). ONLINE, UFS 0.
+- About 60 s after ONLINE, by itself, stock's pattern: FMT rx head 2704 =
+  tail (indications delivered), NORM_RAW tx 10656/10656 and rx
+  672408/672408 (rfsd's traffic both ways), **cp2ap_wakeup:0
+  ap2cp_wakeup:0 pcie_powered_on:0** (the idle link power-down),
+  cp2ap_wakeup interrupts 13, mif_cp2ap_msg 2397 (2052 at the boot), UFS 0.
+- Probe (no SIM): "SIT GET_SIM_STATUS: error=0 length=80", "SIM card
+  state 0 applications []" (absent); "GET_RADIO_POWER: error=0", "radio
+  state 3" (POWER_OFF, MODEM-SIT-RESEARCH 3.1: the radio is off);
+  "GET_PS_REG_STATE: error=0", "packet registration state 0 reject 0 RAT
+  0"; "GET_NR_MODE: error=0", "NR mode [3]"; "GET_PS_SERVICE: error=0",
+  "PS service [1]"; "GET_SMSC_ADDR: error=11" (no SIM: expected). FMT tx
+  144/144, rx 3024/3024 after.
+- Then an operator error, recorded as a hazard (section 4): the M4.1g-1
+  doorbell read (an mmap of BAR0) run while the link was powered down
+  hung the SoC; the watchdog reset it about 2 minutes later, no pstore.
+  The modem was off on the next boot (no modem start); M3.5 before M4.1i.
+
+**The rfid/hwinfo warnings are benign.** cbd takes rfid and hwinfo from
+the modem image's `hardware_config.json` ("Pick HW config path from
+config table", `persist.vendor.modem.hw_config.json_table`), and this
+factory image has none: `images/g5300q-260317-260505-B-15346003/` holds
+only `modem.bin`, `confpack`, `uecap` and `pw_token_db*` (listed from the
+private backup's ext4, nothing extracted), as the working stack also
+noted. So cbd falls back ("Use handover_table") on stock exactly as here;
+the board's own values reach the CP through the handover block built from
+the CDT id and the bootloader's `/chosen/plat` (rfid, modem_hw, modem_sku,
+which our profile binds read-only). What was missing before M4.1h was the
+CDT id itself ("CDT property invalid", "cannot fetch cdt values"). The
+"rfid:0" line is cbd's log of the config-table value it didn't find.
+
+**`omandroid-modem` 0.1.4:** the board id is a required per-phone input.
+The profile's check (`omandroid-vendor-chroot modem check`, run by the
+unit before the hang marker) refuses to start without a non-empty
+`ro.boot.cdt_hwid` in `/var/lib/omandroid-vendor/modem/props.conf`, or with
+a `persist.vendor.modem.cdt_hwid` that differs from it; the install
+script says so on install and warns on upgrade. The value is copied from
+this phone's own stock getprop (the M4.1h one-liner); it never goes into
+the repo, a log excerpt or this plan. Tests cover the check with made-up
+values.
+
+```sh
+# M4.1i a clean repeat, the full read-only probe, ten minutes idle (asks the human: install 0.1.4 and a reboot;
+# announce: the modem powers on and then idles its link; risk: low-medium: link power cycles under load of
+# nothing, each a possible UFS handler pass)
+# NO BAR ACCESS from userspace in this step or after (section 4). Config space (lspci) is fine.
+# 0. M3.5 (read-only): the six partitions against the backup, as M3.4.0; no diff
+# 1. install 0.1.4 (the board id file stays as M4.1h wrote it)
+tools/phone-install-package packages/omandroid-modem
+tools/phone-ssh 'pacman -Q omandroid-modem; /usr/lib/omandroid-vendor/omandroid-vendor-chroot modem check | tail -2'
+#   pass: 0.1.4; "preconditions met" (with the id; without it the check names the missing property)
+# 2. reboot, same kernel and overlays as M4.1h; kmsg terminal into logs/m4.1i-kmsg.log; lsmod 0, err_handler 0
+# 3. the modem to ONLINE (M3.4.5b step 4); pass as M4.1h (cbd fetches the CDT id; ONLINE; UFS 0)
+# 4. the probe at once, then AT, read-only
+tools/phone-ssh 'timeout 60 omandroid-sitd --probe' 2>&1 | tee logs/m4.1i-probe.log
+#   pass: every request "error=0" except GET_SMSC_ADDR (error 11 without a SIM); "SIM card state 0
+#   applications []"; "radio state 3" (POWER_OFF); "packet registration state 0 ..."
+tools/phone-ssh 'cd /usr/lib/omandroid-sit && timeout 20 python3 -c "import os, at, paths
+fd = paths.open_channel(paths.ROUTER)
+try: print(repr(at.exchange(fd, at.COMMANDS[\"radio-state\"], 8)))
+finally: os.close(fd)"'
+#   pass: "+CFUN: 0" and OK (the radio off as SIT says; quote only those)
+# 5. ten minutes idle: count link power cycles and UFS handler passes (read-only)
+tools/phone-ssh 'u0=$(dmesg | grep -c ufshcd_err_handler); d0=$(dmesg | grep -c "PHY isolated"); sleep 600;
+  u1=$(dmesg | grep -c ufshcd_err_handler); d1=$(dmesg | grep -c "PHY isolated");
+  echo "link power-downs: $((d1-d0)), UFS handler passes: $((u1-u0))";
+  grep -E "mif_cp2ap|cp2ap_wakeup" /proc/interrupts; cat /sys/devices/platform/cpif/modem_state;
+  cat /sys/devices/platform/cpif/legacy_queues | grep -E "FMT|NORM_RAW|wakeup"' | tee logs/m4.1i-idle.txt
+#   record: power-downs per 10 min, UFS passes per 10 min (expect 0: M4.1h saw none over its cycles); still ONLINE
+#   stop: UFS passes rising with the cycles (more than one per ten cycles, or any I/O, ext4 or reset line): stop
+#     the step and report: the next change is a link policy (keep the link up while the modem runs), offline
+# 6. the probe once more after the idle period (it wakes the link): the same pass as 4.; one UFS check
+# 7. M3.5 (read-only) at the end; leave the modem up or reboot as the human prefers (a reboot: one UFS pass)
+```
+
+**Before M4.2:** M4.1i passed; a SIM with its PIN lock off in the phone
+(M4.2's preconditions), the carrier's APN in
+`/etc/omandroid/modem-sit.conf` (M4.0). M4.2's own expectations above are
+unchanged; with the CP's start-up fixed they apply as written. Open,
+not blocking M4.2: suspend with the modem up (CPIF's PM paths, section
+6.3), and whether the link's idle cycles stay UFS-clean over hours.
+
 **M4.2 needs a SIM**: registration waits for GET_SIM_STATUS to show a
 ready USIM (`sim_timeout`, 120 s) and fails without one. With no SIM,
 M4.1b is the last M4 step.
@@ -1719,6 +2194,19 @@ M4.1b is the last M4 step.
 
 ## 4. Risks
 
+- **Never touch the modem's BARs from userspace while CPIF may have the
+  link down.** From M4.1h on the modem idles like stock: it drops
+  CP2AP_WAKEUP and CPIF powers the link down (PHY isolated) until either
+  side wants it again. A read of BAR0 (an mmap of `resource0`, the M4.1g-1
+  doorbell read) with the link powered down hung the SoC hard on
+  2026-10-13: SSH and ping gone, the watchdog reset it about 2 minutes
+  later, no pstore. The access goes to an isolated PCIe controller and
+  never completes; it is the "PCIe ELBI while the PHY is isolated" hang
+  (AGENTS 4) through the outbound window. Config space is safe (the host's
+  config accessors refuse while the link is down: `lspci`, `setpci` read
+  all-ones); `devmem` and sysfs `resource*` mmaps are not. A check of
+  `pcie_powered_on:1` and "link 1" right before narrows the window but
+  can't close it (CPIF may power down in between): use CPIF's own paths.
 - **First accesses to HSI1's controller.** Isolation is released before any
   ELBI read (as for Wi-Fi). If `link_up` hangs, the cause is the PHY or a
   clock: HSI1 has no CMU driver, and stock manages no clocks for ch0
