@@ -339,6 +339,12 @@ mounts read-write or the storage guard complains. Rollback: `modprobe -r sg`.
 ### F4: secure storage (IRREVERSIBLE: the first RPMB write from Linux)
 
 **Ask the human; record the yes and the section 5 choice here first.**
+The staged runs use the transient unit `omandroid-fp-stage`. The package
+ships its own `omandroid-fp.service` (disabled, the full bridge), so
+`systemd-run --unit=omandroid-fp` fails with "already loaded or has a
+fragment file".
+
+
 Install the package and the vendor tree (installing writes nothing to
 Trusty):
 
@@ -347,8 +353,8 @@ tools/phone-install-package packages/omandroid-fingerprint
 tar -C out/fingerprint-vendor -cf - root MANIFEST SOURCE | tools/phone-ssh 'tar -C /usr/lib/omandroid-fp -xf -'
 tools/phone-ssh '/usr/lib/omandroid-fp/omandroid-fp-chroot check'
 # --- the irreversible step ---
-tools/phone-ssh 'systemd-run --unit=omandroid-fp -p KillMode=control-group /usr/lib/omandroid-fp/omandroid-fp-chroot start storage'
-tools/phone-ssh 'sleep 10; journalctl -u omandroid-fp -b --no-pager | tail -40; cat /dev/trusty-log0 2>/dev/null | tail -20'
+tools/phone-ssh 'systemd-run --unit=omandroid-fp-stage -p KillMode=control-group /usr/lib/omandroid-fp/omandroid-fp-chroot start storage'
+tools/phone-ssh 'sleep 10; journalctl -u omandroid-fp-stage -b --no-pager | tail -40; cat /dev/trusty-log0 2>/dev/null | tail -20'
 ```
 
 Expect `check`: "preconditions met", RPMB `/dev/sgN`. Then
@@ -357,13 +363,13 @@ requests, "secure storage ready"; Trusty's log mounting tp/td/tdp (td new,
 the others loaded); files under `/var/lib/omandroid-fp/data/vendor/ss`.
 **Stop** on storageproxyd errors or RPMB authentication failures ("MAC
 mismatch", result codes): do not retry in a loop, collect the log. Rollback:
-`systemctl stop omandroid-fp` (RPMB contents cannot be rolled back).
+`systemctl stop omandroid-fp-stage` (RPMB contents cannot be rolled back).
 
 ### F5: the TA (one change; risk low)
 
 ```sh
-tools/phone-ssh 'systemctl stop omandroid-fp; systemd-run --unit=omandroid-fp -p KillMode=control-group /usr/lib/omandroid-fp/omandroid-fp-chroot start apploader'
-tools/phone-ssh 'sleep 5; journalctl -u omandroid-fp -b --no-pager | grep -E "g7|apploader|storage" | tail; python3 - goodix' < packages/omandroid-fingerprint/lib/omandroid-tipc-probe
+tools/phone-ssh 'systemctl stop omandroid-fp-stage; systemd-run --unit=omandroid-fp-stage -p KillMode=control-group /usr/lib/omandroid-fp/omandroid-fp-chroot start apploader'
+tools/phone-ssh 'sleep 5; journalctl -u omandroid-fp-stage -b --no-pager | grep -E "g7|apploader|storage" | tail; python3 - goodix' < packages/omandroid-fingerprint/lib/omandroid-tipc-probe
 ```
 
 Expect "loading g7.app" then "g7.app loaded" within seconds (stock: 0.32 s),
@@ -403,8 +409,8 @@ down), DTB without `fingerprint-sensor`.
 F6c (the HAL):
 
 ```sh
-tools/phone-ssh 'systemctl stop omandroid-fp; systemd-run --unit=omandroid-fp -p KillMode=control-group /usr/lib/omandroid-fp/omandroid-fp-chroot start hal'
-tools/phone-ssh 'sleep 15; journalctl -u omandroid-fp -b --no-pager | grep -E "\[fingerprint\]|\[keymint\]|\[gatekeeper\]" | tail -40; grep goodix /proc/interrupts'
+tools/phone-ssh 'systemctl stop omandroid-fp-stage; systemd-run --unit=omandroid-fp-stage -p KillMode=control-group /usr/lib/omandroid-fp/omandroid-fp-chroot start hal'
+tools/phone-ssh 'sleep 15; journalctl -u omandroid-fp-stage -b --no-pager | grep -E "\[fingerprint\]|\[keymint\]|\[gatekeeper\]" | tail -40; grep goodix /proc/interrupts'
 ```
 
 Expect "HAL/TA version is match", "Initialization successful", the sensor
