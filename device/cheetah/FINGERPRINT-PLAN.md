@@ -914,3 +914,9 @@ wrong-PIN for a correct one: restore `/root/LockView.qml.pre-f16b`.
 | F7 | 2026-10-13 | `…-00402` | **Passed** (the human ran it): a bright circle over the sensor, timed out by itself. `allow_lhbm` resets at boot: package 0.1.2+ sets it with a modprobe option |
 | F8 | 2026-10-13 | `7.3.0-rc6-omandroid-push1-00405-g3bc8d8565645` | First tries: Gatekeeper enroll failed with `UNEXPECTED_NULL` (the bridge sent null arrays; fixed to empty arrays in 0.1.2); the HAL couldn't open `mfg_data` read-write (now a per-run scratch copy); `allow_lhbm` off after a reboot (no circle). A cancel the HAL never answers leaves the bridge stuck; restarting the service then fails (Trusty keeps the old storage proxy) until a reboot. **Passed**: about 17 good touches, `PROGRESS` 34 → 0, `ENROLLED`. `ACQUIRED 11` (immobile) when the finger isn't moved between touches |
 | F9 (HAL) | 2026-10-13 | `…-00405` | **Passed**: enrolled finger → `MATCH`; another finger → `NOMATCH`. fprintd next |
+
+**F16b result (2026-10-13, phone LockView.qml 4c72b5be):** passed. The human
+confirmed: no keyboard over the lock until ABC, a correct PIN on the pad
+unlocks, a wrong one fails, the finger unlocks, ABC/123 show and fold the
+keyboard, and the hide-keyboard button and Keyboard tile work.
+
