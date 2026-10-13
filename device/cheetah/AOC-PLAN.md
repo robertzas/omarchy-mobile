@@ -1466,6 +1466,24 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
        the ADC and the class-H settings. Use the stock tuning and our own
        register captures. No more listening steps at analog 17 until that
        difference is found. The default stays stage media 737/10.
+     **C9d-4 step 1 (2026-10-13, 7.3.0-rc6-omandroid-push1-00395-g6c0e876bd580;
+     stopped):** this tested whether the runaway comes from our post-DSP gain
+     differing from stock's. Both amplifiers were at stock's 817/17, with
+     the level taken down in the file instead: a -40 dBFS multitone at sink
+     1.0, the same speaker voltage as 657/17 with mt20. **It still ran away:**
+     the top read 25 → 50 → 61 → 69 → 77 °C (maximum 83) in 8 s, and the
+     bottom 25 → 43 °C, with vmon low 1 on both throughout. R_selected
+     stayed CAL_R yes, and there were no over-counts. The listener heard
+     static again. The watchdog didn't mute, because the live reading
+     peaked at 77 °C, under its 80 °C limit.
+     - So the gain-mismatch theory is disproved: at analog gain 17 the
+       voltage sense is wrong whatever the signal level.
+     - A -23 dBFS tone at the default 737/10 right after was clean.
+     - Next (offline): what changes with gain 17 on our setup, such as
+       boost headroom and target, the class-H mode, the RX6 source, and the
+       VMON/IMON ranges.
+     - Also lower the watchdog's limit so that it acts on a jump, not only
+       on 80 °C.
    - **C9e balance** (at the last step that passed; risk medium):
      `burst /tmp/mtL.wav 1.0`, then `burst /tmp/mtR.wav 1.0`, with the
      phone upright in front of the listener at about 30 cm (and, if
