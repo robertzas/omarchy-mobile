@@ -1127,6 +1127,68 @@ assigned, graph `imx386 0-001a` -> `gs201-csis link 1` ->
   diagnostics) and in the overlays (each disables the other link);
   `tools/camera-cap-test` replaces the hand-quoted commands.
 
+**CAM3b.3 result (2026-10-12, 7.3.0-rc6-omandroid-push1-00365-g23c2869425ea:
+int with 38355918e; `camera-stream-link0`, then `-link1`, the other link
+disabled each time; `camera-cap-test LINK=N DMA=0`; logs
+`logs/cam3b3-c.out`, `logs/cam3b3-l1c.out`, private): the sensor streams,
+neither link receives anything.** Both runs alike: one sensor->CSIS link;
+`dcphy: link N: 4 lanes at 1548288000 bps, settle 7; PMU 0x3ebc = 0x1,
+clock lane GNR_CON0 0x3` (isolation released); `imx386: streaming
+2016x1508: mode_select 1, frame_count 255 -> 6 in 100 ms, mclk 24576000 Hz`
+and 53/48 at stop (about 60 fps); `link N on: ... CMN_CTRL 0x00004f01
+PHY_CMN 0x1f INT_MSK0/1 0x00fff07f/0x7e`; at stop `FRM_CNT 0`, every
+source 0, no link interrupt, no errors. Wi-Fi fine across the boots.
+
+**Why (offline, second RE follow-up):** the stock camera software's last
+start step is missing from ours: after configuring the PHY, the routing,
+the DMA and the link, it sets the link's bit in CSIS sysreg 0x500
+(`0x1a420500`, the register Google's GPL DT calls the per-PHY reset, which
+no GPL driver writes) and clears it at stop. It never reads or polls a PHY
+or link status while starting, and writes nothing else outside what we
+already write (in D-PHY mode only the bias word outside the lane windows;
+in the link only the RE2 list and the second interrupt mask). It also sets
+a bit in sysreg 0x488 (link + 8 x PDP channel; with no PDP the code gives
+link + 24, unconfirmed for a RAW-only stream). Added in `f32305542`: the
+reset release (on by default, `link_reset_release=0` to leave it out), the
+0x488 bit as an experiment (`sysreg_link_sel=1`), both registers logged at
+stream on; and in `15e8541d3` a debugfs `scan` of all eight links and the
+sysreg routing page and a dump of the PHY's lane registers, which
+`camera-cap-test` prints mid-stream. Which link the ultrawide is on is
+still not known statically; a stock logcat while the camera opens prints
+it ("Camera ID ..., CSIS LINK ..."), but that needs a slot A boot (the
+human's go, and a fresh partition backup after it).
+
+### CAM3b.4: link reset released, then the 0x488 bit. Risk: medium (no DMA)
+
+Kernel from `f32305542` (or int after the merge). One run per boot, link 0
+first, stop at the first pass:
+
+```sh
+# CAM3b.4a link 0 with the reset released (the new default)
+ov <the overlays the phone runs now> camera-stream-link0 && bin/omandroid push   # ASK FIRST
+tools/camera-stage --watchdog x --cmd 'LINK=0 DMA=0 bash -s' --script tools/camera-cap-test
+# CAM3b.4b the same on link 1 (camera-stream-link1, LINK=1)
+# CAM3b.4c only if neither counted: link 0 again with the 0x488 bit as well
+tools/camera-stage --watchdog x --cmd 'LINK=0 DMA=0 CSIS_OPTS=sysreg_link_sel=1 bash -s' --script tools/camera-cap-test
+# CAM3b.4d the same on link 1
+```
+
+- **Expect:** `sysreg 0x488 = ..., 0x500 = ... before start` (record both:
+  ABL's values), then `... after start` with bit N of 0x500 set; the
+  mid-stream `scan` shows this link's `FRM_CNT` and the other seven links;
+  the PHY `regs` dump shows the clock and four data lanes with
+  `GNR_CON0` = 1 or 3.
+- **Pass:** this link's `FRM_CNT` and `frame_start`/`frame_end` rising
+  (about 60/s) with no errors: that's the ultrawide's link, and CAM4 can
+  follow on it.
+- **Also useful if it fails:** whether `SRC0` now shows errors (data
+  arrives but the PHY settings or lane order are wrong: stop before DMA),
+  and whether any other link's `FRM_CNT` in the scan moved.
+- **Stop:** link errors that keep coming, any hang (watchdog, pstore),
+  anything odd on the other camera blocks.
+- **Rollback:** reboot (the bit is cleared at stop and lost at reset);
+  `link_reset_release=0` restores the CAM3b.3 behaviour.
+
 ### CAM4: the CSIS WDMA writes frames. Risk: high (first DMA)
 
 The WDMA writes to the buffer address it is given, with its SysMMU in
