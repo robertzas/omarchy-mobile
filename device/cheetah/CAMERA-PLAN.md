@@ -1069,50 +1069,63 @@ tools/phone-ssh 'modprobe gpio_s2mpg13; modprobe slg51002_regulator; sleep 1; mo
 tools/phone-ssh 'for m in gpio_s2mpg13 slg51002_regulator imx386 phy_gs201_mipi_dcphy_rx gs201_csis; do modprobe $m; sleep 1; done; dmesg | grep -iE "gs201-csis|dcphy" | tail; media-ctl -d /dev/media0 -p'
 #   expect: "link 1 -> WDMA context 1, 4 data lanes"; graph imx386 0-001a ->
 #   gs201-csis link 1 -> gs201-csis-wdma1; PMU 0x3ebc still 0 (gs201_cam_probe step=pmu)
-# CAM3b.3 (next boot) colour bars on the link, no DMA, under the stage
-#   tool's kmsg stream and watchdog (tools/camera-stage --watchdog x --cmd '...')
-tools/camera-stage --watchdog x --cmd 'for m in gpio_s2mpg13 slg51002_regulator imx386 phy_gs201_mipi_dcphy_rx; do modprobe $m; done; modprobe gs201_csis allow_stream=1 link_only=1; sleep 1
-  N=$(media-ctl -d /dev/media0 -p | grep -o "imx386 [0-9]*-001a" | head -1)
-  media-ctl -d /dev/media0 -V "\"$N\":0[fmt:SRGGB10_1X10/2016x1508]" -V "\"gs201-csis link 1\":0[fmt:SRGGB10_1X10/2016x1508]"
-  S=$(media-ctl -d /dev/media0 -e "$N"); v4l2-ctl -d $S --set-ctrl test_pattern=2
-  V=$(media-ctl -d /dev/media0 -e gs201-csis-wdma1); v4l2-ctl -d $V --set-fmt-video=width=2016,height=1508,pixelformat=pRAA
-  timeout 5 v4l2-ctl -d $V --stream-mmap --stream-count=1; cat /sys/kernel/debug/*.csis/stats'
+# CAM3b.3 (corrected, 2026-10-12) colour bars on the link, no DMA. Needs the
+#   kernel with 38355918e and the overlays from repo main (each
+#   camera-stream overlay now also disables the other link). Link 0 first:
+ov <the overlays the phone runs now> camera-stream-link0 && bin/omandroid push   # ASK FIRST
+tools/phone-ssh 'for n in 1a440000 1a450000; do printf "%s %s\n" $n "$(tr -d "\0" < /sys/firmware/devicetree/base/soc@0/csis@$n/status)"; done'
+#   expect: 1a440000 okay, 1a450000 disabled (exactly one link)
+tools/camera-stage --watchdog x --cmd 'LINK=0 DMA=0 bash -s' --script tools/camera-cap-test
+#   then, next boot, the same with camera-stream-link1 and LINK=1
 ```
 
-- **Pass (3b.3):** `frame_start` and `frame_end` rising by about 60 per
-  second (300 in the 5 s), `link_errors` 0, `wdma_done` 0 (no DMA). The
-  `stopped:` line in dmesg gives the same counters.
-- **Not this link:** counters stay 0 with no errors: next boot, the same
-  with `camera-stream-link0` (`csis0`, `gs201-csis link 0`,
-  `gs201-csis-wdma0`). If neither counts, check the sensor started
-  (`0x0100` read back through `i2ctransfer` is out of scope while the
-  driver owns it; instead re-run with dyndbg on imx386) and stop.
-- **Stop:** link errors (SOT, CRC, ECC in `last_link_err`): the PHY
-  settings or settle are wrong for this link: stop, don't try DMA. Any
-  hang: the watchdog resets; save pstore.
+- **Expect (3b.3):** `cap-test: media ...; sensor->CSIS links: 1`; both
+  pads and the video node at 2016x1508 SRGGB10 / `pRAA`, 2528 bytes per
+  line; then, in order, the driver's own lines: `dcphy ... link N: 4
+  lanes at 1548288000 bps, settle 7; PMU 0x3ebc = 0x1` (isolation
+  released), `imx386 0-001a: streaming 2016x1508: mode_select 1,
+  frame_count a -> b`, `gs201-csis ...: link N on: ...` and, after the
+  stream, `link N off: FRM_CNT ... SRC0/1 ... FS/FE ...` and `stopped: FS
+  ... FE ...`.
+- **Pass:** the CSIS frame counter (`FRM_CNT`) and `frame_start`/
+  `frame_end` rise by about 60 a second, link errors 0, `wdma_done` 0. That
+  link is the ultrawide's.
+- **Reading a failure** (which part is silent):
+  - `frame_count` doesn't move or `mode_select` isn't 1: the sensor isn't
+    streaming (data file, MCLK rate in the same line, its power);
+  - PMU 0x3ebc still 0 or GNR_CON0 not 1: the PHY never came up;
+  - sensor counting, PHY up, `FRM_CNT` 0 and SRC0/SRC1/FS/FE all 0: no
+    data reaches this link: the other link is the right one (or lanes);
+  - `FRM_CNT` rising but `link_irqs` 0: frames arrive but the interrupt
+    mask sense or routing is wrong: still a pass for the link question;
+  - SRC0 bits (SOT, CRC, ECC): wrong PHY settings or settle: stop, don't
+    try DMA;
+  - `EPIPE` at stream on: the `invalid` / `differs` line names the pads.
+- **Stop:** any hang (the watchdog resets; save pstore), or errors on both
+  links.
 - **Rollback:** `rmmod gs201_csis imx386` (powers the module down), reboot;
   images without the overlay.
 
-**CAM3b.0/3b.1 results (2026-10-12, 7.3.0-rc6-omandroid-push1-00359-g3cb70218b6cd:
-int 3cb70218b with omandroid-camera 35295a9ab; overlays as before with
-camera-stream-link1 instead of camera-pwr-test; capture blacklist in
-`/etc/modprobe.d/omandroid-camera-capture-bringup.conf`).**
-
-- **3b.0: passed.** `extract-camera-data` on the user's HAL APEX: init 139
-  writes; modes 4032x3016 at 30 fps (FLL 3098, link 774.144 MHz),
-  4032x2272 at 60 fps (link 794.624 MHz), 2016x1508 and 2016x1136 binned
-  at 60 fps; the 1864-byte file installed under
-  `/usr/lib/firmware/omandroid/camera/`.
-- **3b.1: passed, with one driver bug.** `sec_acpm`, `gpio_s2mpg13`,
-  `slg51002_regulator` (pattern ID 0xb13103), then `imx386`: probe ok,
-  bound to `0-001a`, "mode 4032x2272: link frequency 794624000 not in DT,
-  dropped" (expected), runtime-suspended afterwards with every camera rail
-  at use count 0. But "Runtime PM usage count underflow!" twice right after
-  probe: the control handler took `pm_runtime_get_if_in_use()`'s -EINVAL
-  (runtime PM not yet enabled during probe) for "in use" and dropped a
-  reference it never took. Fixed in `e6fd4a6b5` (writes only on a positive
-  count), which also logs "model 0x0386" at probe. Re-check on the next
-  build: no underflow, and the model line in dmesg.
+**CAM3b.2/3b.3 results so far (2026-10-12).** On 3cb70218b
+(camera 35295a9ab), `camera-stream-link1`: **3b.2 passed**: the PHY and
+CSIS bound ("link 1 -> WDMA context 1, 4 data lanes"), camera pool
+assigned, graph `imx386 0-001a` -> `gs201-csis link 1` ->
+`gs201-csis-wdma1` (`/dev/video0`), DC-PHY still isolated afterwards.
+**3b.3 inconclusive:**
+- On link 1 the runbook's media-ctl quoting didn't reach the sensor pad,
+  which stayed at its default 2016x1136 (then the smallest mode; now the
+  largest), so stream-on failed with EPIPE (pads differ). At 2016x1136 on
+  every pad the stream started and stopped with FS 0, FE 0, no link
+  errors, no WDMA activity: link 1 saw nothing, but the sensor, PHY and
+  frame-counter state weren't logged then, so this doesn't yet say "wrong
+  link".
+- On link 0 (32c474a89, with the PM fix: "imx386 0-001a: model 0x0386",
+  no underflow) both CSIS nodes probed, so an earlier link 1 overlay was
+  still in the DTB, and the sensor got two media links into link 0 (the
+  notifier walked all of the sensor's endpoints). Stream-on gave EPIPE.
+- Fixed in 38355918e (one link per CSIS, data type from the sink format,
+  diagnostics) and in the overlays (each disables the other link);
+  `tools/camera-cap-test` replaces the hand-quoted commands.
 
 ### CAM4: the CSIS WDMA writes frames. Risk: high (first DMA)
 
@@ -1123,14 +1136,13 @@ pool only (the driver refuses buffers above 4 GiB), with the watchdog and
 the log stream on, and nothing else running that matters.
 
 ```sh
-# CAM4.1 (next boot) one frame of colour bars, WDMA channel 0, EBUF = context
-tools/camera-stage --watchdog x --cmd '...as CAM3b.3 but: modprobe gs201_csis allow_stream=1 wdma_channel=0
-  timeout 5 v4l2-ctl -d $V --stream-mmap --stream-count=4 --stream-to=/tmp/bars.raw
-  cat /sys/kernel/debug/*.csis/stats; cat /sys/kernel/debug/*.csis/regs'
-tools/phone-ssh 'cat /tmp/bars.raw' > logs/cam4-bars.raw
+# CAM4.1 (next boot) colour bars through the WDMA, channel 0, EBUF = context,
+#   on the link CAM3b found (LINK=N, its overlay)
+tools/camera-stage --watchdog x --cmd 'LINK=N DMA=1 CH=0 FRAMES=4 bash -s' --script tools/camera-cap-test
+tools/phone-ssh 'cat /tmp/cam-2016x1508.raw' > logs/cam4-bars.raw
 # CAM4.2-4 (one per boot, only while 4.1 fails without errors):
-#   wdma_channel=2 (stock's RAW channel); then google,ebuf variations through
-#   a DT property change (the WDMA input value is the open question)
+#   CH=2 (stock's RAW channel); then google,ebuf variations through a DT
+#   property change (the WDMA input value is the open question)
 # CAM4.5 a real picture: test_pattern=0, then 4032x3016
 ```
 

@@ -54,3 +54,8 @@
 &{/soc@0/csis@1a450000} {
 	status = "okay";
 };
+
+/* Never both links: keep the other one off even if an earlier DTB had it. */
+&{/soc@0/csis@1a440000} {
+	status = "disabled";
+};

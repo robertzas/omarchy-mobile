@@ -41,13 +41,14 @@
 #   --regs LIST  u1: sensor registers to read, one at a time (default
 #                "0x0016 0x0017"; only those in the DT's allowlist are read)
 #   --cmd CMD    x: the shell command to run on the phone
+#   --script F   x: a local file fed to --cmd on stdin (e.g. 'LINK=0 bash -s')
 #   --pstore     after a watchdog reset: save /sys/fs/pstore
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SSH="$ROOT/tools/phone-ssh"
 LOGDIR="$ROOT/logs"
 CP=/sys/kernel/debug/gs201-cam-power
-watchdog=0 stage= pstore=0 reg=link0 regs="0x0016 0x0017" cmd=
+watchdog=0 stage= pstore=0 reg=link0 regs="0x0016 0x0017" cmd= script=
 usage() { sed -n '/^# Usage:/,/^#   --pstore/p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 warn() { printf '\e[33m==> %s\e[0m\n' "$*"; }
@@ -59,6 +60,7 @@ while (($#)); do
     --reg) reg="${2:?}"; shift ;;
     --regs) regs="${2:?}"; shift ;;
     --cmd) cmd="${2:?}"; shift ;;
+    --script) script="${2:?}"; shift ;;
     --pstore) pstore=1 ;;
     -h|--help) usage ;;
     k|p1|p2|r0|g1|s1|e1|u1|off|x) stage="$1" ;;
@@ -246,7 +248,12 @@ case "$stage" in
     [[ -n "$cmd" ]] || die "x needs --cmd"
     mark "about to run a capture step (see the log for the command)"
     printf '# command: %s\n' "$cmd" >> "$log"
-    timeout 120 "$SSH" -o ServerAliveInterval=2 -o ServerAliveCountMax=3 "$cmd" </dev/null 2>&1 | tee -a "$log" || result=fail
+    in=/dev/null
+    if [[ -n "$script" ]]; then
+      [[ -r "$script" ]] || die "cannot read $script"
+      in="$script"
+    fi
+    timeout 120 "$SSH" -o ServerAliveInterval=2 -o ServerAliveCountMax=3 "$cmd" <"$in" 2>&1 | tee -a "$log" || result=fail
     ;;
   off)
     mark "about to power the camera test devices down"
