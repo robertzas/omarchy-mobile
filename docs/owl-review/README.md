@@ -1,11 +1,95 @@
 <!-- SPDX-License-Identifier: MIT -->
-# OWL widgets on Omarchy Mobile: review package (milestone 1 and round 2)
+# OWL widgets on Omarchy Mobile: review package (milestone 1, round 2, and the OWL built-ins)
 
 **Status (2026-10-13, round 2 the same night):** built and tested on the laptop only, on branch `owl-widgets`. Round 2 added screens, `stream`, file watching, `Terminal`, the panel-off pause, haptics and the torch behind the approval sheet, the store package and its Store tab, the credited OWL guide, and layout checks for every store widget (what changed is marked **New** below). **Nothing has been installed on the phone, and nothing will be until you have reviewed this and said yes.** Everything is behind a feature flag that is off by default, so even an installed package changes nothing on its own.
 
 This is the first milestone of [WIDGET-INTEROP-PLAN.md](../WIDGET-INTEROP-PLAN.md), option (c): **our own OWL runtime**, written from the language guide, held to Simon Schubert's runtime by a conformance suite that runs his only as a black box inside a container. None of his code is in our tree.
 
-Contents: [how it works on the phone](#how-it-works-on-the-phone) · [the Store tab](#the-store-tab-new) · [screenshots](#screenshots) · [how faithful it is](#how-faithful-it-is) · [tests](#tests) · [what is not done](#what-is-not-done-yet) · [trying it on the phone](#trying-it-on-the-phone-only-after-your-ok) · [questions for Simon](#questions-for-simon) · [the next phases](#the-next-phases)
+**Newest (P9, your decision):** the 47 built-ins that were our QML ports of Simon's widgets are now his OWL originals, and existing home layouts migrate to them: see [the built-ins are OWL now](#the-built-ins-are-owl-now-p9).
+
+Contents: [the built-ins are OWL now](#the-built-ins-are-owl-now-p9) · [how it works on the phone](#how-it-works-on-the-phone) · [the Store tab](#the-store-tab-new) · [screenshots](#screenshots) · [how faithful it is](#how-faithful-it-is) · [tests](#tests) · [what is not done](#what-is-not-done-yet) · [trying it on the phone](#trying-it-on-the-phone-only-after-your-ok) · [questions for Simon](#questions-for-simon) · [the next phases](#the-next-phases)
+
+---
+
+## The built-ins are OWL now (P9)
+
+**What changed.** The home screen's built-ins from Simon Schubert's omarchy-widgets (`widgets/simonschubert/`, MIT) are no longer our 47 QML ports: they are his OWL originals, from the pinned store package `omamobile-owl-widgets` (which `omamobile-shell` 0.2.0 now depends on), run by our OWL runtime. The ports (`plugins/omamobile.home/ported/`, their 47 wrapper files, `PortedWidget.qml`) and their tests are removed. **Every one of the 47 ports has an OWL original; no port stays as it was.** Our own built-ins (clock, weather, battery, media, calendar, note, toggles, text or command) are unchanged.
+
+In the Widgets sheet the built-ins keep their names, icons and sizes on our grid. Each is type `owl:<author>.<name>` (`owl:simonschubert.today`). They are always on (the `owlWidgets` flag still gates only your own OWL folders and the Store tab). A built-in that needs approval opens the approval sheet ("A built-in widget: simonschubert/earthquakes from the OWL widget store, reviewed there and shipped with Omarchy Mobile") before it is added.
+
+**Your layout migrates when the home screen next reads it:**
+
+* each placement of a port becomes its OWL original **on the same page, in the same place and size**; apps and our own widgets are untouched;
+* the first time, the file is kept as `~/.config/omamobile/home.json.before-owl` (never overwritten later);
+* it is idempotent: a migrated layout has no ports left, and reading it again changes nothing (tested);
+* settings that mean the same carry over as the OWL widget's state: the typed **city** (today, forecast, air and pollen, sun and moon, planes overhead), **habit check-ins**, the **owl's** birth, feeding and pets, the **lava lamp's** wax, the chosen **departure stop**. These don't, because the OWL original keeps them elsewhere or not at all: countdown dates and habit names (the originals read `~/.config/omarchy-proot/countdown` and `…/habits`), exchange rates' currencies, the feeds list, uptime's sites, releases' repositories, Omarchy commits' repository and branch, Home Assistant's address, token and entities (the original reads them from its own file), focus length, calendar's first day, the analog clock's second hand, world clock's cities, Hacker News' and Lobsters' refresh interval, and the todo file's path;
+* **"Use my location"** stays with the placement. The weather built-ins (today, forecast, air and pollen, sun and moon, planes overhead) get the phone's position as before (GeoClue at city accuracy, rounded to about 1 km, through the same `locate.sh`), now as their `city` state: wttr.in reads `52.52,13.40` as a place. It goes in only while the city is empty or still the last position put in, so a city you type wins, and only once the widget's internet is allowed. The OWL widget's own city field then shows the coordinates.
+* **Tap anywhere to switch views:** the 21 originals with a longer view (the nine leagues, today, forecast, crypto, air and pollen, sun and moon, planes, departures, fetch, IFSC, notifications, Omarchy commits, world clock) open its `screen { }` on a tap anywhere on the tile, in place, with "‹" to go back, as the ports' expanded views did.
+
+**Approval after migration.** A migrated built-in is approved without asking **only when its original needs nothing the port didn't have**: no commands where the port ran none, no internet where it had none, no other hosts than the port's, no files, notifications, vibration or torch, and no risk flag. Its internet is on only if the port's was. Anything more appears on the tile as "Before it runs: …, Tap to review" and goes through the approval sheet. **18 of 47 pass.** Most of the rest ask because the original fetches with `curl` in a command where our port used the shell's own web requests. The rule applied to every built-in (`tests/owl/port-approvals.js`, the same function the home screen runs):
+
+| Built-in | OWL original | The port had | The original needs | After migration |
+| --- | --- | --- | --- | --- |
+| Air and pollen | simonschubert/air-and-pollen | internet (wttr.in, air-quality-api.open-meteo.com) | uses the internet (wttr.in, air-quality-api.open-meteo.com) | **approved** |
+| Analog clock | simonschubert/analog-clock | nothing | runs nothing, reaches nothing | **approved** |
+| Bitcoin (CoinGecko) | simonschubert/crypto | internet (coingecko.com) | uses the internet (api.coingecko.com) | **approved** |
+| Bundesliga | simonschubert/bundesliga | internet (espn.com, espncdn.com) | runs 2 commands, uses the internet (site.api.espn.com, a.espncdn.com) | asks: runs commands |
+| Champions League | simonschubert/champions-league | internet (espn.com, espncdn.com) | runs 2 commands, uses the internet (site.api.espn.com, a.espncdn.com) | asks: runs commands |
+| Countdowns | simonschubert/countdown | nothing | runs 2 commands | asks: runs commands |
+| Departures | simonschubert/departures | internet (transitous.org) | uses the internet | asks: talks to addresses built while it runs; reaches a web address built while it runs |
+| Earthquakes | simonschubert/earthquakes | internet (earthquake.usgs.gov) | runs 1 command, uses the internet (earthquake.usgs.gov) | asks: runs commands |
+| Exchange rates | simonschubert/exchange-rates | internet (frankfurter.dev) | runs 2 commands, uses the internet (api.frankfurter.dev) | asks: runs commands |
+| Feeds | simonschubert/feeds | commands, internet (any you listed) | runs 2 commands | **approved** |
+| Fetch | simonschubert/fetch | commands | runs 2 commands | **approved** |
+| Focus | simonschubert/focus | nothing | runs nothing, reaches nothing | **approved** |
+| Forecast | simonschubert/forecast | internet (wttr.in) | runs 1 command, uses the internet (wttr.in) | asks: runs commands |
+| Free games | simonschubert/free-games | internet (store.epicgames.com, store-site-backend-static.ak.epicgames.com) | runs 1 command, uses the internet (store-site-backend-static.ak.epicgames.com, store.epicgames.com) | asks: runs commands |
+| GitHub | simonschubert/github | commands, internet (github.com) | runs 2 commands | **approved** |
+| GitHub trending | simonschubert/github-trending | internet (github.com) | runs 1 command, uses the internet (api.github.com) | asks: runs commands |
+| Habits | simonschubert/habits | nothing | runs 2 commands | asks: runs commands |
+| Hacker News | simonschubert/hacker-news | internet (news.ycombinator.com, hn.algolia.com) | runs 1 command, uses the internet (hn.algolia.com, news.ycombinator.com) | asks: runs commands |
+| Home Assistant | simonschubert/home-assistant | internet (any you listed) | runs 3 commands, uses the internet (homeassistant.local) | asks: runs commands; reads keys, tokens or passwords; runs a command built while it runs |
+| IFSC World Cup | simonschubert/ifsc | commands, internet (ifsc.results.info, d1n1qj9geboqnb.cloudfront.net) | runs 2 commands, uses the internet (ifsc.results.info, d1n1qj9geboqnb.cloudfront.net) | **approved** |
+| Koi pond | simonschubert/koi-pond | nothing | runs nothing, reaches nothing | **approved** |
+| LaLiga | simonschubert/la-liga | internet (espn.com, espncdn.com) | runs 2 commands, uses the internet (site.api.espn.com, a.espncdn.com) | asks: runs commands |
+| Lava lamp | simonschubert/lava-lamp | nothing | runs nothing, reaches nothing | **approved** |
+| Ligue 1 | simonschubert/ligue-1 | internet (espn.com, espncdn.com) | runs 2 commands, uses the internet (site.api.espn.com, a.espncdn.com) | asks: runs commands |
+| Lobsters | simonschubert/lobsters | internet (lobste.rs) | runs 1 command, uses the internet (lobste.rs) | asks: runs commands |
+| MLB | simonschubert/mlb | internet (espn.com, espncdn.com) | runs 2 commands, uses the internet (site.api.espn.com, a.espncdn.com) | asks: runs commands |
+| Month | simonschubert/calendar | nothing | runs nothing, reaches nothing | **approved** |
+| NBA | simonschubert/nba | internet (espn.com, espncdn.com) | runs 2 commands, uses the internet (site.api.espn.com, a.espncdn.com) | asks: runs commands |
+| NHL | simonschubert/nhl | internet (espn.com, espncdn.com) | runs 2 commands, uses the internet (site.api.espn.com, a.espncdn.com) | asks: runs commands |
+| Notifications | simonschubert/notifications | commands, notifications | reads your notifications | **approved** |
+| Now playing | simonschubert/now-playing | nothing | runs nothing, reaches nothing | **approved** |
+| Omarchy commits | simonschubert/omarchy-commits | internet (github.com) | uses the internet (api.github.com) | **approved** |
+| Owl | simonschubert/owl | nothing | runs nothing, reaches nothing | **approved** |
+| Picture of the day | simonschubert/picture-of-the-day | internet (wikimedia.org, commons.wikimedia.org) | runs 1 command, uses the internet (api.wikimedia.org) | asks: runs commands |
+| Planes overhead | simonschubert/planes-overhead | internet (wttr.in, opensky-network.org, globe.adsbexchange.com) | uses the internet (wttr.in, opensky-network.org) | **approved** |
+| Premier League | simonschubert/premier-league | internet (espn.com, espncdn.com) | runs 2 commands, uses the internet (site.api.espn.com, a.espncdn.com) | asks: runs commands |
+| Releases | simonschubert/releases | internet (github.com) | runs 2 commands, uses the internet (api.github.com) | asks: runs commands |
+| Rocket launches | simonschubert/launches | internet (spacelaunchnow.me, ll.thespacedevs.com) | runs 1 command, uses the internet (ll.thespacedevs.com, spacelaunchnow.me) | asks: runs commands |
+| Serie A | simonschubert/serie-a | internet (espn.com, espncdn.com) | runs 2 commands, uses the internet (site.api.espn.com, a.espncdn.com) | asks: runs commands |
+| Sun and moon | simonschubert/sun-and-moon | internet (wttr.in) | runs 1 command, uses the internet (wttr.in) | asks: runs commands |
+| Today | simonschubert/today | internet (wttr.in, yr.no) | uses the internet (wttr.in) | **approved** |
+| Todo | simonschubert/todo | commands | runs 3 commands | asks: runs a command built while it runs |
+| Uptime | simonschubert/uptime | internet (any you listed) | runs 2 commands, uses the internet | asks: runs commands |
+| Wikipedia | simonschubert/wikipedia | internet (wikimedia.org, en.m.wikipedia.org) | runs 1 command, uses the internet (api.wikimedia.org) | asks: runs commands |
+| World clock | simonschubert/world-clock | commands | runs 2 commands, reads 1 file | asks: reads files; runs a command built while it runs |
+| xkcd | simonschubert/xkcd | internet (xkcd.com) | runs 1 command, uses the internet (xkcd.com) | asks: runs commands |
+| Year progress | simonschubert/year-progress | nothing | runs nothing, reaches nothing | **approved** |
+
+For your layout's shape (tested as a fixture: apps one per cell along the bottom, our clock and weather, the Bitcoin widget with its internet on, today with location, and three ports on page 2): **Bitcoin and Today are approved and keep working; Earthquakes, Habits and Forecast ask once.**
+
+**Before and after**, the same layout, dark theme (light: `*-catppuccin-latte.png`). Before is main's QML ports, drawn offline (no internet in the container: they show "offline" or their "turn it on" card). After is this branch, with made-up data for the OWL widgets the migration approved, and the approval card on the ones that ask. The clock is the render time; apps are stand-ins.
+
+| | Before (QML ports) | After (OWL originals) |
+| --- | --- | --- |
+| Page 1 | [before](screens/before-page1-tokyo-night.png) | [after](screens/after-page1-tokyo-night.png) |
+| Page 2 | [before](screens/before-page2-tokyo-night.png) | [after](screens/after-page2-tokyo-night.png) |
+
+<img src="screens/before-page1-tokyo-night.png" width="240"> <img src="screens/after-page1-tokyo-night.png" width="240"> <img src="screens/before-page2-tokyo-night.png" width="240"> <img src="screens/after-page2-tokyo-night.png" width="240">
+
+**Credits and licences.** The built-ins' code is now Simon's own files, shipped unchanged by `omamobile-owl-widgets` with the store's MIT licence (`/usr/share/licenses/omamobile-owl-widgets/LICENSE`). `omamobile-shell` no longer ships his code; it ships his OWL guide (`OWL.md`) with its licence as `LICENSE-owl-guide`. The package README and the top-level README say so.
 
 ---
 
@@ -235,7 +319,7 @@ None is refused. A widget that names a root tool would be ("unsupported", not sh
 | `share()` copies to the clipboard; `androidApp()`, `notification()` do nothing (no Android) | P5 / Waydroid |
 | `omamobile-widget check` for OWL, the node checker, an IPC preview for agents | P7 |
 | `omamobile-owl-widgets` in `tools/build-packages`; the real store `index.json` format for "Check the store now" | P8 (your call, Simon) |
-| Replacing the 47 hand ports | P9 |
+| Settings the OWL originals keep elsewhere (countdown dates, habit names, currencies, feeds, sites, repositories, Home Assistant): a later step could write them into the originals' own files on migration, with your OK | P9 follow-up |
 | AI creation in OWL (now with `OWL.md`), shared links | P10 |
 | **Everything on the phone**: frame times at 120 Hz, CPU while hidden or with the panel off, a battery A/B, the first haptic and torch test (announced), squeekboard with Input | on the phone, after your OK |
 
@@ -253,6 +337,16 @@ Nothing here has been run on the phone. If you approve, the steps would be (each
 | 6 | **Announced first:** a made-up widget with `Button { onTap: haptic() }`; allow it; tap once | One short tap, as the feedback profile allows | Repeated or long vibration | Remove the widget; `fbcli` events stop | Low; it buzzes in your hand |
 | 7 | **Announced first:** the same with `torch("toggle")`; tap twice | The torch on, then off | The torch stays on | `brightnessctl --device=white:torch set 0` | Low; light |
 | 8 | A widget with a `screen { }` and one with a `Terminal` (bash); open and close the screen; type `uptime` in the terminal | The screen opens in place with "‹"; the terminal answers | The keyboard doesn't come up, or swipes stop working | Remove the widgets | Low |
+
+**The built-ins migration (P9)**, on the real layout. Read-only first:
+
+| Step | Command | Expect | Stop if | Rollback | Risk |
+| --- | --- | --- | --- | --- | --- |
+| M1 | Read-only: copy `~/.config/omamobile/home.json` and `widget-approvals.json` (if any) to the laptop; run `node -e 'const H=require("packages/omamobile-shell/plugins/omamobile.home/HomeModel.js"); const l=require("/path/home.json"); console.log(H.portPlacements(l)); console.log(H.serialize(H.parse(JSON.stringify(l), {})))'` | The ports listed; the migrated layout keeps every position and size | A widget would move or vanish | Nothing changed | None |
+| M2 | Install `omamobile-owl-widgets` and `omamobile-shell` 0.2.0 from this branch, then `omarchy-restart-shell` (announced) | The same pages; Bitcoin and Today keep showing data; the others show "Tap to review"; `home.json.before-owl` exists | A widget missing, moved or blank without a card | `cp ~/.config/omamobile/home.json.before-owl ~/.config/omamobile/home.json`, reinstall main's `omamobile-shell` | Low: shell restart |
+| M3 | Tap Today: its screen opens in place; "‹" goes back. With Location on, after a minute its city field shows rounded coordinates | Weather for where you are | It shows somewhere else | Type a city, or turn "Use my location" off | Low |
+| M4 | Allow Earthquakes, Habits, Forecast on their sheets, the internet on where wanted | Each starts showing data | A request before you allowed it | Revoke in `widget-approvals.json` | Low |
+| M5 | Restart the shell again (announced) | Nothing migrates twice; approvals kept | Any change to the layout | As M2 | Low |
 
 ## Questions for Simon
 
@@ -280,11 +374,11 @@ Estimates from the plan, revised by what milestone 1 and round 2 did (one develo
 | P6 home integration | onDrag rules, Input with squeekboard, instances that outlive layout edits, "fix with AI" for OWL | 2 d |
 | P7 scan, check, approval | `omamobile-widget check` for OWL (node), IPC preview for agents, crafted bad widgets on the phone | 2 d |
 | P8 catalogue | Done offline; add to `tools/build-packages`, confirm the store's `index.json` with Simon | 0.5 d |
-| P9 ports | Replace the 47 hand ports where the upstream widget passes | 4-5 d |
+| P9 ports | Done offline (all 47 replaced, layouts migrate); carrying the remaining settings into the originals' files, and the migration on the phone | 1 d |
 | P10 AI creation and links | OWL template, `OWL.md` (shipped), prompt, shared links | 3-4 d |
 | P11 Terminal | Done offline (a line-based terminal); a real terminal for full-screen programs later | 1 d |
 
-About **15-18 days** remain to the plan's full scope; **4-6** to a first release with store widgets and approval on the phone (P5 measurements, P6, P7 and the P8 build entry).
+About **12-14 days** remain to the plan's full scope; **4-6** to a first release with store widgets and approval on the phone (P5 measurements, P6, P7 and the P8 build entry).
 
 ## Where things are
 
@@ -297,4 +391,5 @@ About **15-18 days** remain to the plan's full scope; **4-6** to a first release
 | `packages/omamobile-shell/widgets/OWL.md` | Simon's OWL guide, credited, with our notes (installed as `/usr/share/omamobile/shell/OWL.md`) |
 | `packages/omamobile-owl-widgets/` | The store package: `status.json` (what ships and why not), `build-index.js`, `install`, its tests |
 | `tests/owl/` | The conformance container, fixtures, recorded expectations, `conformance.js`, `render/` (L4/L5 and these screenshots), `lint/new-warnings` |
-| `tools/owl-conformance` | Runs it all on the laptop: `--live`, `--record`, `--render` |
+| `tools/owl-conformance` | Runs it all on the laptop: `--live`, `--record`, `--render` (with `OWL_BEFORE_TREE`, the before/after pictures) |
+| `tests/owl/port-approvals.js`, `tests/owl/render/layout*.{js,qml}`, `owner-layout.json` | The P9 approval table and before/after pictures |

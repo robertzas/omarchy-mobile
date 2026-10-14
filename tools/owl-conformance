@@ -39,7 +39,11 @@ done
 docker run --rm --network none -u "$(id -u):$(id -g)" "${mounts[@]}" "$image" \
   node /src/tests/owl/conformance.js "${args[@]}" --out "/src/$out" | tee "$out/summary.txt"
 if (( render )); then
-  docker run --rm --network none -u "$(id -u):$(id -g)" "${mounts[@]}" "$image" \
+  # main's home plugin, with the QML ports, for the before/after pictures.
+  rm -rf "$out/before-tree" && mkdir -p "$out/before-tree"
+  git archive main packages/omamobile-shell/plugins/omamobile.home | tar -x -C "$out/before-tree" 2>/dev/null || true
+  docker run --rm --network none -u "$(id -u):$(id -g)" "${mounts[@]}" \
+    -e OWL_BEFORE_TREE="/src/$out/before-tree/packages/omamobile-shell/plugins/omamobile.home" "$image" \
     bash /src/tests/owl/render/run --out "/src/$out" | tee -a "$out/summary.txt"
 fi
 # Which store widgets the store package may ship (status.json), from this run.
