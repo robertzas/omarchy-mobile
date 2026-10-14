@@ -8,8 +8,8 @@
 # Starts mirroring on the phone (omamobile-mirror on, package omamobile-mirror),
 # opens a VNC viewer on 172.16.42.1:5900 titled "Omarchy Mobile phone", and turns
 # mirroring off again when the viewer closes (--keep leaves it on).
-#   --viewer   pick a viewer; default: the first installed of remmina (scales
-#              the phone to the window), tigervnc's vncviewer, gvncviewer
+#   --viewer   pick a viewer; default: tigervnc, then gvncviewer (remmina only on request;
+#              its VNC plugin rejects the phone's 1440x3120 frame)
 #   --height   window height in pixels (default 900); the width follows the
 #              phone's 1440:3120 portrait shape
 # For OBS: add a "Window Capture (PipeWire)" source and pick the viewer window.
@@ -43,14 +43,17 @@ remmina_vnc() { # Remmina without libvncserver has no VNC plugin
 missing() {
   cat >&2 <<EOF
 phone-mirror: no VNC viewer found on this computer. Install one:
-  sudo pacman -S remmina libvncserver   # recommended: scales the phone to the window
-  sudo pacman -S tigervnc               # vncviewer: full-size picture, no scaling
+  sudo pacman -S tigervnc               # recommended: vncviewer, fast and full quality (no scaling: scroll)
+  sudo pacman -S gtk-vnc                # gvncviewer: works, but slower
+(Remmina's VNC plugin refuses the phone's 1440x3120 frame, "Rect too large",
+and reports a time-out; it is only used when asked for with --viewer remmina.)
 EOF
   exit 1
 }
 if [[ -z $VIEWER ]]; then
-  if have remmina && remmina_vnc; then VIEWER=remmina
-  elif have vncviewer; then VIEWER=tigervnc
+  # TigerVNC first: tested against the phone (2026-10-13). Remmina's VNC
+  # plugin (libvncclient) rejects the 1440x3120 frame ("Rect too large").
+  if have vncviewer; then VIEWER=tigervnc
   elif have gvncviewer; then VIEWER=gvncviewer
   else missing; fi
 fi
