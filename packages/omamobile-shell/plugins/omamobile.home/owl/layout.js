@@ -18,7 +18,8 @@
 //
 // `measure` answers for text: width(text, size, bold, font) and
 // lineHeight(size) in dp, fontHeight(size) for a single line's own height
-// (buttons, inputs), and optionally image(src) -> [w, h] in dp or null.
+// (buttons, inputs), optionally image(src) -> [w, h] in dp or null, and
+// `pixel`, logical pixels per dp (for what snaps to whole pixels).
 //
 // A box: { node, kind, key, x, y, w, h, lines, children, content } with x and y
 // relative to the parent box's top-left corner. `content` is a scrolling
@@ -344,10 +345,13 @@ function grid(n, width, measure) {
   var y = 0
   for (var r = 0; r * columns < kids.length; r++) {
     var row = kids.slice(r * columns, r * columns + columns)
+    // A grid's cells snap to whole pixels, rounding up (SPEC-NOTES N36).
+    var px = measure.pixel || 0
     var sizes = row.map(function(c) {
       var pl = placement(c, "Grid")
       var w = pl.w > 0 ? pl.w : cell
-      return { w: Math.min(w, cell), h: pl.h >= 0 ? pl.h : naturalH(c, Math.min(w, cell), measure) }
+      var h = pl.h >= 0 ? pl.h : naturalH(c, Math.min(w, cell), measure)
+      return { w: Math.min(w, cell), h: px > 0 ? Math.ceil(h * px - 1e-6) / px : h }
     })
     var rowH = sizes.reduce(function(m, s) { return Math.max(m, s.h) }, 0)
     row.forEach(function(c, k) { boxes.push({ n: c, x: k * (cell + gap), y: y, w: sizes[k].w, h: sizes[k].h }) })

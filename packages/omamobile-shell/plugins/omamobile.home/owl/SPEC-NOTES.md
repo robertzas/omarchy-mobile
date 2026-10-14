@@ -65,7 +65,7 @@ Each entry: the decision, the guide section it clarifies, and how it is tested.
 
 **N35.** A component used with layout properties (`weight`, `padding`, ...) is wrapped in a Box that carries them, and its content fills that Box.
 
-**N36.** A Grid splits its width into `columns` equal cells (gap 6); each row is as tall as its tallest cell.
+**N36.** A Grid splits its width into `columns` equal cells (gap 6); each row is as tall as its tallest cell, rounded up to a whole pixel, as the reference renderer's grid draws it. Text lines are 1.17 em of the whole-pixel font size the text is drawn at.
 
 **N37.** `Row { wrap: true }` and `Flow` place children at their own size and wrap at the width.
 

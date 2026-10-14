@@ -108,8 +108,10 @@ Item {
       // Text draws at whole pixel sizes (OwlText), so measure at those.
       return at100 * Math.max(1, Math.round(size * view.dp)) / 100 / view.dp
     },
-    lineHeight: function(size) { return size * 1.17 },
+    // Lines are 1.17 em of the whole-pixel font size text is drawn at.
+    lineHeight: function(size) { return Math.max(1, Math.round(size * view.dp)) * 1.17 / view.dp },
     fontHeight: function(size) { return monoMetrics.height * size / 100 },
+    pixel: view.dp,
     image: function(src) { return view.imageSizes[String(src)] || null }
   })
 

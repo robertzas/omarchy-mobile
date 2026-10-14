@@ -27,7 +27,7 @@ OwlNodeBase {
     font.bold: textNode.p.bold === true
     font.italic: textNode.p.italic === true
     lineHeightMode: Text.FixedHeight
-    lineHeight: textNode.size * 1.17
+    lineHeight: Math.max(1, Math.round(textNode.size)) * 1.17
     verticalAlignment: Text.AlignVCenter
     horizontalAlignment: textNode.p.align === "center" ? Text.AlignHCenter : textNode.p.align === "end" ? Text.AlignRight : Text.AlignLeft
     wrapMode: textNode.lines === 1 ? Text.NoWrap : Text.Wrap
