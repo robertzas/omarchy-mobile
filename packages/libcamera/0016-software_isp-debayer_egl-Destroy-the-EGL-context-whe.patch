@@ -1,0 +1,92 @@
+From 5bf4e5c5b5790cc5264ee0c002096ebf968b1c68 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Wed, 14 Oct 2026 11:58:28 -0400
+Subject: [PATCH] software_isp: debayer_egl: Destroy the EGL context when
+ stopping
+
+DebayerEGL::start() creates a new EGL context every time, and nothing
+destroyed the previous one until the eGL object went away. Each stop
+deleted the cached textures, but the abandoned context still referenced
+the last buffers it had bound, so their imported DMA-BUFs stayed
+allocated. In a long-running application that starts and stops the
+camera repeatedly (a camera app that reconfigures for each photo) this
+leaked the software ISP's output buffers and the camera's own buffers:
+on a Google Pixel 7 Pro, 290 MiB of contiguous memory stayed held after
+the app had closed the camera, and later starts failed to allocate.
+
+Add eGL::destroyEGLContext() and call it at the end of
+DebayerEGL::stop(), after the caches and the program are released.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ include/libcamera/internal/egl.h           |  1 +
+ src/libcamera/egl.cpp                      | 20 ++++++++++++++++++++
+ src/libcamera/software_isp/debayer_egl.cpp |  9 +++++++++
+ 3 files changed, 30 insertions(+)
+
+diff --git a/include/libcamera/internal/egl.h b/include/libcamera/internal/egl.h
+index 1e31d49..290b9e5 100644
+--- a/include/libcamera/internal/egl.h
++++ b/include/libcamera/internal/egl.h
+@@ -103,6 +103,7 @@ public:
+ 	~eGL();
+ 
+ 	int initEGLContext();
++	void destroyEGLContext();
+ 	static bool isAvailable();
+ 
+ 	int createInputDMABufTexture2D(eGLImage &eglImage, int fd);
+diff --git a/src/libcamera/egl.cpp b/src/libcamera/egl.cpp
+index 7ec7a65..b02d4bb 100644
+--- a/src/libcamera/egl.cpp
++++ b/src/libcamera/egl.cpp
+@@ -462,6 +462,26 @@ fail:
+ 	return -ENODEV;
+ }
+ 
++/**
++ * \brief Destroy the EGL context created by initEGLContext()
++ *
++ * Releases the context from the calling thread and destroys it, so that
++ * everything it still references (the last textures and framebuffers it
++ * bound, and through them imported DMA-BUFs) is freed now rather than when
++ * the eGL object goes away. A later initEGLContext() creates a new one.
++ */
++void eGL::destroyEGLContext()
++{
++	if (context_ == EGL_NO_CONTEXT)
++		return;
++
++	ASSERT(tid_ == Thread::currentId());
++
++	eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
++	eglDestroyContext(display_, context_);
++	context_ = EGL_NO_CONTEXT;
++}
++
+ /**
+  * \brief Make the EGL context current for the calling thread
+  *
+diff --git a/src/libcamera/software_isp/debayer_egl.cpp b/src/libcamera/software_isp/debayer_egl.cpp
+index 5a8a490..dfd0929 100644
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -709,6 +709,15 @@ void DebayerEGL::stop()
+ 
+ 	if (programId_)
+ 		glDeleteProgram(programId_);
++	programId_ = 0;
++
++	/*
++	 * start() creates a new context every time. Destroy this one: left
++	 * alive, it kept the last buffers it had bound imported, so a
++	 * long-running application leaked their DMA-BUFs (and the contiguous
++	 * memory behind them) with every stop.
++	 */
++	egl_.destroyEGLContext();
+ }
+ 
+ SizeRange DebayerEGL::sizes(PixelFormat inputFormat, const Size &inputSize)
+-- 
+2.55.0
+

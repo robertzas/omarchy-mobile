@@ -29,6 +29,7 @@ in the table. See `device/cheetah/CAMERA-PLAN.md`, section 5.2.
 | `0012-ipa-simple-Tune-the-Pixel-7-Pro-s-ultrawide-and-main.patch` | Af on both cameras, a stand-in colour matrix for the IMX386, contrast and saturation defaults |
 | `0013-libcamera-Add-the-Samsung-S5K3J1-and-S5KGM5-sensors.patch` | The front and telephoto sensors: helpers (black level 64, gain code / 32), properties, tuning files (identity matrix, Af on the telephoto) |
 | `0014-pipeline-simple-Accept-a-sensor-configuration-within.patch` | A sensor mode within 1% of the stream qualifies: the front camera's 1080p runs its binned mode |
+| `0016-software_isp-debayer_egl-Destroy-the-EGL-context-whe.patch` | The GPU debayer destroys its EGL context at stop: abandoned contexts kept their last buffers imported, and a long-running camera app leaked contiguous memory until starts failed |
 | `0015-ipa-simple-agc-Step-out-of-a-pinned-histogram-quickl.patch` | While nearly every pixel is in the darkest or brightest bin, the AGC doubles or halves the exposure each step instead of 15% |
 | `libcamera-fix-python3.14-macro-redefinition.patch` | Arch's patch, unchanged (sha512 `8b54cbdf…`) |
 | `.SRCINFO` | `makepkg --printsrcinfo` output |
@@ -123,6 +124,7 @@ Pictures stay noisier and softer at the corners than with Google's ISP.
 ## Status
 
 0.7.2-4.4 (0001-0003) runs on the phone: the ultrawide captures end to end.
+0.7.2-4.8 adds 0016 (2026-10-14): no DMA-BUF leak across stop/start.
 0.7.2-4.7 adds 0015 (2026-10-14): the AGC leaves a pinned histogram quickly.
 0.7.2-4.6 adds 0013-0014 (2026-10-13, off the phone): all 14 patches
 apply in order to `v0.7.2`; a minimal x86_64 build (simple pipeline and
