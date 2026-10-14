@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# The patches themselves go on from the pacman hook (95-omamobile-omarchy-patches),
+# which runs after this package is installed or upgraded.
+post_install() {
+  echo "omamobile-omarchy: 'omarchy update' now runs omamobile-update (the phone's exclusions);"
+  echo "  OMAMOBILE_UPDATE=1 omarchy-update runs Omarchy's own flow. Patch log: /var/log/omamobile/omarchy-patches.log"
+}
+post_upgrade() {
+  :
+}
+pre_remove() {
+  # Omarchy's own files back, so removing the package doesn't strand patched copies
+  /usr/bin/omamobile-omarchy-patches restore >/dev/null 2>&1 || true
+}

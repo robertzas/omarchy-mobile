@@ -1,0 +1,17 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile (on PATH only during omamobile-update): no Snapper snapshot.
+# The phone's root is ext4 on userdata, without Snapper or Limine's snapshot
+# menu; its way back is slot A's Android and a reinstall. 127 is what
+# omarchy-update takes for "Snapper is deliberately absent".
+case ${1:-} in
+  create)
+    echo "No snapshot on the phone (ext4 root, no Snapper)."
+    exit 127
+    ;;
+  restore)
+    echo "Snapshots aren't used on the phone." >&2
+    exit 1
+    ;;
+  *) exec "${OMAMOBILE_REAL_BIN:-/usr/bin}/omarchy-snapshot" "$@" ;;
+esac

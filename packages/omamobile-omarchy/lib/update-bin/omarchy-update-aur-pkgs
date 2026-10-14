@@ -1,0 +1,11 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile (on PATH only during omamobile-update): no AUR builds.
+# yay would rebuild every foreign package from the AUR on the phone, under
+# names that can be ours, from PKGBUILDs written for x86_64. Update them by
+# hand after a look: yay -Sua.
+mapfile -t foreign < <(pacman -Qmq 2>/dev/null)
+(( ${#foreign[@]} )) || exit 0
+echo
+echo "AUR: ${#foreign[@]} package(s) not from a repository, not updated on the phone: ${foreign[*]}"
+echo "  (update them by hand after a look: yay -Sua)"

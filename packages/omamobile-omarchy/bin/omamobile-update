@@ -1,0 +1,712 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Omarchy's update, for a phone.
+
+  omamobile-update [-y] [--ignore-battery] [--allow-boot-packages]
+                                 update now, in this terminal ("omarchy update"
+                                 lands here through patch 0012)
+  omamobile-update check [--json] [--offline]
+                                 what an update would bring, and whether it may
+                                 run now (battery, repositories, boot packages)
+  omamobile-update start         the shell's update sheet: reads the user's
+                                 password (the PIN) from stdin, runs the update
+                                 as a user unit, returns once sudo took it
+  omamobile-update status [--json]   running or not, and the last result
+  omamobile-update ack           the sheet has shown the last result
+  omamobile-update notify-check  toast once per new Omarchy release (the shell
+                                 runs this every few hours)
+  omamobile-update run-migration NAME   run one migration the update held
+
+What runs is Omarchy's own omarchy-update, with -y, unchanged, with a
+directory of stand-ins first on PATH (/usr/lib/omamobile-omarchy/update-bin):
+
+  kept       free-space check, package-cache prune, sleep/idle inhibitor,
+             keyrings, pacman -Syu (Omarchy's, with its guard and conflict
+             handler), migrations, ~/.config/omarchy/hooks/post-update, mise,
+             the log check, the shell's update state, the shell restart
+  replaced   omarchy-update-confirm (the sheet's Update button is the
+             confirmation), omarchy-snapshot (no Snapper on the phone's ext4
+             root), omarchy-update-aur-pkgs (no AUR builds on the phone),
+             omarchy-update-orphan-pkgs (listed, never removed),
+             omarchy-update-restart (no gum, no false "kernel updated": the
+             phone's kernel is not a package), omarchy-migrate (boot-related
+             migrations held), sudo (non-interactive from the sheet)
+
+Before anything is downloaded it refuses: below 30% battery unless charging,
+when /etc/pacman.conf doesn't list [omamobile] first and [omarchy] before
+Arch Linux ARM's repositories, and when the update would install a kernel,
+bootloader or boot-image tool (--allow-boot-packages overrides). The kernel
+itself still goes to the phone through bin/omamobile push.
+
+The sheet's run: progress events in $XDG_RUNTIME_DIR/omamobile-update/events
+(kind<TAB>text lines: step, line, progress, auth, held, result, state), the
+full output in ~/.local/state/omamobile/update/update.log, the result in
+~/.local/state/omamobile/update/last.json; Omarchy's own transcript stays in
+/tmp/omarchy-update.log.
+"""
+import datetime
+import json
+import os
+import re
+import select
+import shlex
+import shutil
+import stat
+import subprocess
+import sys
+import threading
+import time
+
+HOME = os.path.expanduser("~")
+RUNTIME = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp/omamobile-update-%d" % os.getuid(), "omamobile-update")
+STATE = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.join(HOME, ".local/state"), "omamobile/update")
+LIB = os.environ.get("OMAMOBILE_OMARCHY_LIB", "/usr/lib/omamobile-omarchy")
+SHIMS = os.path.join(LIB, "update-bin")
+OMARCHY_UPDATE = os.environ.get("OMAMOBILE_OMARCHY_UPDATE", "/usr/bin/omarchy-update")
+SUDO = os.environ.get("OMAMOBILE_SUDO", "/usr/bin/sudo")
+SCRIPT = os.environ.get("OMAMOBILE_SCRIPT", "script")
+SYSTEMD_RUN = os.environ.get("OMAMOBILE_SYSTEMD_RUN", "systemd-run")
+SYSTEMCTL = os.environ.get("OMAMOBILE_SYSTEMCTL", "systemctl")
+CHECKUPDATES = os.environ.get("OMAMOBILE_CHECKUPDATES", "checkupdates")
+PACMAN = os.environ.get("OMAMOBILE_PACMAN", "pacman")
+PACMAN_CONF = os.environ.get("OMAMOBILE_PACMAN_CONF", "/etc/pacman.conf")
+POWER = os.environ.get("OMAMOBILE_POWER_SUPPLY", "/sys/class/power_supply")
+PATCH_STATUS = os.environ.get("OMAMOBILE_PATCH_STATUS", "/var/lib/omamobile/omarchy-patches/status.json")
+NOTIFY = os.environ.get("OMAMOBILE_NOTIFY", "omarchy-notification-send")
+OMARCHY_PATH = os.environ.get("OMARCHY_PATH") or "/usr/share/omarchy"
+MIN_BATTERY = int(os.environ.get("OMAMOBILE_MIN_BATTERY", "30"))
+MIN_FREE = 10 * 1024 ** 3  # omarchy-update-requires-free-space's limit
+UNIT = "omamobile-update"
+RELEASE_NOTES = "https://github.com/basecamp/omarchy/releases/latest"
+OMARCHY_LOG = os.environ.get("OMAMOBILE_OMARCHY_LOG", "/tmp/omarchy-update.log")
+MARK = "@@omamobile "
+
+# Packages a phone update must not install: kernels and boot-image tools
+# (the phone boots from boot_b, which bin/omamobile push writes), bootloaders,
+# Snapper, fwupd. linux-firmware*, linux-api-headers and the like are fine.
+BOOT_PACKAGES = re.compile(
+    r"^(linux|linux-(aarch64|lts|zen|hardened|rt|omarchy.*|rpi.*|t2.*)(-headers)?|limine(-.*)?|grub|"
+    r"efibootmgr|sbctl|snapper|snap-pac|mkinitcpio|dracut|booster|ukify|systemd-ukify|fwupd)$")
+ANSI = re.compile(r"\x1b(\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)|[()][0-9A-Za-z]|[=>78])")
+GREEN = re.compile(r"^\x1b\[(0;)?32m")
+
+
+def now():
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def load_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def write_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".new"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+        f.write("\n")
+    os.replace(tmp, path)
+
+
+def private_dir(path):
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    os.chmod(path, 0o700)
+    return path
+
+
+# ---------------------------------------------------------------- checks
+
+
+def read_sys(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def battery():
+    """{"present", "percent", "charging"} from the kernel's power supplies."""
+    present, percent, charging = False, -1, False
+    try:
+        supplies = sorted(os.listdir(POWER))
+    except OSError:
+        supplies = []
+    for name in supplies:
+        d = os.path.join(POWER, name)
+        kind = read_sys(os.path.join(d, "type"))
+        if kind == "Battery" and read_sys(os.path.join(d, "present")) != "0" and not present:
+            cap = read_sys(os.path.join(d, "capacity"))
+            if cap.isdigit():
+                present, percent = True, int(cap)
+            if read_sys(os.path.join(d, "status")) in ("Charging", "Full"):
+                charging = True
+        elif kind in ("Mains", "USB", "USB_C", "USB_PD", "Wireless") and read_sys(os.path.join(d, "online")) == "1":
+            charging = True
+    return {"present": present, "percent": percent, "charging": charging}
+
+
+def battery_blocker(bat):
+    if bat["present"] and not bat["charging"] and bat["percent"] < MIN_BATTERY:
+        return "Battery at %d%%: charge to %d%% or plug in the charger first" % (bat["percent"], MIN_BATTERY)
+    return ""
+
+
+def repository_order(path=PACMAN_CONF):
+    """"" when [omamobile] is first and [omarchy] comes before Arch Linux ARM's."""
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError as e:
+        return "cannot read %s: %s" % (path, e.strerror)
+    repos = [r for r in re.findall(r"^\s*\[([^\]]+)\]", text, re.M) if r != "options"]
+    if not repos or repos[0] != "omamobile":
+        return "%s must list [omamobile] first, so the phone's own Mesa, Hyprland and libcamera win (it lists %s)" % (
+            path, ", ".join("[%s]" % r for r in repos[:3]) or "none")
+    if "omarchy" in repos:
+        later = [r for r in ("core", "extra", "alarm", "aur") if r in repos and repos.index(r) < repos.index("omarchy")]
+        if later:
+            return "%s must list [omarchy] before [%s]" % (path, later[0])
+    return ""
+
+
+def free_bytes(path="/"):
+    try:
+        s = os.statvfs(path)
+        return s.f_bavail * s.f_frsize
+    except OSError:
+        return -1
+
+
+def installed_version(name):
+    out = subprocess.run([PACMAN, "-Q", name], capture_output=True, text=True)
+    return out.stdout.split()[1] if out.returncode == 0 and len(out.stdout.split()) > 1 else ""
+
+
+def pending_updates(offline=False):
+    """(lines "name old -> new", [(name, version) to install or upgrade], error)"""
+    if offline:
+        return [], [], ""
+    try:
+        out = subprocess.run([CHECKUPDATES, "--nocolor"], capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return [], [], "checkupdates: %s" % e
+    if out.returncode not in (0, 2):  # 2: nothing to update
+        return [], [], "could not check for updates (offline?): %s" % (out.stderr.strip()[-200:] or out.returncode)
+    lines = [l for l in out.stdout.splitlines() if l.strip()]
+    db = os.environ.get("CHECKUPDATES_DB") or os.path.join(os.environ.get("TMPDIR") or "/tmp", "checkup-db-%d" % os.getuid())
+    targets = []
+    if lines:
+        try:
+            plan = subprocess.run([PACMAN, "-Sup", "--dbpath", db, "--logfile", "/dev/null",
+                                   "--print-format", "%n %v"], capture_output=True, text=True, timeout=120)
+            for l in plan.stdout.splitlines():
+                parts = l.split()
+                if len(parts) == 2 and not l.startswith(("::", "warning", "error")):
+                    targets.append((parts[0], parts[1]))
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        if not targets:
+            targets = [(l.split()[0], l.split()[-1]) for l in lines]
+    return lines, targets, ""
+
+
+def credential():
+    path = os.path.join(HOME, ".config/omamobile/credential")
+    try:
+        with open(path) as f:
+            return "password" if f.read().strip() == "password" else "pin"
+    except OSError:
+        return "pin"
+
+
+def patch_summary():
+    s = load_json(PATCH_STATUS) or {}
+    return {"result": s.get("result", "never"), "omarchy": s.get("omarchy"), "applied": s.get("applied") or [],
+            "upstream": s.get("upstream") or [], "failed": (s.get("failed") or {}).get("patch"),
+            "message": s.get("message", ""), "time": s.get("time"), "log": s.get("log", "/var/log/omamobile/omarchy-patches.log")}
+
+
+def unit_active():
+    try:
+        out = subprocess.run([SYSTEMCTL, "--user", "is-active", "--quiet", UNIT + ".service"], timeout=10)
+        return out.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def running():
+    state = read_sys(os.path.join(RUNTIME, "state"))
+    return state == "running" and (unit_active() or pid_alive(read_sys(os.path.join(RUNTIME, "pid"))))
+
+
+def pid_alive(pid):
+    if not pid.isdigit():
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except OSError:
+        return False
+
+
+def check(offline=False, allow_boot=False):
+    bat = battery()
+    blockers = []
+    b = battery_blocker(bat)
+    if b:
+        blockers.append(b)
+    order = repository_order()
+    if order:
+        blockers.append(order)
+    free = free_bytes()
+    if 0 <= free < MIN_FREE:
+        blockers.append("Only %.1f GiB free; Omarchy's update needs 10 GiB" % (free / 1024 ** 3))
+    lines, targets, err = pending_updates(offline)
+    boot = sorted({n for n, _ in targets if BOOT_PACKAGES.match(n)})
+    if boot and not allow_boot:
+        blockers.append("This update would install %s, which the phone doesn't use (its kernel goes through "
+                        "bin/omamobile push); ask on the project before updating" % ", ".join(boot))
+    if err:
+        blockers.append(err)
+    omarchy_line = next((l for l in lines if l.split()[0] in ("omarchy", "omarchy-dev")), "")
+    is_running = running()
+    if is_running:
+        blockers.append("An update is already running")
+    return {
+        "battery": bat, "min_battery": MIN_BATTERY, "battery_ok": not battery_blocker(bat),
+        "repositories_ok": not order, "repositories": order,
+        "free_gib": round(free / 1024 ** 3, 1) if free >= 0 else None,
+        "omarchy": installed_version("omarchy") or installed_version("omarchy-dev"),
+        "omarchy_update": omarchy_line, "updates": lines, "update_count": len(targets) or len(lines),
+        "boot_packages": boot, "running": is_running, "credential": credential(),
+        "patches": patch_summary(), "release_notes": RELEASE_NOTES, "checked_offline": offline,
+        "blockers": blockers, "ok": not blockers,
+    }
+
+
+# ---------------------------------------------------------------- the run
+
+
+class Events:
+    """The sheet's progress feed: one "kind<TAB>text" line per event."""
+
+    def __init__(self, path, log_path):
+        self.path = path
+        self.f = open(path, "a", buffering=1) if path else None
+        self.log = open(log_path, "a", buffering=1)
+        self.last_progress = 0.0
+
+    def emit(self, kind, text):
+        text = text.replace("\t", " ").replace("\n", " ")
+        if self.f:
+            self.f.write("%s\t%s\n" % (kind, text))
+
+    def output(self, raw, terminated):
+        """One line or \\r-segment of the run's output."""
+        green = bool(GREEN.match(raw))
+        text = ANSI.sub("", raw).rstrip()
+        if not text.strip():
+            return
+        if text.startswith(MARK):
+            words = text[len(MARK):].split(" ", 1)
+            self.emit(words[0], words[1] if len(words) > 1 else "")
+            return
+        if terminated == "\r":
+            t = time.monotonic()
+            if t - self.last_progress >= 0.4:
+                self.last_progress = t
+                self.emit("progress", text.strip())
+            return
+        self.log.write(text + "\n")
+        self.emit("step" if green else "line", text.strip())
+
+    def close(self):
+        if self.f:
+            self.f.close()
+        self.log.close()
+
+
+def pump(stream, events, echo):
+    """Split the pty's output on \\n and \\r into events (and echo it raw)."""
+    buf = b""
+    pending_green = False
+    while True:
+        chunk = os.read(stream.fileno(), 65536)
+        if not chunk:
+            break
+        if echo:
+            sys.stdout.buffer.write(chunk)
+            sys.stdout.buffer.flush()
+        buf += chunk
+        while True:
+            m = re.search(rb"[\r\n]", buf)
+            if not m:
+                break
+            piece, sep, buf = buf[:m.start()], buf[m.start():m.start() + 1], buf[m.end():]
+            if sep == b"\r" and buf.startswith(b"\n"):
+                sep, buf = b"\n", buf[1:]
+            text = piece.decode("utf-8", "replace")
+            # Omarchy's headings: "\e[32m\nUpdate system packages\e[0m" puts the
+            # colour on the line before the words.
+            if pending_green and ANSI.sub("", text).strip():
+                text = "\x1b[32m" + text
+                pending_green = False
+            elif GREEN.match(text) and not ANSI.sub("", text).strip():
+                pending_green = True
+                continue
+            events.output(text, sep.decode())
+    if buf:
+        events.output(buf.decode("utf-8", "replace"), "\n")
+
+
+def write_result(result, events=None):
+    write_json(os.path.join(STATE, "last.json"), result)
+    if events:
+        events.emit("result", json.dumps(result, sort_keys=True))
+        events.emit("state", "done")
+    try:
+        with open(os.path.join(RUNTIME, "state"), "w") as f:
+            f.write("done\n")
+    except OSError:
+        pass
+
+
+def run(args):
+    """The update itself, in a terminal or as the sheet's user unit."""
+    auth_fifo = None
+    interactive = sys.stdin.isatty()
+    ignore_battery = allow_boot = False
+    while args:
+        a = args.pop(0)
+        if a == "--auth-fifo" and args:
+            auth_fifo = args.pop(0)
+        elif a == "--ignore-battery":
+            ignore_battery = True
+        elif a == "--allow-boot-packages":
+            allow_boot = True
+        elif a in ("-y", "--yes"):
+            pass
+        else:
+            print("omamobile-update: unknown argument %s" % a, file=sys.stderr)
+            return 2
+    sheet = auth_fifo is not None
+    private_dir(RUNTIME)
+    os.makedirs(STATE, exist_ok=True)
+    events_path = os.path.join(RUNTIME, "events") if sheet else None
+    if sheet:
+        open(events_path, "w").close()
+    with open(os.path.join(RUNTIME, "state"), "w") as f:
+        f.write("running\n")
+    with open(os.path.join(RUNTIME, "pid"), "w") as f:
+        f.write("%d\n" % os.getpid())
+    for leftover in ("restart.json", "held"):
+        try:
+            os.unlink(os.path.join(RUNTIME, leftover))
+        except OSError:
+            pass
+    log_path = os.path.join(STATE, "update.log")
+    open(log_path, "w").close()
+    events = Events(events_path, log_path)
+    result = {"started": now(), "omarchy_before": installed_version("omarchy"), "log": log_path,
+              "omarchy_log": OMARCHY_LOG, "needs_reboot": False, "reasons": [], "warnings": [], "held": []}
+
+    def finish(kind, message, code):
+        result.update(result=kind, message=message, exit=code, finished=now(),
+                      omarchy_after=installed_version("omarchy"), patches=patch_summary())
+        restart = load_json(os.path.join(RUNTIME, "restart.json")) or {}
+        result["needs_reboot"] = bool(restart.get("needs_reboot"))
+        result["reasons"] = restart.get("reasons", [])
+        result["warnings"] = restart.get("warnings", [])
+        held = os.path.join(RUNTIME, "held")
+        if os.path.exists(held):
+            with open(held) as f:
+                result["held"] = [l.rstrip("\n").split("\t") for l in f if l.strip()]
+        if kind == "ok" and result["patches"]["result"] == "failed":
+            result["result"] = "patches-failed"
+            result["message"] = ("Updated, but the phone's Omarchy patches could not be re-applied: the lock "
+                                 "screen's PIN pad may be missing. See %s" % result["patches"]["log"])
+        if os.path.exists(OMARCHY_LOG):
+            try:
+                shutil.copyfile(OMARCHY_LOG, os.path.join(STATE, "omarchy-update.log"))
+            except OSError:
+                pass
+        write_result(result, events if sheet else None)
+        events.close()
+        if not sheet:
+            print()
+            print("omamobile-update: %s" % result["message"])
+            if result["needs_reboot"]:
+                print("Restart the phone to finish (%s): omarchy-system-reboot" % "; ".join(result["reasons"]))
+            for h in result["held"]:
+                print("Held migration %s (%s): omamobile-update run-migration %s" % (h[0], h[1], h[0]))
+        return code
+
+    # Refusals that need no network: before the password is used
+    blockers = []
+    if not ignore_battery:
+        b = battery_blocker(battery())
+        if b:
+            blockers.append(b)
+    order = repository_order()
+    if order:
+        blockers.append(order)
+    if blockers:
+        events.emit("step", "Not updating")
+        for b in blockers:
+            events.emit("line", b)
+        return finish("refused", "; ".join(blockers), 5)
+
+    inner = [sys.executable, "-I", os.path.abspath(__file__), "__inner"]
+    if auth_fifo:
+        inner += ["--auth-fifo", auth_fifo]
+    if allow_boot:
+        inner += ["--allow-boot-packages"]
+    cmd = [SCRIPT, "-qefc", shlex.join(inner), OMARCHY_LOG]
+    events.emit("step", "Starting the update")
+    proc = subprocess.Popen(cmd, stdin=None if interactive else subprocess.DEVNULL, stdout=subprocess.PIPE)
+    pump(proc.stdout, events, echo=not sheet)
+    code = proc.wait()
+    if code == 0:
+        return finish("ok", "Updated", 0)
+    if code == 3:
+        return finish("auth-failed", "Wrong PIN or password", 3)
+    if code == 5:
+        return finish("refused", read_sys(os.path.join(RUNTIME, "refused")) or "Not updated", 5)
+    return finish("failed", "The update stopped (exit %d). The log is in %s" % (code, log_path), code)
+
+
+def keep_sudo_fresh(stop):
+    while not stop.wait(50):
+        if subprocess.run([SUDO, "-n", "-v"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL).returncode != 0:
+            print(MARK + "line sudo's timestamp could not be renewed", flush=True)
+            return
+
+
+def inner(args):
+    """Inside script's pty: sudo once, then Omarchy's update with the stand-ins."""
+    auth_fifo = None
+    allow_boot = False
+    while args:
+        a = args.pop(0)
+        if a == "--auth-fifo" and args:
+            auth_fifo = args.pop(0)
+        elif a == "--allow-boot-packages":
+            allow_boot = True
+    env = dict(os.environ)
+    if auth_fifo:
+        try:
+            with open(auth_fifo) as f:
+                secret = f.readline().rstrip("\n")
+        except OSError:
+            secret = ""
+        ok = bool(secret) and subprocess.run([SUDO, "-S", "-p", "", "-v"], input=secret + "\n", text=True,
+                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        secret = None
+        print(MARK + "auth " + ("ok" if ok else "failed"), flush=True)
+        if not ok:
+            return 3
+        env["OMAMOBILE_UPDATE_NONINTERACTIVE"] = "1"
+    else:
+        print("Omarchy Mobile update: sudo asks for your PIN or password once.", flush=True)
+        if subprocess.run([SUDO, "-v"]).returncode != 0:
+            return 3
+    stop = threading.Event()
+    threading.Thread(target=keep_sudo_fresh, args=(stop,), daemon=True).start()
+    try:
+        print("\x1b[32m\nChecking what the update brings\x1b[0m", flush=True)
+        lines, targets, err = pending_updates()
+        boot = sorted({n for n, _ in targets if BOOT_PACKAGES.match(n)})
+        refusal = ""
+        if err:
+            refusal = err
+        elif boot and not allow_boot:
+            refusal = ("This update would install %s, which the phone doesn't use (its kernel goes through "
+                       "bin/omamobile push). Not updating." % ", ".join(boot))
+        if refusal:
+            print(refusal, flush=True)
+            with open(os.path.join(RUNTIME, "refused"), "w") as f:
+                f.write(refusal + "\n")
+            return 5
+        omarchy_line = next((l for l in lines if l.split()[0] in ("omarchy", "omarchy-dev")), "")
+        print("%d package(s) to update%s" % (len(targets) or len(lines), "; " + omarchy_line if omarchy_line else ""),
+              flush=True)
+        env.update(PATH=SHIMS + ":" + env.get("PATH", "/usr/bin"), OMARCHY_UPDATE_LOGGED="1", OMAMOBILE_UPDATE="1",
+                   OMAMOBILE_UPDATE_DIR=RUNTIME, OMAMOBILE_SUDO=SUDO)
+        return subprocess.run([OMARCHY_UPDATE, "-y"], env=env).returncode
+    finally:
+        stop.set()
+
+
+# ---------------------------------------------------------------- the sheet's side
+
+
+def start(args):
+    """Read the password from stdin, start the run as a user unit, and return
+    once sudo has taken or refused it. Exit 0 started, 3 wrong password,
+    4 already running, 5 refused, 1 otherwise."""
+    extra = [a for a in args if a in ("--ignore-battery", "--allow-boot-packages")]
+    if running():
+        print("running")
+        return 4
+    secret = sys.stdin.readline().rstrip("\n")
+    if not secret:
+        print("no password")
+        return 3
+    private_dir(RUNTIME)
+    fifo = os.path.join(RUNTIME, "auth")
+    try:
+        os.unlink(fifo)
+    except OSError:
+        pass
+    os.mkfifo(fifo, 0o600)
+    events = os.path.join(RUNTIME, "events")
+    open(events, "w").close()
+    # Read-write, so opening never blocks and the line waits in the pipe
+    # until the run reads it; closed (and removed) once sudo has answered.
+    fd = os.open(fifo, os.O_RDWR)
+    try:
+        os.write(fd, (secret + "\n").encode())
+        secret = None
+        cmd = [SYSTEMD_RUN, "--user", "--unit=" + UNIT, "--collect", "--quiet",
+               "--description=Omarchy Mobile update", "--setenv=PATH=" + os.environ.get("PATH", "/usr/bin"),
+               "--", os.path.abspath(__file__), "run", "--auth-fifo", fifo] + extra
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if out.returncode != 0:
+            print("could not start: " + (out.stderr.strip() or str(out.returncode)))
+            return 1
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            with open(events) as f:
+                text = f.read()
+            if "\nauth\tok" in "\n" + text:
+                print("started")
+                return 0
+            if "\nauth\tfailed" in "\n" + text:
+                print("auth-failed")
+                return 3
+            if "\nresult\t" in "\n" + text:
+                last = load_json(os.path.join(STATE, "last.json")) or {}
+                print(last.get("result", "stopped"))
+                return 5 if last.get("result") == "refused" else 1
+            time.sleep(0.2)
+        print("timeout")
+        return 1
+    finally:
+        os.close(fd)
+        try:
+            os.unlink(fifo)
+        except OSError:
+            pass
+
+
+def status(args):
+    last = load_json(os.path.join(STATE, "last.json"))
+    seen = read_sys(os.path.join(STATE, "seen"))
+    info = {"running": running(), "events": os.path.join(RUNTIME, "events"), "last": last,
+            "unseen": bool(last and last.get("finished") and last.get("finished") != seen)}
+    if "--json" in args:
+        print(json.dumps(info, sort_keys=True))
+    else:
+        print("running" if info["running"] else "idle")
+        if last:
+            print("last: %s %s (%s)" % (last.get("result"), last.get("finished", ""), last.get("message", "")))
+    return 0
+
+
+def ack(_args):
+    last = load_json(os.path.join(STATE, "last.json")) or {}
+    os.makedirs(STATE, exist_ok=True)
+    with open(os.path.join(STATE, "seen"), "w") as f:
+        f.write((last.get("finished") or "") + "\n")
+    return 0
+
+
+def notify_check(_args):
+    """Toast once per new Omarchy release; tapping it opens the sheet."""
+    try:
+        out = subprocess.run(["omarchy-update-available"], capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.TimeoutExpired):
+        return 1
+    if out.returncode != 0:
+        print("up to date")
+        return 0
+    line = out.stdout.strip().splitlines()[0] if out.stdout.strip() else "Omarchy update"
+    marker = os.path.join(STATE, "notified")
+    if read_sys(marker) == line:
+        print("available (already notified): " + line)
+        return 0
+    os.makedirs(STATE, exist_ok=True)
+    words = line.split()
+    body = "Omarchy %s is ready. Tap to see what's new and update." % words[-1] if len(words) >= 4 else line
+    subprocess.run([NOTIFY, "-g", "\U000f06b0", "-u", "normal", "Update available", body,
+                    "--exec", "omarchy-shell", "shell", "summon", "omamobile.update", "{}"], timeout=30)
+    with open(marker, "w") as f:
+        f.write(line + "\n")
+    print("available: " + line)
+    return 0
+
+
+def run_migration(args):
+    if len(args) != 1 or not re.match(r"^[0-9]+\.sh$", args[0]):
+        print("usage: omamobile-update run-migration <number>.sh", file=sys.stderr)
+        return 2
+    name = args[0]
+    path = os.path.join(OMARCHY_PATH, "migrations", name)
+    if not os.path.isfile(path):
+        print("no migration %s" % path, file=sys.stderr)
+        return 1
+    code = subprocess.run(["bash", "-euo", "pipefail", path], env=dict(os.environ, OMARCHY_PATH=OMARCHY_PATH)).returncode
+    held = os.path.join(STATE, "held-migrations")
+    if code == 0 and os.path.exists(held):
+        with open(held) as f:
+            keep = [l for l in f if not l.startswith(name + "\t")]
+        with open(held, "w") as f:
+            f.writelines(keep)
+    return code
+
+
+def main(argv):
+    if argv and argv[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+    cmd = argv[0] if argv and not argv[0].startswith("-") else "run"
+    args = argv[1:] if argv and not argv[0].startswith("-") else list(argv)
+    if cmd == "check":
+        result = check(offline="--offline" in args, allow_boot="--allow-boot-packages" in args)
+        if "--json" in args:
+            print(json.dumps(result, sort_keys=True))
+        else:
+            print("Omarchy %s; %d package(s) to update%s" % (result["omarchy"] or "?", result["update_count"],
+                                                             (": " + result["omarchy_update"]) if result["omarchy_update"] else ""))
+            bat = result["battery"]
+            print("Battery: %s" % ("%d%%%s" % (bat["percent"], ", charging" if bat["charging"] else "") if bat["present"] else "none"))
+            print("Phone patches: %s" % result["patches"]["result"])
+            for b in result["blockers"]:
+                print("Blocked: " + b)
+        return 0 if result["ok"] else 1
+    if cmd == "run":
+        return run(args)
+    if cmd == "__inner":
+        return inner(args)
+    if cmd == "start":
+        return start(args)
+    if cmd == "status":
+        return status(args)
+    if cmd == "ack":
+        return ack(args)
+    if cmd == "notify-check":
+        return notify_check(args)
+    if cmd == "run-migration":
+        return run_migration(args)
+    print("omamobile-update: unknown command %s (see --help)" % cmd, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
