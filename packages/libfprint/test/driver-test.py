@@ -41,6 +41,7 @@ class FakeBridge(threading.Thread):
         self.hold_auth = False
         self.conn = None
         self.drop_next = False
+        self.mute_cancel = False
 
     def send(self, *lines):
         for line in lines:
@@ -84,7 +85,8 @@ class FakeBridge(threading.Thread):
             answer = self.auth_answers.pop(0) if self.auth_answers else "NOMATCH"
             self.send("FINGER DOWN", "ACQUIRED 1 0", answer, "FINGER UP")
         elif cmd == "CANCEL":
-            self.send("ERROR 5")
+            if not self.mute_cancel:
+                self.send("ERROR 5")
         elif cmd == "LIST":
             self.send("LIST" + "".join(f" {i}" for i in self.enrolled))
         elif cmd.startswith("DELETE "):
@@ -197,7 +199,23 @@ def main():
         check("cancel ends verify as cancelled",
               e.matches(Gio.io_error_quark(), Gio.IOErrorEnum.CANCELLED))
     check("cancel sent CANCEL", "CANCEL" in bridge.commands)
+
+    # a CANCEL the bridge never answers (it once swallowed the answer when a
+    # match landed after the cancel): the driver still ends the action, so
+    # fprintd can release the device, and the device works afterwards
+    bridge.mute_cancel = True
+    cancellable = Gio.Cancellable()
+    GLib.timeout_add(200, lambda: cancellable.cancel() and False)
+    try:
+        dev.verify_sync(enrolled, cancellable)
+        check("unanswered cancel ends verify", False)
+    except GLib.Error as e:
+        check("unanswered cancel ends verify as cancelled",
+              e.matches(Gio.io_error_quark(), Gio.IOErrorEnum.CANCELLED))
+    bridge.mute_cancel = False
     bridge.hold_auth = False
+    bridge.auth_answers = [f"MATCH {ENROLL_ID}"]
+    check("verify works after an unanswered cancel", dev.verify_sync(enrolled)[0])
 
     dev.delete_print_sync(enrolled)
     check("delete removes it", bridge.enrolled == [])

@@ -1296,8 +1296,17 @@ static void hal_event(const struct event *e)
 	case CB_AUTHENTICATION_SUCCEEDED:
 		if (op != OP_AUTH)
 			return;
+		/*
+		 * A match that lands after our cancel (the finger down as the
+		 * client's wait ran out) ends the operation; the HAL's ERROR 5
+		 * then comes with op NONE and is dropped. Answer the CANCEL
+		 * here, or the client waits for it forever (fprintd kept the
+		 * device claimed and every later Claim failed).
+		 */
 		if (!op_ending)
 			reply("MATCH %d", e->a);
+		else if (ending_reply)
+			reply("ERROR %d", ERR_CANCELED);
 		op_done();
 		return;
 	case CB_AUTHENTICATION_FAILED:
@@ -1313,6 +1322,8 @@ static void hal_event(const struct event *e)
 			if (!op_ending)
 				reply("LOCKOUT %lld", e->code == CB_LOCKOUT_TIMED ?
 				      (long long)e->c : -1LL);
+			else if (ending_reply)
+				reply("ERROR %d", ERR_CANCELED);	/* as above */
 			op_done();
 		}
 		return;

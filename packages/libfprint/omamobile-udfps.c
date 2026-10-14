@@ -82,6 +82,7 @@ struct _FpiDeviceOmamobileUdfps
 
   gint                enroll_stages;
   gboolean            cancelling;
+  guint               cancel_timeout_id;
 };
 
 G_DECLARE_FINAL_TYPE (FpiDeviceOmamobileUdfps, fpi_device_omamobile_udfps, FPI,
@@ -198,6 +199,7 @@ start_action (FpiDeviceOmamobileUdfps *self, const char *command)
   GError *error = NULL;
 
   self->cancelling = FALSE;
+  g_clear_handle_id (&self->cancel_timeout_id, g_source_remove);
   if (!send_command (self, command, &error))
     fpi_device_action_error (FP_DEVICE (self), error);
 }
@@ -473,6 +475,7 @@ dev_open (FpDevice *dev)
 static void
 disconnect (FpiDeviceOmamobileUdfps *self)
 {
+  g_clear_handle_id (&self->cancel_timeout_id, g_source_remove);
   if (self->cancellable)
     g_cancellable_cancel (self->cancellable);
   g_clear_object (&self->cancellable);
@@ -565,8 +568,31 @@ dev_delete (FpDevice *dev)
   start_action (self, command);
 }
 
+/* No answer to CANCEL: complete the action as cancelled anyway, so fprintd
+ * can release the device instead of holding the claim for good. */
+static gboolean
+cancel_timeout_cb (gpointer user_data)
+{
+  FpiDeviceOmamobileUdfps *self = user_data;
+  FpDevice *dev = FP_DEVICE (self);
+  FpiDeviceAction action = fpi_device_get_current_action (dev);
+
+  self->cancel_timeout_id = 0;
+  if (self->cancelling && action != FPI_DEVICE_ACTION_NONE &&
+      action != FPI_DEVICE_ACTION_OPEN && action != FPI_DEVICE_ACTION_CLOSE)
+    {
+      fp_warn ("no answer to CANCEL: completing the action as cancelled");
+      fpi_device_action_error (dev, g_error_new_literal (G_IO_ERROR, G_IO_ERROR_CANCELLED,
+                                                         "Operation was cancelled"));
+    }
+  return G_SOURCE_REMOVE;
+}
+
 /* The bridge ends the capture and answers ERROR 5, which completes the
- * action as cancelled. */
+ * action as cancelled; CANCEL_TIMEOUT_MS is the backstop if it never does
+ * (the bridge gives the HAL 3 s). */
+#define CANCEL_TIMEOUT_MS 5000
+
 static void
 dev_cancel (FpDevice *dev)
 {
@@ -578,6 +604,8 @@ dev_cancel (FpDevice *dev)
   self->cancelling = TRUE;
   if (!send_command (self, "CANCEL", &error))
     fp_warn ("cannot cancel: %s", error->message);
+  g_clear_handle_id (&self->cancel_timeout_id, g_source_remove);
+  self->cancel_timeout_id = g_timeout_add (CANCEL_TIMEOUT_MS, cancel_timeout_cb, self);
 }
 
 static void
