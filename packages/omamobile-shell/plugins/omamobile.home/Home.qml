@@ -331,6 +331,11 @@ Item {
       var next = HomeModel.normalize(layout, userCatalog)
       if (next && HomeModel.serialize(next) !== HomeModel.serialize(layout)) commit(next)
     }
+    if (pendingApprove && UserWidgets.findRecord(scan, pendingApprove)) {
+      const approve = pendingApprove
+      pendingApprove = ""
+      Qt.callLater(function() { root.openOwlApproval(approve) })
+    }
     if (pendingAdd) {
       var r = UserWidgets.findRecord(scan, pendingAdd)
       // Placed behind the Create sheet, which stays up for the agent's outcome.
@@ -521,6 +526,67 @@ Item {
   readonly property var owlHost: owlHostObject
   Owl.OwlScheduler { id: owlSchedulerObject; paused: root.owlPaused }
   readonly property var owlScheduler: owlSchedulerObject
+
+  // ---------- the Store tab (omamobile-owl-widgets, plan §5.1)
+
+  // The package's index, and what "Check the store now" downloaded, if anything.
+  readonly property string owlStoreDir: Quickshell.env("OMAMOBILE_OWL_STORE") || "/usr/share/omamobile/owl-widgets"
+  readonly property string owlStoreCache: (Quickshell.env("XDG_CACHE_HOME") || Quickshell.env("HOME") + "/.cache") + "/omamobile/owl-store"
+  property var owlStoreIndex: ({ widgets: [] })
+  property var owlStoreFetched: ({ widgets: [] })
+  FileView {
+    path: root.owlEnabled ? root.owlStoreDir + "/index.json" : ""
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: { try { root.owlStoreIndex = JSON.parse(text()) } catch (e) { root.owlStoreIndex = { widgets: [] } } }
+  }
+  FileView {
+    id: fetchedIndex
+    path: root.owlEnabled ? root.owlStoreCache + "/index.json" : ""
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: { try { root.owlStoreFetched = JSON.parse(text()) } catch (e) { root.owlStoreFetched = { widgets: [] } } }
+  }
+  readonly property var owlStoreRows: OwlCatalog.storeRows(owlStoreIndex, owlStoreFetched,
+    userScan.widgets.filter(function(r) { return r.kind === "owl" }), layout.grid, owlCellHeight, owlDp)
+  property string owlStoreDetail: ""
+  property string owlStoreMessage: ""
+  // A widget just copied from the store: its approval sheet opens once the scan sees it.
+  property string pendingApprove: ""
+
+  function openStoreWidget(storeId) {
+    owlStoreDetail = String(storeId)
+    setEditing(true)
+    sheet = "owl-store"
+  }
+  // Copies the store's file into the widgets folder, then asks for approval.
+  function addFromStore(storeId) {
+    const id = String(storeId).replace("/", ".")
+    if (UserWidgets.findRecord(userScan, id)) { openOwlApproval(id); return id }
+    runHelper(UserWidgets.storeCopyArgv(storeId), function(code, out, err) {
+      if (code !== 0) { root.flash(err.trim() || "Couldn't copy it"); return }
+      root.pendingApprove = id
+      root.scanWidgets()
+    })
+    return id
+  }
+  function updateFromStore(widgetId) {
+    runHelper(UserWidgets.storeUpdateArgv(widgetId), function(code, out, err) {
+      root.flash(code === 0 ? "Updated; if it runs anything new, it asks again" : (err.trim() || "Couldn't update it"))
+      root.scanWidgets()
+    })
+  }
+  // Only when the user taps "Check the store now": the one network fetch of
+  // widget code, every file checked against the store's index.
+  function fetchStore() {
+    owlStoreMessage = "Checking the store\u2026"
+    runHelper(UserWidgets.STORE_FETCH_ARGV, function(code, out, err) {
+      root.owlStoreMessage = code === 0 ? "Checked: " + out.trim() : (err.trim().split("\n").slice(-1)[0] || "Couldn't reach the store")
+      fetchedIndex.reload()
+    })
+  }
 
   // The approval sheet.
   property string owlApproveId: ""

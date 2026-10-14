@@ -50,6 +50,10 @@ if [[ -d /omarchy-shell ]]; then
   for f in "$hh"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
   ln -s "$src/packages/omamobile-shell/plugins/omamobile.home" "$hh/home"
   cp "$here"/home.qml "$here"/MockHome.qml "$hh/"
+  # The store package, staged here from the pinned store, for the Store tab.
+  rm -rf /tmp/owl-store-root
+  "$src/packages/omamobile-owl-widgets/install" /tmp/owl-store-root /ref/omarchy-widgets "$src/packages/omamobile-shell/plugins/omamobile.home/owl"
+  export OWL_STORE_DIR=/tmp/owl-store-root/usr/share/omamobile/owl-widgets
   for theme in tokyo-night catppuccin-latte; do
     home=/tmp/home-$theme
     mkdir -p "$home/.local/state/omarchy/current"

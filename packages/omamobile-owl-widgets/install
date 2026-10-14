@@ -1,0 +1,24 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-owl-widgets into DESTDIR from a checkout of the widget
+# store at the pinned commit: the widgets status.json lets ship (they pass
+# our conformance suite), the store's order, its licence, and an index built
+# with our own compiler. Never activates anything.
+#   ./install DESTDIR STORE_CHECKOUT [OWL_RUNTIME_DIR]
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+destination=${1:?Usage: ./install DESTDIR STORE_CHECKOUT [OWL_RUNTIME_DIR]}
+store=${2:?the store checkout}
+owl=${3:-/usr/share/omamobile/shell/plugins/omamobile.home/owl}
+[[ $destination == /* && $destination != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+share=$destination/usr/share/omamobile/owl-widgets
+mkdir -p "$share"
+node "$here/build-index.js" "$store" "$owl" "$here/status.json" > "$share/index.json"
+# Only what the index lets ship: status ok or partial.
+python3 -c 'import json,sys; [print(w["id"]) for w in json.load(open(sys.argv[1]))["widgets"] if w["status"] in ("ok", "partial")]' "$share/index.json" |
+while IFS= read -r id; do
+  install -Dm644 "$store/widgets/$id/widget.owl" "$share/widgets/$id/widget.owl"
+done
+[[ -f $store/order.txt ]] && install -Dm644 "$store/order.txt" "$share/order.txt"
+install -Dm644 "$store/LICENSE" "$destination/usr/share/licenses/omamobile-owl-widgets/LICENSE"
+install -Dm644 "$here/version" "$share/version"

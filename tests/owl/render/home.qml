@@ -79,7 +79,12 @@ ShellRoot {
                 color: mock.cardColor
                 clip: true
                 Loader {
+                  id: cellLoader
                   anchors.fill: parent
+                  Connections {
+                    target: shell
+                    function onOpenScreensChanged() { if (shell.openScreens.indexOf(cell.modelData.id) >= 0 && cellLoader.item) cellLoader.item.openScreen() }
+                  }
                   source: Qt.resolvedUrl("home/OwlCell.qml")
                   onLoaded: {
                     item.home = mock
@@ -115,6 +120,7 @@ ShellRoot {
         }
 
         Home.HomeSheets {
+          id: sheetsItem
           z: 100
           anchors.fill: parent
           home: mock
@@ -142,12 +148,18 @@ ShellRoot {
 
   MockHome {
     id: mock
+    owlStoreDir: shell.job.storeDir || ""
+    owlStoreIndex: storeIndexFile.text() ? JSON.parse(storeIndexFile.text()) : ({ widgets: [] })
     widgets: shell.job.widgets
     fixtureTime: shell.job.time
     themeColors: OwlPhone.parseColorsToml(themeFile.text())
   }
 
+  property var openScreens: []
+  FileView { id: storeIndexFile; path: shell.job.storeDir ? shell.job.storeDir + "/index.json" : ""; blockLoading: true; printErrors: false }
+
   function next() {
+    shell.openScreens = []
     shell.index++
     if (shell.index >= shell.job.shots.length) { Qt.quit(); return }
     const s = shell.job.shots[shell.index]
@@ -155,6 +167,9 @@ ShellRoot {
     mock.approvals = s.approvals
     mock.owlApproveId = s.approveId || ""
     mock.sheet = s.sheet || ""
+    sheetsItem.widgetsTab = s.tab || ""
+    mock.owlStoreDetail = s.storeDetail || ""
+    if (s.openScreen) Qt.callLater(function() { shell.openScreens = [s.openScreen] })
     mock.editing = !!s.sheet
     settle.restart()
   }

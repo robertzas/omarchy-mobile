@@ -6,6 +6,7 @@
 # qmllint parts skip themselves without it).
 import importlib.machinery
 import importlib.util
+import hashlib
 import json
 import os
 import shutil
@@ -288,6 +289,88 @@ def owl_widgets_are_listed_with_their_text():
         assert any("larger than" in e for e in s.mod.inspect(f, s.widgets, "user", lint=False)["errors"])
         # A QML widget is still a QML widget.
         assert s.mod.inspect(s.widget("t.qml"), s.widgets, "user", lint=False)["kind"] == "qml"
+
+
+def fake_store(root, widgets):
+    """A store folder like omamobile-owl-widgets': {id: (version, text, status)}."""
+    base = os.path.join(root, "store")
+    entries = []
+    for wid, (version, text, status) in widgets.items():
+        path = os.path.join(base, "widgets", wid, "widget.owl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").write(text)
+        entries.append({"id": wid, "version": version, "status": status,
+                        "sha256": hashlib.sha256(text.encode()).hexdigest()})
+    json.dump({"version": 1, "widgets": entries}, open(os.path.join(base, "index.json"), "w"))
+    return base
+
+
+@test
+def store_copy_and_update():
+    with Sandbox() as s:
+        base = fake_store(s.root, {"alice/hello": ("1.0", 'widget "hello" { Text { text: "1" } }\n', "ok"),
+                                   "bob/nope": ("1.0", 'widget "n" { Text { text: "x" } }\n', "unsupported")})
+        s.env["OMAMOBILE_OWL_STORE"] = base
+        s.env["XDG_CACHE_HOME"] = os.path.join(s.root, "cache")
+        out = s.run("store-copy", "alice/hello")
+        assert out.returncode == 0, out.stderr
+        folder = os.path.join(s.widgets, "alice.hello")
+        assert open(os.path.join(folder, "widget.owl")).read().startswith('widget "hello"')
+        stored = json.load(open(os.path.join(folder, ".store.json")))
+        assert stored["id"] == "alice/hello" and stored["version"] == "1.0"
+        mod = load(s.env)
+        r = mod.inspect(folder, s.widgets, "user", lint=False)
+        assert r["store"]["version"] == "1.0" and r["owl"]["sha256"] == stored["sha256"], r
+        assert s.run("store-copy", "alice/hello").returncode == 3            # already there
+        assert s.run("store-copy", "bob/nope").returncode == 3               # not shippable
+        assert s.run("store-copy", "../etc").returncode == 2                 # not an id
+        assert s.run("store-update", "alice.hello").returncode == 3          # nothing newer
+        # A newer version in the store replaces an unmodified copy ...
+        fake_store(s.root, {"alice/hello": ("1.1", 'widget "hello" { Text { text: "2" } }\n', "ok")})
+        out = s.run("store-update", "alice.hello")
+        assert out.returncode == 0, out.stderr
+        assert '"2"' in open(os.path.join(folder, "widget.owl")).read()
+        # ... and never one the user changed.
+        fake_store(s.root, {"alice/hello": ("1.2", 'widget "hello" { Text { text: "3" } }\n', "ok")})
+        open(os.path.join(folder, "widget.owl"), "a").write("// mine\n")
+        assert s.run("store-update", "alice.hello").returncode == 4
+        assert "// mine" in open(os.path.join(folder, "widget.owl")).read()
+
+
+@test
+def store_fetch_checks_every_file_and_never_runs_on_its_own():
+    with Sandbox() as s:
+        cache = os.path.join(s.root, "cache")
+        s.env["XDG_CACHE_HOME"] = cache
+        mod = load(s.env)
+        good = b'widget "a" { Text { text: "a" } }\n'
+        files = {
+            "https://store.example/index.json": json.dumps({"widgets": [
+                {"id": "alice/a", "version": "2.0", "sha256": hashlib.sha256(good).hexdigest()},
+                {"id": "mallory/b", "version": "1.0", "sha256": "0" * 64},
+                {"id": "../../etc", "version": "1"}]}).encode(),
+            "https://store.example/widgets/alice/a/widget.owl": good,
+            "https://store.example/widgets/mallory/b/widget.owl": b'widget "b" { Text { text: "b" } }\n'}
+        asked = []
+        def fake_fetch(url, limit):
+            asked.append(url)
+            return files[url]
+        mod.fetch = fake_fetch
+        mod.OWL_STORE_URL = "https://store.example"
+        import contextlib, io
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                mod.cmd_store_fetch()
+        except SystemExit as e:
+            assert False, "store-fetch exited %s" % e.code
+        index = json.load(open(os.path.join(mod.OWL_STORE_CACHE, "index.json")))
+        assert [w["id"] for w in index["widgets"]] == ["alice/a"], index      # a bad sha256 and a bad id are dropped
+        assert open(os.path.join(mod.OWL_STORE_CACHE, "widgets/alice/a/widget.owl"), "rb").read() == good
+        assert not any("etc" in u for u in asked), asked
+        # Scanning and checking never reach the network.
+        asked.clear()
+        mod.scan(lint=False)
+        assert asked == []
 
 
 @test

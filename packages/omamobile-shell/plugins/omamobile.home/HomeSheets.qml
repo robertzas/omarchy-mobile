@@ -2,12 +2,15 @@
 import QtQuick
 import QtQuick.Controls as Controls
 import Quickshell
+import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "HomeModel.js" as HomeModel
 import "UserWidgets.js" as UserWidgets
 import "owl/catalog.js" as OwlCatalog
+import "owl/phone.js" as OwlPhone
+import "owl" as Owl
 
 // Edit mode's sheets, sliding up from the bottom of the home screen: add a
 // widget, add an app, manage pages, and one widget's settings. `home` is
@@ -64,7 +67,8 @@ Item {
           : sheets.which === "pages" ? "Pages"
           : sheets.which === "settings" ? sheets.settingsTitle
           : sheets.which === "create" ? sheets.createTitle
-          : sheets.which === "owl-approve" ? sheets.approveTitle : ""
+          : sheets.which === "owl-approve" ? sheets.approveTitle
+          : sheets.which === "owl-store" ? sheets.storeTitle : ""
         color: sheets.fg
         font.family: Style.font.family
         font.pixelSize: Style.font.heading
@@ -97,7 +101,8 @@ Item {
         : sheets.which === "pages" ? pagesSheet
         : sheets.which === "settings" ? settingsSheet
         : sheets.which === "create" ? createSheet
-        : sheets.which === "owl-approve" ? approveSheet : null
+        : sheets.which === "owl-approve" ? approveSheet
+        : sheets.which === "owl-store" ? storeSheet : null
     }
   }
 
@@ -310,18 +315,86 @@ Item {
         id: widgetsColumn
         width: parent.width
 
+        // Yours and built-in, or the OWL store (with OWL widgets on).
+        Row {
+          visible: sheets.home.owlEnabled
+          width: parent.width
+          height: visible ? sheets.touch : 0
+          spacing: Style.spacing.sm
+          bottomPadding: Style.spacing.md
+          Repeater {
+            model: [{ tab: "", label: "Widgets" }, { tab: "store", label: "Store" }]
+            delegate: SheetButton {
+              required property var modelData
+              width: (widgetsColumn.width - Style.spacing.sm) / 2
+              label: modelData.label
+              primary: sheets.widgetsTab === modelData.tab
+              onClicked: sheets.widgetsTab = modelData.tab
+            }
+          }
+        }
+
+        Column {
+          visible: sheets.widgetsTab === "store" && sheets.home.owlEnabled
+          width: parent.width
+          spacing: Style.spacing.xs
+          Label {
+            width: parent.width
+            text: "Widgets from the OWL widget store, the ones that run on this phone. Each asks before it runs anything."
+          }
+          Flow {
+            width: parent.width
+            spacing: Style.spacing.sm
+            Repeater {
+              model: [""].concat(OwlCatalog.CATEGORIES)
+              delegate: SheetButton {
+                required property var modelData
+                label: modelData || "all"
+                primary: sheets.storeCategory === modelData
+                onClicked: sheets.storeCategory = modelData
+              }
+            }
+          }
+          Repeater {
+            model: sheets.home.owlStoreRows.filter(function(r) { return !sheets.storeCategory || r.category === sheets.storeCategory })
+            delegate: WidgetRow {
+              required property var modelData
+              width: widgetsColumn.width
+              glyph: modelData.status === "unsupported" ? "󰀦" : OwlCatalog.ICON
+              title: modelData.name + "  \u00b7  " + modelData.author
+              subtitle: (modelData.update ? "update to " + modelData.version + "  \u00b7  " : modelData.owned ? "added  \u00b7  " : "")
+                + (modelData.sizeText ? modelData.sizeText + "  \u00b7  " : "") + modelData.summary
+              warn: modelData.status === "unsupported"
+              onClicked: sheets.home.openStoreWidget(modelData.id)
+            }
+          }
+          SheetButton {
+            width: parent.width
+            label: "Check the store now"
+            enabled: !sheets.home.helperBusy
+            onClicked: sheets.home.fetchStore()
+          }
+          Label {
+            visible: sheets.home.owlStoreMessage !== ""
+            width: parent.width
+            text: sheets.home.owlStoreMessage
+          }
+        }
+
         SheetButton {
+          visible: sheets.widgetsTab === "" || !sheets.home.owlEnabled
           width: parent.width
           label: "󰚩  Create a widget with AI"
           primary: true
           onClicked: sheets.home.openCreate("create", "")
         }
 
-        SectionLabel { visible: widgetsColumn.yours.length > 0; text: "YOURS" }
+        SectionLabel { visible: widgetsColumn.mine && widgetsColumn.yours.length > 0; text: "YOURS" }
+        readonly property bool mine: sheets.widgetsTab === "" || !sheets.home.owlEnabled
         // OWL widgets only while the feature is on (features.json).
         readonly property var yours: scan.widgets.filter(function(r) { return r.kind !== "owl" || sheets.home.owlEnabled })
         Repeater {
-          model: widgetsColumn.yours
+          model: widgetsColumn.mine ? widgetsColumn.yours : []
           delegate: WidgetRow {
             required property var modelData
             readonly property bool isOwl: modelData.kind === "owl"
@@ -343,9 +416,9 @@ Item {
           }
         }
 
-        SectionLabel { text: "BUILT IN" }
+        SectionLabel { visible: widgetsColumn.mine; text: "BUILT IN" }
         Repeater {
-          model: HomeModel.widgetTypes()
+          model: widgetsColumn.mine ? HomeModel.widgetTypes() : []
           delegate: Row2 {
             required property var modelData
             width: widgetsColumn.width
@@ -356,9 +429,9 @@ Item {
           }
         }
 
-        SectionLabel { visible: scan.examples.length > 0; text: "EXAMPLES" }
+        SectionLabel { visible: widgetsColumn.mine && scan.examples.length > 0; text: "EXAMPLES" }
         Repeater {
-          model: scan.examples
+          model: widgetsColumn.mine ? scan.examples : []
           delegate: WidgetRow {
             required property var modelData
             width: widgetsColumn.width
@@ -370,6 +443,112 @@ Item {
           }
         }
 
+      }
+    }
+  }
+
+  property string widgetsTab: ""
+  property string storeCategory: ""
+
+  // ---------------------------------------------------------------- one store widget
+
+  readonly property var storeRow: home && which === "owl-store"
+    ? home.owlStoreRows.filter(function(r) { return r.id === home.owlStoreDetail })[0] || null : null
+  readonly property string storeTitle: storeRow ? storeRow.name : "Store"
+
+  Component {
+    id: storeSheet
+    Flickable {
+      id: storeFlick
+      implicitHeight: storeColumn.implicitHeight
+      contentHeight: storeColumn.implicitHeight
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      readonly property var row: sheets.storeRow
+      readonly property var info: row && sheets.home ? OwlCatalog.describe(row.widgetId, storeFile.text(), sheets.home.layout.grid, sheets.home.owlCellHeight, sheets.home.owlDp) : null
+
+      FileView {
+        id: storeFile
+        path: storeFlick.row ? sheets.home.owlStoreDir + "/widgets/" + storeFlick.row.id + "/widget.owl" : ""
+        blockLoading: true
+        printErrors: false
+      }
+
+      Column {
+        id: storeColumn
+        width: parent.width
+        spacing: Style.spacing.xl
+
+        Label {
+          width: parent.width
+          text: storeFlick.row ? storeFlick.row.description + "\n\nBy " + storeFlick.row.author + ", version " + storeFlick.row.version
+            + (storeFlick.row.category ? ", " + storeFlick.row.category : "") + ". From the OWL widget store, reviewed there." : ""
+        }
+
+        Label {
+          visible: !!storeFlick.info && storeFlick.info.ok && storeFlick.row.status !== "unsupported"
+          width: parent.width
+          text: "Preview, in your theme, with no data yet: nothing runs until you add and allow it."
+        }
+        // A preview drawn here, in your theme, with no data: nothing runs.
+        Rectangle {
+          visible: !!storeFlick.info && storeFlick.info.ok && storeFlick.row.status !== "unsupported"
+          width: storeFlick.info && storeFlick.info.ok ? Math.min(parent.width, storeFlick.info.spec.size[0] * parent.width / 4) : 0
+          height: storeFlick.info && storeFlick.info.ok ? storeFlick.info.spec.size[1] * (sheets.home.owlCellHeight) - Style.spacing.md * 2 : 0
+          anchors.horizontalCenter: parent.horizontalCenter
+          radius: Math.max(Style.cornerRadius, 12)
+          color: sheets.home.cardColor
+          clip: true
+          Owl.OwlWidget {
+            id: preview
+            text: storeFlick.info && storeFlick.info.ok ? storeFile.text() : ""
+            host: ({ loadState: function() { return {} }, saveState: function() {}, report: function() {} })
+            themeColors: sheets.home.owlPalette
+            active: false
+            tileVars: OwlPhone.tileVars(parent.width, parent.height, sheets.home.owlDp, sheets.home.owlScreenWidth, sheets.home.owlScreenHeight, Style.cornerRadius)
+          }
+          Owl.OwlView {
+            anchors.fill: parent
+            anchors.margins: (preview.program ? preview.program.padding : 12) * sheets.home.owlDp
+            tree: preview.tree
+            colors: sheets.home.owlInk
+            dp: sheets.home.owlDp
+            corners: OwlPhone.cornersFor(Style.cornerRadius)
+            monoFamily: Style.font.family
+            iconFamily: Style.font.family
+            interactive: false
+          }
+        }
+
+        Section {
+          visible: !!storeFlick.row
+          title: storeFlick.row && storeFlick.row.status === "unsupported" ? "Not on this phone yet" : "What it does"
+          Label {
+            width: parent.width
+            text: storeFlick.row ? storeFlick.row.summary + (storeFlick.row.note && storeFlick.row.status === "partial" ? ". Partly: " + storeFlick.row.note : "") : ""
+          }
+        }
+
+        Row {
+          spacing: Style.spacing.lg
+          SheetButton {
+            visible: !!storeFlick.row && storeFlick.row.status !== "unsupported" && !storeFlick.row.owned
+            label: "Add"
+            primary: true
+            enabled: !sheets.home.helperBusy
+            onClicked: sheets.home.addFromStore(storeFlick.row.id)
+          }
+          SheetButton {
+            visible: !!storeFlick.row && storeFlick.row.update
+            label: "Update to " + (storeFlick.row ? storeFlick.row.version : "")
+            primary: true
+            onClicked: sheets.home.updateFromStore(storeFlick.row.widgetId)
+          }
+          SheetButton {
+            label: "Back"
+            onClicked: sheets.home.sheet = "widgets"
+          }
+        }
       }
     }
   }

@@ -99,13 +99,33 @@ Item {
     android: function(widget, kind, done) { done({ value: null }) },
     act: function() {}, runInto: function() {},
     loadState: function() { return {} }, saveState: function() {},
-    report: function(widget, message) { console.log("owl report " + widget.stateKey + ": " + message) }
+    report: function(widget, message) { console.log("owl report " + widget.stateKey + ": " + message) },
+    // A terminal that prints a fixed session (nothing runs).
+    terminalFor: function() {
+      return { start: function(command, onOutput) {
+        onOutput("$ uptime\r\n 13:27:00 up 2 days,  3:04,  1 user,  load average: 0.31, 0.28, 0.25\r\n$ ")
+        return { write: function() {}, stop: function() {} }
+      } }
+    }
   })
   readonly property var owlScheduler: ({
     add: function() {}, remove: function() {},
     // One frame at the fixture's time, so a drawing that reads `time` shows it.
     setAnimating: function(client, on) { if (on) client.frame(mock.fixtureTime % 3600 + 0.5) }
   })
+
+  // The Store tab, from the package built in the container.
+  property string owlStoreDir: ""
+  property var owlStoreIndex: ({ widgets: [] })
+  readonly property var owlStoreRows: OwlCatalog.storeRows(mock.owlStoreIndex, null,
+    mock.userScan.widgets.filter(function(r) { return r.kind === "owl" }), { columns: 4, rows: 6 }, mock.owlCellHeight, mock.owlDp)
+  property string owlStoreDetail: ""
+  property string owlStoreMessage: ""
+  function openStoreWidget(id) { mock.owlStoreDetail = id; mock.sheet = "owl-store" }
+  function addFromStore() { return "" }
+  function updateFromStore() {}
+  function fetchStore() {}
+  readonly property real owlCellHeightPublic: mock.owlCellHeight
 
   function guardBegin() {}
   function guardEnd() {}

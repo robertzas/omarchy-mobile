@@ -93,6 +93,9 @@ Item {
     onKeyboardWanted: function(on) { if (owlCell.home && owlCell.home.owlKeyboard) owlCell.home.owlKeyboard(on) }
   }
 
+  // Opens the widget's screen, as its own screen() does (tests, IPC).
+  function openScreen() { owl.openScreen() }
+
   // ---------- the scheduler and the crash guard
 
   readonly property var client: ({

@@ -32,4 +32,10 @@ delete withoutQuakes["simonschubert.earthquakes"]
 shots.push({ png: path.join(out, `widgets-sheet-${theme}.png`), cells: pages[0], page: 0, pages: pages.length, approvals: withoutQuakes, sheet: "widgets" })
 shots.push({ png: path.join(out, `approve-earthquakes-${theme}.png`), cells: pages[0], page: 0, pages: pages.length, approvals: withoutQuakes, sheet: "owl-approve", approveId: "simonschubert.earthquakes" })
 shots.push({ png: path.join(out, `approve-risky-${theme}.png`), cells: pages[3], page: 3, pages: pages.length, approvals: approved, sheet: "owl-approve", approveId: "shared.wallpaper-of-the-day" })
-console.log(JSON.stringify({ time: cases.time, widgets, shots }))
+// The rest of this round: a screen opened in place, a Terminal tile, the
+// Store tab and one store widget.
+for (const id of ["my.notes-screen", "my.uptime-terminal"]) approved[id] = { commands: C.compile(widgets.find((w) => w.id === id).text).commands, network: false }
+shots.push({ png: path.join(out, `screen-and-terminal-${theme}.png`), cells: [s("my.notes-screen", 0, 0, 4, 3), s("my.uptime-terminal", 0, 3, 4, 2)], page: 0, pages: 1, approvals: approved, openScreen: "my.notes-screen" })
+shots.push({ png: path.join(out, `store-tab-${theme}.png`), cells: pages[0], page: 0, pages: pages.length, approvals: approved, sheet: "widgets", tab: "store" })
+shots.push({ png: path.join(out, `store-widget-${theme}.png`), cells: pages[0], page: 0, pages: pages.length, approvals: approved, sheet: "owl-store", storeDetail: "simonschubert/earthquakes" })
+console.log(JSON.stringify({ time: cases.time, widgets, shots, storeDir: process.env.OWL_STORE_DIR || "" }))

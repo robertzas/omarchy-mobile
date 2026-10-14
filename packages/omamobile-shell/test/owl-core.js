@@ -350,4 +350,22 @@ test("a widget's screen and its actions compile; screen() needs a screen", () =>
   eq(acts, [["close"]])
 })
 
+test("the Store tab's rows: order, sizes, what they run, owned, updates", () => {
+  const K = load("catalog.js")
+  const index = { widgets: [
+    { id: "a/quakes", name: "quakes", author: "a", status: "ok", version: "1.1", size: [6, 3], category: "world",
+      commands: ["curl -s https://q.example/x"], capabilities: ["commands", "network"], hosts: ["q.example"] },
+    { id: "b/root", name: "root", status: "unsupported", note: "runs a root tool: sudo id", version: "1" },
+    { id: "c/clock", name: "clock", status: "ok", version: "2.0", size: [3, 3], commands: [], capabilities: [] }] }
+  const records = [
+    { id: "a.quakes", kind: "owl", owl: { sha256: "s1" }, store: { id: "a/quakes", version: "1.0", sha256: "s1" } },
+    { id: "c.clock", kind: "owl", owl: { sha256: "changed" }, store: { id: "c/clock", version: "1.0", sha256: "s2" } }]
+  const rows = K.storeRows(index, { widgets: [{ id: "c/clock", version: "3.0" }] }, records, { columns: 4, rows: 6 }, 908 / 6, P.dpFor(480))
+  eq(rows.map((r) => r.id), ["a/quakes", "b/root", "c/clock"])
+  eq([rows[0].sizeText, rows[0].summary, rows[0].owned, rows[0].update], ["4\u00d72", "runs 1 command, uses the internet (q.example)", true, true])
+  eq(rows[1].summary, "not yet on this phone: runs a root tool: sudo id")
+  eq([rows[2].version, rows[2].modified, rows[2].update, rows[2].summary], ["3.0", true, false, "runs nothing, reaches nothing"])
+  assert.ok(K.newer("1.10", "1.9") && !K.newer("1.0", "1") && K.newer("2", "1.9"))
+})
+
 if (failed) { console.log(failed + " failed"); process.exit(1) }

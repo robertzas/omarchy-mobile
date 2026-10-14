@@ -1,0 +1,5 @@
+widget "hello" {
+  meta { description: "Says hello, for the tests"; version: "1.0"; license: "MIT"; category: "fun" }
+  size: 3x2
+  Text { text: "hello" }
+}

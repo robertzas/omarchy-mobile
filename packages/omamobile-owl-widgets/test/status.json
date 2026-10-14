@@ -1,0 +1,4 @@
+{ "source": "fake store", "widgets": {
+  "alice/hello": { "status": "ok" },
+  "alice/clock": { "status": "partial", "note": "a note" },
+  "bob/sneaky": { "status": "ok" } } }

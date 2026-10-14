@@ -70,6 +70,60 @@ function cardState(enabled, scanned, record, info, approval, crashedHash) {
   return { state: "ok", message: "" }
 }
 
+// ---------------------------------------------------------------- the Store tab
+
+var CATEGORIES = ["news", "dev", "productivity", "time", "world", "fun", "home", "system"]
+
+function versionKey(v) {
+  return String(v || "0").split(/[.-]/).map(function(p) { return /^[0-9]+$/.test(p) ? Number(p) : p })
+}
+function newer(a, b) {
+  var x = versionKey(a), y = versionKey(b)
+  for (var i = 0; i < Math.max(x.length, y.length); i++) {
+    var p = x[i] === undefined ? 0 : x[i], q = y[i] === undefined ? 0 : y[i]
+    if (p === q) continue
+    if (typeof p === typeof q) return p > q
+    return typeof p === "number"
+  }
+  return false
+}
+
+// The Store tab's rows, in the store's order: the package's index, with a
+// newer version store-fetch downloaded when there is one, and what the user
+// already has (`records`: the scan's OWL widgets, with their `store` origin).
+// Each row: { id, widgetId, name, author, description, category, version,
+//   sizeText, summary, status, note, owned, modified, update }.
+function storeRows(index, fetched, records, grid, cellHeight, dp) {
+  var fetchedBy = {}
+  ;((fetched && fetched.widgets) || []).forEach(function(w) { fetchedBy[w.id] = w })
+  var mine = {}
+  ;(records || []).forEach(function(r) { if (r.store && r.store.id) mine[r.store.id] = r })
+  return ((index && index.widgets) || []).map(function(w) {
+    var widgetId = String(w.id).replace("/", ".")
+    var own = mine[w.id] || null
+    var latest = fetchedBy[w.id] && newer(fetchedBy[w.id].version, w.version) ? fetchedBy[w.id].version : w.version
+    var modified = !!own && !!own.owl && own.owl.sha256 !== own.store.sha256
+    var cells = w.size ? Phone.homeSpec({ size: w.size, minSize: w.minSize || [1, 1] }, grid, cellHeight, dp).size : null
+    return {
+      id: w.id, widgetId: widgetId, name: w.name || w.id, author: w.author || String(w.id).split("/")[0],
+      description: w.description || "", category: w.category || "", version: latest || "",
+      sizeText: cells ? cells[0] + "\u00d7" + cells[1] : "",
+      summary: w.status === "unsupported" ? "not yet on this phone: " + (w.note || "") : summary(storeCaps(w)),
+      status: w.status, note: w.note || "", owned: !!own, modified: modified,
+      update: !!own && !modified && newer(latest, own.store.version)
+    }
+  })
+}
+
+function storeCaps(w) {
+  var caps = w.capabilities || []
+  return { commands: (w.commands || []).filter(function(c) { return !/^(http GET |read file |read Android)/.test(c) }),
+           network: caps.indexOf("network") >= 0, hosts: w.hosts || [],
+           files: (w.commands || []).filter(function(c) { return /^read file /.test(c) }),
+           notifications: caps.indexOf("notifications") >= 0, devices: [], terminal: false }
+}
+
 if (typeof module !== "undefined") {
-  module.exports = { describe: describe, summary: summary, shortCommand: shortCommand, cardState: cardState, ICON: ICON }
+  module.exports = { describe: describe, summary: summary, shortCommand: shortCommand, cardState: cardState, ICON: ICON,
+                     storeRows: storeRows, newer: newer, CATEGORIES: CATEGORIES }
 }

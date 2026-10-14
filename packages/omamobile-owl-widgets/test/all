@@ -1,0 +1,36 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omamobile-owl-widgets, with a made-up store (test/fake-store):
+# the index, the store order, the gate, the staged files.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+owl=${OWL_RUNTIME_DIR:-../omamobile-shell/plugins/omamobile.home/owl}
+[[ -d $owl ]] || owl=/usr/share/omamobile/shell/plugins/omamobile.home/owl
+command -v node >/dev/null || { pass "store index # SKIP no node"; exit 0; }
+python3 -c 'import json; json.load(open("status.json"))' || fail "status.json is valid JSON"
+pass "status.json parses"
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+cp test/status.json "$tmp/status.json"
+# The install script reads status.json next to it: stage a copy of the package.
+mkdir -p "$tmp/pkg" && cp build-index.js install version "$tmp/pkg/" && cp test/status.json "$tmp/pkg/status.json"
+"$tmp/pkg/install" "$tmp/root" test/fake-store "$owl"
+share=$tmp/root/usr/share/omamobile/owl-widgets
+python3 - "$share/index.json" <<'PY' || fail "the index"
+import json, sys
+idx = json.load(open(sys.argv[1]))
+ids = [w["id"] for w in idx["widgets"]]
+assert ids == ["alice/clock", "alice/hello", "bob/sneaky"], ids          # listed, by name, after "..."
+by = {w["id"]: w for w in idx["widgets"]}
+c = by["alice/clock"]
+assert c["status"] == "partial" and c["version"] == "2.1" and c["size"] == [6, 2] and c["requires"] == ["curl"], c
+assert c["commands"] == ["curl -s https://weather.example.org/now"] and c["capabilities"] == ["commands", "network"], c
+assert c["hosts"] == ["weather.example.org"] and len(c["sha256"]) == 64 and c["category"] == "time", c
+assert by["bob/sneaky"]["status"] == "unsupported" and "root tool" in by["bob/sneaky"]["note"], by["bob/sneaky"]
+PY
+pass "the index lists every widget in store order with what it runs"
+[[ -f $share/widgets/alice/hello/widget.owl && -f $share/widgets/alice/clock/widget.owl ]] || fail "shippable widgets are staged"
+[[ ! -e $share/widgets/bob/sneaky ]] || fail "refused widgets are not staged"
+[[ -f $tmp/root/usr/share/licenses/omamobile-owl-widgets/LICENSE && -f $share/order.txt ]] || fail "licence and order are staged"
+pass "only what passes ships, with the store's licence"
