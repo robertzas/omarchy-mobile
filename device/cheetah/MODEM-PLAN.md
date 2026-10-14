@@ -17,10 +17,11 @@ on once up (M2.6). **M4.1i passed** (the full probe twice, ten minutes of
 idle link cycles, 0 UFS passes, NV unchanged). **But a reboot with the
 modem ONLINE and its link idle hung the phone** (power key needed):
 DesignWare's MSI code touches DBI while our PHY is isolated; `4b1364136`
-guards it. **Until the phone runs that kernel: no reboot after the
-modem was started unless the human is at the phone** (section 4). Next
-on the phone: M4.1j (the fixed kernel; a reboot with the modem idling,
-attended); M4.2 needs a SIM. Section 6.3 lists what our CPIF
+guards it. **M4.1j passed (2026-10-13, 00511):** with that kernel the
+same reboot came back on its own in about 25 s, NV unchanged. Shutdown
+still prints two WARNs (the MSI domain is removed while the endpoint's
+vectors are allocated: teardown order, offline fix next). Keep reboots
+after a modem start attended until a second clean run. M4.2 needs a SIM. Section 6.3 lists what our CPIF
 port still lacks for data and suspend.
 Kernel branch `omamobile-modem` in `~/android/mainline/wt-modem` (head
 `4b1364136`, section 6.3, M3.4.5b and M4.1b-M4.1j), build in `~/android/mainline/out-modem` (last
@@ -2218,6 +2219,26 @@ tools/phone-ssh 'sync; (sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
 #     shutdown touches the controller)
 # 5. M3.5 (read-only)
 ```
+
+**M4.1j, results (2026-10-13, `7.3.0-rc6-omamobile-push1-00511-g9626f17f7825`;
+logs `logs/m4.1j-*`): PASSED.** M3.5 before: the six partitions match the
+2026-10-13 backup. M3.4.3: "preconditions met", PMU 0x3ec0 0x0, faults 0x0.
+`systemctl start omamobile-modem`: ONLINE within 60 s, 0 UFS handler
+passes. The probe (with `omamobile-modem-sit` 0.2.0, which the reinstall
+leaves out on purpose): five requests "error=0", GET_SMSC_ADDR error 11
+(no SIM), "SIM card state 0 applications []", "radio state 3". The link
+went idle ("pcie_powered_on:0", 0 UFS passes), then `reboot-to omamobile`:
+the kmsg stream shows "PHY isolated (PMU 0x3ec0 = 0x0)" before the reboot,
+"s51xx PCIe Remove!!!", `power_shutdown_cp` and the AP2CP power-off GPIO
+edges, and the phone was back on SSH in about 25 s with no hang and no
+power key. New boot: 0 UFS handler passes, no failed units. M3.5 after:
+unchanged. Left on the shutdown path, not fatal: two WARNs in
+`device_shutdown` from `gs201_pcie_cp_shutdown`:
+`irq_domain_remove+0xf0` (kernel/irq/irqdomain.c:408) and
+`msi_device_data_release+0x44` (kernel/irq/msi.c:294), i.e. the MSI
+domain is torn down while s51xx's vectors are still allocated. Next,
+offline: free the endpoint's vectors (or remove the root bus) before
+the domain in the shutdown path, then a second attended M4.1j run.
 
 **Before M4.2:** M4.1i passed; a SIM with its PIN lock off in the phone
 (M4.2's preconditions), the carrier's APN in
