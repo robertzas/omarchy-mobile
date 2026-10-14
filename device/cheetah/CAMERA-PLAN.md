@@ -3389,6 +3389,47 @@ omamobile-apps 0.1.1): GNOME Snapshot works with all four cameras.**
   T.3), so the telephoto has no autofocus; the main and ultrawide AK7375
   lenses stay powered while PipeWire holds their subdevs (power: measure).
 
+**CAM5.4 follow-ups (2026-10-14, 00533-00543):**
+- **Ultrawide autofocus:** `camera-uw-lens` joins `device.conf`; libcamera's
+  contrast AF sweeps the AK7375 (sharpness 46 000-198 000 across the
+  sweep) and completes. The two AK7375s log "ak7375_vcm_resume I2C
+  failure: -6" once when WirePlumber first opens them at 40 s; later opens
+  work.
+- **Snapshot photos are 1080p by design:** its camera library caps the
+  stream at 1080 lines (`aperture/src/utils.rs`: `MAX_HEIGHT = 1080`) and
+  takes photos from that stream. Our side isn't the limit: PipeWire offers
+  sizes up to 3840x2400, and a 3840x2160 stream from the main camera ran
+  through PipeWire (the 4080x2288 mode, WDMA errors 0). Higher-resolution
+  photos need a patched Snapshot or another app.
+- **Telephoto lens works** (int `1f83c16c0` = 00543): the SEM1215SA answers
+  only while its sensor is powered, as stock powers it inside the sensor's
+  sequence. Read-only first (00535, `boot_ms=20`, opened during a stream):
+  positions read back 217→220, 248→246, no bus error. Now s5kgn1 holds its
+  lens-focus device powered while it streams, sem1215 no longer powers on
+  open (WirePlumber keeps lens subdevs open), waits 20 ms after its
+  supplies and reads the calibration at the first stream ("focus range
+  142-664 (calibrated 182-624)"). libcamera AF: "Autofocus completed at
+  450", every move read back within a few codes; no I2C timeout in two
+  runs. The telephoto bus also runs at 950 kHz now (`b267e0dd4`): mainline
+  i2c-exynos5 runs 1 MHz as high-speed mode, which stock doesn't.
+- **Telephoto rotation 270 again** (with its vertical flip): upside down at
+  90 once Snapshot named the cameras; the earlier "upside down at 270" came
+  while the three back cameras were indistinguishable. The owner checks
+  text (upright, not mirrored).
+- **Snapshot crash after photos (not a camera bug):** GTK 4.24 exports GL
+  textures as dmabufs for its Vulkan renderer; Mesa's panfrost makes every
+  resource without `PIPE_BIND_SHARED` a BO private to its GPU VM, and
+  panthor refuses to export those (-EINVAL: "We can't export GEMs that
+  have an exclusive VM"). Every export failed ("drmPrimeHandleToFD() failed
+  (err=22)"), GTK built a texture with no fd, and Snapshot crashed in
+  `gsk_renderer_render_texture`. Fix in `packages/mesa` 0002 (images always
+  shareable, buffers stay private); upstream recorded the same failure as
+  a CI expectation in 2023 ("panfrost: Add spec@egl 1.4@egl-ext_egl_image_storage
+  to the list of failures").
+- **AGC from a dark start:** libcamera 0.7.2-4.7 (`0015`) doubles or halves
+  the exposure while the histogram is pinned at an end, instead of 15% a
+  frame (the front camera took seconds to brighten).
+
 ### CAM7: the front camera (Samsung S5K3J1, D-PHY on link 0). Risk: medium
 
 **Facts.** [V] from the user's own HAL (section 4.5) unless marked: chip ID
