@@ -9,6 +9,7 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 for f in tools/install-phone tools/phone-provision tools/build-rootfs tools/build-packages tools/make-bundle \
          tools/lib/alarm.sh tools/lib/alarm-setup rootfs/build-inside tests/*; do
+  [[ -f $f ]] || continue   # tests/owl is the OWL conformance suite's folder
   bash -n "$f" || { echo "not ok - $f parses" >&2; exit 1; }
 done
 sh -n device/*/initramfs/init
