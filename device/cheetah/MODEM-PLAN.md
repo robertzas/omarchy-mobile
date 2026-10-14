@@ -19,14 +19,15 @@ modem ONLINE and its link idle hung the phone** (power key needed):
 DesignWare's MSI code touches DBI while our PHY is isolated; `4b1364136`
 guards it. **M4.1j passed (2026-10-13, 00511):** with that kernel the
 same reboot came back on its own in about 25 s, NV unchanged. Shutdown
-still prints two WARNs (the MSI domain is removed while the endpoint's
-vectors are allocated: teardown order, offline fix next). Keep reboots
+still printed two WARNs: CPIF's s51xx never freed the endpoint's MSI
+vectors, so the endpoint's MSI domain went with them allocated;
+fixed offline in `7b2b87cb7` (M4.1k, not yet on the phone). Keep reboots
 after a modem start attended until a second clean run. M4.2 needs a SIM. Section 6.3 lists what our CPIF
 port still lacks for data and suspend.
 Kernel branch `omamobile-modem` in `~/android/mainline/wt-modem` (head
-`4b1364136`, section 6.3, M3.4.5b and M4.1b-M4.1j), build in `~/android/mainline/out-modem` (last
-full build `7.3.0-rc6-omamobile-push1-00368-g6638c9b533e6`, the same tree
-before a message amend, W=1 clean on the touched files).
+`d34bbbad4`, section 6.3, M3.4.5b and M4.1b-M4.1k), build in `~/android/mainline/out-modem` (last
+full build `7.3.0-rc6-omamobile-push1-00370-gd34bbbad467d`, W=1 clean on
+the touched files).
 Everything new is disabled by default. RADIOS-CAMERA-PLAN.md section 1 is
 the survey this follows.
 
@@ -2239,6 +2240,62 @@ unchanged. Left on the shutdown path, not fatal: two WARNs in
 domain is torn down while s51xx's vectors are still allocated. Next,
 offline: free the endpoint's vectors (or remove the root bus) before
 the domain in the shutdown path, then a second attended M4.1j run.
+
+**M4.1k, offline (2026-10-13): the WARNs are CPIF's, not the host
+driver's.** Both traces run through `device_release_driver` of the
+S5300 function inside `pci_stop_root_bus`, before
+`gs201_pcie_cp_remove()` gets to `dw_pcie_free_msi()`: the host driver
+already removes the bus before its own MSI domain. What goes is the
+endpoint's per-device MSI domain, a devres of the `pci_dev` released when
+s51xx unbinds, and it still holds the four vectors that
+`request_pcie_int()` allocated on the first power-on: `s51xx_pcie_remove()`
+never freed them, nor the two doorbell handlers on them, and it left
+`mc->s51xx_pdev` pointing at the `pci_dev` the bus removal frees (which
+`power_shutdown_cp()` reads a moment later). `omamobile-modem` `7b2b87cb7`
+frees the handlers (and their wake setting), then the vectors, and
+forgets the `pci_dev`; `d34bbbad4` drops the unpaired
+`pci_release_regions()` behind the "Trying to free nonexistent resource
+<0x40000000-0x400fffff>" line just before the first WARN. With the link
+idle the masking this adds is dropped by the host driver (config space
+refused, DBI skipped while the PHY is isolated, `4b1364136`); no BAR or
+ELBI access is added. Build `7.3.0-rc6-omamobile-push1-00370-gd34bbbad467d`
+in `out-modem`, W=1 clean on `s51xx_pcie.c` and `modem_ctrl_s5100.c`,
+checkpatch clean.
+
+```sh
+# M4.1k the shutdown without WARNs (asks the human: a push and two reboots; the human at the phone for
+# step 4; risk: medium: a reboot with the modem up, the path M4.1i hung on and M4.1j fixed)
+# NO BAR ACCESS from userspace (section 4). Config space and CPIF's sysfs files only.
+# Before (laptop): the human merges omamobile-modem (d34bbbad4 or later) into omamobile-int and builds it
+#   (explicit KERNEL_DIR/KERNEL_OUT). The phone runs 00511 (int 9626f17f7) or a later int without the modem.
+# 0. M3.5 (read-only): the six partitions against the backup, as M3.4.0; no diff
+#   stop: any diff (stock booted since? take a fresh backup first, AGENTS.md section 1)
+# 1. push, the attended way: the modem must not be running on the current boot (it isn't unless started),
+#    so the push's reboot is the ordinary one. Kmsg terminal into logs/m4.1k-kmsg.log before step 2
+bin/omamobile push
+tools/phone-ssh 'uname -r; dmesg | grep -c ufshcd_err_handler; lsmod | grep -c "^cpif "'
+#   pass: the new release; err_handler 0; cpif 0 (not loaded yet)
+#   stop: no SSH within the usual time: wait for the reboot watchdog, then the human's force restart;
+#     rollback below
+# 2. the modem to ONLINE (M3.4.5b step 4) and the probe (M4.1i step 4): pass as M4.1j
+# 3. wait for an idle link (M4.1j step 3, read-only)
+#   pass: "pcie_powered_on:0"; err_handler count unchanged
+# 4. the reboot, attended (announce: a reboot; if the phone hangs, Power held ~30 s, then Power)
+tools/phone-ssh 'sync; (sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
+#   pass: back on SSH on its own (M4.1j: about 25 s); in logs/m4.1k-kmsg.log after "s51xx PCIe Remove!!!":
+#     no "WARNING:", no "Trying to free", no "already-free IRQ", no "Unbalanced", no oops, then
+#     power_shutdown_cp and the AP2CP power-off edges as in M4.1j
+grep -nE "WARNING:|Trying to free|already-free|Unbalanced|Unable to handle|Internal error" logs/m4.1k-kmsg.log
+#   pass: no line at or after "s5100_reboot_handler" (quote any line found, nothing else)
+#   expect: the new boot's err_handler count 0
+#   stop: a hang (force restart; record the last kmsg lines), an oops, or a new WARN in the shutdown path:
+#     record its first trace and stop; the next step is offline
+# 5. M3.5 (read-only): unchanged
+#   stop: any diff: no more modem runs until it is explained
+# Rollback: push the previous int build again (00511, int 9626f17f7: M4.1j's, two WARNs at shutdown but no
+#   hang), or merge int without 7b2b87cb7/d34bbbad4; the modem must be stopped (or never started) on the
+#   boot that the push reboots. If slot B does not come up, slot A is stock as always.
+```
 
 **Before M4.2:** M4.1i passed; a SIM with its PIN lock off in the phone
 (M4.2's preconditions), the carrier's APN in
