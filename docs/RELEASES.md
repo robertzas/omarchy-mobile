@@ -293,7 +293,7 @@ Per release, in order. Stop at any failed step.
 2. **Curate:** move what has passed into `omamobile` (§8); publish `omamobile` and the `omamobile-int` snapshot; tag `omamobile-int-<date>`.
 3. **Build** the kernel from the tag in the pinned container, release `LOCALVERSION`; pack `linux-omamobile`.
 4. **Images** for every device: `DEVICE=<codename> bin/omamobile images`, twice, checksums equal.
-5. **Packages:** every changed package has a bumped `version`, its `test/all` passes, `tools/repo-build` builds and signs them and the database.
+5. **Packages:** every changed package has a bumped `version`, its `test/all` passes, `tools/build-packages` builds and signs them and the database on the laptop (`tools/repo-build` on a phone only as an opt-in shortcut).
 6. **Test install** on each released device, attended: the bundle's `install` on a phone whose stock slot A and backups are known good; first boot, device package installed, `omarchy update` clean, then a package-hook kernel update and a reboot into it.
 7. **Identifiers:** grep the bundle, the root image's file list, `MANIFEST` and the release notes for MAC addresses (`[0-9a-f]{2}(:[0-9a-f]{2}){5}`), serial numbers, SSIDs and account names; confirm no file from a factory image is in any artifact.
 8. **Sign** the bundles and the root image; verify the signatures from a clean keyring.

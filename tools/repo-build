@@ -1,8 +1,10 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Build the [omamobile] pacman repository in out/repo/aarch64: our packages,
-# built natively on the phone (the only aarch64 builder for now), each signed
-# with the Omarchy Mobile key in keys/, plus a signed omamobile.db.
+# Opt-in shortcut: build [omamobile] packages natively on a connected phone,
+# into out/repo/aarch64, each signed with the Omarchy Mobile key in keys/,
+# plus a signed omamobile.db. The default build needs no phone:
+# tools/build-packages (an Arch Linux ARM container on the laptop). Use this
+# only to save hours on big packages (Mesa, Hyprland, libcamera).
 #   tools/repo-build [package-dir...]   (default: every package but mesa)
 # Mesa takes hours to build, so its already-built packages are collected from
 # the phone's build directory instead (packages/mesa/README.md).
