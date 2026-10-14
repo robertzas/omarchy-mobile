@@ -3414,8 +3414,10 @@ omamobile-apps 0.1.1): GNOME Snapshot works with all four cameras.**
   i2c-exynos5 runs 1 MHz as high-speed mode, which stock doesn't.
 - **Telephoto rotation 270 again** (with its vertical flip): upside down at
   90 once Snapshot named the cameras; the earlier "upside down at 270" came
-  while the three back cameras were indistinguishable. The owner checks
-  text (upright, not mirrored).
+  while the three back cameras were indistinguishable. The owner checked
+  text on 00543: upright, not mirrored. All four rotations are now
+  confirmed (main 90, ultrawide 270, telephoto 270 with the vertical flip,
+  front 90).
 - **Snapshot crash after photos (not a camera bug):** GTK 4.24 exports GL
   textures as dmabufs for its Vulkan renderer; Mesa's panfrost makes every
   resource without `PIPE_BIND_SHARED` a BO private to its GPU VM, and
