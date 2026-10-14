@@ -8,7 +8,7 @@
 pkgname=omamobile-apps
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile's default mobile apps (maps and location, NFC tags)"
+pkgdesc="Omarchy Mobile's default mobile apps (camera, maps and location, NFC tags)"
 arch=(any)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
@@ -16,9 +16,10 @@ depends=(
   gnome-maps   # location through GeoClue (omamobile-gnss feeds it the GPS)
   geoclue
   neard        # NFC tags; omamobile-shell's omamobile-nfc-open opens their web links
+  snapshot     # camera: the four cameras through libcamera and PipeWire (CAMERA-PLAN CAM5.4)
+  pipewire-libcamera
 )
 optdepends=(
-  'snapshot: camera (waits for the camera capture path, CAMERA-PLAN CAM4, and libcamera)'
   'gnome-calls: phone calls (waits for the modem, MODEM-PLAN M4, and a client for its RIL)'
   'chatty: SMS (waits for the modem, as gnome-calls)'
 )
