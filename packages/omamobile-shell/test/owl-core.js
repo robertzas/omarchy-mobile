@@ -384,4 +384,43 @@ test("a port's OWL original is approved without asking only within what the port
   eq(K.portApproval(H.portCapabilities("koiPond"), web, true).extra, ["uses the internet"])
 })
 
+test("the owner's layout: migration approvals, and never a package install without asking", () => {
+  const K = load("catalog.js")
+  const H = require("../plugins/omamobile.home/HomeModel.js")
+  const owner = require("./owner-layout.json")
+  const grid = { columns: 4, rows: 6 }
+  // Stand-ins with the originals' shape: fetch's command installs fastfetch when it's missing.
+  const texts = {
+    "owl:simonschubert.fetch": 'widget "fetch" {\n  meta { owl: 5 }\n  source f = cmd("command -v fastfetch >/dev/null || pacman -S --needed --noconfirm fastfetch; fastfetch --pipe")\n  Text { text: f }\n}',
+    "owl:simonschubert.owl": 'widget "owl" {\n  state born = 0 persist\n  Text { text: born }\n}',
+    "owl:simonschubert.koi-pond": 'widget "koi" {\n  Canvas { circle(time, 1, 1) }\n}',
+    "owl:simonschubert.crypto": 'widget "bitcoin" {\n  meta { owl: 5 }\n  source m = http("https://api.coingecko.com/api/v3/x") json status\n  Text { text: m }\n}',
+    "owl:simonschubert.today": 'widget "today" {\n  meta { owl: 5 }\n  state city = "" persist\n  source wx = http("https://wttr.in/${city}?format=j1") json\n  Text { text: wx }\n}',
+    "owl:simonschubert.earthquakes": 'widget "q" {\n  source q = cmd("curl -s https://earthquake.usgs.gov/x")\n  Text { text: q }\n}',
+    "owl:simonschubert.habits": 'widget "h" {\n  source n = cmd("cat ~/.config/omarchy-proot/habits")\n  Text { text: n }\n}',
+    "owl:simonschubert.forecast": 'widget "f" {\n  source w = cmd("curl -s https://wttr.in/x")\n  Text { text: w }\n}'
+  }
+  const infoFor = (t) => K.describe(t, texts[t], grid, 151, 1.16)
+  const fetch = infoFor("owl:simonschubert.fetch")
+  assert.ok(fetch.caps.risks.some((r) => r.id === "installs"), "the sheet flags the install")
+  const r = K.migrationApprovals(H.portPlacements(owner), {}, infoFor, H.portCapabilities)
+  const verdict = {}
+  r.decisions.forEach((d) => { verdict[d.from] = d.verdict })
+  eq(verdict, { crypto: "approved", today: "approved", earthquakes: "asks", habits: "asks", forecast: "asks", fetch: "asks", owl: "approved", koiPond: "approved" })
+  eq(Object.keys(r.approvals).sort(), ["owl:simonschubert.crypto", "owl:simonschubert.koi-pond", "owl:simonschubert.owl", "owl:simonschubert.today"])
+  eq([r.approvals["owl:simonschubert.crypto"].network, r.approvals["owl:simonschubert.owl"].network], [true, false])
+  assert.ok(r.decisions.find((d) => d.from === "fetch").extra.includes("installs software (pacman, yay, paru and the like)"))
+  // An automatic approval written by an earlier build is withdrawn; one the user gave is kept.
+  const stale = { "owl:simonschubert.fetch": { commands: fetch.program.commands, devices: [], network: false, auto: true, from: "fetch" },
+                  "owl:simonschubert.habits": { commands: [], devices: [], network: false } }
+  const again = K.recheckAutoApprovals(stale, infoFor, H.portCapabilities)
+  eq([again.changed, Object.keys(again.approvals)], [true, ["owl:simonschubert.habits"]])
+  // Running it twice changes nothing more.
+  eq(K.migrationApprovals(H.portPlacements(owner), r.approvals, infoFor, H.portCapabilities).changed, false)
+  // Other installers are flagged too; sudo is refused outright.
+  for (const c of ["yay -S foo", "paru -S --noconfirm bar", "pip install x", "flatpak install y"])
+    assert.ok(P.capabilities(C.compile('widget "w" {\n  source a = cmd("' + c + '")\n  Text { text: a }\n}')).risks.some((x) => x.id === "installs"), c)
+  eq(P.capabilities(C.compile('widget "w" {\n  source a = cmd("sudo pacman -S x")\n  Text { text: a }\n}')).refusals.length, 1)
+})
+
 if (failed) { console.log(failed + " failed"); process.exit(1) }

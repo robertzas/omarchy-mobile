@@ -445,6 +445,7 @@ Item {
       let data = {}
       try { data = JSON.parse(text() || "{}") || {} } catch (e) { data = {} }
       root.owlApprovals = data
+      Qt.callLater(root.recheckApprovals)
     }
   }
   function approveOwl(widgetId, network) {
@@ -487,23 +488,22 @@ Item {
   // A port's placement becomes its OWL original (HomeModel.normalize); this
   // approves it, without asking, only when it needs no more than the port had.
   function migratePorts(ports) {
-    const next = Object.assign({}, owlApprovals)
-    let changed = false
-    ports.forEach(function(p) {
-      if (next[p.to]) return
-      const verdict = OwlCatalog.portApproval(HomeModel.portCapabilities(p.from), owlBuiltinInfo(p.to), p.enabled)
-      if (!verdict.approve) {
-        console.warn("omamobile.home: " + p.to + " needs your OK: " + verdict.extra.join("; "))
-        return
-      }
-      verdict.approve.from = p.from
-      verdict.approve.at = new Date().toISOString()
-      next[p.to] = verdict.approve
-      changed = true
+    const r = OwlCatalog.migrationApprovals(ports, owlApprovals, owlBuiltinInfo, HomeModel.portCapabilities)
+    r.decisions.forEach(function(d) {
+      if (d.verdict === "asks") console.warn("omamobile.home: " + d.to + " needs your OK: " + d.extra.join("; "))
     })
-    if (!changed) return
-    owlApprovals = next
-    approvalsFile.setText(JSON.stringify(next, null, 2) + "\n")
+    saveApprovals(r)
+  }
+  // Earlier automatic approvals, checked again with today's rules.
+  function recheckApprovals() {
+    saveApprovals(OwlCatalog.recheckAutoApprovals(owlApprovals, owlBuiltinInfo, HomeModel.portCapabilities))
+  }
+  function saveApprovals(r) {
+    if (!r.changed) return
+    const stamped = r.approvals
+    Object.keys(stamped).forEach(function(k) { if (stamped[k].auto && !stamped[k].at) stamped[k].at = new Date().toISOString() })
+    owlApprovals = stamped
+    approvalsFile.setText(JSON.stringify(stamped, null, 2) + "\n")
   }
 
   function owlCard(widgetId) {

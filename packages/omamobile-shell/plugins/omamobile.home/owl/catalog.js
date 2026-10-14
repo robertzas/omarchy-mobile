@@ -101,6 +101,45 @@ function portApproval(port, info, enabled) {
   return { approve: { commands: info.program.commands.slice(), devices: [], network: !!port.network && enabled === true, auto: true }, extra: [] }
 }
 
+// What the migration does with the approvals, as one pure step (Home.qml
+// and tests/owl/migration-preview.js both run it): approves the ports'
+// originals that pass portApproval, and withdraws an earlier automatic
+// approval that no longer passes (an approval the user gave stays).
+// `ports`: HomeModel.portPlacements; `infoFor(type)`: describe() of the
+// original; `capsFor(port)`: HomeModel.portCapabilities.
+// -> { approvals, decisions: [{ id, from, to, verdict: "approved"|"asks"|"kept", extra }], changed }
+function migrationApprovals(ports, approvals, infoFor, capsFor) {
+  var next = {}
+  Object.keys(approvals || {}).forEach(function(k) { next[k] = approvals[k] })
+  var changed = false
+  var decisions = []
+  ;(ports || []).forEach(function(p) {
+    var v = portApproval(capsFor(p.from), infoFor(p.to), p.internet)
+    var had = next[p.to]
+    if (had && !had.auto) { decisions.push({ id: p.id, from: p.from, to: p.to, verdict: "kept", extra: [] }); return }
+    if (v.approve) {
+      if (!had) { v.approve.from = p.from; next[p.to] = v.approve; changed = true }
+      decisions.push({ id: p.id, from: p.from, to: p.to, verdict: "approved", extra: [] })
+    } else {
+      if (had) { delete next[p.to]; changed = true }
+      decisions.push({ id: p.id, from: p.from, to: p.to, verdict: "asks", extra: v.extra })
+    }
+  })
+  return { approvals: next, decisions: decisions, changed: changed }
+}
+
+// Automatic approvals already stored, checked again with today's rules
+// (a migrated layout has no ports left to look at): any that no longer
+// passes is withdrawn, so the widget asks.
+function recheckAutoApprovals(approvals, infoFor, capsFor) {
+  var ports = []
+  Object.keys(approvals || {}).forEach(function(type) {
+    var a = approvals[type]
+    if (a && a.auto && a.from) ports.push({ id: "", from: a.from, to: type, internet: a.network === true })
+  })
+  return migrationApprovals(ports, approvals, infoFor, capsFor)
+}
+
 // ---------------------------------------------------------------- the Store tab
 
 var CATEGORIES = ["news", "dev", "productivity", "time", "world", "fun", "home", "system"]
@@ -156,5 +195,6 @@ function storeCaps(w) {
 
 if (typeof module !== "undefined") {
   module.exports = { describe: describe, summary: summary, shortCommand: shortCommand, cardState: cardState, ICON: ICON,
-                     storeRows: storeRows, newer: newer, CATEGORIES: CATEGORIES, portApproval: portApproval }
+                     storeRows: storeRows, newer: newer, CATEGORIES: CATEGORIES, portApproval: portApproval,
+                     migrationApprovals: migrationApprovals, recheckAutoApprovals: recheckAutoApprovals }
 }

@@ -137,6 +137,8 @@ var RISKS = [
   { id: "base64", re: /base64\s+(-d|--decode)/, says: "decodes hidden text (base64 -d)" },
   { id: "eval", re: /(^|[\s;&|(])eval\s/, says: "runs text as code (eval)" },
   { id: "disk", re: /(^|[\s;&|(])(dd|mkfs[.\w]*|shred|wipefs)\s/, says: "writes to disks (dd, mkfs, shred)" },
+  // Installing software: never without the user (sudo itself is refused).
+  { id: "installs", re: /(^|[\s;&|(`$])(pacman|yay|paru|pikaur|trizen|aura|makepkg|flatpak|pip3?|npm|cargo)\s+([^\n;&|]*\s)?(-S|-U|install\b|-i\b|--install)/, says: "installs software (pacman, yay, paru and the like)", high: true },
   { id: "secrets", re: /\.ssh\b|\.gnupg\b|\btokens?\b|\bsecret|password|\.netrc|keyring/i, says: "reads keys, tokens or passwords" }
 ]
 
