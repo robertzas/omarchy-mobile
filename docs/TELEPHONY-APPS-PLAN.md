@@ -4,7 +4,7 @@
 **Status (2026-10-14):** **T0 and T1 done** without a SIM: `omamobile-modem-sit` 0.3.0 (event subscription, SIM and radio state) and `omamobile-mmd` 0.1.0, the ModemManager-compatible bridge, pass their tests, mmcli, GNOME Calls 51.1 and Chatty 0.8.9 in a container, and a no-SIM run on the phone (FAILED/sim-missing, as MM shows it; NetworkManager sees the modem). Results and runbook: [MODEM-PLAN](../device/cheetah/MODEM-PLAN.md) "T0/T1: the ModemManager bridge". T2 needs the SIM. Packaging decided: its own package `omamobile-mmd` (not `omamobile-mm`), `conflicts=(modemmanager)` and no `provides=` (nothing depends on `modemmanager`), no D-Bus activation file, Python with PyGObject's Gio rather than dbus-fast (on the phone already, and it gives the caller's bus name for polkit). The bridge owns the bus name from its start and shows the modem once sitd's socket answers. Hold, swap, conference, call waiting, signal strength and SIM PIN moved to T8 (new SIT requests, untestable without a SIM).
 
 **T6 and T7, first version (2026-10-14), offline only.** The apps are built as **omatel**: Phone (`omaphone`), Messages (`omamessages`) and `omatel-agent`, one headless agent for both (Q12), in one local repository (`~/Projects/omatel`, GPL-3.0-or-later, not published). They passed:
-- 94 Rust tests (unit tests; the ModemManager proxies against a scripted MM; the agent end to end on private buses);
+- 92 Rust tests (unit tests; the ModemManager proxies against a scripted MM; the agent end to end on private buses);
 - a chain test in a container: agent, then `omamobile-mmd`, `omamobile-sitd` and `tools/sit-sim`;
 - screenshots in a headless Weston.
 
@@ -557,7 +557,7 @@ Everything here was built and tested on the laptop, offline, against a scripted 
 
 **Results:**
 
-- **Rust tests (`scripts/check.sh`: rustfmt, clippy `-D warnings`): 94 pass.** Of those:
+- **Rust tests (`scripts/check.sh`: rustfmt, clippy `-D warnings`): 92 pass, plus the chain test (below), which skips outside its container.** Of those:
   - 7 in `omatel-mm`'s own unit tests;
   - 5 run `omatel-mm` against the scripted MM: an incoming call with Accept and DTMF, an outgoing call answered and one refused, SMS in and out, a delivery report, a failed send, and a WAP push;
   - 11 run the agent end to end on two private buses:
