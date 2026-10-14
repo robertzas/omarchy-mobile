@@ -20,6 +20,9 @@ while IFS= read -r -d '' file; do
   install -Dm644 "$file" "$destination/usr/share/omamobile/shell/widget-${file#widgets/}"
 done < <(find widgets/template widgets/examples -type f -print0)
 install -Dm644 environment.d/20-omamobile-osk.conf "$destination/usr/lib/environment.d/20-omamobile-osk.conf"
+# squeekboard's terminal layout with an Esc key (GPL-3.0-or-later, from
+# squeekboard); omamobile-setup-user links it into the user's data dir.
+install -Dm644 squeekboard/keyboards/terminal/us.yaml "$destination/usr/share/omamobile/squeekboard/keyboards/terminal/us.yaml"
 install -Dm644 systemd/omamobile-nfc-open.service "$destination/usr/lib/systemd/system/omamobile-nfc-open.service"
 install -Dm644 systemd/user/omarchy-fcitx5-omamobile.conf "$destination/usr/lib/systemd/user/omarchy-fcitx5.service.d/omamobile.conf"
 install -Dm644 polkit/49-omamobile-admin-self.rules "$destination/usr/share/polkit-1/rules.d/49-omamobile-admin-self.rules"

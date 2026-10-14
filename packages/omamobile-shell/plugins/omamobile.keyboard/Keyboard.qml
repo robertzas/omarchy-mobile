@@ -5,7 +5,6 @@ import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
-import "extrakeys.js" as Keys
 
 // A "hide keyboard" button, as on Android: while squeekboard is unfolded, a
 // small button sits just above the keyboard's top-right corner; a tap folds
@@ -16,14 +15,6 @@ import "extrakeys.js" as Keys
 // exclusion, so the compositor places it right above the area the keyboard
 // reserves; the window is the button, so it takes no other touches.
 // hypr/phone.lua lets it work over the lock screen too (above_lock 2).
-//
-// While the keyboard is up over a terminal window (foot, Alacritty, ...),
-// a row of the keys squeekboard's layout lacks sits above it, as in
-// Termux: Esc, Tab, Ctrl and Alt (held for the next key), the arrows and
-// | / - ~ :, and Ctrl combinations while Ctrl is held. They reach the
-// terminal as key presses through wtype. (OwlExtraKeys.qml and
-// extrakeys.js are the same files as in omamobile.home/owl/, kept equal by
-// test/all: plugins don't import across folders.)
 Item {
   id: root
 
@@ -41,8 +32,7 @@ Item {
 
   // `shell call omamobile.keyboard state ''`
   function state() {
-    return JSON.stringify({ keyboard: oskOpen, watcher: oskWatch.running, button: button.visible,
-                            terminal: terminalFocused, terminalKeys: terminalKeys.visible })
+    return JSON.stringify({ keyboard: oskOpen, watcher: oskWatch.running, button: button.visible })
   }
 
   // `shell call omamobile.keyboard hideKeyboard ''` / `showKeyboard ''` /
@@ -82,39 +72,6 @@ Item {
   }
 
   readonly property int size: Math.max(44, Style.space(44))
-
-  // The focused window is a terminal: then the extra keys show.
-  readonly property var activeWindow: ToplevelManager.activeToplevel
-  readonly property bool terminalFocused: !!root.activeWindow && Keys.isTerminalClass(root.activeWindow.appId)
-  function sendKey(key, mods) {
-    const argv = Keys.wtypeArgv(key, mods)
-    if (argv) Quickshell.execDetached(argv)
-  }
-
-  PanelWindow {
-    id: terminalKeys
-
-    visible: root.oskOpen && root.terminalFocused
-    anchors { bottom: true; left: true; right: true }
-    implicitHeight: keyRow.implicitHeight
-    // Its own room, so the terminal's last line isn't under it.
-    exclusionMode: ExclusionMode.Auto
-    color: "transparent"
-    WlrLayershell.namespace: "omamobile-terminal-keys"
-    WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
-
-    OwlExtraKeys {
-      id: keyRow
-      anchors.fill: parent
-      keyHeight: root.size
-      foreground: Commons.Color.bar.text
-      accent: Commons.Color.accent
-      background: Commons.Color.bar.background
-      fontFamily: Style.font.family
-      onPressed: function(key, mods) { root.sendKey(key, mods) }
-    }
-  }
 
   PanelWindow {
     id: button

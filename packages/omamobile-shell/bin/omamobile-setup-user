@@ -107,6 +107,15 @@ o.launch_on_start("squeekboard")
 LUA
 fi
 
+# Terminals get squeekboard's terminal layout (Tab, Ctrl, Alt, arrows); ours
+# adds Esc to its top row, for vim and friends. squeekboard reads layouts only
+# from the user's data dir, so link ours there unless the user has their own.
+k=${XDG_DATA_HOME:-$HOME/.local/share}/squeekboard/keyboards/terminal
+if [[ ! -e $k/us.yaml && ! -L $k/us.yaml ]]; then
+  mkdir -p "$k"
+  ln -s /usr/share/omamobile/squeekboard/keyboards/terminal/us.yaml "$k/us.yaml"
+fi
+
 # squeekboard needs Hyprland's input-method slot, which Omarchy's fcitx5 (run
 # for desktop compose sequences) would otherwise take. The package's drop-in
 # (omarchy-fcitx5.service.d/omamobile.conf) keeps fcitx5 from starting. Up to

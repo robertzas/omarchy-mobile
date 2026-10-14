@@ -41,11 +41,6 @@ cp "$here/host-test.qml" "$ht/"
 timeout 60 quickshell -p "$ht/host-test.qml" 2>&1 | grep -E "(^|m: )(not )?ok - " | sed -E 's/.*m: //' | tee "$out/host-test.txt"
 ! grep -c "^not ok" "$out/host-test.txt" >/dev/null || echo "host test failed"
 
-# The terminal's extra keys, offscreen, with a fake pty.
-cp "$here/terminal-keys-test.qml" "$ht/"
-mkdir -p "$out/screens"
-QT_SCALE_FACTOR=3 OWL_OUT="$out/screens" timeout 60 quickshell -p "$ht/terminal-keys-test.qml" 2>&1 | grep -E "(^|m: )(not )?ok - " | sed -E 's/.*m: //' | tee "$out/terminal-keys-test.txt"
-
 # The review screenshots, in a dark and a light Omarchy theme. Omarchy's
 # shell modules (Commons, Ui) come from the laptop, read-only.
 if [[ -d /omarchy-shell ]]; then

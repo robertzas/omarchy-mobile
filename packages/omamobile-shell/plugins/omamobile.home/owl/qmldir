@@ -3,7 +3,6 @@
 OwlBlock 1.0 OwlBlock.qml
 OwlButton 1.0 OwlButton.qml
 OwlCanvas 1.0 OwlCanvas.qml
-OwlExtraKeys 1.0 OwlExtraKeys.qml
 OwlImage 1.0 OwlImage.qml
 OwlInput 1.0 OwlInput.qml
 OwlNodeBase 1.0 OwlNodeBase.qml

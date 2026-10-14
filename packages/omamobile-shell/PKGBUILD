@@ -6,8 +6,8 @@ pkgrel=1
 pkgdesc="Omarchy Mobile's phone profile for the Omarchy shell: status bar, quick settings, launcher"
 arch=(any)
 url="https://github.com/derekross/omarchy-mobile"
-license=(MIT)
-depends=(omarchy omamobile-apps omamobile-omarchy omamobile-owl-widgets bash wtype squeekboard bluez wf-recorder python python-dbus python-gobject
+license=(MIT GPL-3.0-or-later)  # GPL: the squeekboard layout
+depends=(omarchy omamobile-apps omamobile-omarchy omamobile-owl-widgets bash squeekboard bluez wf-recorder python python-dbus python-gobject
          pipewire-audio pipewire-pulse pipewire-alsa wireplumber
          inotify-tools qt6-declarative)
 optdepends=('fprintd: fingerprint setup and unlock (with omamobile-fingerprint)')
