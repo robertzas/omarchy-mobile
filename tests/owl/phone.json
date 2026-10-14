@@ -1,0 +1,12 @@
+{
+  "comment": "The Pixel 7 Pro's home screen in logical pixels (1440x3120 physical at scale 3), as packages/omamobile-shell lays it out: the status bar (44), the dock's search field (48 + 2 x 12), the pager's top margin and page dots (8 + 8), a 4x6 grid, 6 px around each card.",
+  "screen": [480, 1040],
+  "scale": 3,
+  "bar": 44,
+  "dock": 72,
+  "pagerTop": 8,
+  "dots": 8,
+  "grid": { "columns": 4, "rows": 6 },
+  "gap": 6,
+  "cardRadius": 12
+}

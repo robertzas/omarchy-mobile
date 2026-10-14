@@ -1,0 +1,8 @@
+widget "clock" {
+  meta { description: "A clock with the date, for the tests"; version: "2.1"; license: "MIT"; category: "time" }
+  size: 6x2
+  requires { pacman: ["curl"] }
+  source now = clock every 1s
+  source w = cmd("curl -s https://weather.example.org/now")
+  Text { text: fmtTime(now, "HH:mm") }
+}

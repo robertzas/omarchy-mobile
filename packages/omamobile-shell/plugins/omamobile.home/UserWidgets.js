@@ -52,13 +52,18 @@ function cleanRecord(r) {
     id: r.id,
     source: r.source === "example" ? "example" : "user",
     dir: String(r.dir || ""),
-    status: r.status === "ok" && m ? "ok" : "error",
+    status: r.status === "ok" && (m || (r.kind === "owl" && r.owl)) ? "ok" : "error",
     errors: strings(r.errors),
     warnings: strings(r.warnings),
     hash: String(r.hash || ""),
     manifest: m,
     detected: strings(r.detected),
-    undeclared: strings(r.undeclared)
+    undeclared: strings(r.undeclared),
+    // An OWL widget (widget.owl, no manifest): the home screen compiles it.
+    kind: r.kind === "owl" ? "owl" : "qml",
+    owl: r.kind === "owl" && r.owl && typeof r.owl.text === "string" ? { text: r.owl.text, sha256: String(r.owl.sha256 || "") } : null,
+    // Where an OWL widget was copied from the store: { id, version, sha256 }.
+    store: r.store && typeof r.store.id === "string" ? { id: r.store.id, version: String(r.store.version || ""), sha256: String(r.store.sha256 || "") } : null
   }
 }
 
@@ -81,9 +86,15 @@ function findExample(scan, id) {
 // Specs in HomeModel.REGISTRY's shape, keyed by widget id: what sizes and
 // settings a placed user widget gets. A widget with errors but a readable
 // manifest keeps its sizes, so a broken edit doesn't reshape the page.
-function catalog(scan) {
+// OWL widgets take their spec from `owlSpecs` (id -> spec), which the home
+// screen builds by compiling them (owl/catalog.js).
+function catalog(scan, owlSpecs) {
   var out = {}
   ;(scan && scan.widgets ? scan.widgets : []).forEach(function(r) {
+    if (r.kind === "owl") {
+      if (owlSpecs && owlSpecs[r.id]) out[r.id] = owlSpecs[r.id]
+      return
+    }
     var m = r.manifest
     if (!m) return
     out[r.id] = {
@@ -199,6 +210,9 @@ function editPrompt(description, dir, contract, name, errors) {
 }
 
 function newArgv(id, name) { return [TOOL, "new", String(id), String(name)] }
+function storeCopyArgv(storeId) { return [TOOL, "store-copy", String(storeId)] }
+function storeUpdateArgv(id) { return [TOOL, "store-update", String(id)] }
+var STORE_FETCH_ARGV = [TOOL, "store-fetch"]
 function copyArgv(id) { return [TOOL, "copy-example", String(id)] }
 function removeArgv(id) { return [TOOL, "remove", String(id)] }
 function agentArgv(id, prompt) { return [TOOL, "agent", String(id), String(prompt)] }
@@ -269,7 +283,7 @@ if (typeof module !== "undefined") {
     emptyScan: emptyScan, parseScan: parseScan, findRecord: findRecord, findExample: findExample, catalog: catalog,
     typeFor: typeFor, idOf: idOf, tildePath: tildePath, cardState: cardState, capabilityText: capabilityText, statusLine: statusLine,
     slug: slug, newId: newId, nameFrom: nameFrom, createPrompt: createPrompt, editPrompt: editPrompt,
-    newArgv: newArgv, copyArgv: copyArgv, removeArgv: removeArgv, agentArgv: agentArgv, agentOutcome: agentOutcome,
+    newArgv: newArgv, storeCopyArgv: storeCopyArgv, storeUpdateArgv: storeUpdateArgv, STORE_FETCH_ARGV: STORE_FETCH_ARGV, copyArgv: copyArgv, removeArgv: removeArgv, agentArgv: agentArgv, agentOutcome: agentOutcome,
     coerceSetting: coerceSetting, runCheck: runCheck, runTimeout: runTimeout, timeoutArgv: timeoutArgv, runResult: runResult
   }
 }

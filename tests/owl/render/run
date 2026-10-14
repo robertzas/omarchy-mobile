@@ -1,0 +1,95 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Inside the conformance container: L4 (layout) and L5 (pixels) of our
+# renderer against the reference's, offscreen at the phone's scale, and the
+# review screenshots. tools/owl-conformance --render runs it.
+set -euo pipefail
+out=/tmp/owl-render
+while (( $# )); do case $1 in --out) out=$2; shift 2 ;; *) shift ;; esac; done
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+src=$(cd -- "$here/../../.." && pwd)
+mkdir -p "$out" /tmp/xdg /tmp/owl-fixtures
+export XDG_RUNTIME_DIR=/tmp/xdg QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software TZ=Europe/Berlin
+
+# A stand-in picture for the xkcd fixture: drawn here, not a comic.
+magick -size 600x360 xc:white -stroke black -strokewidth 4 -fill none \
+  -draw "rectangle 20,20 580,340" -draw "circle 160,180 160,120" -draw "line 300,100 520,260" \
+  -draw "line 300,260 520,100" /tmp/owl-fixtures/sample-comic.png
+
+h=/tmp/owl-harness
+rm -rf "$h"; mkdir -p "$h"
+ln -s "$src/packages/omamobile-shell/plugins/omamobile.home/owl" "$h/ours"
+ln -s /ref/omarchy-widgets/runtimes/quickshell "$h/ref"
+cp "$here"/*.qml "$h/"
+node "$here/jobs.js" "$out" /ref/omarchy-widgets/widgets > "$h/job.json"
+QT_SCALE_FACTOR=3 OWL_JOB="$h/job.json" timeout 600 quickshell -p "$h/tiles.qml" 2>&1 | grep -E "rendered|ERROR|rror|report:" | grep -v "^.*DEBUG.*rendered" | head -40 || true
+node "$here/compare.js" "$out"
+
+# Every store widget without data.
+if [[ -z ${OWL_ONLY:-} ]]; then
+  node "$here/all-jobs.js" "$out" /ref/omarchy-widgets/widgets > "$h/all-job.json"
+  QT_SCALE_FACTOR=3 OWL_JOB="$h/all-job.json" timeout 1800 quickshell -p "$h/tiles.qml" >/dev/null 2>&1 || true
+  node "$here/compare-all.js" "$out"
+fi
+
+# The phone host and the live widget against mocks (no vibration, no torch:
+# their argv is captured).
+ht=/tmp/owl-host-test
+rm -rf "$ht"; mkdir -p "$ht"
+ln -s "$src/packages/omamobile-shell/plugins/omamobile.home" "$ht/home"
+cp "$here/host-test.qml" "$ht/"
+timeout 60 quickshell -p "$ht/host-test.qml" 2>&1 | grep -E "(^|m: )(not )?ok - " | sed -E 's/.*m: //' | tee "$out/host-test.txt"
+! grep -c "^not ok" "$out/host-test.txt" >/dev/null || echo "host test failed"
+
+# The review screenshots, in a dark and a light Omarchy theme. Omarchy's
+# shell modules (Commons, Ui) come from the laptop, read-only.
+if [[ -d /omarchy-shell ]]; then
+  hh=/tmp/owl-home
+  rm -rf "$hh"; mkdir -p "$hh" "$out/screens"
+  # A copy, with Omarchy's palette qualified: Qt 6.12's QtQuick Color type
+  # shadows a bare `Color.` (AGENTS.md, Userspace). The phone's shell has
+  # the same fix in its own files.
+  for m in Commons Ui services; do cp -r "/omarchy-shell/$m" "$hh/$m"; done
+  find "$hh/Commons" "$hh/Ui" "$hh/services" -name '*.qml' -exec sed -i -E \
+    -e 's/(^|[^.[:alnum:]_])Color\./\1Commons.Color./g' \
+    -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
+  # Commons' own files see the module through a self-import.
+  for f in "$hh"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
+  ln -s "$src/packages/omamobile-shell/plugins/omamobile.home" "$hh/home"
+  cp "$here"/home.qml "$here"/MockHome.qml "$hh/"
+  for theme in tokyo-night catppuccin-latte; do
+    mkdir -p "/tmp/home-$theme/.local/state/omarchy/current"
+    ln -sfn "/themes/$theme" "/tmp/home-$theme/.local/state/omarchy/current/theme"
+  done
+  # The store package, staged here from the pinned store, for the Store tab.
+  rm -rf /tmp/owl-store-root
+  "$src/packages/omamobile-owl-widgets/install" /tmp/owl-store-root /ref/omarchy-widgets
+  export OWL_STORE_DIR=/tmp/owl-store-root/usr/share/omamobile/owl-widgets
+  # Before and after the OWL built-ins: main's plugin (with the QML ports,
+  # from $OWL_BEFORE_TREE) and this branch's, the owner's layout shape.
+  if [[ -n ${OWL_BEFORE_TREE:-} && -d $OWL_BEFORE_TREE ]]; then
+    for side in before after; do
+      lh=/tmp/owl-layout-$side
+      rm -rf "$lh"; mkdir -p "$lh"
+      for m in Commons Ui services; do ln -s "$hh/$m" "$lh/$m"; done
+      # Copied, not linked: Quickshell finds a folder's own types (GeoLocation) only in real folders.
+      if [[ $side == before ]]; then cp -r "$OWL_BEFORE_TREE" "$lh/home"; else cp -r "$src/packages/omamobile-shell/plugins/omamobile.home" "$lh/home"; fi
+      # The folder's own types by name, as Omarchy's plugin loader gives them.
+      (cd "$lh/home" && for q in *.qml; do echo "${q%.qml} 1.0 $q"; done > qmldir)
+      cp "$here"/layout.qml "$here"/BeforeHome.qml "$here"/MockHome.qml "$lh/"
+      for theme in tokyo-night catppuccin-latte; do
+        node "$here/layout-jobs.js" "$side" "$out/screens" /ref/omarchy-widgets/widgets "$theme" > "$lh/job-$theme.json"
+        HOME=/tmp/home-$theme QT_SCALE_FACTOR=3 OWL_LAYOUT_JOB="$lh/job-$theme.json" timeout 300 quickshell -p "$lh/layout.qml" 2>&1 \
+          | grep -E "shot |Error|TypeError|ReferenceError" | grep -v hyprctl | head -20 || true
+      done
+    done
+  fi
+  for theme in tokyo-night catppuccin-latte; do
+    home=/tmp/home-$theme
+    mkdir -p "$home/.local/state/omarchy/current"
+    ln -sfn "/themes/$theme" "$home/.local/state/omarchy/current/theme"
+    node "$here/home-jobs.js" "$out/screens" /ref/omarchy-widgets/widgets "$theme" > "$hh/job-$theme.json"
+    HOME=$home QT_SCALE_FACTOR=3 OWL_HOME_JOB="$hh/job-$theme.json" timeout 600 quickshell -p "$hh/home.qml" 2>&1 \
+      | grep -E "shot |owl report|Error|error:|ReferenceError|TypeError" | grep -v hyprctl | head -40 || true
+  done
+fi

@@ -1,0 +1,8 @@
+{
+ "compile": {
+  "ok": false,
+  "at": "2:28",
+  "message": "unknown state 'nope'; declare it with: state nope = ..."
+ },
+ "walk": null
+}

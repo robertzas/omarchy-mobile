@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+# The OWL widget store (Simon Schubert's omarchy-widgets, MIT) at a pinned
+# commit, for the home screen's Store tab: only the widgets that pass our
+# conformance suite (status.json), and an index built with our compiler.
+# No previews (docs/WIDGET-INTEROP-PLAN.md Q10).
+pkgname=omamobile-owl-widgets
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+_commit=b63886b
+pkgdesc="Omarchy Mobile: OWL home-screen widgets from the omarchy-widgets store (the built-ins and the Store tab), checked against our runtime"
+arch=(any)
+url="https://github.com/SimonSchubert/omarchy-widgets"
+license=(MIT)
+# Data only; omamobile-shell depends on this package for its built-in widgets.
+# index.json is built with the shell's compiler (update-index.js) and
+# committed here, so this builds on its own (tools/phone-install-package).
+makedepends=(git python)
+source=("omarchy-widgets::git+https://github.com/SimonSchubert/omarchy-widgets.git#commit=$_commit")
+sha256sums=(SKIP)
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir" "$srcdir/omarchy-widgets"
+}

@@ -1,0 +1,8 @@
+{
+ "compile": {
+  "ok": false,
+  "at": "18:15",
+  "message": "unknown name 'now'"
+ },
+ "walk": null
+}

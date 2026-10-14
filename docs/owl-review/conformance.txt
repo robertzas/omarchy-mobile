@@ -1,0 +1,34 @@
+widgets: L1 14/14, L2 14/14, L3 14/14
+probes: L1 25/25, L3 25/25
+store (105 widgets, no data): L1 105, L2 105, L3 105
+themes: 22/22 palettes match
+L4 layout: 14/14 within 1 dp (Text 2 dp)
+  ok     simonschubert/analog-clock  L4 worst 0.0 dp  L5 0% pixels differ
+  ok     simonschubert/calendar  L4 worst 0.5 dp  L5 0.69% pixels differ
+  ok     simonschubert/countdown  L4 worst 0.0 dp  L5 0.68% pixels differ
+  ok     simonschubert/year-progress  L4 worst 0.0 dp  L5 0.3% pixels differ
+  ok     simonschubert/focus  L4 worst 0.1 dp  L5 0.12% pixels differ
+  ok     simonschubert/habits  L4 worst 0.0 dp  L5 0.15% pixels differ
+  ok     simonschubert/earthquakes  L4 worst 0.0 dp  L5 0.49% pixels differ
+  ok     simonschubert/hacker-news  L4 worst 0.0 dp  L5 0.91% pixels differ
+  ok     simonschubert/exchange-rates  L4 worst 0.0 dp  L5 1.36% pixels differ
+  ok     derekross/bitcoin  L4 worst 0.0 dp  L5 1.05% pixels differ
+  ok     simonschubert/xkcd  L4 worst 0.0 dp  L5 0.1% pixels differ
+  ok     lucassynnott/year-left  L4 worst 0.0 dp  L5 0% pixels differ
+  ok     simonschubert/todo  L4 worst 0.0 dp  L5 0.74% pixels differ
+  ok     simonschubert/koi-pond  L4 worst 0.0 dp  L5 0% pixels differ
+store widgets without data: L4 104/105 within 1 dp (Text 2 dp), L5 104/105 with 2% of pixels or fewer differing
+  not ok thedavidcoen/terminal-profiles: not rendered on the reference side: has a Terminal: the reference's would start the widget's program; L5 null%
+ok - haptic without approval does nothing
+ok - haptic with approval asks feedbackd
+ok - torch with approval sets the LED
+ok - a second action within a second is held back
+ok - a stream gives one value per line
+ok - a stream stops
+ok - a watched file is read, and again when it changes
+ok - a terminal session shows its output and ends
+ok - a stream source updates the tile
+ok - each line is a new value
+ok - screen() opens the widget's screen
+ok - close() goes back to the tile
+ok - a hidden widget stops its stream

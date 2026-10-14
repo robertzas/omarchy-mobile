@@ -1,0 +1,20 @@
+widget "probe numbers" {
+  meta { owl: 7 }
+  source j = cmd("x") json
+  Column {
+    for e, i in [
+      10000000, 9999999, 123456789, 1234567890123, 1000000000000000, 10000000000000000, 0.001, 0.0011, 0.000999, 1/0, -1/0, 0/0, 1/0 + 1, 5 % 0,
+      2.50, 100.0, -3.75, 7 / 2, -7 / 2, 0.1 * 3, 255 / 255, 1/3 * 3,
+      "5" + 5, "5" - 2, "abc" * 2, "" + 1.5, "x" < "y", "10" < "9", "10" < 9, null > 0, null == 0, null == false, false == 0, "" == null, [] == [], [1] == [1], {a: 1} == {a: 1},
+      true + 1, "true" == true, -"3", -null, -"x", !1, !!"a",
+      round(3.14159, 3), round(1234.5678, -2), round("2.6"), floor("x"), num(true), num(null), num([1]), int(null), int("x"), int(100000000000000000000), str(true), str(0.5),
+      fixed(1000000000000000000000, 2), fixed(null, 2), fixed("3.14159", 3), fixed(2.5, 0), fixed(3.5, 0), fixed(-2.5, 0), pad(12.5, 6), pad("x", 3, "ab"),
+      max(5), min([3, 1, 2]), max("a", "b"), sum([]), sum(null), avg([1, 2, "x"]), clamp(null, 0, 1), clamp(15, 0, 10), lerp(1, 2, null),
+      sign(-4), sign(0), deg(pi), rad(180), sin(90), cos(0), tan(45), sin(rad(90)), pow(2, 0.5), sqrt(-1), abs("-5"),
+      j.a.b.c, j[0], len(null), len(""), sub(null, 1), lines(null), words(null), split(null, ","), join(null, ","), upper(null), trim(null), replace(null, "a", "b"),
+      fmtBytes(0), fmtBytes(null), fmtBytes(1024), fmtBytes(1048576), fmtBytes(999999999), fmtBytes(-2048), fmtDuration(0), fmtDuration(61), fmtDuration(3599), fmtDuration(86400), fmtDuration(10000000), fmtDuration(null), fmtDuration(59.9)
+    ] {
+      Text { text: "${i}: ${e}" }
+    }
+  }
+}

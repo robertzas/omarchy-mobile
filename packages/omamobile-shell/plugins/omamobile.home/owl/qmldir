@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# The OWL runtime's QML types, so the folder resolves them by name however it is loaded.
+OwlBlock 1.0 OwlBlock.qml
+OwlButton 1.0 OwlButton.qml
+OwlCanvas 1.0 OwlCanvas.qml
+OwlImage 1.0 OwlImage.qml
+OwlInput 1.0 OwlInput.qml
+OwlNodeBase 1.0 OwlNodeBase.qml
+OwlProgress 1.0 OwlProgress.qml
+OwlRing 1.0 OwlRing.qml
+OwlScheduler 1.0 OwlScheduler.qml
+OwlShader 1.0 OwlShader.qml
+OwlSlider 1.0 OwlSlider.qml
+OwlSparkline 1.0 OwlSparkline.qml
+OwlTerminal 1.0 OwlTerminal.qml
+OwlText 1.0 OwlText.qml
+OwlView 1.0 OwlView.qml
+OwlWidget 1.0 OwlWidget.qml

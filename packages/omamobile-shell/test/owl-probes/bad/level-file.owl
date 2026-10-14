@@ -1,0 +1,4 @@
+widget "w" {
+  source s = file("~/x")
+  Text { text: s }
+}

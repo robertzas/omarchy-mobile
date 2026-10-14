@@ -1,0 +1,8 @@
+{
+ "compile": {
+  "ok": false,
+  "at": "2:21",
+  "message": "'text' is set twice"
+ },
+ "walk": null
+}

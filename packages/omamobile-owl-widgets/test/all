@@ -1,0 +1,61 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omamobile-owl-widgets, with a made-up store (test/fake-store and
+# its committed index): staging, the sha256 check, the gate. Runs from this
+# directory alone (tools/phone-install-package builds it on its own); the
+# checks that need omamobile-shell's compiler run only beside it.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+for f in status.json index.json test/fake-store/index.json; do
+  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$f" || fail "$f is valid JSON"
+done
+python3 - <<'PY' || fail "index.json follows status.json"
+import json
+st, idx = json.load(open("status.json"))["widgets"], json.load(open("index.json"))["widgets"]
+assert sorted(w["id"] for w in idx) == sorted(st), "the index lists every widget status.json names"
+for w in idx:
+    if w["status"] in ("ok", "partial"):
+        assert len(w.get("sha256", "")) == 64 and isinstance(w.get("commands"), list), w["id"]
+PY
+pass "status.json and index.json parse and agree"
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+./install "$tmp/root" test/fake-store test/fake-store/index.json
+share=$tmp/root/usr/share/omamobile/owl-widgets
+python3 - "$share/index.json" <<'PY' || fail "the index"
+import json, sys
+idx = json.load(open(sys.argv[1]))
+ids = [w["id"] for w in idx["widgets"]]
+assert ids == ["alice/clock", "alice/hello", "bob/sneaky"], ids          # listed, by name, after "..."
+by = {w["id"]: w for w in idx["widgets"]}
+c = by["alice/clock"]
+assert c["status"] == "partial" and c["version"] == "2.1" and c["size"] == [6, 2] and c["requires"] == ["curl"], c
+assert c["commands"] == ["curl -s https://weather.example.org/now"] and c["capabilities"] == ["commands", "network"], c
+assert c["hosts"] == ["weather.example.org"] and len(c["sha256"]) == 64 and c["category"] == "time", c
+assert by["bob/sneaky"]["status"] == "unsupported" and "root tool" in by["bob/sneaky"]["note"], by["bob/sneaky"]
+PY
+pass "the index lists every widget in store order with what it runs"
+[[ -f $share/widgets/alice/hello/widget.owl && -f $share/widgets/alice/clock/widget.owl ]] || fail "shippable widgets are staged"
+[[ ! -e $share/widgets/bob/sneaky ]] || fail "refused widgets are not staged"
+[[ -f $tmp/root/usr/share/licenses/omamobile-owl-widgets/LICENSE && -f $share/order.txt ]] || fail "licence and order are staged"
+pass "only what passes ships, with the store's licence"
+cp -r test/fake-store "$tmp/changed"
+echo "// changed" >> "$tmp/changed/widgets/alice/hello/widget.owl"
+if ./install "$tmp/root2" "$tmp/changed" test/fake-store/index.json 2>/dev/null; then fail "a file that doesn't match the index is refused"; fi
+pass "a file that doesn't match the index is refused"
+
+# Beside omamobile-shell (the repository): the committed indexes are what
+# its compiler builds now, and every built-in of the home screen ships.
+shell=../omamobile-shell/plugins/omamobile.home
+if [[ -d $shell/owl ]] && command -v node >/dev/null; then
+  diff <(node update-index.js test/fake-store "$shell/owl" test/status.json) test/fake-store/index.json >/dev/null \
+    || fail "test/fake-store/index.json is current (node update-index.js test/fake-store ... > test/fake-store/index.json)"
+  node -e '
+const H = require(process.argv[1]); const st = require(process.argv[2]).widgets
+const missing = H.OWL_ORDER.map(H.owlStoreId).filter((id) => !st[id] || !["ok", "partial"].includes(st[id].status))
+if (missing.length) { console.error(missing.join(" ")); process.exit(1) }' "$(realpath "$shell/HomeModel.js")" "$(realpath status.json)" || fail "every built-in ships"
+  pass "the fake store's index is current, and every OWL built-in of the home screen ships"
+else
+  pass "beside omamobile-shell # SKIP built on its own"
+fi

@@ -1,0 +1,16 @@
+// Our own probe of colours, gradients and animation curves.
+widget "probe colors" {
+  meta { owl: 7 }
+  Column {
+    Text { text: "a"; color: accent; background: alpha(surface, 0.4) }
+    Text { text: "b"; color: "#ff8800"; background: "muted" }
+    Text { text: "c"; color: mix(accent, background, 0.25); background: rgb(300, -5, 128, 0.5) }
+    Text { text: "d"; color: hsl(210, 0.6, 0.4); background: hsl(400, 1, 0.5, 0.7) }
+    Text { text: "e"; color: alpha("#123456", 0.333); background: alpha(alpha(red, 0.5), 0.5) }
+    Text { text: "f"; color: bright_cyan; background: color13 }
+    Text { text: "g"; color: "nonsense"; background: transparent }
+    Progress { value: 30; color: linear(0, 0, 1, 0, [accent, red]); track: radial(5, 5, 10, ["#fff", "#000", yellow]) }
+    Box { animate opacity: spring(0.3, 900); animate scale: tween(); animate rotation: tween(1s, "in"); opacity: 0.5 }
+    Text { text: "${[accent, #0f0, rgb(1, 2, 3)]}"; style: label }
+  }
+}

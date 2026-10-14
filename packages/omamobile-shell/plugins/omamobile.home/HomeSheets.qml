@@ -2,11 +2,15 @@
 import QtQuick
 import QtQuick.Controls as Controls
 import Quickshell
+import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "HomeModel.js" as HomeModel
 import "UserWidgets.js" as UserWidgets
+import "owl/catalog.js" as OwlCatalog
+import "owl/phone.js" as OwlPhone
+import "owl" as Owl
 
 // Edit mode's sheets, sliding up from the bottom of the home screen: add a
 // widget, add an app, manage pages, and one widget's settings. `home` is
@@ -62,7 +66,9 @@ Item {
           : sheets.which === "apps" ? "Add an app"
           : sheets.which === "pages" ? "Pages"
           : sheets.which === "settings" ? sheets.settingsTitle
-          : sheets.which === "create" ? sheets.createTitle : ""
+          : sheets.which === "create" ? sheets.createTitle
+          : sheets.which === "owl-approve" ? sheets.approveTitle
+          : sheets.which === "owl-store" ? sheets.storeTitle : ""
         color: sheets.fg
         font.family: Style.font.family
         font.pixelSize: Style.font.heading
@@ -94,7 +100,9 @@ Item {
         : sheets.which === "apps" ? appsSheet
         : sheets.which === "pages" ? pagesSheet
         : sheets.which === "settings" ? settingsSheet
-        : sheets.which === "create" ? createSheet : null
+        : sheets.which === "create" ? createSheet
+        : sheets.which === "owl-approve" ? approveSheet
+        : sheets.which === "owl-store" ? storeSheet : null
     }
   }
 
@@ -307,47 +315,126 @@ Item {
         id: widgetsColumn
         width: parent.width
 
+        // Yours and built-in, or the OWL store (with OWL widgets on).
+        Row {
+          visible: sheets.home.owlEnabled
+          width: parent.width
+          height: visible ? sheets.touch : 0
+          spacing: Style.spacing.sm
+          bottomPadding: Style.spacing.md
+          Repeater {
+            model: [{ tab: "", label: "Widgets" }, { tab: "store", label: "Store" }]
+            delegate: SheetButton {
+              required property var modelData
+              width: (widgetsColumn.width - Style.spacing.sm) / 2
+              label: modelData.label
+              primary: sheets.widgetsTab === modelData.tab
+              onClicked: sheets.widgetsTab = modelData.tab
+            }
+          }
+        }
+
+        Column {
+          visible: sheets.widgetsTab === "store" && sheets.home.owlEnabled
+          width: parent.width
+          spacing: Style.spacing.xs
+          Label {
+            width: parent.width
+            text: "Widgets from the OWL widget store, the ones that run on this phone. Each asks before it runs anything."
+          }
+          Flow {
+            width: parent.width
+            spacing: Style.spacing.sm
+            Repeater {
+              model: [""].concat(OwlCatalog.CATEGORIES)
+              delegate: SheetButton {
+                required property var modelData
+                label: modelData || "all"
+                primary: sheets.storeCategory === modelData
+                onClicked: sheets.storeCategory = modelData
+              }
+            }
+          }
+          Repeater {
+            model: sheets.home.owlStoreRows.filter(function(r) { return !sheets.storeCategory || r.category === sheets.storeCategory })
+            delegate: WidgetRow {
+              required property var modelData
+              width: widgetsColumn.width
+              glyph: modelData.status === "unsupported" ? "󰀦" : OwlCatalog.ICON
+              title: modelData.name + "  \u00b7  " + modelData.author
+              subtitle: (modelData.update ? "update to " + modelData.version + "  \u00b7  " : modelData.owned ? "added  \u00b7  " : "")
+                + (modelData.sizeText ? modelData.sizeText + "  \u00b7  " : "") + modelData.summary
+              warn: modelData.status === "unsupported"
+              onClicked: sheets.home.openStoreWidget(modelData.id)
+            }
+          }
+          SheetButton {
+            width: parent.width
+            label: "Check the store now"
+            enabled: !sheets.home.helperBusy
+            onClicked: sheets.home.fetchStore()
+          }
+          Label {
+            visible: sheets.home.owlStoreMessage !== ""
+            width: parent.width
+            text: sheets.home.owlStoreMessage
+          }
+        }
+
         SheetButton {
+          visible: sheets.widgetsTab === "" || !sheets.home.owlEnabled
           width: parent.width
           label: "󰚩  Create a widget with AI"
           primary: true
           onClicked: sheets.home.openCreate("create", "")
         }
 
-        SectionLabel { visible: scan.widgets.length > 0; text: "YOURS" }
+        SectionLabel { visible: widgetsColumn.mine && widgetsColumn.yours.length > 0; text: "YOURS" }
+        readonly property bool mine: sheets.widgetsTab === "" || !sheets.home.owlEnabled
+        // OWL widgets only while the feature is on (features.json).
+        readonly property var yours: scan.widgets.filter(function(r) { return r.kind !== "owl" || sheets.home.owlEnabled })
         Repeater {
-          model: scan.widgets
+          model: widgetsColumn.mine ? widgetsColumn.yours : []
           delegate: WidgetRow {
             required property var modelData
+            readonly property bool isOwl: modelData.kind === "owl"
+            readonly property var owlCard: isOwl ? sheets.home.owlCard(modelData.id) : null
             width: widgetsColumn.width
-            glyph: modelData.manifest ? modelData.manifest.icon : "󰀦"
-            title: modelData.manifest ? modelData.manifest.name : modelData.id
-            subtitle: UserWidgets.statusLine(modelData)
-            warn: modelData.status !== "ok"
+            glyph: isOwl ? (owlCard.state === "error" ? "󰀦" : OwlCatalog.ICON) : modelData.manifest ? modelData.manifest.icon : "󰀦"
+            title: isOwl ? (owlCard.info && owlCard.info.name ? owlCard.info.name : modelData.id) : modelData.manifest ? modelData.manifest.name : modelData.id
+            subtitle: isOwl ? sheets.owlLine(owlCard) : UserWidgets.statusLine(modelData)
+            warn: isOwl ? owlCard.state === "error" : modelData.status !== "ok"
             actions: true
             // A broken widget can still be placed: its card shows what's wrong.
-            onClicked: sheets.home.addWidgetHere(UserWidgets.typeFor(modelData.id))
+            // An OWL widget asks first, once, for what it runs.
+            onClicked: {
+              if (isOwl && owlCard.state === "approve") sheets.home.openOwlApproval(modelData.id)
+              else sheets.home.addWidgetHere(UserWidgets.typeFor(modelData.id))
+            }
             onEdit: sheets.home.openCreate("edit", modelData.id)
             onRemove: sheets.home.removeUserWidget(modelData.id)
           }
         }
 
-        SectionLabel { text: "BUILT IN" }
+        SectionLabel { visible: widgetsColumn.mine; text: "BUILT IN" }
         Repeater {
-          model: HomeModel.widgetTypes()
+          model: widgetsColumn.mine ? HomeModel.widgetTypes() : []
           delegate: Row2 {
             required property var modelData
             width: widgetsColumn.width
             glyph: modelData.icon
             title: modelData.name
-            subtitle: modelData.w + "×" + modelData.h + (modelData.network ? "  ·  uses the internet once you turn it on" : "")
-            onClicked: sheets.home.addWidgetHere(modelData.type)
+            subtitle: modelData.w + "×" + modelData.h + (modelData.network ? "  ·  uses the internet once you allow it" : "")
+            onClicked: {
+              if (HomeModel.isOwlType(modelData.type) && sheets.home.owlCard(modelData.type).state === "approve") sheets.home.openOwlApproval(modelData.type)
+              else sheets.home.addWidgetHere(modelData.type)
+            }
           }
         }
 
-        SectionLabel { visible: scan.examples.length > 0; text: "EXAMPLES" }
+        SectionLabel { visible: widgetsColumn.mine && scan.examples.length > 0; text: "EXAMPLES" }
         Repeater {
-          model: scan.examples
+          model: widgetsColumn.mine ? scan.examples : []
           delegate: WidgetRow {
             required property var modelData
             width: widgetsColumn.width
@@ -359,6 +446,330 @@ Item {
           }
         }
 
+      }
+    }
+  }
+
+  property string widgetsTab: ""
+  property string storeCategory: ""
+
+  // ---------------------------------------------------------------- one store widget
+
+  readonly property var storeRow: home && which === "owl-store"
+    ? home.owlStoreRows.filter(function(r) { return r.id === home.owlStoreDetail })[0] || null : null
+  readonly property string storeTitle: storeRow ? storeRow.name : "Store"
+
+  Component {
+    id: storeSheet
+    Flickable {
+      id: storeFlick
+      implicitHeight: storeColumn.implicitHeight
+      contentHeight: storeColumn.implicitHeight
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      readonly property var row: sheets.storeRow
+      readonly property var info: row && sheets.home ? OwlCatalog.describe(row.widgetId, storeFile.text(), sheets.home.layout.grid, sheets.home.owlCellHeight, sheets.home.owlDp) : null
+
+      FileView {
+        id: storeFile
+        path: storeFlick.row ? sheets.home.owlStoreDir + "/widgets/" + storeFlick.row.id + "/widget.owl" : ""
+        blockLoading: true
+        printErrors: false
+      }
+
+      Column {
+        id: storeColumn
+        width: parent.width
+        spacing: Style.spacing.xl
+
+        Label {
+          width: parent.width
+          text: storeFlick.row ? storeFlick.row.description + "\n\nBy " + storeFlick.row.author + ", version " + storeFlick.row.version
+            + (storeFlick.row.category ? ", " + storeFlick.row.category : "") + ". From the OWL widget store, reviewed there." : ""
+        }
+
+        Label {
+          visible: !!storeFlick.info && storeFlick.info.ok && storeFlick.row.status !== "unsupported"
+          width: parent.width
+          text: "Preview, in your theme, with no data yet: nothing runs until you add and allow it."
+        }
+        // A preview drawn here, in your theme, with no data: nothing runs.
+        Rectangle {
+          visible: !!storeFlick.info && storeFlick.info.ok && storeFlick.row.status !== "unsupported"
+          width: storeFlick.info && storeFlick.info.ok ? Math.min(parent.width, storeFlick.info.spec.size[0] * parent.width / 4) : 0
+          height: storeFlick.info && storeFlick.info.ok ? storeFlick.info.spec.size[1] * (sheets.home.owlCellHeight) - Style.spacing.md * 2 : 0
+          anchors.horizontalCenter: parent.horizontalCenter
+          radius: Math.max(Style.cornerRadius, 12)
+          color: sheets.home.cardColor
+          clip: true
+          Owl.OwlWidget {
+            id: preview
+            text: storeFlick.info && storeFlick.info.ok ? storeFile.text() : ""
+            host: ({ loadState: function() { return {} }, saveState: function() {}, report: function() {} })
+            themeColors: sheets.home.owlPalette
+            active: false
+            tileVars: OwlPhone.tileVars(parent.width, parent.height, sheets.home.owlDp, sheets.home.owlScreenWidth, sheets.home.owlScreenHeight, Style.cornerRadius)
+          }
+          Owl.OwlView {
+            anchors.fill: parent
+            anchors.margins: (preview.program ? preview.program.padding : 12) * sheets.home.owlDp
+            tree: preview.tree
+            colors: sheets.home.owlInk
+            dp: sheets.home.owlDp
+            corners: OwlPhone.cornersFor(Style.cornerRadius)
+            monoFamily: Style.font.family
+            iconFamily: Style.font.family
+            interactive: false
+          }
+        }
+
+        Section {
+          visible: !!storeFlick.row
+          title: storeFlick.row && storeFlick.row.status === "unsupported" ? "Not on this phone yet" : "What it does"
+          Label {
+            width: parent.width
+            text: storeFlick.row ? storeFlick.row.summary + (storeFlick.row.note && storeFlick.row.status === "partial" ? ". Partly: " + storeFlick.row.note : "") : ""
+          }
+        }
+
+        Row {
+          spacing: Style.spacing.lg
+          SheetButton {
+            visible: !!storeFlick.row && storeFlick.row.status !== "unsupported" && !storeFlick.row.owned
+            label: "Add"
+            primary: true
+            enabled: !sheets.home.helperBusy
+            onClicked: sheets.home.addFromStore(storeFlick.row.id)
+          }
+          SheetButton {
+            visible: !!storeFlick.row && storeFlick.row.update
+            label: "Update to " + (storeFlick.row ? storeFlick.row.version : "")
+            primary: true
+            onClicked: sheets.home.updateFromStore(storeFlick.row.widgetId)
+          }
+          SheetButton {
+            label: "Back"
+            onClicked: sheets.home.sheet = "widgets"
+          }
+        }
+      }
+    }
+  }
+
+  // The line under an OWL widget in the Widgets sheet.
+  function owlLine(card) {
+    if (!card) return ""
+    const info = card.info
+    const size = info && info.ok ? info.spec.size[0] + "\u00d7" + info.spec.size[1] + "  \u00b7  " : ""
+    if (card.state === "error") return "OWL  \u00b7  \u26a0 " + String(card.message).split("\n")[0]
+    if (card.state === "approve") return "OWL  \u00b7  " + size + "needs your OK: " + OwlCatalog.summary(info.caps)
+    return "OWL  \u00b7  " + size + OwlCatalog.summary(info ? info.caps : null)
+      + (info && info.caps.network && !(card.approval && card.approval.network) ? " (off)" : "")
+  }
+
+  // ---------------------------------------------------------------- allow an OWL widget
+
+  readonly property var approveCard: home && which === "owl-approve" ? home.owlCard(home.owlApproveId) : null
+  readonly property string approveTitle: approveCard && approveCard.info && approveCard.info.name
+    ? "Allow \u201c" + approveCard.info.name + "\u201d?" : "Allow this widget?"
+
+  component Section: Column {
+    id: section
+    property string title: ""
+    property bool warn: false
+    width: parent ? parent.width : 0
+    spacing: Style.spacing.xs
+    Text {
+      width: section.width
+      textFormat: Text.PlainText
+      text: section.title
+      color: section.warn ? Commons.Color.urgent : sheets.fg
+      font.family: Style.font.family
+      font.pixelSize: Style.font.subtitle
+      font.bold: true
+      wrapMode: Text.Wrap
+    }
+  }
+
+  component CodeLine: Rectangle {
+    id: codeLine
+    property string code: ""
+    width: parent ? parent.width : 0
+    height: codeText.implicitHeight + Style.spacing.md * 2
+    radius: Style.cornerRadius
+    color: Util.alpha(sheets.fg, 0.06)
+    Text {
+      id: codeText
+      x: Style.spacing.md
+      y: Style.spacing.md
+      width: codeLine.width - Style.spacing.md * 2
+      textFormat: Text.PlainText
+      text: codeLine.code
+      color: sheets.fg
+      font.family: Style.font.family
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WrapAnywhere
+      maximumLineCount: 8
+      elide: Text.ElideRight
+    }
+  }
+
+  Component {
+    id: approveSheet
+    Flickable {
+      id: approveFlick
+      implicitHeight: approveColumn.implicitHeight
+      contentHeight: approveColumn.implicitHeight
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      readonly property var card: sheets.approveCard
+      readonly property var info: card ? card.info : null
+      readonly property var caps: info && info.ok ? info.caps : null
+      readonly property var program: info && info.ok ? info.program : null
+      readonly property var packages: program && program.requires && program.requires.pacman ? program.requires.pacman : []
+      property bool internet: false
+      readonly property bool builtin: HomeModel.isOwlType(sheets.home.owlApproveId)
+      readonly property string placeType: builtin ? sheets.home.owlApproveId : UserWidgets.typeFor(sheets.home.owlApproveId)
+      readonly property bool placed: {
+        const type = approveFlick.placeType
+        return sheets.home.layout.pages.some(function(p) { return p.items.some(function(i) { return i.type === type }) })
+      }
+
+      Column {
+        id: approveColumn
+        width: parent.width
+        spacing: Style.spacing.xl
+
+        Label {
+          width: parent.width
+          text: "This OWL widget runs inside the home screen, as you. Omarchy Mobile read its file and lists everything it can do below. Nothing runs until you allow it, and if the widget changes what it runs, it asks again."
+        }
+
+        Section {
+          visible: !!approveFlick.caps && approveFlick.caps.commands.length > 0
+          title: approveFlick.caps ? "Runs " + (approveFlick.caps.commands.length === 1 ? "this command" : "these " + approveFlick.caps.commands.length + " commands") : ""
+          Repeater {
+            model: approveFlick.caps ? approveFlick.caps.commands : []
+            delegate: CodeLine { required property var modelData; code: modelData }
+          }
+        }
+
+        Section {
+          visible: !!approveFlick.caps && approveFlick.caps.network
+          title: "Uses the internet"
+          Label {
+            width: parent.width
+            text: approveFlick.caps && approveFlick.caps.hosts.length
+              ? "It talks to " + approveFlick.caps.hosts.join(", ") + "."
+              : "Its commands reach the network."
+          }
+          Item {
+            width: parent.width
+            height: sheets.touch
+            Text {
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.PlainText
+              text: "Use the internet"
+              color: sheets.fg
+              font.family: Style.font.family
+              font.pixelSize: Style.font.title
+            }
+            ToggleSwitch {
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              checked: approveFlick.internet
+              onToggled: approveFlick.internet = !checked
+            }
+          }
+          Label {
+            width: parent.width
+            text: "Off: whatever uses the internet waits until you turn it on, as for the built-in widgets."
+          }
+        }
+
+        Section {
+          visible: !!approveFlick.caps && approveFlick.caps.files.length > 0
+          title: "Reads these files"
+          Repeater {
+            model: approveFlick.caps ? approveFlick.caps.files : []
+            delegate: CodeLine { required property var modelData; code: modelData }
+          }
+        }
+
+        Section {
+          visible: !!approveFlick.caps && (approveFlick.caps.devices.length > 0 || approveFlick.caps.terminal)
+          title: "Uses the phone"
+          Repeater {
+            model: approveFlick.caps ? approveFlick.caps.devices : []
+            delegate: Label {
+              required property var modelData
+              width: parent.width
+              text: modelData === "haptic" ? "It vibrates (a short tap, as your feedback setting allows)." : "It switches the torch on and off."
+            }
+          }
+          Label {
+            visible: !!approveFlick.caps && approveFlick.caps.terminal
+            width: parent.width
+            text: "It has a terminal in its tile: what you type there runs as you. Its command is listed above."
+          }
+        }
+
+        Section {
+          visible: approveFlick.packages.length > 0
+          title: "Needs " + approveFlick.packages.join(", ")
+          Label {
+            width: parent.width
+            text: "It never installs anything. If a package is missing, install it yourself (Omarchy's Install package)."
+          }
+        }
+
+        Section {
+          visible: !!approveFlick.caps && approveFlick.caps.risks.length > 0
+          warn: true
+          title: "\u26a0 Look twice"
+          Repeater {
+            model: approveFlick.caps ? approveFlick.caps.risks : []
+            delegate: Label {
+              required property var modelData
+              width: parent.width
+              color: Commons.Color.urgent
+              text: "It " + modelData.says + ": " + OwlCatalog.shortCommand(modelData.line, 60)
+            }
+          }
+        }
+
+        Section {
+          visible: !!approveFlick.caps && approveFlick.caps.commands.length === 0 && !approveFlick.caps.network && approveFlick.caps.files.length === 0
+          title: "Runs no commands and reaches nothing outside itself"
+        }
+
+        Label {
+          width: parent.width
+          text: (approveFlick.builtin
+            ? "A built-in widget: " + HomeModel.owlStoreId(sheets.home.owlApproveId) + " from the OWL widget store, reviewed there and shipped with Omarchy Mobile."
+            : "From your widgets folder (" + UserWidgets.tildePath(sheets.home.widgetsDir, sheets.home.homeDir) + "/" + sheets.home.owlApproveId + "). Nobody reviewed it.")
+            + " This is a guard rail, not a sandbox: an allowed command runs with your rights."
+        }
+
+        Row {
+          spacing: Style.spacing.lg
+          SheetButton {
+            label: approveFlick.placed ? "Allow" : "Allow and add"
+            primary: true
+            enabled: !!approveFlick.info && approveFlick.info.ok
+            onClicked: {
+              const id = sheets.home.owlApproveId
+              sheets.home.approveOwl(id, approveFlick.internet)
+              if (!approveFlick.placed) sheets.home.addWidgetHere(approveFlick.placeType)
+              else sheets.home.sheet = ""
+            }
+          }
+          SheetButton {
+            label: "Not now"
+            onClicked: sheets.home.sheet = approveFlick.placed ? "" : "widgets"
+          }
+        }
       }
     }
   }

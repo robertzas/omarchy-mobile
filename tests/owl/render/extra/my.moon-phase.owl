@@ -1,0 +1,9 @@
+// A made-up widget for the review: a typo, and the error card it gives.
+widget "moon phase" {
+  size: 3x3
+  source now = clock every 1h
+  Column {
+    Text { text: "moon"; style: muted }
+    Text { txt: fmtTime(now, "d MMM") }
+  }
+}

@@ -1,0 +1,20 @@
+// A made-up widget for the review: a tile with a longer screen behind it.
+widget "notes" {
+  meta { owl: 5 }
+  size: 3x3
+  state notes = ["buy coffee", "call the bank", "water the plants", "book the bike service", "back up the phone"]
+  onTap: screen()
+  Column {
+    Text { text: "notes"; style: muted }
+    Text { text: "${len(notes)}"; style: huge; color: accent }
+    Text { text: "tap for all"; style: small; color: muted }
+  }
+  screen {
+    title: "all notes"
+    Column {
+      gap: 6
+      for n, i in notes { Row { Text { text: "${i + 1}"; width: 20; color: muted } Text { text: n; weight: 1 } } }
+      Button { text: "back"; onTap: close() }
+    }
+  }
+}

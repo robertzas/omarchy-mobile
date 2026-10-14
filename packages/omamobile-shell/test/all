@@ -25,7 +25,7 @@ pass "palette references are qualified"
 # without needing the shell's own imports to resolve.
 qmlformat=$(command -v qmlformat || command -v /usr/lib/qt6/bin/qmlformat || true)
 if [[ -n $qmlformat ]]; then
-  for qml in plugins/*/*.qml; do
+  for qml in plugins/*/*.qml plugins/omamobile.home/owl/*.qml; do
     "$qmlformat" "$qml" >/dev/null 2>&1 || fail "$qml parses"
   done
   pass "plugin QML parses"
@@ -43,6 +43,10 @@ if command -v node >/dev/null; then
   node test/sensor-model.js || fail "fingerprint sensor model"
   node test/tiles-model.js || fail "quick-settings tile layout"
   node test/home-model.js || fail "home screen model"
+  # Our OWL runtime's core: probes against the reference runtime's recorded
+  # outputs, the resource caps, sh() quoting, and the phone's rules.
+  node test/owl-core.js >/dev/null || { node test/owl-core.js | grep -v '^ok'; fail "OWL runtime core"; }
+  pass "OWL runtime core"
 else
   pass "Wi-Fi and Bluetooth models # SKIP no node"
 fi
@@ -106,54 +110,31 @@ grep -c 'namespace = "^osk\$" }, above_lock = 2' hypr/phone.lua >/dev/null || fa
 pass "PIN or password"
 
 # Home screens: enabled for new and existing users, and the widget files the
-# registry names exist.
+# registry names exist (OWL built-ins run through OwlCell.qml).
 python3 -c 'import json; assert {"id": "omamobile.home"} in json.load(open("profile/shell.json"))["plugins"]' \
   || fail "the phone profile enables the home screens"
 grep -c 'add_plugin omamobile.home' bin/omamobile-setup-user >/dev/null || fail "existing users get the home screens"
 if command -v node >/dev/null; then
-  for type in $(node -e 'console.log(Object.keys(require("./plugins/omamobile.home/HomeModel.js").REGISTRY).join(" "))'); do
+  for type in $(node -e 'console.log(Object.keys(require("./plugins/omamobile.home/HomeModel.js").REGISTRY).filter((t) => !t.startsWith("owl:")).join(" "))'); do
     [[ -f plugins/omamobile.home/${type^}Widget.qml ]] || fail "widget $type has ${type^}Widget.qml"
   done
 fi
 pass "home screen wiring"
 
-# The built-ins ported from omarchy-widgets: their QML parses and lints clean
-# (qmllint with the shell's imports, as `omamobile-widget check` runs it), their
-# helper scripts parse, and the MIT notice ships with them.
-grep -c 'Copyright (c) 2026 Simon Schubert and contributors' plugins/omamobile.home/LICENSE-omarchy-widgets >/dev/null \
-  || fail "the omarchy-widgets license ships with the home screen"
-if [[ -n $qmlformat ]]; then
-  for qml in plugins/omamobile.home/ported/*/*.qml; do
-    "$qmlformat" "$qml" >/dev/null 2>&1 || fail "$qml parses"
-  done
-fi
-while IFS= read -r -d '' file; do
-  case $file in
-    *.js) if command -v node >/dev/null; then node --check "$file" || fail "$file parses"; fi ;;
-    *.py) python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$file" || fail "$file parses" ;;
-    *.sh) bash -n "$file" || fail "$file parses" ;;
-  esac
-done < <(find plugins/omamobile.home/ported -type f \( -name '*.js' -o -name '*.py' -o -name '*.sh' \) -print0)
+# The built-ins from omarchy-widgets are the OWL originals now (the
+# omamobile-owl-widgets package): no QML ports are left, each built-in names
+# its store widget, and the guide's MIT notice ships with the shell.
+grep -c 'Copyright (c) 2026 Simon Schubert and contributors' widgets/LICENSE-owl-guide >/dev/null \
+  || fail "the OWL guide's licence ships with the shell"
+[[ ! -e plugins/omamobile.home/ported && ! -e plugins/omamobile.home/PortedWidget.qml ]] || fail "the QML ports are gone"
 if command -v node >/dev/null; then
-  python3 -B - "$(node -e 'const M = require("./plugins/omamobile.home/HomeModel.js"); console.log(M.PORTED_ORDER.map((t) => t.charAt(0).toUpperCase() + t.slice(1) + "Widget.qml").join(" "))')" <<'PY' || fail "the ported built-ins lint clean"
-import glob, importlib.machinery, importlib.util, os, sys
-loader = importlib.machinery.SourceFileLoader("omamobile_widget", "bin/omamobile-widget")
-spec = importlib.util.spec_from_loader("omamobile_widget", loader)
-tool = importlib.util.module_from_spec(spec)
-loader.exec_module(tool)
-home = "plugins/omamobile.home"
-if not tool.qmllint_path() or not os.path.isdir(os.path.join(tool.OMARCHY_PATH, "shell")):
-    print("ok - ported built-ins lint # SKIP no qmllint or Omarchy shell")
-    sys.exit(0)
-files = [os.path.join(home, f) for f in ("PortedWidget.qml", "GeoLocation.qml", "WeatherWidget.qml")] + [os.path.join(home, f) for f in sys.argv[1].split()]
-files += sorted(glob.glob(os.path.join(home, "ported/*/*.qml")))
-lint = tool.run_qmllint([os.path.abspath(f) for f in files])
-for line in lint["errors"] + lint["warnings"]:
-    print("  " + line)
-sys.exit(1 if lint["errors"] or lint["warnings"] else 0)
-PY
+  node -e '
+const H = require("./plugins/omamobile.home/HomeModel.js")
+if (H.OWL_ORDER.length !== 47) throw new Error(H.OWL_ORDER.length + " OWL built-ins")
+for (const t of H.OWL_ORDER) if (!/^owl:simonschubert\.[a-z0-9-]+$/.test(t) || H.owlStoreId(t) !== H.REGISTRY[t].credit) throw new Error(t)
+' || fail "every old port has its OWL original as a built-in"
 fi
-pass "ported built-ins"
+pass "OWL built-ins"
 
 # The weather widgets' position: locate.sh against a fake where-am-i.
 bash -n plugins/omamobile.home/locate.sh || fail "locate.sh parses"
@@ -271,4 +252,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
    && -f $tmp/root/usr/share/omamobile/shell/widget-template/manifest.json \
    && -f $tmp/root/usr/share/omamobile/shell/widget-examples/countdown/Widget.qml ]] \
   || fail "install stages the widget tool, contract, template and examples"
+[[ -f $tmp/root/usr/share/omamobile/shell/OWL.md ]] || fail "install stages the OWL guide"
+grep -c 'Copyright (c) 2026 Simon Schubert and contributors' widgets/OWL.md >/dev/null || fail "the OWL guide keeps its copyright line"
+grep -c 'd355bdb2789f7bd1023d88b17f8a2898dc0ffa2b' widgets/OWL.md >/dev/null || fail "the OWL guide names its source commit"
 pass "install stages the package"

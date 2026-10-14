@@ -14,6 +14,8 @@ done < <(find plugins profile hypr branding -type f -print0)
 # Your own home-screen widgets: the contract, the template Create copies,
 # and examples to copy (never loaded from here).
 install -Dm644 widgets/WIDGETS.md "$destination/usr/share/omamobile/shell/WIDGETS.md"
+# The OWL language guide (Simon Schubert, MIT, credited inside) for OWL widgets.
+install -Dm644 widgets/OWL.md "$destination/usr/share/omamobile/shell/OWL.md"
 while IFS= read -r -d '' file; do
   install -Dm644 "$file" "$destination/usr/share/omamobile/shell/widget-${file#widgets/}"
 done < <(find widgets/template widgets/examples -type f -print0)
@@ -23,6 +25,7 @@ install -Dm644 systemd/user/omarchy-fcitx5-omamobile.conf "$destination/usr/lib/
 install -Dm644 polkit/49-omamobile-admin-self.rules "$destination/usr/share/polkit-1/rules.d/49-omamobile-admin-self.rules"
 install -Dm644 applications/omamobile-open-intent.desktop "$destination/usr/share/applications/omamobile-open-intent.desktop"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-shell/LICENSE"
-# The home screen's ported built-ins are MIT, from Simon Schubert's omarchy-widgets.
-install -Dm644 plugins/omamobile.home/LICENSE-omarchy-widgets "$destination/usr/share/licenses/omamobile-shell/LICENSE-omarchy-widgets"
+# OWL.md is Simon Schubert's OWL guide (MIT). The built-in widgets themselves
+# come from omamobile-owl-widgets, which ships the store's licence.
+install -Dm644 widgets/LICENSE-owl-guide "$destination/usr/share/licenses/omamobile-shell/LICENSE-owl-guide"
 install -Dm644 version "$destination/usr/share/omamobile/shell/version"

@@ -1,0 +1,20 @@
+{
+ "ok": true,
+ "name": "habits",
+ "size": [
+  6,
+  3
+ ],
+ "minSize": [
+  4,
+  2
+ ],
+ "commands": [
+  "f=~/.config/omarchy-proot/habits\nmkdir -p \"${f%/*}\"\n[ -f \"$f\" ] || printf 'exercise\\nread\\ndrink water\\n' > \"$f\"\ngrep -v '^#' \"$f\" | grep .",
+  "$EDITOR ~/.config/omarchy-proot/habits"
+ ],
+ "requires": {},
+ "capabilities": [
+  "commands"
+ ]
+}

@@ -1,0 +1,107 @@
+{
+ "theme": {
+  "background": -15066330,
+  "foreground": -5656106,
+  "accent": -8740105,
+  "muted": -12498840,
+  "red": -559474,
+  "bright_red": -34157,
+  "green": -6369686,
+  "bright_green": -4590980,
+  "yellow": -2052248,
+  "bright_yellow": -24988,
+  "blue": -8740105,
+  "bright_blue": -8542465,
+  "magenta": -5402906,
+  "bright_magenta": -4482313,
+  "cyan": -12280405,
+  "bright_cyan": -15877673,
+  "orange": -1338757,
+  "brown": -9090755,
+  "purple": -5402906,
+  "bright_foreground": -4142347,
+  "dark_foreground": -11116663,
+  "lighter_background": -14407621,
+  "dark_background": -15526884,
+  "selection": -14078398,
+  "cursor": -4142347,
+  "surface": -14407621,
+  "border": -13158071,
+  "white": -4142347,
+  "black": -15526884,
+  "color0": -15066330,
+  "color1": -559474,
+  "color2": -6369686,
+  "color3": -2052248,
+  "color4": -8740105,
+  "color5": -5402906,
+  "color6": -12280405,
+  "color7": -5656106,
+  "color8": -12498840,
+  "color9": -34157,
+  "color10": -4590980,
+  "color11": -24988,
+  "color12": -8542465,
+  "color13": -4482313,
+  "color14": -15877673,
+  "color15": -4142347
+ },
+ "time": 12.5,
+ "canvas": [
+  300,
+  200
+ ],
+ "tile": {
+  "cols": 3,
+  "rows": 3,
+  "tileWidth": 300,
+  "tileHeight": 280,
+  "screenWidth": 400,
+  "screenHeight": 860,
+  "linux": true,
+  "corners": 0
+ },
+ "sources": {
+  "j": {
+   "value": {
+    "a": {
+     "b": {
+      "c": 7
+     }
+    },
+    "list": [
+     3,
+     1,
+     2
+    ],
+    "10": "ten",
+    "2": "two"
+   }
+  },
+  "t": {
+   "text": "  cpu 42%\nmem 1.5G\n\nswap 0\n"
+  },
+  "now": {
+   "value": 1791890820
+  },
+  "items": {
+   "value": [
+    {
+     "id": "a",
+     "n": 3,
+     "tag": "x"
+    },
+    {
+     "id": "b",
+     "n": 1,
+     "tag": "y"
+    },
+    {
+     "id": "c",
+     "n": 2,
+     "tag": "x"
+    }
+   ]
+  }
+ }
+}

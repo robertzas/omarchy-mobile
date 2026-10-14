@@ -14,11 +14,18 @@ them; it shows a widget only when this tool calls it "ok". Coding agents run
   omamobile-widget copy-example ID      copy an installed example into your widgets
   omamobile-widget remove ID            move a widget folder out (recoverable)
   omamobile-widget agent ID PROMPT      Omarchy's default agent, in a terminal, in that folder
+  omamobile-widget store-copy STORE_ID  copy an OWL widget from the store into your widgets
+                                        (author/name -> author.name)
+  omamobile-widget store-update ID      replace an unmodified store copy with the store's newer one
+  omamobile-widget store-fetch          download the store's current index and widgets into
+                                        ~/.cache (only when the user asks; each file checked
+                                        against the index's sha256 when it has one)
 
 /usr/share/omamobile/shell/WIDGETS.md is the contract. Everything here runs
 as the user; nothing asks for root, and widget code is never fetched from
-the network or read from anywhere but the user's widgets folder and the
-installed examples.
+the network or read from anywhere but the user's widgets folder, the
+installed examples and the OWL store (the omamobile-owl-widgets package, or
+what store-fetch downloaded when asked).
 """
 
 import hashlib
@@ -38,6 +45,11 @@ EXAMPLES_DIR = os.environ.get("OMAMOBILE_WIDGET_EXAMPLES") or os.path.join(SHARE
 TEMPLATE_DIR = os.environ.get("OMAMOBILE_WIDGET_TEMPLATE") or os.path.join(SHARE, "widget-template")
 CONTRACT = os.environ.get("OMAMOBILE_WIDGET_CONTRACT") or os.path.join(SHARE, "WIDGETS.md")
 CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache"), "omamobile/widget-lint")
+OWL_STORE = os.environ.get("OMAMOBILE_OWL_STORE") or "/usr/share/omamobile/owl-widgets"
+OWL_STORE_CACHE = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache"), "omamobile/owl-store")
+OWL_STORE_URL = os.environ.get("OMAMOBILE_OWL_STORE_URL") or "https://simonschubert.github.io/omarchy-widgets/"
+STORE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*$")
+MAX_STORE_BYTES = 8 << 20
 REMOVED_DIR = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local/share"), "omamobile/removed-widgets")
 OMARCHY_PATH = os.environ.get("OMARCHY_PATH") or "/usr/share/omarchy"
 
@@ -51,6 +63,8 @@ FIELD_TYPES = ("string", "path", "integer", "number", "boolean", "enum")
 # The largest grid the home screen allows (HomeModel.LIMITS).
 MAX_COLUMNS, MAX_ROWS = 6, 8
 MAX_FILES, MAX_BYTES, MAX_MANIFEST = 64, 1 << 20, 64 << 10
+# OWL widgets (docs/WIDGET-INTEROP-PLAN.md): one widget.owl per folder.
+OWL_FILE, MAX_OWL = "widget.owl", 256 << 10
 
 # ---------------------------------------------------------------- manifest
 
@@ -370,7 +384,7 @@ def inspect(folder, base, source, lint=True):
     """Everything the home screen needs to know about one widget folder."""
     dir_name = os.path.basename(folder.rstrip("/"))
     out = {"id": dir_name, "source": source, "dir": folder, "status": "error", "errors": [], "warnings": [],
-           "hash": "", "manifest": None, "detected": [], "undeclared": [], "lint": None}
+           "hash": "", "manifest": None, "detected": [], "undeclared": [], "lint": None, "kind": "qml"}
     errors, warnings = out["errors"], out["warnings"]
     if not inside(folder, base):
         errors.append("the folder is a link to somewhere outside %s" % base)
@@ -402,6 +416,9 @@ def inspect(folder, base, source, lint=True):
     out["hash"] = digest.hexdigest()[:16]
 
     manifest_path = os.path.join(folder, "manifest.json")
+    owl_path = os.path.join(folder, OWL_FILE)
+    if not os.path.isfile(manifest_path) and os.path.isfile(owl_path):
+        return inspect_owl(out, owl_path)
     if not os.path.isfile(manifest_path):
         errors.append("no manifest.json")
         return out
@@ -445,6 +462,35 @@ def inspect(folder, base, source, lint=True):
         warnings.extend(out["lint"]["warnings"])
     if not errors:
         out["status"] = "ok"
+    return out
+
+
+def inspect_owl(out, path):
+    """An OWL widget (a folder with widget.owl and no manifest.json). The
+    home screen compiles it with its own OWL runtime and derives what it may
+    do from the compiler's list of commands, URLs and files; here only its
+    size and encoding are checked, and its text handed over."""
+    out["kind"] = "owl"
+    if os.path.getsize(path) > MAX_OWL:
+        out["errors"].append("%s is larger than %d KiB" % (OWL_FILE, MAX_OWL >> 10))
+        return out
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        out["owl"] = {"file": OWL_FILE, "text": text, "sha256": hashlib.sha256(text.encode()).hexdigest()}
+    except UnicodeDecodeError:
+        out["errors"].append("%s isn't UTF-8 text" % OWL_FILE)
+        return out
+    # A copy from the store remembers where it came from (dotfiles are left
+    # out of the folder's hash, so this doesn't count as a change).
+    try:
+        with open(os.path.join(os.path.dirname(path), ".store.json"), encoding="utf-8") as f:
+            store = json.load(f)
+        if isinstance(store, dict) and isinstance(store.get("id"), str):
+            out["store"] = {"id": store["id"], "version": str(store.get("version", "")), "sha256": str(store.get("sha256", ""))}
+    except (OSError, ValueError):
+        pass
+    out["status"] = "ok"
     return out
 
 
@@ -542,6 +588,161 @@ def cmd_remove(widget_id):
     shutil.move(folder, target)
     print(target)
 
+# ---------------------------------------------------------------- the OWL store
+
+
+def store_index(base):
+    try:
+        with open(os.path.join(base, "index.json"), encoding="utf-8") as f:
+            data = json.load(f)
+        return {w["id"]: w for w in data.get("widgets", []) if isinstance(w, dict) and isinstance(w.get("id"), str)}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def version_key(v):
+    return [int(p) if p.isdigit() else p for p in re.split(r"[.-]", str(v or "0"))]
+
+
+def newer(a, b):
+    """Whether version a is newer than b."""
+    try:
+        return version_key(a) > version_key(b)
+    except TypeError:
+        return str(a) > str(b)
+
+
+def store_source(store_id):
+    """(text, entry, where) of the newest shippable copy of a store widget:
+    the package's, or a newer one store-fetch downloaded."""
+    best = None
+    for base, where in ((OWL_STORE, "package"), (OWL_STORE_CACHE, "fetched")):
+        entry = store_index(base).get(store_id)
+        path = os.path.join(base, "widgets", store_id, OWL_FILE)
+        if not entry or entry.get("status") not in ("ok", "partial") or not os.path.isfile(path) or not inside(path, base):
+            continue
+        if best is None or newer(entry.get("version"), best[1].get("version")):
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            if entry.get("sha256") and hashlib.sha256(text.encode()).hexdigest() != entry["sha256"]:
+                continue
+            best = (text, entry, where)
+    return best
+
+
+def write_store_copy(folder, store_id, text, entry):
+    with open(os.path.join(folder, OWL_FILE), "w", encoding="utf-8") as f:
+        f.write(text)
+    with open(os.path.join(folder, ".store.json"), "w", encoding="utf-8") as f:
+        json.dump({"id": store_id, "version": str(entry.get("version", "")),
+                   "sha256": hashlib.sha256(text.encode()).hexdigest()}, f)
+        f.write("\n")
+
+
+def cmd_store_copy(store_id):
+    if not STORE_ID_RE.match(store_id or ""):
+        fail("not a store widget id: %r" % store_id)
+    found = store_source(store_id)
+    if not found:
+        fail("no store widget called %s that runs here" % store_id, 3)
+    widget_id = store_id.replace("/", ".")
+    check_id(widget_id)
+    ensure_dir()
+    target = os.path.join(WIDGETS_DIR, widget_id)
+    if os.path.lexists(target):
+        fail("%s already exists" % target, 3)
+    staging = tempfile.mkdtemp(prefix="." + widget_id + "-", dir=WIDGETS_DIR)
+    try:
+        os.makedirs(os.path.join(staging, "w"))
+        write_store_copy(os.path.join(staging, "w"), store_id, found[0], found[1])
+        # Appears whole: the home screen's watcher never sees half a widget.
+        os.rename(os.path.join(staging, "w"), target)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    print(target)
+
+
+def cmd_store_update(widget_id):
+    """Only an unmodified copy (its file still has the sha256 it was copied
+    with) is replaced; a copy the user changed is never overwritten."""
+    check_id(widget_id)
+    folder = os.path.join(WIDGETS_DIR, widget_id)
+    try:
+        with open(os.path.join(folder, ".store.json"), encoding="utf-8") as f:
+            store = json.load(f)
+        with open(os.path.join(folder, OWL_FILE), encoding="utf-8") as f:
+            current = f.read()
+    except (OSError, ValueError):
+        fail("%s isn't a copy from the store" % widget_id, 3)
+    if hashlib.sha256(current.encode()).hexdigest() != store.get("sha256"):
+        fail("%s was changed since it was copied, so it isn't replaced" % widget_id, 4)
+    found = store_source(store.get("id", ""))
+    if not found or not newer(found[1].get("version"), store.get("version")):
+        fail("no newer version of %s in the store" % widget_id, 3)
+    write_store_copy(folder, store["id"], found[0], found[1])
+    print(folder)
+
+
+def fetch(url, limit):
+    import urllib.request
+    with urllib.request.urlopen(url, timeout=20) as response:
+        data = response.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("%s is larger than %d bytes" % (url, limit))
+    return data
+
+
+def cmd_store_fetch():
+    """The store's current index and widget files, into the cache. Run only
+    from the Store tab's "Check the store now", never on its own. Files go
+    through the same compiler and approval as the package's."""
+    base = OWL_STORE_URL.rstrip("/") + "/"
+    try:
+        index = json.loads(fetch(base + "index.json", 4 << 20).decode())
+    except (OSError, ValueError) as e:
+        fail("couldn't read the store's index: %s" % e, 5)
+    entries = index.get("widgets", index) if isinstance(index, dict) else index
+    if not isinstance(entries, list):
+        fail("the store's index isn't a list of widgets", 5)
+    staging = tempfile.mkdtemp(prefix="owl-store-")
+    out, total, skipped = [], 0, []
+    try:
+        for e in entries:
+            store_id = e.get("id") if isinstance(e, dict) else None
+            if not isinstance(store_id, str) or not STORE_ID_RE.match(store_id):
+                continue
+            try:
+                data = fetch(base + "widgets/" + store_id + "/" + OWL_FILE, MAX_OWL)
+            except (OSError, ValueError) as err:
+                skipped.append("%s: %s" % (store_id, err))
+                continue
+            total += len(data)
+            if total > MAX_STORE_BYTES:
+                skipped.append("%s: the store is larger than %d MiB" % (store_id, MAX_STORE_BYTES >> 20))
+                break
+            digest = hashlib.sha256(data).hexdigest()
+            if e.get("sha256") and e["sha256"] != digest:
+                skipped.append("%s: its file doesn't match the index's sha256" % store_id)
+                continue
+            path = os.path.join(staging, "widgets", store_id, OWL_FILE)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(data)
+            # Shippable here only once our compiler and the home screen say so:
+            # the Store tab compiles each one before it offers it.
+            out.append({"id": store_id, "version": str(e.get("version", "")), "sha256": digest,
+                        "status": "ok", "fetched": True, "verified": bool(e.get("sha256"))})
+        with open(os.path.join(staging, "index.json"), "w", encoding="utf-8") as f:
+            json.dump({"version": 1, "source": base, "widgets": out}, f)
+        shutil.rmtree(OWL_STORE_CACHE, ignore_errors=True)
+        os.makedirs(os.path.dirname(OWL_STORE_CACHE), exist_ok=True)
+        shutil.move(staging, OWL_STORE_CACHE)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    for line in skipped:
+        print("skipped " + line, file=sys.stderr)
+    print("%d widgets" % len(out))
+
 # ---------------------------------------------------------------- the agent
 
 
@@ -637,6 +838,12 @@ def main(argv):
         cmd_remove(args[0])
     elif cmd == "agent" and len(args) == 2:
         cmd_agent(*args)
+    elif cmd == "store-copy" and len(args) == 1:
+        cmd_store_copy(args[0])
+    elif cmd == "store-update" and len(args) == 1:
+        cmd_store_update(args[0])
+    elif cmd == "store-fetch" and not args:
+        cmd_store_fetch()
     elif cmd == "init" and not args:
         ensure_dir()
         print(WIDGETS_DIR)

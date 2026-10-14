@@ -1,0 +1,30 @@
+{
+ "compile": {
+  "ok": true,
+  "name": "w",
+  "size": null,
+  "minSize": [
+   1,
+   1
+  ],
+  "commands": [
+   "cmd(…) built from widget values"
+  ],
+  "requires": {},
+  "capabilities": [
+   "commands"
+  ]
+ },
+ "walk": {
+  "root": [
+   {
+    "kind": "Text",
+    "props": {
+     "text": "null"
+    },
+    "anim": {},
+    "children": []
+   }
+  ]
+ }
+}

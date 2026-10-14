@@ -1,0 +1,33 @@
+{
+  "comment": "The store widgets of the first milestone, each with fixed source data (our own made-up data, never real feeds). Times are 2026-10-13 13:27 in Europe/Berlin.",
+  "time": 1791890820,
+  "theme": "tokyo-night",
+  "lightTheme": "catppuccin-latte",
+  "widgets": [
+    { "id": "simonschubert/analog-clock", "covers": "Canvas, rotate groups, clock every 1s", "sources": { "now": { "value": 1791890820 } } },
+    { "id": "simonschubert/calendar", "covers": "Grid, fmtTime, per-day background", "sources": { "now": { "value": 1791890820 } } },
+    { "id": "simonschubert/countdown", "covers": "cmd text, lists of maps, for ... key, Row align", "sources": {
+        "dates": { "text": "1792274400 halloween party\n1797634800 new year\n1795128000 winter break\n1793570400 dentist\n1801000000 trip to the coast\n" },
+        "now": { "value": 1791890820 } } },
+    { "id": "simonschubert/year-progress", "covers": "Progress, animate spring, justify spaceBetween", "sources": { "now": { "value": 1791890820 } } },
+    { "id": "simonschubert/focus", "covers": "Ring, Box align, Buttons that set state", "sources": { "now": { "value": 1791890820 } } },
+    { "id": "simonschubert/habits", "covers": "state persist, scroll Column, nested for, tap to toggle", "sources": {
+        "names": { "text": "exercise\nread\ndrink water\nstretch\n" }, "now": { "value": 1791890820 } } },
+    { "id": "simonschubert/earthquakes", "covers": "cmd json, scrolling list, colours by value", "sources": {
+        "quakes": { "text": "[{\"mag\":6.1,\"place\":\"120 km SE of Sample Island\",\"at\":1791887000,\"url\":\"https://example.org/q1\",\"tsunami\":true},{\"mag\":5.2,\"place\":\"40 km N of Example Bay\",\"at\":1791880000,\"url\":\"https://example.org/q2\",\"tsunami\":false},{\"mag\":4.8,\"place\":\"Mid-Ocean Ridge (sample)\",\"at\":1791860000,\"url\":\"https://example.org/q3\",\"tsunami\":false},{\"mag\":4.6,\"place\":\"15 km W of Testville\",\"at\":1791830000,\"url\":\"https://example.org/q4\",\"tsunami\":false},{\"mag\":4.5,\"place\":\"Offshore Placeholder Coast\",\"at\":1791820000,\"url\":\"https://example.org/q5\",\"tsunami\":false}]" },
+        "now": { "value": 1791890820 } } },
+    { "id": "simonschubert/hacker-news", "covers": "two-line list items, maxLines, nested onTap", "sources": {
+        "hn": { "text": "[{\"id\":\"1\",\"title\":\"A small declarative widget language for phones\",\"points\":412,\"comments\":187,\"url\":\"https://example.org/a\",\"site\":\"example.org\"},{\"id\":\"2\",\"title\":\"Show HN: A mainline kernel on a phone, three years in\",\"points\":256,\"comments\":98,\"url\":\"https://example.com/b\",\"site\":\"example.com\"},{\"id\":\"3\",\"title\":\"Why software scene graphs still matter\",\"points\":131,\"comments\":45,\"url\":\"https://example.net/c\",\"site\":\"example.net\"},{\"id\":\"4\",\"title\":\"Battery life on Linux phones, measured\",\"points\":88,\"comments\":30,\"url\":\"https://example.org/d\",\"site\":\"example.org\"}]" } } },
+    { "id": "simonschubert/exchange-rates", "covers": "Sparkline in a weighted Row of Columns", "sources": {
+        "fx": { "text": "{\"base\":\"USD\",\"rates\":[{\"code\":\"EUR\",\"rate\":0.9123,\"change\":0.21,\"hist\":[0.90,0.905,0.91,0.908,0.912,0.915,0.913,0.9123]},{\"code\":\"GBP\",\"rate\":0.7811,\"change\":-0.35,\"hist\":[0.79,0.788,0.785,0.787,0.784,0.782,0.7838,0.7811]},{\"code\":\"JPY\",\"rate\":149.32,\"change\":0.05,\"hist\":[147.1,147.9,148.6,148.2,149.0,149.4,149.25,149.32]}]}" } } },
+    { "id": "derekross/bitcoin", "covers": "http json, area Sparkline, visible by cols", "sources": {
+        "spot": { "text": "{\"data\":{\"amount\":\"64250.12\",\"base\":\"BTC\",\"currency\":\"USD\"}}" },
+        "candles": { "value": [[1791890100,64100,64300,64150,64250,10],[1791889200,63950,64180,64000,64150,12],[1791888300,63800,64050,63850,64000,9],[1791887400,63700,63900,63750,63850,11],[1791886500,63650,63800,63700,63750,8],[1791885600,63500,63720,63600,63700,13],[1791884700,63400,63650,63450,63600,7],[1791883800,63300,63500,63350,63450,10]] } } },
+    { "id": "simonschubert/xkcd", "covers": "Image from a file, if, three text styles", "sources": {
+        "comic": { "text": "{\"num\":4242,\"title\":\"Sample comic (fixture)\",\"alt\":\"A stand-in picture drawn for the tests, not a real comic.\",\"path\":\"/tmp/owl-fixtures/sample-comic.png\"}" } } },
+    { "id": "lucassynnott/year-left", "covers": "Canvas with 365 rects, range and sortBy (step budget)", "sources": { "now": { "value": 1791890820 } } },
+    { "id": "simonschubert/todo", "covers": "run() action with a value, lines and split", "sources": {
+        "todo": { "text": "3:water the plants\n4:reply to the landlord\n6:book the bike service\n7:back up the phone\n" } } },
+    { "id": "simonschubert/koi-pond", "covers": "Canvas animated by time (30 fps cap), padding 0", "sources": {} }
+  ]
+}

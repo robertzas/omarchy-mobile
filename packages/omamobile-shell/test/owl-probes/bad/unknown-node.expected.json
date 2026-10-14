@@ -1,0 +1,8 @@
+{
+ "compile": {
+  "ok": false,
+  "at": "2:3",
+  "message": "unknown node 'Txt' (Column, Row, Flow, Box, Grid, Text, Image, Button, Progress, Ring, Sparkline, Canvas, Shader, Spacer, Terminal, Slider, Input)"
+ },
+ "walk": null
+}

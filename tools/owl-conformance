@@ -1,0 +1,60 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# OWL conformance (docs/WIDGET-INTEROP-PLAN.md §7) on the laptop, in a
+# container: our runtime against the reference runtime at the pinned
+# commits, which live only inside the image. Never touches the phone, and
+# never starts a compositor or Quickshell on the desktop: rendering is
+# offscreen inside the container, and widgets' commands never run (the
+# container has no network either).
+#
+#   tools/owl-conformance            L1-L3 against the recorded expectations,
+#                                    plus every store widget without data
+#   tools/owl-conformance --live     the same, against the reference live
+#   tools/owl-conformance --record   refresh tests/owl/expected/ and the
+#                                    probes' expected outputs from the reference
+#   tools/owl-conformance --render   also L4 layout and L5 pixels (the
+#                                    milestone widgets with data, every store
+#                                    widget without), the review screenshots,
+#                                    and the store package's status.json
+#                                    (written into the package with --record)
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+image=omamobile-owl-conformance:p1
+out=logs/owl-conformance/$(date +%Y-%m-%d-%H%M%S)
+mkdir -p "$out"
+docker build -q -t "$image" tests/owl >/dev/null
+themes=/usr/share/omarchy/themes
+shell=/usr/share/omarchy/shell
+mounts=(-v "$PWD:/src" -v "$themes:/themes:ro")
+[[ -d $shell ]] && mounts+=(-v "$shell:/omarchy-shell:ro")
+render=0
+args=(--all)
+for a in "$@"; do
+  case $a in
+    --render) render=1 ;;
+    --live | --record) args+=("$a") ;;
+    *) echo "unknown option $a" >&2; exit 2 ;;
+  esac
+done
+docker run --rm --network none -u "$(id -u):$(id -g)" "${mounts[@]}" "$image" \
+  node /src/tests/owl/conformance.js "${args[@]}" --out "/src/$out" | tee "$out/summary.txt"
+if (( render )); then
+  # main's home plugin, with the QML ports, for the before/after pictures.
+  rm -rf "$out/before-tree" && mkdir -p "$out/before-tree"
+  git archive main packages/omamobile-shell/plugins/omamobile.home | tar -x -C "$out/before-tree" 2>/dev/null || true
+  docker run --rm --network none -u "$(id -u):$(id -g)" "${mounts[@]}" \
+    -e OWL_BEFORE_TREE="/src/$out/before-tree/packages/omamobile-shell/plugins/omamobile.home" "$image" \
+    bash /src/tests/owl/render/run --out "/src/$out" | tee -a "$out/summary.txt"
+fi
+# Which store widgets the store package may ship (status.json), from this run.
+if (( render )); then
+  docker run --rm --network none -u "$(id -u):$(id -g)" "${mounts[@]}" "$image" \
+    node /src/tests/owl/store-status.js "/src/$out/report.json" "/src/$out/render-all.json" > "$out/status.json"
+  if [[ " ${args[*]} " == *" --record "* ]]; then
+    cp "$out/status.json" packages/omamobile-owl-widgets/status.json
+    # The index the package ships, built from that status with our compiler.
+    docker run --rm --network none -u "$(id -u):$(id -g)" "${mounts[@]}" "$image" \
+      node /src/packages/omamobile-owl-widgets/update-index.js /ref/omarchy-widgets > packages/omamobile-owl-widgets/index.json
+  fi
+fi
+echo "report: $out/report.json"

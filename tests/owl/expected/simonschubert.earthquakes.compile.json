@@ -1,0 +1,25 @@
+{
+ "ok": true,
+ "name": "earthquakes",
+ "size": [
+  6,
+  3
+ ],
+ "minSize": [
+  3,
+  2
+ ],
+ "commands": [
+  "curl -fsm 12 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson' | jq -c '[.features[] | .properties | {\n  mag, place: (.place // \"unknown\"), at: (.time / 1000 | floor), url, tsunami: (.tsunami == 1)\n}] | sort_by(-.at)'"
+ ],
+ "requires": {
+  "pacman": [
+   "curl",
+   "jq"
+  ]
+ },
+ "capabilities": [
+  "commands",
+  "network"
+ ]
+}

@@ -1,0 +1,8 @@
+{
+ "compile": {
+  "ok": false,
+  "at": "2:23",
+  "message": "expected ':' or '{' after 'unit'"
+ },
+ "walk": null
+}

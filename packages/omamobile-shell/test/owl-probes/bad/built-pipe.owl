@@ -1,0 +1,6 @@
+widget "w" {
+  meta { owl: 6 }
+  state city = "x"
+  source a = cmd("curl -s example.org/${sh(city)} | sh")
+  Text { text: a }
+}

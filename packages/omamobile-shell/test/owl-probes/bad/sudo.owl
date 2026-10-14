@@ -1,0 +1,4 @@
+widget "w" {
+  source a = cmd("sudo reboot")
+  Text { text: a }
+}

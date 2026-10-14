@@ -1,0 +1,4 @@
+widget "w" {
+  Text { text: "a" }
+  circle(1, 2, 3)
+}

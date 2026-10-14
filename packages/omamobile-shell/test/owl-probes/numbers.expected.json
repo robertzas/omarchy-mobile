@@ -1,0 +1,901 @@
+{
+ "compile": {
+  "ok": true,
+  "name": "probe numbers",
+  "size": null,
+  "minSize": [
+   1,
+   1
+  ],
+  "commands": [
+   "x"
+  ],
+  "requires": {},
+  "capabilities": [
+   "commands"
+  ]
+ },
+ "walk": {
+  "root": [
+   {
+    "kind": "Column",
+    "props": {},
+    "anim": {},
+    "children": [
+     {
+      "kind": "Text",
+      "props": {
+       "text": "0: 10000000"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "1: 9999999"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "2: 123456789"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "3: 1234567890123"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "4: 1.0E15"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "5: 1.0E16"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "6: 0.001"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "7: 0.0011"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "8: 9.99E-4"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "9: 0"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "10: 0"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "11: 0"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "12: 1"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "13: 0"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "14: 2.5"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "15: 100"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "16: -3.75"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "17: 3.5"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "18: -3.5"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "19: 0.30000000000000004"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "20: 1"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "21: 1"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "22: 55"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "23: 3"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "24: …"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "25: 1.5"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "26: true"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "27: false"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "28: false"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "29: false"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "30: false"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "31: false"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "32: false"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "33: false"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "34: true"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "35: true"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "36: true"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "37: 2"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "38: false"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "39: -3"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "40: …"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "41: …"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "42: false"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "43: true"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "44: 3.142"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "45: 1200"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "46: 3"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "47: 0"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "48: 1"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "49: …"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "50: …"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "51: …"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "52: …"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "53: 1.0E20"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "54: true"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "55: 0.5"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "56: 1000000000000000000000.00"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "57: …"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "58: 3.142"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "59: 3"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "60: 4"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "61: -3"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "62:   12.5"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "63: aax"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "64: 5"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "65: 1"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "66: -1.7976931348623157E308"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "67: 0"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "68: 0"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "69: 1"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "70: 0"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "71: 10"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "72: 1"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "73: -1"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "74: 0"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "75: 180"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "76: 3.141592653589793"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "77: 0.8939966636005579"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "78: 1"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "79: 1.6197751905438615"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "80: 1"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "81: 1.4142135623730951"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "82: NaN"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "83: 5"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "84: 7"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "85: …"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "86: 0"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "87: 0"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "88: "
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "89: []"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "90: []"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "91: []"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "92: "
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "93: "
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "94: "
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "95: "
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "96: 0B"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "97: …"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "98: 1.0K"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "99: 1.0M"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "100: 954M"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "101: -2.0K"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "102: 0s"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "103: 1m 1s"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "104: 59m 59s"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "105: 1d 0h"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "106: 115d 17h"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "107: …"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "text": "108: 59s"
+      },
+      "anim": {},
+      "children": []
+     }
+    ]
+   }
+  ]
+ }
+}

@@ -8,7 +8,7 @@ Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these a
 | `plugins/omamobile.quicksettings` | Pull-down quick settings |
 | `plugins/omamobile.launcher` | Home bar: app search, app grid and a prompt to the user's Omarchy default agent |
 | `plugins/omamobile.switcher` | Recent apps: swipe up on the dock; hold a card to show the app with another one, or give it its own screen again |
-| `plugins/omamobile.home` | Home screens: pages of apps and widgets on the wallpaper, with an edit mode. The built-ins include ports of every widget in Simon Schubert's [omarchy-widgets](https://github.com/SimonSchubert/omarchy-widgets) `widgets/simonschubert/` (MIT, `LICENSE-omarchy-widgets`), in `ported/` |
+| `plugins/omamobile.home` | Home screens: pages of apps and widgets on the wallpaper, with an edit mode. The built-ins include every widget in Simon Schubert's [omarchy-widgets](https://github.com/SimonSchubert/omarchy-widgets) `widgets/simonschubert/` (MIT): the OWL originals, from the `omamobile-owl-widgets` package, run by our own OWL runtime (`owl/`, see `owl/SPEC-NOTES.md`). `widgets/OWL.md` is his OWL language guide (MIT, `widgets/LICENSE-owl-guide`) |
 | `plugins/omamobile.keyboard` | Hide button above the on-screen keyboard |
 | `plugins/omamobile.update` | The update sheet: Omarchy's update for a phone, through `omamobile-update` (package `omamobile-omarchy`) |
 | `plugins/omamobile.fingerprint` | The under-display fingerprint sensor: target during verification, enrollment screen |

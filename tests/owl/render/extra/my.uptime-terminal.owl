@@ -1,0 +1,7 @@
+// A made-up widget for the review: a Terminal tile (owl 2).
+widget "terminal" {
+  meta { owl: 2 }
+  size: 6x3
+  padding: 4
+  Terminal { command: "bash -l"; fontSize: 8 }
+}

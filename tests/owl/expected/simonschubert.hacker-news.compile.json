@@ -1,0 +1,25 @@
+{
+ "ok": true,
+ "name": "hacker news",
+ "size": [
+  6,
+  4
+ ],
+ "minSize": [
+  4,
+  3
+ ],
+ "commands": [
+  "curl -fsm 10 'https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=15' | jq -c '[.hits[] | {\n  id: .objectID, title, points, comments: (.num_comments // 0),\n  url: (.url // \"https://news.ycombinator.com/item?id=\\(.objectID)\"),\n  site: ((.url // \"\") | sub(\"^https?://(www\\\\.)?\"; \"\") | split(\"/\")[0])\n}]'"
+ ],
+ "requires": {
+  "pacman": [
+   "curl",
+   "jq"
+  ]
+ },
+ "capabilities": [
+  "commands",
+  "network"
+ ]
+}

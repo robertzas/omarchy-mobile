@@ -1,0 +1,4 @@
+widget "w" {
+  state n = 0
+  Button { text: "x"; onTap: frobnicate(1) }
+}

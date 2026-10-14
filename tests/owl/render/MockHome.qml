@@ -1,0 +1,159 @@
+// SPDX-License-Identifier: MIT
+import QtQuick
+import qs.Commons
+import qs.Commons as Commons
+import "home/HomeModel.js" as HomeModel
+import "home/UserWidgets.js" as UserWidgets
+import "home/owl/catalog.js" as OwlCatalog
+import "home/owl/phone.js" as OwlPhone
+
+// What OwlCell and HomeSheets need from Home.qml, for the review
+// screenshots: the same functions over a fixed widgets folder, fixtures in
+// place of commands, and no files written. Nothing runs a widget's command.
+Item {
+  id: mock
+
+  property var shot: null
+  property var widgets: []          // [{ id, text, fixture }]
+  property var approvals: ({})
+  property real fixtureTime: 0
+
+  // ---------- what Home.qml has
+  readonly property color foreground: Commons.Color.menu.text
+  readonly property color dimForeground: Util.alpha(Commons.Color.menu.text, 0.68)
+  readonly property color cardColor: Util.alpha(Commons.Color.menu.background, 0.8)
+  property string sheet: ""
+  property string settingsId: ""
+  property string owlApproveId: ""
+  property string createMode: "create"
+  property string createTarget: ""
+  property string createText: ""
+  property string createError: ""
+  property bool helperBusy: false
+  property bool editing: false
+  readonly property var appLibrary: null
+  readonly property bool owlEnabled: true
+  readonly property string homeDir: "/home/you"
+  readonly property string widgetsDir: "/home/you/.config/omamobile/widgets"
+  // The page being shown, so "placed" reads right on the approval sheet.
+  readonly property var layout: ({ grid: { columns: 4, rows: 6 }, home: 0, pages: [{ items: (mock.shot ? mock.shot.cells : []).map(function(c) {
+    return { id: "w" + c.x + c.y, kind: "widget", type: "user:" + c.id, x: c.x, y: c.y, w: c.w, h: c.h, config: {} } }) }] })
+  readonly property var userScan: UserWidgets.parseScan(JSON.stringify({
+    dir: mock.widgetsDir,
+    widgets: mock.widgets.filter(function(w) { return !HomeModel.isOwlType(w.id) }).map(function(w) { return { id: w.id, status: "ok", hash: "h-" + w.id, kind: "owl", owl: { text: w.text }, errors: [] } })
+  }))
+  readonly property real owlDp: OwlPhone.dpFor(480)
+  readonly property real owlCellHeight: 908 / 6
+  readonly property real owlScreenWidth: 480
+  readonly property real owlScreenHeight: 924
+  readonly property var owlInfo: {
+    const out = {}
+    mock.widgets.forEach(function(w) { out[w.id] = OwlCatalog.describe(w.id, w.text, { columns: 4, rows: 6 }, mock.owlCellHeight, mock.owlDp) })
+    return out
+  }
+  readonly property var userCatalog: UserWidgets.catalog(mock.userScan, mock.owlSpecs)
+  readonly property var owlSpecs: {
+    const out = {}
+    for (const id in mock.owlInfo) if (mock.owlInfo[id].ok) out[id] = mock.owlInfo[id].spec
+    return out
+  }
+  // Built-ins (owl:<author>.<name>): their text is in the job (from the store package).
+  function owlCard(widgetId) {
+    if (HomeModel.isOwlType(widgetId)) {
+      const w = mock.widgets.filter(function(x) { return x.id === widgetId })[0]
+      const info = w ? OwlCatalog.describe(widgetId, w.text, { columns: 4, rows: 6 }, mock.owlCellHeight, mock.owlDp) : null
+      if (info) info.name = HomeModel.REGISTRY[widgetId].name
+      const rec = w ? { id: widgetId, status: "ok", errors: [], hash: "builtin", kind: "owl", owl: { text: w.text } } : null
+      const c = OwlCatalog.cardState(true, true, rec, info, mock.approvals[widgetId] || null, "")
+      c.record = rec
+      c.info = info
+      c.approval = mock.approvals[widgetId] || null
+      return c
+    }
+    const r = UserWidgets.findRecord(mock.userScan, widgetId)
+    const info = mock.owlInfo[widgetId] || null
+    const approval = mock.approvals[widgetId] || null
+    const card = OwlCatalog.cardState(true, true, r, info, approval, "")
+    card.record = r
+    card.info = info
+    card.approval = approval
+    return card
+  }
+  function owlActive() { return true }
+  function argbOf(c) {
+    return ((Math.round(c.a * 255) << 24) | (Math.round(c.r * 255) << 16) | (Math.round(c.g * 255) << 8) | Math.round(c.b * 255)) >>> 0
+  }
+  property var themeColors: ({})
+  readonly property var owlPalette: OwlPhone.cardPalette(OwlPhone.palette(mock.themeColors), {
+    foreground: mock.argbOf(mock.foreground), dimForeground: mock.argbOf(mock.dimForeground), background: mock.argbOf(Commons.Color.menu.background),
+    border: mock.argbOf(Commons.Color.menu.border), accent: mock.argbOf(Commons.Color.accent), urgent: mock.argbOf(Commons.Color.urgent)
+  })
+  readonly property var owlInk: {
+    const out = {}
+    for (const k in mock.owlPalette) {
+      const s = (mock.owlPalette[k] >>> 0).toString(16)
+      out[k] = "#" + "00000000".slice(s.length) + s
+    }
+    return out
+  }
+
+  // Sources answer from each widget's fixture; actions do nothing.
+  readonly property var owlHost: ({
+    now: function() { return mock.fixtureTime },
+    interval: function(spec) { return spec.every },
+    runSource: function(widget, spec, arg, headers, done) {
+      const w = mock.widgets.filter(function(x) { return widget.stateKey.indexOf(x.id + "@") === 0 })[0]
+      const e = w && w.fixture ? w.fixture.sources[spec.name] : null
+      if (!e) { done({ error: "no fixture" }); return }
+      if (e.value !== undefined) done({ value: e.value })
+      else done({ code: e.code === undefined ? 0 : e.code, ok: true, out: e.text, err: "" })
+    },
+    android: function(widget, kind, done) { done({ value: null }) },
+    act: function() {}, runInto: function() {},
+    loadState: function() { return {} }, saveState: function() {},
+    report: function(widget, message) { console.log("owl report " + widget.stateKey + ": " + message) },
+    // A terminal that prints a fixed session (nothing runs).
+    terminalFor: function() {
+      return { start: function(command, onOutput) {
+        onOutput("$ uptime\r\n 13:27:00 up 2 days,  3:04,  1 user,  load average: 0.31, 0.28, 0.25\r\n$ ")
+        return { write: function() {}, stop: function() {} }
+      } }
+    }
+  })
+  readonly property var owlScheduler: ({
+    add: function() {}, remove: function() {},
+    // One frame at the fixture's time, so a drawing that reads `time` shows it.
+    setAnimating: function(client, on) { if (on) client.frame(mock.fixtureTime % 3600 + 0.5) }
+  })
+
+  // The Store tab, from the package built in the container.
+  property string owlStoreDir: ""
+  property var owlStoreIndex: ({ widgets: [] })
+  readonly property var owlStoreRows: OwlCatalog.storeRows(mock.owlStoreIndex, null,
+    mock.userScan.widgets.filter(function(r) { return r.kind === "owl" }), { columns: 4, rows: 6 }, mock.owlCellHeight, mock.owlDp)
+  property string owlStoreDetail: ""
+  property string owlStoreMessage: ""
+  function openStoreWidget(id) { mock.owlStoreDetail = id; mock.sheet = "owl-store" }
+  function addFromStore() { return "" }
+  function updateFromStore() {}
+  function fetchStore() {}
+  readonly property real owlCellHeightPublic: mock.owlCellHeight
+
+  // What the QML built-ins (clock, weather) read.
+  readonly property string systemTimeFormat: "HH:mm"
+  property var cache: ({})
+  function widgetCache(id) { return mock.cache[id] || null }
+  function setWidgetCache(id, v) { mock.cache[id] = v }
+  function setConfig() {}
+
+  function guardBegin() {}
+  function guardEnd() {}
+  function openOwlApproval(id) { mock.owlApproveId = id; mock.sheet = "owl-approve" }
+  function openCreate() {}
+  function addWidgetHere() { return "" }
+  function approveOwl() { return "approved" }
+  function removeUserWidget() {}
+  function openSettings() {}
+  function setEditing(on) { mock.editing = on }
+  function flash() {}
+}

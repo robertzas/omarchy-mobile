@@ -1,0 +1,25 @@
+{
+ "ok": true,
+ "name": "xkcd",
+ "size": [
+  6,
+  5
+ ],
+ "minSize": [
+  3,
+  3
+ ],
+ "commands": [
+  "c=~/.cache/xkcd\nmkdir -p \"$c\"\ninfo=$(curl -fsm 10 https://xkcd.com/info.0.json) || exit\nnum=$(jq -r .num <<< \"$info\")\n[ -s \"$c/$num.png\" ] || curl -fsm 20 -o \"$c/$num.png\" \"$(jq -r .img <<< \"$info\")\"\nfind \"$c\" -name '*.png' ! -name \"$num.png\" -delete\njq -c --arg path \"$c/$num.png\" '{num, title: .safe_title, alt, path: $path}' <<< \"$info\""
+ ],
+ "requires": {
+  "pacman": [
+   "curl",
+   "jq"
+  ]
+ },
+ "capabilities": [
+  "commands",
+  "network"
+ ]
+}

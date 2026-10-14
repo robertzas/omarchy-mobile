@@ -7,8 +7,12 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import qs.services as OmarchyServices
+import Quickshell.Hyprland
 import "HomeModel.js" as HomeModel
 import "UserWidgets.js" as UserWidgets
+import "owl/catalog.js" as OwlCatalog
+import "owl/phone.js" as OwlPhone
+import "owl" as Owl
 
 // Home screens, after Android launchers (Omalauncher, Pixel Launcher): pages
 // of app shortcuts and widgets on the wallpaper, swiped sideways, with page
@@ -69,7 +73,7 @@ Item {
   property string sheet: ""
   property string settingsId: ""
   property string notice: ""
-  readonly property bool wantsKeyboard: sheet === "apps" || sheet === "settings" || sheet === "create"
+  readonly property bool wantsKeyboard: sheet === "apps" || sheet === "settings" || sheet === "create" || owlTyping
 
   // Bumped when desktop entries change, so app tiles look themselves up again.
   property int appsRevision: 0
@@ -124,6 +128,11 @@ Item {
 
   function loadText(text) {
     if (loaded && text === lastWritten) return
+    // Ports from before the OWL built-ins: kept once as home.json.before-owl,
+    // approved where their OWL original needs no more than they had.
+    var ports = []
+    try { ports = HomeModel.portPlacements(JSON.parse(text)) } catch (e) { ports = [] }
+    if (ports.length) { owlBackupProc.running = true; migratePorts(ports) }
     var parsed = HomeModel.parse(text, userCatalog)
     if (!parsed) {
       // Unreadable (a hand edit gone wrong): keep showing what we have (the
@@ -135,6 +144,7 @@ Item {
     }
     corrupt = false
     layout = parsed
+    if (ports.length) saveTimer.restart()
     if (!loaded) { loaded = true; goToPage(layout.home, false) }
     else if (currentPage >= layout.pages.length) goToPage(layout.pages.length - 1, false)
   }
@@ -163,6 +173,12 @@ Item {
   }
 
   Timer { id: saveTimer; interval: 300; onTriggered: root.flush() }
+
+  // The layout as it was before its ports became OWL widgets, kept once.
+  Process {
+    id: owlBackupProc
+    command: ["sh", "-c", "[ -e \"$1.before-owl\" ] || cp -p \"$1\" \"$1.before-owl\"", "sh", root.layoutPath]
+  }
 
   Process {
     id: backupProc
@@ -211,7 +227,7 @@ Item {
   // The last good scan (UserWidgets.parseScan) and the specs HomeModel sizes
   // user widgets by.
   property var userScan: UserWidgets.emptyScan()
-  readonly property var userCatalog: UserWidgets.catalog(userScan)
+  readonly property var userCatalog: UserWidgets.catalog(userScan, owlEnabled ? owlSpecs : null)
   readonly property string widgetsDir: userScan.dir || (Quickshell.env("HOME") + "/.config/omamobile/widgets")
   // Errors widgets hit when the home screen built them (QML that loads
   // badly), by widget id and hash: shown on their card and by widgetStatus.
@@ -327,6 +343,11 @@ Item {
       var next = HomeModel.normalize(layout, userCatalog)
       if (next && HomeModel.serialize(next) !== HomeModel.serialize(layout)) commit(next)
     }
+    if (pendingApprove && UserWidgets.findRecord(scan, pendingApprove)) {
+      const approve = pendingApprove
+      pendingApprove = ""
+      Qt.callLater(function() { root.openOwlApproval(approve) })
+    }
     if (pendingAdd) {
       var r = UserWidgets.findRecord(scan, pendingAdd)
       // Placed behind the Create sheet, which stays up for the agent's outcome.
@@ -356,6 +377,291 @@ Item {
     next[widgetId] = { hash: r ? r.hash : "", message: String(message || "It failed to load") }
     runtimeErrors = next
     console.warn("omamobile.home: widget " + widgetId + ": " + message)
+  }
+
+  // ---------------------------------------------------------------- OWL widgets
+
+  // Widgets in OWL, the language of the Omalauncher widget store, run by our
+  // own runtime (owl/, docs/WIDGET-INTEROP-PLAN.md). Behind a flag that is
+  // off by default: ~/.config/omamobile/features.json {"owlWidgets": true}.
+  // A folder with a widget.owl is listed by the scan; it runs once the user
+  // has approved its exact list of commands, URLs and files.
+  property bool owlEnabled: false
+  FileView {
+    path: root.configDir + "/features.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: {
+      let features = {}
+      try { features = JSON.parse(text() || "{}") || {} } catch (e) { features = {} }
+      root.owlEnabled = features.owlWidgets === true
+    }
+    onLoadFailed: root.owlEnabled = false
+  }
+
+  readonly property string homeDir: Quickshell.env("HOME")
+  // Geometry: one OWL dp from the page width (Omalauncher's 6 columns of 69 dp).
+  property real owlPageWidth: 480
+  property real owlPagerHeight: 908
+  readonly property real owlCellHeight: owlPagerHeight / Math.max(1, layout.grid.rows)
+  property real owlScreenWidth: 480
+  property real owlScreenHeight: 924
+  readonly property real owlDp: OwlPhone.dpFor(owlPageWidth)
+
+  // What each OWL widget compiles to, its sizes and what it may do.
+  readonly property var owlInfo: {
+    const out = {}
+    if (!owlEnabled) return out
+    userScan.widgets.forEach(function(r) {
+      if (r.kind === "owl" && r.owl) out[r.id] = OwlCatalog.describe(r.id, r.owl.text, root.layout.grid, root.owlCellHeight, root.owlDp)
+    })
+    return out
+  }
+  readonly property var owlSpecs: {
+    const out = {}
+    for (const id in owlInfo) if (owlInfo[id].ok) out[id] = owlInfo[id].spec
+    return out
+  }
+  function isOwlType(type) {
+    const r = UserWidgets.findRecord(userScan, UserWidgets.idOf(type))
+    return !!r && r.kind === "owl"
+  }
+
+  // Approvals: { id: { commands: [...], network: bool, at } }. An approval
+  // holds for one exact list; a widget whose list changes asks again.
+  readonly property string approvalsPath: configDir + "/widget-approvals.json"
+  property var owlApprovals: ({})
+  FileView {
+    id: approvalsFile
+    // Read before the layout, which may approve migrated ports into it.
+    blockLoading: true
+    path: root.approvalsPath
+    watchChanges: true
+    atomicWrites: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: {
+      let data = {}
+      try { data = JSON.parse(text() || "{}") || {} } catch (e) { data = {} }
+      root.owlApprovals = data
+      Qt.callLater(root.recheckApprovals)
+    }
+  }
+  function approveOwl(widgetId, network) {
+    const info = HomeModel.isOwlType(widgetId) ? owlBuiltinInfo(widgetId) : owlInfo[widgetId]
+    if (!info || !info.ok) return "unknown"
+    const next = Object.assign({}, owlApprovals)
+    next[widgetId] = { commands: info.program.commands.slice(), devices: info.caps.devices.slice(), network: network === true, at: new Date().toISOString() }
+    owlApprovals = next
+    approvalsFile.setText(JSON.stringify(next, null, 2) + "\n")
+    return "approved"
+  }
+  function revokeOwl(widgetId) {
+    const next = Object.assign({}, owlApprovals)
+    delete next[widgetId]
+    owlApprovals = next
+    approvalsFile.setText(JSON.stringify(next, null, 2) + "\n")
+  }
+
+  // What a placed OWL widget shows: { state, message, record, info, approval }.
+  // ---------- built-ins: the OWL originals of the old ports
+
+  // Their files, from the omamobile-owl-widgets package (read once each).
+  property var owlBuiltinCache: ({})
+  Component { id: builtinFile; FileView { blockLoading: true; printErrors: false } }
+  function owlBuiltinInfo(type) {
+    if (owlBuiltinCache[type]) return owlBuiltinCache[type]
+    const storeId = HomeModel.owlStoreId(type)
+    const view = builtinFile.createObject(root, { path: owlStoreDir + "/widgets/" + storeId + "/widget.owl" })
+    const text = view.text()
+    view.destroy()
+    const info = text ? OwlCatalog.describe(type, text, layout.grid, owlCellHeight, owlDp)
+      : { ok: false, error: "The widget store package (omamobile-owl-widgets) doesn't have " + storeId, program: null, caps: null, refusals: [], name: storeId }
+    // Named and sized as the built-in always was.
+    const spec = HomeModel.widgetSpec(type, null)
+    if (spec) info.name = spec.name
+    info.text = text
+    owlBuiltinCache[type] = info
+    return info
+  }
+  // A port's placement becomes its OWL original (HomeModel.normalize); this
+  // approves it, without asking, only when it needs no more than the port had.
+  function migratePorts(ports) {
+    const r = OwlCatalog.migrationApprovals(ports, owlApprovals, owlBuiltinInfo, HomeModel.portCapabilities)
+    r.decisions.forEach(function(d) {
+      if (d.verdict === "asks") console.warn("omamobile.home: " + d.to + " needs your OK: " + d.extra.join("; "))
+    })
+    saveApprovals(r)
+  }
+  // Earlier automatic approvals, checked again with today's rules.
+  function recheckApprovals() {
+    saveApprovals(OwlCatalog.recheckAutoApprovals(owlApprovals, owlBuiltinInfo, HomeModel.portCapabilities))
+  }
+  function saveApprovals(r) {
+    if (!r.changed) return
+    const stamped = r.approvals
+    Object.keys(stamped).forEach(function(k) { if (stamped[k].auto && !stamped[k].at) stamped[k].at = new Date().toISOString() })
+    owlApprovals = stamped
+    approvalsFile.setText(JSON.stringify(stamped, null, 2) + "\n")
+  }
+
+  function owlCard(widgetId) {
+    if (HomeModel.isOwlType(widgetId)) {
+      const bi = owlBuiltinInfo(widgetId)
+      const ba = owlApprovals[widgetId] || null
+      const record = { id: widgetId, status: bi.text ? "ok" : "error", errors: bi.text ? [] : [bi.error], hash: "builtin",
+                       kind: "owl", owl: { text: bi.text } }
+      // Built-ins are always on: they are the home screen's own widgets.
+      const bc = OwlCatalog.cardState(true, true, record, bi, ba, guardCrashed[widgetId] === "builtin" ? "builtin" : "")
+      bc.record = record
+      bc.info = bi
+      bc.approval = ba
+      return bc
+    }
+    const r = UserWidgets.findRecord(userScan, widgetId)
+    const info = owlInfo[widgetId] || null
+    const approval = owlApprovals[widgetId] || null
+    const card = OwlCatalog.cardState(owlEnabled, userScan.ok, r, info, approval, r ? guardCrashed[widgetId] : "")
+    card.record = r
+    card.info = info
+    card.approval = approval
+    return card
+  }
+
+  // Sources run while the widget's page or a neighbour shows and no app
+  // covers the home screen (an app on this workspace).
+  readonly property bool owlPaused: owlPanelOff || (!!Hyprland.focusedWorkspace && Hyprland.focusedWorkspace.toplevels.values.length > 0)
+
+  // The panel is off when its backlight's bl_power isn't 0, read the way
+  // omamobile-keys reads it (the device from omarchy-hw-display). sysfs has
+  // no change events, so it is read every 2 s, a cheap file read.
+  property bool owlPanelOff: false
+  property string owlBacklight: ""
+  Process {
+    command: ["omarchy-hw-display"]
+    running: root.owlEnabled
+    stdout: StdioCollector { id: displayName; waitForEnd: true; onStreamFinished: root.owlBacklight = String(displayName.text || "").trim().split("\n")[0] }
+  }
+  FileView {
+    id: blPower
+    path: root.owlBacklight ? "/sys/class/backlight/" + root.owlBacklight + "/bl_power" : ""
+    printErrors: false
+    onLoaded: root.owlPanelOff = OwlPhone.panelOff(text())
+  }
+  Timer {
+    interval: 2000
+    repeat: true
+    running: root.owlEnabled && root.owlBacklight !== ""
+    onTriggered: blPower.reload()
+  }
+
+  // An OWL Input has focus: the surface takes the keyboard.
+  property bool owlTyping: false
+  function owlKeyboard(on) { owlTyping = !!on }
+  function owlActive(entryId) {
+    const found = HomeModel.findItem(layout, entryId)
+    return !!found && Math.abs(found.page - currentPage) <= 1 && !owlPaused
+  }
+
+  // The palette OWL names resolve to: the Omarchy theme, with the names that
+  // must read on our card taken from the shell (plan §4.1).
+  property var owlThemeColors: ({})
+  FileView {
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/current/theme/colors.toml"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.owlThemeColors = OwlPhone.parseColorsToml(text())
+  }
+  function argbOf(c) {
+    return ((Math.round(c.a * 255) << 24) | (Math.round(c.r * 255) << 16) | (Math.round(c.g * 255) << 8) | Math.round(c.b * 255)) >>> 0
+  }
+  readonly property var owlPalette: OwlPhone.cardPalette(OwlPhone.palette(owlThemeColors), {
+    foreground: argbOf(foreground), dimForeground: argbOf(dimForeground), background: argbOf(Commons.Color.menu.background),
+    border: argbOf(Commons.Color.menu.border), accent: argbOf(Commons.Color.accent), urgent: argbOf(Commons.Color.urgent)
+  })
+  readonly property var owlInk: {
+    const out = {}
+    for (const k in owlPalette) {
+      const s = (owlPalette[k] >>> 0).toString(16)
+      out[k] = "#" + "00000000".slice(s.length) + s
+    }
+    return out
+  }
+
+  OwlPhoneHost { id: owlHostObject; home: root }
+  readonly property var owlHost: owlHostObject
+  Owl.OwlScheduler { id: owlSchedulerObject; paused: root.owlPaused }
+  readonly property var owlScheduler: owlSchedulerObject
+
+  // ---------- the Store tab (omamobile-owl-widgets, plan §5.1)
+
+  // The package's index, and what "Check the store now" downloaded, if anything.
+  readonly property string owlStoreDir: Quickshell.env("OMAMOBILE_OWL_STORE") || "/usr/share/omamobile/owl-widgets"
+  readonly property string owlStoreCache: (Quickshell.env("XDG_CACHE_HOME") || Quickshell.env("HOME") + "/.cache") + "/omamobile/owl-store"
+  property var owlStoreIndex: ({ widgets: [] })
+  property var owlStoreFetched: ({ widgets: [] })
+  FileView {
+    path: root.owlEnabled ? root.owlStoreDir + "/index.json" : ""
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: { try { root.owlStoreIndex = JSON.parse(text()) } catch (e) { root.owlStoreIndex = { widgets: [] } } }
+  }
+  FileView {
+    id: fetchedIndex
+    path: root.owlEnabled ? root.owlStoreCache + "/index.json" : ""
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: { try { root.owlStoreFetched = JSON.parse(text()) } catch (e) { root.owlStoreFetched = { widgets: [] } } }
+  }
+  readonly property var owlStoreRows: OwlCatalog.storeRows(owlStoreIndex, owlStoreFetched,
+    userScan.widgets.filter(function(r) { return r.kind === "owl" }), layout.grid, owlCellHeight, owlDp)
+  property string owlStoreDetail: ""
+  property string owlStoreMessage: ""
+  // A widget just copied from the store: its approval sheet opens once the scan sees it.
+  property string pendingApprove: ""
+
+  function openStoreWidget(storeId) {
+    owlStoreDetail = String(storeId)
+    setEditing(true)
+    sheet = "owl-store"
+  }
+  // Copies the store's file into the widgets folder, then asks for approval.
+  function addFromStore(storeId) {
+    const id = String(storeId).replace("/", ".")
+    if (UserWidgets.findRecord(userScan, id)) { openOwlApproval(id); return id }
+    runHelper(UserWidgets.storeCopyArgv(storeId), function(code, out, err) {
+      if (code !== 0) { root.flash(err.trim() || "Couldn't copy it"); return }
+      root.pendingApprove = id
+      root.scanWidgets()
+    })
+    return id
+  }
+  function updateFromStore(widgetId) {
+    runHelper(UserWidgets.storeUpdateArgv(widgetId), function(code, out, err) {
+      root.flash(code === 0 ? "Updated; if it runs anything new, it asks again" : (err.trim() || "Couldn't update it"))
+      root.scanWidgets()
+    })
+  }
+  // Only when the user taps "Check the store now": the one network fetch of
+  // widget code, every file checked against the store's index.
+  function fetchStore() {
+    owlStoreMessage = "Checking the store\u2026"
+    runHelper(UserWidgets.STORE_FETCH_ARGV, function(code, out, err) {
+      root.owlStoreMessage = code === 0 ? "Checked: " + out.trim() : (err.trim().split("\n").slice(-1)[0] || "Couldn't reach the store")
+      fetchedIndex.reload()
+    })
+  }
+
+  // The approval sheet.
+  property string owlApproveId: ""
+  function openOwlApproval(widgetId) {
+    owlApproveId = String(widgetId)
+    setEditing(true)
+    sheet = "owl-approve"
   }
 
   // ---------- the helper (omamobile-widget new | copy-example | remove | agent)
@@ -543,8 +849,10 @@ Item {
     goToPage(next.placed.page, true)
     if (keepSheet !== true) sheet = ""
     var spec = HomeModel.widgetSpec(type, userCatalog)
-    // Built-in network widgets start off and ask for their settings.
-    if (spec && spec.network && !spec.user) openSettings(next.placed.id)
+    // Built-in network widgets start off and ask for their settings; an OWL
+    // built-in asks on its approval sheet instead.
+    if (HomeModel.isOwlType(type)) { if (owlCard(type).state === "approve") openOwlApproval(type) }
+    else if (spec && spec.network && !spec.user) openSettings(next.placed.id)
     return next.placed.id
   }
 
@@ -625,6 +933,16 @@ Item {
     var t = String(type)
     return HomeModel.widgetSpec(t, userCatalog) || HomeModel.isUserType(t) ? addWidgetHere(t) : "unknown"
   }
+  // `shell call omamobile.home owlStatus <id>`: what the home screen makes of
+  // an OWL widget (compiles, problems, commands, approval), for an agent.
+  function owlStatus(id) {
+    const info = owlInfo[String(id)]
+    if (!info) return owlEnabled ? "unknown" : "off"
+    const card = owlCard(String(id))
+    return JSON.stringify({ id: String(id), status: card.state, message: card.message, compiles: info.ok, error: info.error,
+                            commands: info.ok ? info.program.commands : [], capabilities: info.ok ? info.spec.capabilities : [],
+                            risks: info.caps ? info.caps.risks : [], approved: card.state === "ok" })
+  }
   function showSheet(name) {
     if (["widgets", "apps", "pages", "create", ""].indexOf(String(name)) < 0) return "unknown"
     if (name === "create") { openCreate("create", ""); return sheet }
@@ -681,6 +999,8 @@ Item {
       id: screenItem
       anchors.fill: parent
       focus: true
+      onWidthChanged: root.owlScreenWidth = width
+      onHeightChanged: root.owlScreenHeight = height
       Keys.onEscapePressed: {
         if (root.sheet) root.sheet = ""
         else root.setEditing(false)
@@ -708,6 +1028,8 @@ Item {
         onCurrentIndexChanged: root.currentPage = currentIndex
 
         delegate: Page { }
+        onWidthChanged: root.owlPageWidth = width
+        onHeightChanged: root.owlPagerHeight = height
       }
 
       // ---------- page dots
@@ -957,7 +1279,8 @@ Item {
       clip: cell.isWidget
       // A user widget goes through UserWidgetCell, which loads its code
       // only when the scan calls it ok and shows an error card otherwise.
-      source: cell.isUser ? Qt.resolvedUrl("UserWidgetCell.qml")
+      source: (cell.isUser && root.isOwlType(cell.modelData.type)) || HomeModel.isOwlType(cell.modelData.type) ? Qt.resolvedUrl("OwlCell.qml")
+        : cell.isUser ? Qt.resolvedUrl("UserWidgetCell.qml")
         : cell.isWidget ? Qt.resolvedUrl(cell.modelData.type.charAt(0).toUpperCase() + cell.modelData.type.slice(1) + "Widget.qml")
         : Qt.resolvedUrl("AppTile.qml")
       onLoaded: {
