@@ -3381,6 +3381,10 @@ omamobile-apps 0.1.1): GNOME Snapshot works with all four cameras.**
 - Snapshot picks the binned modes (2016x1136 on the back cameras,
   1920x1116 on the front); the owner switched through all four, every
   stream with WDMA errors 0.
+- **Main camera autofocus works** (M.7): `cam` with `IPASoftAf:0` on the
+  main camera: coarse and fine sweeps, "Autofocus completed at 925". The
+  ultrawide has no lens control on these images (the `camera-uw-lens`
+  overlay isn't in `device.conf` yet: one boot to add).
 - Open: the telephoto's lens (it NACKs; longer waits hung its bus, CAM-T
   T.3), so the telephoto has no autofocus; the main and ultrawide AK7375
   lenses stay powered while PipeWire holds their subdevs (power: measure).
