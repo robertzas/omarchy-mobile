@@ -11,12 +11,13 @@ an unknown model, and PanVK returns `VK_ERROR_INCOMPATIBLE_DRIVER`. See
 | --- | --- |
 | `PKGBUILD` | Arch's `mesa` PKGBUILD at tag `1-26.2.4-1`, trimmed for this phone (see its header) |
 | `0001-panfrost-add-Mali-G710-to-the-model-table.patch` | The Mesa change, in `git format-patch` form |
+| `0002-panfrost-don-t-make-image-BOs-private-on-panthor.patch` | Image BOs are always shareable: panthor can't export a BO private to one GPU VM, and GTK 4 exports GL textures made without `PIPE_BIND_SHARED` (GNOME Snapshot crashed after photos with "drmPrimeHandleToFD() failed (err=22)") |
 | `UPSTREAM.md` | Merge request text for upstream Mesa |
 | `.SRCINFO` | `makepkg --printsrcinfo` output |
 
 ## What differs from Arch Linux ARM's `mesa`
 
-- The patch above.
+- The patches above.
 - `arch=(aarch64)`.
 - Only drivers this phone can use:
   - Gallium `panfrost` (which brings `kmsro`), `llvmpipe`, `softpipe` and `zink`.
@@ -24,8 +25,8 @@ an unknown model, and PanVK returns `VK_ERROR_INCOMPATIBLE_DRIVER`. See
   - The `device-select` and `anti-lag` layers.
 - Only three split packages: `mesa`, `vulkan-panfrost` and
   `vulkan-mesa-implicit-layers` (which `vulkan-panfrost` depends on).
-- `pkgrel=1.1`. makepkg only accepts `integer[.integer]`, so the Omarchy Mobile
-  marker is in Mesa's version string instead: `26.2.4-arch1.1.1.omamobile1`.
+- `pkgrel=1.2`. makepkg only accepts `integer[.integer]`, so the Omarchy Mobile
+  marker is in Mesa's version string instead: `26.2.4-arch1.1.2.omamobile2`.
   That string shows up in `GL_VERSION` and in the `libgallium-*.so` file name.
 
 The other ALARM split packages (`vulkan-swrast`, `opencl-mesa` and so on)
@@ -55,9 +56,9 @@ sudo pacman -S --needed base-devel
 gpg --recv-keys 57551DE15B968F6341C248F68D8E31AFC32428A6   # Eric Engestrom, signed 26.2.4
 cd packages/mesa
 makepkg -s                       # pulls the makedepends listed in the PKGBUILD
-sudo pacman -U mesa-1:26.2.4-1.1-aarch64.pkg.tar.zst \
-  vulkan-panfrost-1:26.2.4-1.1-aarch64.pkg.tar.zst \
-  vulkan-mesa-implicit-layers-1:26.2.4-1.1-aarch64.pkg.tar.zst
+sudo pacman -U mesa-1:26.2.4-1.2-aarch64.pkg.tar.zst \
+  vulkan-panfrost-1:26.2.4-1.2-aarch64.pkg.tar.zst \
+  vulkan-mesa-implicit-layers-1:26.2.4-1.2-aarch64.pkg.tar.zst
 ```
 
 Until Panthor exposes `/dev/dri/renderD128`, nothing changes visibly:

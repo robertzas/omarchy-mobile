@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Wed, 14 Oct 2026 09:40:00 -0400
+Subject: [PATCH] panfrost: don't make image BOs private on panthor
+
+panfrost allocates a resource's BO private to the context's GPU VM (an
+"exclusive VM" BO on panthor) unless the resource is created with
+PIPE_BIND_SHARED. Panthor refuses to export such a BO: its prime export
+returns -EINVAL ("We can't export GEMs that have an exclusive VM").
+
+Any image can be exported long after it was created without
+PIPE_BIND_SHARED, though, through EGL_MESA_image_dma_buf_export. That
+failure is known: commit "panfrost: Add spec@egl 1.4@egl-ext_egl_image_storage
+to the list of failures" (Boris Brezillon, 2023-09-19) records it in the
+G52 CI expectations rather than changing the allocation. It now bites real
+applications: GTK 4 renders some textures with GL and hands them to its
+Vulkan renderer through that extension. On a Mali-G710 (panthor) every such
+export failed with "drmPrimeHandleToFD() failed (err=22)", GTK then built a
+dmabuf texture with no valid fd, and GNOME Snapshot crashed in
+gsk_renderer_render_texture after a photo.
+
+The trade-off: a private BO shares the VM's reservation object, so a job
+submission locks one dma_resv for all of them instead of one per BO, and
+the BO never needs implicit-sync bookkeeping. That matters most for the
+many small, short-lived buffers a frame uses (uniforms, varyings, upload
+buffers), which can never be exported. Images, which can, are fewer and
+longer lived.
+
+So keep private BOs for buffers, which EGL can't export, and allocate
+every image shareable. Reallocating a private image on export instead
+would keep the saving for images too, but needs a blit at export time and
+a context to do it in, which resource_get_handle doesn't always have.
+---
+ src/gallium/drivers/panfrost/pan_resource.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/src/gallium/drivers/panfrost/pan_resource.c b/src/gallium/drivers/panfrost/pan_resource.c
+--- a/src/gallium/drivers/panfrost/pan_resource.c
++++ b/src/gallium/drivers/panfrost/pan_resource.c
+@@ -1164,8 +1164,14 @@ panfrost_resource_create_with_modifier(struct pipe_screen *screen,
+        * care to map e.g. FBOs which the CPU probably won't touch */
+       uint32_t flags = PAN_BO_DELAY_MMAP;
+ 
+-      /* If the resource is never exported, we can make the BO private. */
+-      if (template->bind & PIPE_BIND_SHARED)
++      /* A private BO (exclusive VM) can't be exported: panthor refuses it
++       * with EINVAL. Only buffers that aren't shared stay private: an image
++       * can be exported long after it was created without
++       * PIPE_BIND_SHARED (eglExportDMABUFImageMESA on a GL texture, as GTK
++       * does to hand a GL-rendered texture to its Vulkan renderer).
++       */
++      if ((template->bind & PIPE_BIND_SHARED) ||
++          template->target != PIPE_BUFFER)
+          flags |= PAN_BO_SHAREABLE;
+ 
+       char *res_label =
+-- 
+2.55.0

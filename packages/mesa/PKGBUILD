@@ -8,13 +8,16 @@
 # (intel-rt off). Omarchy Mobile changes:
 #  - 0001-panfrost-add-Mali-G710-to-the-model-table.patch (sent upstream,
 #    see UPSTREAM.md); drop it once Mesa ships the entry.
+#  - 0002-panfrost-don-t-make-image-BOs-private-on-panthor.patch: panthor
+#    can't export a BO private to one GPU VM, and GTK 4 exports GL textures
+#    created without PIPE_BIND_SHARED (GNOME Snapshot crashed after photos).
 #  - aarch64 only, and only the drivers this phone can use: Gallium
 #    panfrost (with kmsro), llvmpipe, softpipe and zink; Vulkan panfrost
 #    (PanVK). Splits: mesa, vulkan-panfrost, vulkan-mesa-implicit-layers
 #    (vulkan-panfrost depends on it). No rusticl, NVK, docs or valgrind,
 #    so no Rust crates and a much shorter native build.
-#  - pkgrel 1.1: makepkg only allows integer[.integer], so the Omarchy Mobile
-#    marker lives in the VERSION string (".omamobile1"), which shows up in
+#  - pkgrel 1.2: makepkg only allows integer[.integer], so the Omarchy Mobile
+#    marker lives in the VERSION string (".omamobile2"), which shows up in
 #    GL_VERSION and the libgallium file name.
 #
 # Maintainers of the original: Laurent Carlier, Felix Yan, Jan Alexander
@@ -28,8 +31,8 @@ pkgname=(
 )
 pkgver=26.2.4
 _pkgver=${pkgver/[a-z]/-&}
-pkgrel=1.1
-_omamobile=omamobile1
+pkgrel=1.2
+_omamobile=omamobile2
 epoch=1
 pkgdesc="Open-source OpenGL drivers (Omarchy Mobile: Mali-G710)"
 url="https://www.mesa3d.org/"
@@ -86,6 +89,7 @@ options=(
 source=(
   "https://archive.mesa3d.org/mesa-$_pkgver.tar.xz"{,.sig}
   0001-panfrost-add-Mali-G710-to-the-model-table.patch
+  0002-panfrost-don-t-make-image-BOs-private-on-panthor.patch
 )
 validpgpkeys=(
   946D09B5E4C9845E63075FF1D961C596A7203456 # Andres Gomez <tanty@igalia.com>
@@ -97,10 +101,12 @@ validpgpkeys=(
 )
 b2sums=('28506a9366e3c031acbb52924e43b0ec098f44a3ac3bb839ec2a86fa0faf83652347704b0e58bdc447aaebae5a2a254e5456e0b893755fd7721e57d6b614ecc4'
         'SKIP'
-        '13c27e8a37c0e838c56b660a798d74565181dab88cb3402a19e2ad026a012f0594d6bc70ad26fe247b324e2aa5429edeb8681e234124a0a978084b549b2641ae')
+        '13c27e8a37c0e838c56b660a798d74565181dab88cb3402a19e2ad026a012f0594d6bc70ad26fe247b324e2aa5429edeb8681e234124a0a978084b549b2641ae'
+        '38fbdbe0742564a4e7e040a828a564c2eb96fce5616c24bb42ab1da9241455e5e85d1275b5d94c53c3f560c0226ce65db9917c0cc04be636b38a6d2f24f40804')
 sha256sums=('bce5f7fbebb934373b86c999a064d52fb5065878dc57f287f95346648ec832e9'
             'SKIP'
-            '1a6ac513fb44579f6ca72a2c92bb7fd86743a4a9dc01f452ac1ab93073100ce1')
+            '1a6ac513fb44579f6ca72a2c92bb7fd86743a4a9dc01f452ac1ab93073100ce1'
+            'f064ce851d4898b87c95ea55c3367de9cdddb4e6a99e6ba89033e76dc9adecb8')
 
 prepare() {
   cd mesa-$_pkgver
