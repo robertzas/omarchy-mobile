@@ -14,7 +14,7 @@
 #   theme_name    the current theme's directory name
 #   nightlight    on while hyprsunset runs warmer than identity
 #   stayawake     on while Omarchy's stay-awake indicator exists
-#   record        on while gpu-screen-recorder runs
+#   record        on while omamobile-screenrecord (wf-recorder) records
 #   data          on while omamobile-sit-data.service is active; none
 #                 without omamobile-sitd running
 #   data_status   the operator and technology, when registered
@@ -71,8 +71,8 @@ else
 fi
 
 # record
-if have gpu-screen-recorder && have omarchy-capture-screenrecording; then
-  if pgrep -f "^gpu-screen-recorder" >/dev/null 2>&1; then echo "record=on"; else echo "record=off"; fi
+if have omamobile-screenrecord && have wf-recorder; then
+  echo "record=$(t omamobile-screenrecord status || echo off)"
 else
   echo "record=none"
 fi
