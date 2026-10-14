@@ -3432,6 +3432,37 @@ omamobile-apps 0.1.1): GNOME Snapshot works with all four cameras.**
   the exposure while the histogram is pinned at an end, instead of 15% a
   frame (the front camera took seconds to brighten).
 
+**CAM5.4, later on 2026-10-14 (00545-00554, libcamera 4.7-4.8, Mesa 1.2):**
+- **Ultrawide full mode at 330 MB/s** (`sony,max-line-throughput`, 00545):
+  5 x 21 frames of 4032x3016, WDMA errors 0 (one run at 360 had dropped
+  lines).
+- **CMA exhaustion in camera apps was a libcamera leak:** the GPU debayer
+  made a new EGL context at every start and never destroyed the old one,
+  which kept its last buffers imported; omacam held 290 MiB (software ISP
+  output in the default CMA, camera buffers in the camera pool) after
+  closing the camera, and later starts failed with "Cannot allocate
+  memory". Hyprland's buffers were not the cause (GPU buffers from normal
+  memory, scanout from `display-pool`). libcamera 4.8 (`0016`) destroys the
+  context at stop; restarting WirePlumber returned 22 MiB it had leaked.
+- **AGC from a dark start** (4.7, `0015`): doubles or halves the exposure
+  while the histogram is pinned at an end.
+- **Snapshot crash** fixed in Mesa 1:26.2.4-1.2 (`packages/mesa` 0002).
+- **Main camera blurry in apps:** both AK7375 VCMs ignore writes for the
+  first seconds after the camera drivers load (still after 250 ms of
+  retries), so WirePlumber's lens open failed and libcamera dropped the
+  lens for the session. The driver now keeps an unanswering VCM powered,
+  lets the open succeed and sets it up at the first move (00554); main
+  camera AF completes in libcamera.
+- **No WARN when the camera pool is full** (`__GFP_NOWARN`; not
+  `DMA_ATTR_NO_WARN`, which the non-coherent allocation refuses: tried on
+  00548, every capture failed, fixed in 00550).
+- **Telephoto yellow photos (omacam):** libcamera's white balance on the
+  telephoto matches the raw frame's own grey-world ratios (gains R 1.09,
+  B 1.56 against 1.10 and 1.56) and `cam`'s processed frame is only
+  slightly warm (R 157, G 164, B 140); omacam's photo has blue at 62
+  against about 145. The cast is in omacam's still path, not the sensor or
+  libcamera.
+
 ### CAM7: the front camera (Samsung S5K3J1, D-PHY on link 0). Risk: medium
 
 **Facts.** [V] from the user's own HAL (section 4.5) unless marked: chip ID
