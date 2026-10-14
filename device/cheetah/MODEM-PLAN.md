@@ -2324,6 +2324,124 @@ not blocking M4.2: suspend with the modem up (CPIF's PM paths, section
 ready USIM (`sim_timeout`, 120 s) and fails without one. With no SIM,
 M4.1b is the last M4 step.
 
+### T0/T1: the ModemManager bridge (`omamobile-modem-sit` 0.3.0, `omamobile-mmd` 0.1.0)
+
+[TELEPHONY-APPS-PLAN](../../docs/TELEPHONY-APPS-PLAN.md) phases T0 and T1:
+`omamobile-mmd` owns `org.freedesktop.ModemManager1` and serves MM 1.24's
+API from `omamobile-sitd`'s socket, so GNOME Calls, Chatty, mmsd-tng and
+NetworkManager see a modem. sitd stays the only process that talks to the
+modem; the bridge never starts it or the modem.
+
+**T0 (sitd 0.3.0, offline):** a `subscribe` request (the full status at
+once and after every change; MODEM-CLIENT section 2); the SIM state
+(card and application state, PIN/PUK retries, never an AID, label, ICCID
+or IMSI) and the radio state from GET_SIM_STATUS and GET_RADIO_POWER in
+the 30 s poll (both already allow-listed and used by `--probe`), plus
+IND_RADIO_STATE_CHANGED and IND_SIM_STATUS_CHANGED read passively; the
+emergency numbers of TS 22.101 10.1.1. **No new SIT request.** Hold,
+swap, conference, call waiting, signal strength and SIM PIN stay for
+T8: each is a request that has never met our firmware, and none can be
+tested without a SIM. `tools/sit-sim` gained a `--control` socket (ring,
+remote hang-up, SMS, WAP push) and answers, DTMF and the research
+note's radio-state values.
+
+**T1 (`omamobile-mmd` 0.1.0):**
+
+- Python with PyGObject's Gio (owner's Q3), not dbus-fast: python-gobject
+  is on the phone already, Gio answers Get/GetAll/Introspect from the
+  interface XML, and the method handler gets the caller's bus name for
+  polkit.
+- Interfaces: Manager + ObjectManager, Modem, Modem3gpp, Simple,
+  Location, Messaging, Signal, Voice; Sim, Bearer (read-only), Sms, Call.
+  Names and signatures written out from MM 1.24.2 (tag `1.24.2`,
+  `f2b9ab1ad78d`); `test/test_api.py` compares them with MM's own
+  introspection XML: identical. Everything not possible yet returns MM's
+  `Error.Core.Unsupported`.
+- States as MM: no SIM is FAILED/sim-missing with Modem, 3GPP, Voice and
+  Location only and `Voice.EmergencyOnly` set; `Enable` is refused
+  (WrongState). Emergency numbers are refused at `CreateCall` with a
+  clear error (TELEPHONY-APPS-PLAN section 3). IMEI, IMSI and ICCID stay
+  empty (Q9). A WAP push is an Sms with Text empty and Data set
+  (mmsd-tng's rule; ofono2mm lacks Data).
+- Package of its own (it takes over MM's bus name, policy and polkit
+  actions, which the RIL alone must not): `conflicts=(modemmanager)`, no
+  `provides=` (gnome-calls 51.1, chatty 0.8.9, networkmanager and geoclue
+  depend on libmm-glib only; mmsd-tng is AUR-only, libmm-glib too).
+  The unit is not enabled, `Conflicts=ModemManager.service`, requires
+  nothing, starts with `omamobile-sitd` once enabled; no D-Bus
+  activation file, so no client can start it.
+- Offline: `packages/omamobile-mmd/test/all` (private dbus-daemon: the
+  bridge against a fake sitd, libmm-glib as the client, polkit with a
+  fake authority, and the chain down to `tools/sit-sim`) green;
+  `test/conformance` (container, Xvfb): mmcli, GNOME Calls 51.1 and
+  Chatty 0.8.9, 43 checks pass. Calls finds the modem, answers, sends
+  DTMF, hangs up and dials; Chatty receives an SMS, stores it and
+  deletes it on the modem. The conformance run found that listing
+  `org.freedesktop.DBus.*` in `GetManagedObjects` crashed GNOME Calls
+  (libmm-glib gives those no interface info); they are left out.
+
+```sh
+# T1 on the phone, no SIM (risk: low-medium: one modem start; the radio stays off)
+# 0. M3.5 (read-only) as M3.4.0, into logs/t1-m3.5-before.sha256: no diff against the 2026-10-13 backup
+# 1. install, enable nothing (packages built locally with tools/build-packages)
+tools/phone-ssh 'cat > /tmp/s.pkg.tar.zst' < out/repo/aarch64/omamobile-modem-sit-0.3.0-1-aarch64.pkg.tar.zst
+tools/phone-ssh 'cat > /tmp/m.pkg.tar.zst' < out/repo/aarch64/omamobile-mmd-0.1.0-1-aarch64.pkg.tar.zst
+tools/phone-ssh 'OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U --noconfirm /tmp/s.pkg.tar.zst /tmp/m.pkg.tar.zst;
+  systemctl is-enabled omamobile-sitd omamobile-mmd omamobile-modem'
+#   pass: 0.3.0, 0.1.0; "disabled" three times
+# 2. kmsg terminal (logs/t1-kmsg.log), M3.4.3, dead-man, the modem to ONLINE (M3.4.5b step 4), the probe (M4.1i step 4)
+# 3. sitd WITHOUT its start-up (no SIM: --bringup would wait for one), then the bridge
+tools/phone-ssh 'systemd-run --unit=x-sitd -p Type=notify -p NotifyAccess=main /usr/bin/omamobile-sitd;
+  systemctl start omamobile-mmd; journalctl -u omamobile-mmd -b -o cat | tail -3'
+#   pass: "Modem .../Modem/0 exported: state -1, failed reason sim-missing, SIM absent, radio off"
+tools/phone-ssh python3 - < packages/omamobile-mmd/test/libmm-status.py
+tools/phone-ssh 'nmcli -f DEVICE,TYPE,STATE device; gdbus call --system -d org.freedesktop.ModemManager1
+  -o /org/freedesktop/ModemManager1/Modem/0 -m org.freedesktop.ModemManager1.Modem.Enable true'
+#   pass: failed / sim-missing / power low; NM: umts_ipc0 gsm unavailable; Enable: WrongState
+#   stop: any AT command or SIT request beyond GET_SIM_STATUS, GET_RADIO_POWER, GET_PS_REG_STATE in the sitd journal;
+#     UFS handler passes; a CP crash
+# 4. stop the bridge and sitd; cancel the dead-man; the modem stays ONLINE until the next reboot (the M4.1k path)
+tools/phone-ssh 'systemctl stop x-modem-deadman.timer omamobile-mmd x-sitd'
+# 5. M3.5 (read-only) again; ufshcd_err_handler again about 10 minutes later
+# rollback: pacman -U the previous omamobile-modem-sit; pacman -R omamobile-mmd
+```
+
+**T1 on the phone, results (2026-10-14,
+`7.3.0-rc6-omamobile-push1-00545-g3f9a2a5aba8e`; logs `logs/t1-*`):
+PASSED.** M3.5 before: the six partitions match the 2026-10-13 backup,
+all six `ro=1`, none mounted. Installed `omamobile-modem-sit` 0.3.0 and
+`omamobile-mmd` 0.1.0, nothing enabled. M3.4.3: "preconditions met",
+PMU 0x3ec0 0x0, faults 0x0. The modem ONLINE within 60 s, the marker
+cleared, 0 UFS handler passes. The probe as M4.1i (five requests
+`error=0`, GET_SMSC_ADDR error 11, "SIM card state 0 applications []",
+radio state 3). sitd without `--bringup` served at once; its journal
+shows only GET_SIM_STATUS, GET_RADIO_POWER and GET_PS_REG_STATE; its
+status: SIM absent, radio off, not registered. The bridge exported
+`/org/freedesktop/ModemManager1/Modem/0`: State -1 (FAILED),
+StateFailedReason 2 (sim-missing), PowerState 2 (low), Sim `/`,
+interfaces Modem, Modem3gpp, Voice, Location; Voice EmergencyOnly true,
+no calls; IMEI and equipment identifier empty; `Version` "1.24.2";
+`Enable` refused with `Error.Core.WrongState: Modem in failed state:
+sim-missing`. libmm-glib on the phone (`test/libmm-status.py`, mmcli
+isn't installed) shows the same. **NetworkManager** created a `gsm`
+device `umts_ipc0`, "unavailable", and logged "modem state 'failed'" and
+"No SIM object available", as with MM itself (and a harmless "error
+setting IPv4 forwarding" warning: `umts_ipc0` is a character device,
+not a netdev). As the phone's user: properties readable, `Modem.Command`
+refused by the bus policy. Bridge and sitd stopped cleanly; no kernel
+WARN or oops, no failed units. **The modem was left ONLINE** (link idle,
+`pcie_powered_on:0`) until the next reboot, the path M4.1j/k proved,
+because a unit stop with the link idle has not been run on this kernel
+yet. M3.5 after: unchanged. About 12 minutes after ONLINE
+(12:29): still ONLINE, 0 UFS handler passes, no kernel WARN or oops,
+cp2ap_wakeup interrupts counting (the idle link cycling).
+
+**Next (T2) needs the SIM:** with a SIM (PIN lock off) and the APN, M4.2
+(sitd `--bringup`), then the bridge enabled with sitd, and GNOME Calls
+and Chatty on the phone. Before that, nothing more can be learned on
+hardware: registration, calls, SMS and the WAP push path all wait on
+M4.2-M4.4.
+
 
 ## 4. Risks
 
