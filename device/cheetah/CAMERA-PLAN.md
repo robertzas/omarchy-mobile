@@ -7,7 +7,8 @@ loses lines that arrive faster than about 400 MB/s, so the sensor driver
 now lengthens their lines (`samsung,max-line-throughput = <360>`, section
 CAM-M.5l). Front: F.5-F.7 passed. Telephoto: T.1, T.2, T.4, T.5 passed;
 its SEM1215SA lens NACKs (T.3), so it stays at a stop, out of focus.
-Kernel: int `52763e295` = `7.3.0-rc6-omamobile-push1-00504-g52763e295d8a`,
+Kernel: int `9626f17f7` = `7.3.0-rc6-omamobile-push1-00511-g9626f17f7825`
+(the same code as 00504),
 overlays as `device.conf` (now with `camera-tele`). Earlier status (2026-10-13, evening): **the ultrawide works end to end through
 libcamera (CAM5). The other three cameras are built offline and wait for
 the phone: main (Samsung S5KGN1, C-PHY, link 1; runbook CAM-M), front
@@ -3276,6 +3277,20 @@ Results (00490-00500, main camera unless said):
   its RGB888 output buffers (4 x 37 MB) then fail to allocate ("dma-heap
   allocation failure"), a CMA-size limit, not a driver one. The binned
   sizes run (main 30 fps, telephoto 26 fps).
+
+- **Telephoto lens (00506-00508, reverted in 00511):** letting the
+  SEM1215SA's ready poll wait through NACKs (2 ms before the first read,
+  up to 500 ms) made it worse: with its own supplies on for more than a
+  few milliseconds the controller's reads time out ("exynos5-hsi2c
+  10930000.i2c: tx timeout", -110) and **hsi2c_4 stays stuck until a
+  reboot**, so the telephoto sensor's own chip-ID read fails too. The
+  original driver (one immediate read, a NACK, supplies off) leaves the
+  bus working. Both commits are reverted (`174134912`, `3e5457525`); with
+  them out, all four cameras ran twice each through libcamera on 00511
+  with no WDMA error, no bus timeout and no vb2 warning. Stock's bus has
+  `samsung,reset-before-trans` (a controller reset before every
+  transfer) and pin states for on/off; the lens is next tried with the
+  bus reset before each transfer, read-only, on its own boot.
 
 Next:
 1. Telephoto lens: the SEM1215SA NACKs at 0x34 with its own supplies;
