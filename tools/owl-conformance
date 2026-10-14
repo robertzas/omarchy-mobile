@@ -12,8 +12,11 @@
 #   tools/owl-conformance --live     the same, against the reference live
 #   tools/owl-conformance --record   refresh tests/owl/expected/ and the
 #                                    probes' expected outputs from the reference
-#   tools/owl-conformance --render   also L4 layout and L5 pixels, and the
-#                                    review screenshots (docs/owl-review/)
+#   tools/owl-conformance --render   also L4 layout and L5 pixels (the
+#                                    milestone widgets with data, every store
+#                                    widget without), the review screenshots,
+#                                    and the store package's status.json
+#                                    (written into the package with --record)
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 image=omamobile-owl-conformance:p1
@@ -38,5 +41,11 @@ docker run --rm --network none -u "$(id -u):$(id -g)" "${mounts[@]}" "$image" \
 if (( render )); then
   docker run --rm --network none -u "$(id -u):$(id -g)" "${mounts[@]}" "$image" \
     bash /src/tests/owl/render/run --out "/src/$out" | tee -a "$out/summary.txt"
+fi
+# Which store widgets the store package may ship (status.json), from this run.
+if (( render )); then
+  docker run --rm --network none -u "$(id -u):$(id -g)" "${mounts[@]}" "$image" \
+    node /src/tests/owl/store-status.js "/src/$out/report.json" "/src/$out/render-all.json" > "$out/status.json"
+  if [[ " ${args[*]} " == *" --record "* ]]; then cp "$out/status.json" packages/omamobile-owl-widgets/status.json; fi
 fi
 echo "report: $out/report.json"

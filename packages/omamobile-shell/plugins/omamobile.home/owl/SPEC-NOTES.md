@@ -63,7 +63,7 @@ Each entry: the decision, the guide section it clarifies, and how it is tested.
 
 **N34.** Several root nodes stack as a Column with no gap, and the root fills the tile's content area (the card minus `padding`, 12 dp by default).
 
-**N35.** A component used with layout properties (`weight`, `padding`, ...) is wrapped in a Box that carries them, and its content fills that Box.
+**N35.** A component used with layout properties (`weight`, `padding`, ...) is wrapped in a Box that carries them, and its content fills that Box. A Box never gives a child more room than it has, even a child with a fixed size.
 
 **N36.** A Grid splits its width into `columns` equal cells (gap 6); each row is as tall as its tallest cell, rounded up to a whole pixel, as the reference renderer's grid draws it. Text lines are 1.17 em of the whole-pixel font size the text is drawn at.
 

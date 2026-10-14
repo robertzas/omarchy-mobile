@@ -38,7 +38,14 @@ Rectangle {
     tile.program = C.compile(tile.task.source)
     const host = {
       theme: function(n) { return tile.theme[n] === undefined ? null : tile.theme[n] },
-      tile: function(n) { return tile.fx.tile[n] === undefined ? null : tile.fx.tile[n] },
+      // The reference renderer reports tileWidth/tileHeight without the
+      // tile's padding (the guide says with it); for comparing layouts
+      // both sides get the reference's (docs/owl-review, question 7).
+      tile: function(n) {
+        if (n === "tileWidth") return owlView.width / tile.dp
+        if (n === "tileHeight") return owlView.height / tile.dp
+        return tile.fx.tile[n] === undefined ? null : tile.fx.tile[n]
+      },
       act: function() {}, runInto: function() {}, report: function(m) { console.log("report: " + m) }, changed: function() {}
     }
     const inst = new R.Instance(tile.program, host, {})
@@ -55,8 +62,10 @@ Rectangle {
     })
     inst.invalidate()
     inst.sample()
-    tile.tree = inst.render(false)
+    tile.inst = inst
+    Qt.callLater(function() { tile.inst.invalidate(); tile.tree = tile.inst.render(false) })
   }
+  property var inst: null
 
   Ours.OwlView {
     id: owlView

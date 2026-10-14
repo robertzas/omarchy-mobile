@@ -328,7 +328,11 @@ function stack(n, width, height, measure) {
     boxes.push({ n: c, w: w, h: h, x: 0, y: 0, hidden: !shown(c) })
   })
   var boxH = height < 0 ? tallest : height
+  // A Box's children never get more room than the Box has, even a fixed
+  // size (Compose's constraints; SPEC-NOTES N35).
   boxes.forEach(function(b) {
+    b.w = Math.min(b.w, width)
+    if (height >= 0) b.h = Math.min(b.h, height)
     b.x = /End$|^end$/.test(align) ? width - b.w : /Start$|^start$/.test(align) ? 0 : (width - b.w) / 2
     b.y = /^top/.test(align) ? 0 : /^bottom/.test(align) ? boxH - b.h : (boxH - b.h) / 2
   })
@@ -416,7 +420,10 @@ function layout(children, width, height, measure) {
 // Every box in order, with its position on the tile: for the L4 dump.
 function flatten(box, ox, oy, path, out) {
   out = out || []
-  var x = (ox || 0) + box.x, y = (oy || 0) + box.y
+  // `offset` moves a node where it is drawn, children with it.
+  var off = props(box.node).offset
+  var dx = Array.isArray(off) ? num(off[0], 0) : 0, dy = Array.isArray(off) ? num(off[1], 0) : 0
+  var x = (ox || 0) + box.x + dx, y = (oy || 0) + box.y + dy
   out.push({ path: path || "0", kind: box.kind, x: x, y: y, w: box.w, h: box.h })
   box.children.forEach(function(c, i) { flatten(c, x, y, (path || "0") + "." + i, out) })
   return out

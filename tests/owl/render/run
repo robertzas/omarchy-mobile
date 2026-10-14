@@ -25,6 +25,13 @@ node "$here/jobs.js" "$out" /ref/omarchy-widgets/widgets > "$h/job.json"
 QT_SCALE_FACTOR=3 OWL_JOB="$h/job.json" timeout 600 quickshell -p "$h/tiles.qml" 2>&1 | grep -E "rendered|ERROR|rror|report:" | grep -v "^.*DEBUG.*rendered" | head -40 || true
 node "$here/compare.js" "$out"
 
+# Every store widget without data.
+if [[ -z ${OWL_ONLY:-} ]]; then
+  node "$here/all-jobs.js" "$out" /ref/omarchy-widgets/widgets > "$h/all-job.json"
+  QT_SCALE_FACTOR=3 OWL_JOB="$h/all-job.json" timeout 1800 quickshell -p "$h/tiles.qml" >/dev/null 2>&1 || true
+  node "$here/compare-all.js" "$out"
+fi
+
 # The phone host and the live widget against mocks (no vibration, no torch:
 # their argv is captured).
 ht=/tmp/owl-host-test

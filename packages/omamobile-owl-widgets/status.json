@@ -3,423 +3,423 @@
  "widgets": {
   "9g420/codex-quota": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "amirinanto-r37/go-limit": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "arbadacarbayk/nostr-apps": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "arbadacarbayk/nostr-git": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "asphyksia/companion": {
    "status": "partial",
-   "note": "draws a shader's fallback colour (L1-L3 checked; layout not rendered yet)"
+   "note": "draws a shader's fallback colour (L1-L5 checked)"
   },
   "bryanperdana/retro-amp": {
    "status": "partial",
-   "note": "opens Android apps (no Android here until Waydroid) (L1-L3 checked; layout not rendered yet)"
+   "note": "opens Android apps (no Android here until Waydroid) (L1-L5 checked)"
   },
   "cbarland/asset-ticker": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "cipriandrei10/claude-top": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "cipriandrei10/google-calendar": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "daileng/note": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "daileng/omarcharium": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "daviddelpozo/f1": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "derekross/bitcoin": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "derekross/nostr-inbox": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "dimasmds/hootling": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "elchopchop/btcusd-minimal": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "emircanagac/bitcoin-ticker": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "gbenselum/dns": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "gbovee/balatro-joker": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "hoangitk/bookmarks": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "hoangitk/reminders": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "hoangitk/vlc-player": {
    "status": "partial",
-   "note": "opens Android apps (no Android here until Waydroid) (L1-L3 checked; layout not rendered yet)"
+   "note": "opens Android apps (no Android here until Waydroid) (L1-L5 checked)"
   },
   "im0001gt/tesla": {
    "status": "partial",
-   "note": "opens Android apps (no Android here until Waydroid) (L1-L3 checked; layout not rendered yet)"
+   "note": "opens Android apps (no Android here until Waydroid) (L1-L5 checked)"
   },
   "iosue-iulianus/eredivisie": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "iosue-iulianus/loyalty-card": {
    "status": "partial",
-   "note": "opens Android apps (no Android here until Waydroid) (L1-L3 checked; layout not rendered yet)"
+   "note": "opens Android apps (no Android here until Waydroid) (L1-L5 checked)"
   },
   "jdblackwell/spacex": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "jenskock/photoprism-random": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "jonasallencodes/digital-clock": {
    "status": "partial",
-   "note": "opens Android apps (no Android here until Waydroid) (L1-L3 checked; layout not rendered yet)"
+   "note": "opens Android apps (no Android here until Waydroid) (L1-L5 checked)"
   },
   "jubudge/flipper-zero": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "kingdompaulo/ai-stars": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "lucassynnott/year-left": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "luciano-sparti/timetree": {
    "status": "partial",
-   "note": "reads Android notifications, which this phone doesn't have; opens Android apps (no Android here until Waydroid); acts on Android notifications (L1-L3 checked; layout not rendered yet)"
+   "note": "reads Android notifications, which this phone doesn't have; opens Android apps (no Android here until Waydroid); acts on Android notifications (L1-L5 checked)"
   },
   "lukedca/btclock": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "missingpackage/2048": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "missingpackage/dice": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "missingpackage/news": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "moustaphawaguihh-hue/lights-out": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "nyaadesu/agenda": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "nyaadesu/ns": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "petllama/gestures": {
    "status": "partial",
-   "note": "reads Android notifications, which this phone doesn't have; opens Android apps (no Android here until Waydroid); acts on Android notifications; draws Android app icons (L1-L3 checked; layout not rendered yet)"
+   "note": "reads Android notifications, which this phone doesn't have; opens Android apps (no Android here until Waydroid); acts on Android notifications; draws Android app icons (L1-L5 checked)"
   },
   "rcrohmana/classic-clock": {
    "status": "partial",
-   "note": "opens Android apps (no Android here until Waydroid) (L1-L3 checked; layout not rendered yet)"
+   "note": "opens Android apps (no Android here until Waydroid) (L1-L5 checked)"
   },
   "rcrohmana/codex-quota": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "samthambad/sg-psi": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "setiapam/omaprayer": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/air-and-pollen": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/analog-clock": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/bundesliga": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/calendar": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/champions-league": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/countdown": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/crypto": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/departures": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/earthquakes": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/exchange-rates": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/feeds": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/fetch": {
    "status": "partial",
-   "note": "offers to install Linux, which is always there (L1-L3 checked; layout not rendered yet)"
+   "note": "offers to install Linux, which is always there (L1-L5 checked)"
   },
   "simonschubert/focus": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/forecast": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/free-games": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/github": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/github-trending": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/habits": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/hacker-news": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/home-assistant": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/ifsc": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/koi-pond": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/la-liga": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/launches": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/lava-lamp": {
    "status": "partial",
-   "note": "draws a shader's fallback colour (L1-L3 checked; layout not rendered yet)"
+   "note": "draws a shader's fallback colour (L1-L5 checked)"
   },
   "simonschubert/ligue-1": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/lobsters": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/mlb": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/nba": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/nhl": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/notifications": {
    "status": "partial",
-   "note": "reads Android notifications, which this phone doesn't have; acts on Android notifications (L1-L3 checked; layout not rendered yet)"
+   "note": "reads Android notifications, which this phone doesn't have; acts on Android notifications (L1-L5 checked)"
   },
   "simonschubert/now-playing": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/omarchy-commits": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/owl": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/picture-of-the-day": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/planes-overhead": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/premier-league": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/releases": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/serie-a": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/sun-and-moon": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/today": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/todo": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/uptime": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/whats-new": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/wikipedia": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/world-clock": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/xkcd": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "simonschubert/year-progress": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "ssalentin/claude-limits": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "ssalentin/red-panda": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "thedavidcoen/cursor-plan": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "thedavidcoen/terminal-profiles": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L3 checked; layout not compared on the reference side: has a Terminal: the reference's would start the widget's program"
   },
   "toniavanza/agy-limits": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "travonted/nfl": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "travonted/vcard": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "tusshar2000/ppt-maker": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "tusshar2000/widget-maker": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "vikrantpagare/buddha-meditation": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "vikrantpagare/coin-flip": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "weebowiz/dictation": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   },
   "weebowiz/terminal-voice": {
    "status": "ok",
-   "note": "L1-L3 checked; layout not rendered yet"
+   "note": "L1-L5 checked"
   }
  }
 }

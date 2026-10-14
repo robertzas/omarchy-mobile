@@ -36,12 +36,13 @@ for (const author of fs.readdirSync(path.join(REF, "widgets")).sort()) {
     const f = failed[id]
     if (f && (f.l1 || f.l2 || f.l3)) { out.widgets[id] = { status: "unsupported", note: "conformance: " + [f.l1, f.l2, f.l3].filter(Boolean).join("; ").slice(0, 200) }; continue }
     const r = rendered[id]
-    if (r && !r.l4.pass) { out.widgets[id] = { status: "unsupported", note: "layout differs from the reference: " + r.l4.why }; continue }
+    const notCompared = r && /^not rendered on the reference side/.test(r.l4.why)
+    if (r && !r.l4.pass && !notCompared) { out.widgets[id] = { status: "unsupported", note: "layout differs from the reference: " + r.l4.why }; continue }
     let caps
     try { caps = P.capabilities(C.compile(text)) } catch (e) { out.widgets[id] = { status: "unsupported", note: String(e.message) }; continue }
     if (caps.refusals.length) { out.widgets[id] = { status: "unsupported", note: caps.refusals.join("; ") }; continue }
     const partial = PARTIAL.filter((p) => p[0].test(text)).map((p) => p[1])
-    const checked = r ? "L1-L5 checked" : "L1-L3 checked; layout not rendered yet"
+    const checked = notCompared ? "L1-L3 checked; " + r.l4.why.replace(/^not rendered/, "layout not compared") : r ? "L1-L5 checked" : "L1-L3 checked; layout not rendered yet"
     out.widgets[id] = partial.length ? { status: "partial", note: partial.join("; ") + " (" + checked + ")" } : { status: "ok", note: checked }
   }
 }
