@@ -15,7 +15,10 @@ ExecStart=/usr/lib/omamobile-vendor/omamobile-gnss-lto --timeout 60
 Nice=10
 IOSchedulingClass=idle
 ProtectSystem=strict
-ReadWritePaths=-/var/lib/omamobile-vendor/gnss
+# Created if missing (a fresh install has no GNSS state yet) and writable
+# under ProtectSystem=strict; a "-" ReadWritePaths entry skipped the missing
+# directory, left /var/lib read-only and the download failed.
+StateDirectory=omamobile-vendor/gnss
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
