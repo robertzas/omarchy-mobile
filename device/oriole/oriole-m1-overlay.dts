@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Empty board overlay for the Pixel 6 bootloader (ABL).
+ *
+ * ABL picks a dtbo entry by board_id/board_rev and applies it on top of
+ * our base DTB. The stock overlay references Google labels that do not
+ * exist in the mainline DTB, so we ship one that changes nothing.
+ * board_id/board_rev are not confirmed on a phone yet (NOTES.md).
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	board_id = <0x20304>;
+	board_rev = <0x10000>;
+
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+		};
+	};
+};
