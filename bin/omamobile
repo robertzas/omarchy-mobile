@@ -29,11 +29,13 @@ Usage: [DEVICE=<codename>] omamobile <command>
                    /usr/lib/modules on the phone
   modules-push     Stream that tarball to the running phone, unpack it into
                    /usr/lib/modules/<release> and run depmod (no reboot)
-  images           Pack boot, init_boot, vendor_boot, vendor_kernel_boot and dtbo
-                   images for the experiment slot into $KERNEL_OUT/images
+  images           Pack the device's boot images (BOOT_IMAGES: boot, vendor_boot and
+                   dtbo, plus init_boot and vendor_kernel_boot where the device has
+                   them) for the experiment slot into $KERNEL_OUT/images
   kexec            Send the freshly built kernel and initramfs to the running phone
                    and jump into them (no reboot or fastboot). Device tree changes
-                   still need: omamobile images, then flash vendor_kernel_boot
+                   still need: omamobile images, then flash the image holding the
+                   DTB (vendor_kernel_boot, or vendor_boot without it)
   fastboot         Get the phone into fastboot without buttons (adb, reboot-to,
                    or crash until ABL falls back to stock Android on slot A)
   flash            Flash the experiment images to slot B and boot them
@@ -79,6 +81,10 @@ load_device() {
 
 # Is <image>_b on the device's storage-guard allowlist?
 slot_b_allowed() { [[ " $DEV_UFS_RW " == *" ${1}_b "* ]]; }
+
+# Does the device have this boot image? gs101 phones have no init_boot or
+# vendor_kernel_boot.
+has_image() { [[ " $DEV_BOOT_IMAGES " == *" $1 "* ]]; }
 
 # Run a command in the build container with the work tree and this repo mounted.
 in_container() {
@@ -311,14 +317,29 @@ cmd_images() {
   say "Boot images (header v4)"
   : | cpio -o -H newc --quiet > "$img/empty.cpio"
   local cmdline="$DEV_VENDOR_CMDLINE"
-  python3 "$tools/mkbootimg.py" --header_version 4 --kernel "$img/Image.lz4" --cmdline '' --output "$img/boot.img"
-  python3 "$tools/mkbootimg.py" --header_version 4 --ramdisk "$img/empty.cpio" \
-    --os_version "$DEV_OS_VERSION" --os_patch_level "$DEV_OS_PATCH_LEVEL" --output "$img/init_boot.img"
-  python3 "$tools/mkbootimg.py" --header_version 4 --pagesize "$DEV_VENDOR_PAGESIZE" --vendor_cmdline "$cmdline" \
-    --ramdisk_type 1 --ramdisk_name '' --vendor_ramdisk_fragment "$img/empty.cpio" --vendor_boot "$img/vendor_boot.img"
-  python3 "$tools/mkbootimg.py" --header_version 4 --pagesize "$DEV_VENDOR_PAGESIZE" --vendor_cmdline '' \
-    --dtb "$img/dtb.img" --ramdisk_type 1 --ramdisk_name '' --vendor_ramdisk_fragment "$KERNEL_OUT/initramfs.cpio.lz4" \
-    --vendor_boot "$img/vendor_kernel_boot.img"
+  # The generic ramdisk (empty) and the OS version go in init_boot where the
+  # device has one, and in boot otherwise.
+  if has_image init_boot; then
+    python3 "$tools/mkbootimg.py" --header_version 4 --kernel "$img/Image.lz4" --cmdline '' --output "$img/boot.img"
+    python3 "$tools/mkbootimg.py" --header_version 4 --ramdisk "$img/empty.cpio" \
+      --os_version "$DEV_OS_VERSION" --os_patch_level "$DEV_OS_PATCH_LEVEL" --output "$img/init_boot.img"
+  else
+    python3 "$tools/mkbootimg.py" --header_version 4 --kernel "$img/Image.lz4" --ramdisk "$img/empty.cpio" --cmdline '' \
+      --os_version "$DEV_OS_VERSION" --os_patch_level "$DEV_OS_PATCH_LEVEL" --output "$img/boot.img"
+  fi
+  # The DTB and our initramfs go in vendor_kernel_boot where the device has
+  # one, leaving vendor_boot empty, and in vendor_boot otherwise.
+  if has_image vendor_kernel_boot; then
+    python3 "$tools/mkbootimg.py" --header_version 4 --pagesize "$DEV_VENDOR_PAGESIZE" --vendor_cmdline "$cmdline" \
+      --ramdisk_type 1 --ramdisk_name '' --vendor_ramdisk_fragment "$img/empty.cpio" --vendor_boot "$img/vendor_boot.img"
+    python3 "$tools/mkbootimg.py" --header_version 4 --pagesize "$DEV_VENDOR_PAGESIZE" --vendor_cmdline '' \
+      --dtb "$img/dtb.img" --ramdisk_type 1 --ramdisk_name '' --vendor_ramdisk_fragment "$KERNEL_OUT/initramfs.cpio.lz4" \
+      --vendor_boot "$img/vendor_kernel_boot.img"
+  else
+    python3 "$tools/mkbootimg.py" --header_version 4 --pagesize "$DEV_VENDOR_PAGESIZE" --vendor_cmdline "$cmdline" \
+      --dtb "$img/dtb.img" --ramdisk_type 1 --ramdisk_name '' --vendor_ramdisk_fragment "$KERNEL_OUT/initramfs.cpio.lz4" \
+      --vendor_boot "$img/vendor_boot.img"
+  fi
   ls -lh "$img"/*.img
 }
 
@@ -384,8 +405,9 @@ cmd_flash() {
   local img="$KERNEL_OUT/images" p
   load_device
   in_fastboot || die "phone not in fastboot (try: omamobile fastboot)"
-  for p in boot vendor_kernel_boot init_boot vendor_boot dtbo; do
+  for p in $DEV_BOOT_IMAGES; do
     slot_b_allowed "$p" || die "${p}_b is not on device/$DEVICE's storage-guard allowlist; refusing"
+    [[ -f "$img/$p.img" ]] || die "missing $img/$p.img (run: omamobile images)"
     timeout 60 fastboot flash "${p}_b" "$img/$p.img" 2>&1 | grep -E 'OKAY|FAIL' | tail -1 | sed "s/^/$p: /"
   done
   timeout 20 fastboot --set-active=b >/dev/null 2>&1

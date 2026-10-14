@@ -55,7 +55,7 @@ Every rule here exists because breaking it either bricks a phone or loses data n
 ### 3.1 Stock Android stays on slot A
 
 - Pixels have A/B slots. **Omarchy Mobile only ever lives on slot B.** Slot A keeps the stock factory build, so the phone always has a known-good system to fall back to and a way back to `fastboot` (`adb reboot bootloader`).
-- **We flash only these partitions:** `boot_b`, `init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b`, `dtbo_b`, and `userdata`, which holds the Arch root.
+- **We flash only these partitions:** the device's boot images on slot B (its descriptor's `BOOT_IMAGES`: `boot_b`, `vendor_boot_b` and `dtbo_b`, plus `init_boot_b` and `vendor_kernel_boot_b` where the phone has them), and `userdata`, which holds the Arch root.
 - **Never flash** `bootloader`, `abl`, `bl1`/`bl2`/`bl31`, `pbl`, `radio`/`modem`, `devinfo`, `persist`, `efs*`, `modem_userdata`, `vbmeta`, or anything without an explicit `_b` suffix. `fastboot flash boot …` without a suffix writes whichever slot is active.
 - **Never relock the bootloader** (`fastboot flashing lock`) while any non-stock image is on the phone.
 - **Never flash a factory image older than the one installed.** Pixels enforce bootloader anti-rollback.
@@ -66,7 +66,7 @@ Every rule here exists because breaking it either bricks a phone or loses data n
 UFS holds the per-device calibration. The initramfs ([`device/cheetah/initramfs/init`](device/cheetah/initramfs/init)) guards it before anything else runs:
 
 - It sets every SCSI disk and partition read-only (`blockdev --setro`) as soon as it appears, and keeps a watcher running for the life of PID 1.
-- The only exceptions are an allowlist of GPT partition names: slot B's five boot images and `userdata`.
+- The only exceptions are an allowlist of GPT partition names: the device's `BOOT_IMAGES` on slot B, and `userdata`.
 - It deletes the whole-disk node of the main LUN (`/dev/sda`), so nothing can write across partitions. The boot LUNs stay read-only at the disk level.
 - In Arch, [`10-omamobile-storage.rules`](packages/omamobile-device-cheetah/vendor/udev/rules.d/10-omamobile-storage.rules) keeps the whole-disk node unusable and hides the Android partitions from desktop tools.
 - The one write outside the allowlist is the boot-success marker (`omamobile-boot-success`). It opens exactly `devinfo` for a single verified write of the slot flag bytes, then sets it read-only again.
