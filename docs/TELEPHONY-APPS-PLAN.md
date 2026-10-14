@@ -588,7 +588,8 @@ Everything here was built and tested on the laptop, offline, against a scripted 
   | Phone, start to first frame saved | 0.6 s (warm) |
   | Messages, start to first frame saved | 0.3 s (warm) |
   | Apps with a call or a thread open | about 64-67 MB RSS each |
-- **Cross-compile:** omatel's `bin/cross build` uses omacam's image and sysroot. For the package build time, see `packages/omatel/README.md`.
+- **Cross-compile:** omatel's `bin/cross build` and `bin/cross package` use omacam's image and sysroot, and make the three aarch64 packages: 2.7 to 3.3 MB each, with 8 to 10 MB binaries.
+- **The package under qemu:** `packages/omatel` built its three packages in **34 min**, with `check()`, in the same Arch Linux ARM image and the same steps as `tools/build-packages`. The output went to a scratch directory, not into the signed `out/repo`: another session was building libcamera into it at the time. The real run is P1.
 
 **Stubbed or deferred:**
 

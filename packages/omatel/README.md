@@ -45,8 +45,8 @@ emergency numbers, until the plan's §3.3 tests pass.
 
 ## Build
 
-- `tools/build-packages packages/omatel` builds under qemu-user. See the
-  plan for the time it took.
+- `tools/build-packages packages/omatel` builds under qemu-user: 34
+  minutes for 0.1.0 on the laptop (2026-10-14), with `check()`.
 - While developing omatel, cross-compile with its `bin/cross package`
   instead: about four minutes cold, seconds after that. It makes the same
   three packages.
