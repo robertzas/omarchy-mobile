@@ -514,6 +514,24 @@ Item {
         }
 
         Section {
+          visible: !!approveFlick.caps && (approveFlick.caps.devices.length > 0 || approveFlick.caps.terminal)
+          title: "Uses the phone"
+          Repeater {
+            model: approveFlick.caps ? approveFlick.caps.devices : []
+            delegate: Label {
+              required property var modelData
+              width: parent.width
+              text: modelData === "haptic" ? "It vibrates (a short tap, as your feedback setting allows)." : "It switches the torch on and off."
+            }
+          }
+          Label {
+            visible: !!approveFlick.caps && approveFlick.caps.terminal
+            width: parent.width
+            text: "It has a terminal in its tile: what you type there runs as you. Its command is listed above."
+          }
+        }
+
+        Section {
           visible: approveFlick.packages.length > 0
           title: "Needs " + approveFlick.packages.join(", ")
           Label {

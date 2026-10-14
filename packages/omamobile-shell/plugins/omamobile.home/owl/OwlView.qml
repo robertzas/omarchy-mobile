@@ -23,6 +23,9 @@ Item {
   property string iconFamily: view.monoFamily
   property string homeDir: ""
   property bool interactive: true
+  // Starts a Terminal node's session: start(command, onOutput, onExit) ->
+  // { write(text), stop() }. Set by the host; null: terminals stay empty.
+  property var terminals: null
   // Bumped by the scheduler (30 fps at most) while something animates.
   property int frame: 0
   readonly property real devicePixelRatio: Screen.devicePixelRatio > 0 ? Screen.devicePixelRatio : 1
@@ -118,7 +121,7 @@ Item {
     Column: "OwlBlock.qml", Row: "OwlBlock.qml", Flow: "OwlBlock.qml", Box: "OwlBlock.qml", Grid: "OwlBlock.qml",
     Spacer: "OwlBlock.qml", Text: "OwlText.qml", Button: "OwlButton.qml", Progress: "OwlProgress.qml",
     Ring: "OwlRing.qml", Sparkline: "OwlSparkline.qml", Canvas: "OwlCanvas.qml", Image: "OwlImage.qml",
-    Shader: "OwlShader.qml", Terminal: "OwlShader.qml", Slider: "OwlSlider.qml", Input: "OwlInput.qml"
+    Shader: "OwlShader.qml", Terminal: "OwlTerminal.qml", Slider: "OwlSlider.qml", Input: "OwlInput.qml"
   })
   property var components: ({})
 

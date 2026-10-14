@@ -40,6 +40,8 @@ function summary(caps) {
   if (caps.network) parts.push("uses the internet" + (caps.hosts.length ? " (" + caps.hosts.join(", ") + ")" : ""))
   if (caps.files.length) parts.push("reads " + plural(caps.files.length, "file", "files"))
   if (caps.notifications) parts.push("reads your notifications")
+  if (caps.terminal) parts.push("has a terminal")
+  ;(caps.devices || []).forEach(function(d) { parts.push(d === "haptic" ? "vibrates" : "switches the torch") })
   return parts.length ? parts.join(", ") : "runs nothing, reaches nothing"
 }
 

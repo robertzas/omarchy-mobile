@@ -25,6 +25,15 @@ node "$here/jobs.js" "$out" /ref/omarchy-widgets/widgets > "$h/job.json"
 QT_SCALE_FACTOR=3 OWL_JOB="$h/job.json" timeout 600 quickshell -p "$h/tiles.qml" 2>&1 | grep -E "rendered|ERROR|rror|report:" | grep -v "^.*DEBUG.*rendered" | head -40 || true
 node "$here/compare.js" "$out"
 
+# The phone host and the live widget against mocks (no vibration, no torch:
+# their argv is captured).
+ht=/tmp/owl-host-test
+rm -rf "$ht"; mkdir -p "$ht"
+ln -s "$src/packages/omamobile-shell/plugins/omamobile.home" "$ht/home"
+cp "$here/host-test.qml" "$ht/"
+timeout 60 quickshell -p "$ht/host-test.qml" 2>&1 | grep -E "(^|m: )(not )?ok - " | sed -E 's/.*m: //' | tee "$out/host-test.txt"
+! grep -c "^not ok" "$out/host-test.txt" >/dev/null || echo "host test failed"
+
 # The review screenshots, in a dark and a light Omarchy theme. Omarchy's
 # shell modules (Commons, Ui) come from the laptop, read-only.
 if [[ -d /omarchy-shell ]]; then

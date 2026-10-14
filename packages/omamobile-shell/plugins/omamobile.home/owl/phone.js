@@ -149,7 +149,7 @@ function hostOf(url) {
 // requires (plan §3.1): { commands, network, hosts, files, notifications,
 // risks, refusals }. Every list keeps the compiler's order.
 function capabilities(program) {
-  var out = { commands: [], network: false, hosts: [], files: [], notifications: false, risks: [], refusals: [] }
+  var out = { commands: [], network: false, hosts: [], files: [], notifications: false, risks: [], refusals: [], devices: [], terminal: false }
   var builtFrom = false
   function risk(id, says, line) {
     if (!out.risks.some(function(r) { return r.id === id && r.line === line })) out.risks.push({ id: id, says: says, line: line })
@@ -185,9 +185,13 @@ function capabilities(program) {
   })
   var req = program.requires && program.requires.pacman ? program.requires.pacman : []
   if (req.indexOf("curl") >= 0 || req.indexOf("wget") >= 0) out.network = true
-  if (program.terminal) out.refusals.push("Terminal isn't supported on this phone yet")
+  // Things it can do to the phone itself, asked for on the approval sheet.
+  out.devices = (program.actions || []).filter(function(a) { return DEVICE_ACTIONS.hasOwnProperty(a) })
+  out.terminal = !!program.terminal
   return out
 }
+
+var DEVICE_ACTIONS = { haptic: "vibrates the phone", torch: "switches the torch" }
 
 // The capability words the home screen and approval sheet use.
 function capabilityList(caps) {
@@ -196,6 +200,7 @@ function capabilityList(caps) {
   if (caps.network) list.push("network")
   if (caps.files.length) list.push("files")
   if (caps.notifications) list.push("notifications")
+  ;(caps.devices || []).forEach(function(d) { list.push(d) })
   return list
 }
 
@@ -206,7 +211,91 @@ function approvalMatches(record, program) {
   var now = program.commands || []
   if (record.commands.length !== now.length) return false
   for (var i = 0; i < now.length; i++) if (record.commands[i] !== now[i]) return false
-  return true
+  // Vibration and the torch are asked for too: a widget that starts using
+  // one asks again.
+  var devices = Array.isArray(record.devices) ? record.devices : []
+  return (program.actions || []).every(function(a) { return !DEVICE_ACTIONS.hasOwnProperty(a) || devices.indexOf(a) >= 0 })
+}
+
+// ---------------------------------------------------------------- host calls
+
+var TORCH = "white:torch"
+
+// The argv a phone action runs (never through a shell unless shown), or
+// null when the action isn't a plain command. The torch is the quick
+// settings tile's LED (leds-lm3644), the haptic a feedbackd event, so the
+// user's feedback profile (silent, quiet) applies.
+function actionArgv(name, args) {
+  var a = args || []
+  function s(i) { return a[i] === undefined || a[i] === null ? "" : String(a[i]) }
+  switch (name) {
+  case "haptic": return ["fbcli", "-E", "button-pressed"]
+  case "torch": {
+    var v = a[0]
+    if (v === true || s(0) === "on" || s(0) === "true") return ["brightnessctl", "--device=" + TORCH, "--quiet", "set", "100%"]
+    if (v === false || s(0) === "off" || s(0) === "false") return ["brightnessctl", "--device=" + TORCH, "--quiet", "set", "0"]
+    return ["sh", "-c", "if [ \"$(brightnessctl --device=" + TORCH + " get)\" -gt 0 ]; then brightnessctl --device=" + TORCH + " --quiet set 0; " +
+            "else brightnessctl --device=" + TORCH + " --quiet set 100%; fi"]
+  }
+  case "notify": return ["notify-send", s(0), s(1)]
+  case "copy": return ["wl-copy", "--", s(0)]
+  case "media": return ["playerctl", s(0) === "toggle" ? "play-pause" : s(0) === "open" ? "play" : s(0)]
+  case "volume": {
+    var w = s(0), sink = "@DEFAULT_AUDIO_SINK@"
+    if (w === "up") return ["wpctl", "set-volume", sink, "5%+"]
+    if (w === "down") return ["wpctl", "set-volume", sink, "5%-"]
+    if (w === "mute") return ["wpctl", "set-mute", sink, "1"]
+    if (w === "unmute") return ["wpctl", "set-mute", sink, "0"]
+    if (w === "toggle") return ["wpctl", "set-mute", sink, "toggle"]
+    return ["wpctl", "set-volume", sink, Math.max(0, Math.min(100, Number(w) || 0)) + "%"]
+  }
+  }
+  return null
+}
+
+// ---------------------------------------------------------------- android.*, from Linux
+
+// `wpctl get-volume` -> { level, muted, steps }
+function volumeFrom(text) {
+  var m = /Volume:\s*([0-9.]+)/.exec(String(text || ""))
+  if (!m) return null
+  return { level: Math.round(parseFloat(m[1]) * 100), muted: /\[MUTED\]/.test(text), steps: 20 }
+}
+
+// `playerctl metadata --format ...` lines -> android.media's shape.
+var MEDIA_FORMAT = "{{status}}\n{{title}}\n{{artist}}\n{{album}}\n{{playerName}}\n{{position}}\n{{mpris:length}}\n{{mpris:artUrl}}"
+function mediaFrom(text) {
+  var l = String(text || "").split("\n")
+  if (l.length < 7 || !l[0]) return { available: true, playing: false, title: null, artist: null, album: null, app: null, package: null, position: null, duration: null, art: null }
+  var us = function(v) { var n = parseInt(v, 10); return isFinite(n) ? Math.round(n / 1e6) : null }
+  var art = l[7] || ""
+  return { available: true, playing: l[0] === "Playing", title: l[1] || null, artist: l[2] || null, album: l[3] || null,
+           app: l[4] || null, package: l[4] || null, position: us(l[5]), duration: us(l[6]),
+           art: art.indexOf("file://") === 0 ? art.slice(7) : null }
+}
+
+// "<torch brightness>\n<mako modes>" -> android.modes' shape.
+function modesFrom(text) {
+  var l = String(text || "").split("\n")
+  var torch = parseInt(l[0], 10)
+  return { dnd: /do-not-disturb/.test(l.slice(1).join(" ")), saver: false, ringer: "normal", torch: isFinite(torch) ? torch > 0 : null }
+}
+
+// /proc/meminfo, /proc/uptime and uname -> part of android.system.
+function systemFrom(meminfo, uptime, kernel) {
+  var kb = function(name) { var m = new RegExp("^" + name + ":\\s+(\\d+)", "m").exec(meminfo || ""); return m ? parseInt(m[1], 10) * 1024 : null }
+  var total = kb("MemTotal"), available = kb("MemAvailable")
+  return { kernel: String(kernel || "").trim() || null, uptime: Math.floor(parseFloat(uptime) || 0),
+           memory: { total: total, used: total !== null && available !== null ? total - available : null, available: available },
+           storage: null, cpu: { soc: "gs201", maker: "Google", hardware: null, cores: 8, abi: "arm64-v8a", maxMhz: null },
+           display: { width: 1440, height: 3120, hz: 120, dpi: 512 }, build: null, codename: "cheetah", patch: null,
+           locale: null, timezone: null, launcher: "omamobile", theme: null, apps: 0 }
+}
+
+// The panel is off when its backlight's bl_power isn't 0, as omamobile-keys reads it.
+function panelOff(blPower) {
+  var t = String(blPower === undefined || blPower === null ? "" : blPower).trim()
+  return t !== "" && t !== "0"
 }
 
 // ---------------------------------------------------------------- limits
@@ -229,6 +318,8 @@ if (typeof module !== "undefined") {
     parseColorsToml: parseColorsToml, palette: palette, cardPalette: cardPalette,
     dpFor: dpFor, cellsFor: cellsFor, homeSpec: homeSpec, tileVars: tileVars, cornersFor: cornersFor,
     capabilities: capabilities, capabilityList: capabilityList, approvalMatches: approvalMatches,
-    sourceLimits: sourceLimits, LIMITS: LIMITS, hostOf: hostOf, OWL_CELL_DP: OWL_CELL_DP
+    sourceLimits: sourceLimits, LIMITS: LIMITS, hostOf: hostOf, OWL_CELL_DP: OWL_CELL_DP,
+    actionArgv: actionArgv, volumeFrom: volumeFrom, mediaFrom: mediaFrom, MEDIA_FORMAT: MEDIA_FORMAT,
+    modesFrom: modesFrom, systemFrom: systemFrom, panelOff: panelOff, DEVICE_ACTIONS: DEVICE_ACTIONS
   }
 }

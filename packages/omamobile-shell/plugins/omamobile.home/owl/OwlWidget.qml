@@ -38,7 +38,13 @@ Item {
   property var tree: null
   property string error: ""
   property var problems: []
-  readonly property bool animating: !!widget.tree && widget.tree.readsTime === true
+  readonly property bool animating: (!!widget.tree && widget.tree.readsTime === true)
+    || (widget.screenOpen && !!widget.screenTree && widget.screenTree.readsTime === true)
+  // The widget's `screen { }`, shown in place of the tile while open (as
+  // our built-ins switch to their longer view), with its title.
+  property bool screenOpen: false
+  property var screenTree: null
+  readonly property bool hasScreen: !!widget.program && !!widget.program.screen
 
   // ---------------------------------------------------------------- loading
 
@@ -47,6 +53,9 @@ Item {
   Component.onCompleted: Qt.callLater(widget.load)
 
   function load() {
+    widget.stopLive()
+    widget.screenOpen = false
+    widget.screenTree = null
     widget.instance = null
     widget.tree = null
     widget.error = ""
@@ -64,7 +73,7 @@ Item {
     const saved = widget.host && widget.stateKey ? widget.host.loadState(widget.stateKey) : null
     widget.instance = new Runtime.Instance(widget.program, widget.bridge, saved || {})
     widget.render()
-    if (widget.active) widget.refresh()
+    if (widget.active) { widget.refresh(); widget.startLive() }
   }
 
   // What the instance calls back into.
@@ -85,7 +94,13 @@ Item {
 
   onThemeColorsChanged: if (widget.instance) { widget.instance.invalidate(); widget.render() }
   onTileVarsChanged: if (widget.instance) { widget.instance.invalidate(); widget.render() }
-  onActiveChanged: if (widget.active) widget.refresh()
+  // Sources keep running while the screen is open, whatever page shows.
+  readonly property bool live: widget.active || widget.screenOpen
+  onLiveChanged: {
+    if (widget.live) { widget.refresh(); widget.startLive() }
+    else widget.stopLive()
+  }
+  Component.onDestruction: { widget.stopLive(); widget.saveNow() }
 
   // ---------------------------------------------------------------- drawing
 
@@ -95,7 +110,19 @@ Item {
   }
 
   function render() {
-    if (widget.instance) widget.tree = widget.instance.render(false)
+    if (!widget.instance) return
+    widget.tree = widget.instance.render(false)
+    if (widget.screenOpen) widget.screenTree = widget.instance.render(true)
+  }
+
+  function openScreen() {
+    if (!widget.hasScreen) { widget.report("screen(): this widget has no screen { }"); return }
+    widget.screenOpen = true
+    widget.render()
+  }
+  function closeScreen() {
+    widget.screenOpen = false
+    widget.screenTree = null
   }
 
   function frame(seconds) {
@@ -149,10 +176,11 @@ Item {
   function tick(now) {
     if (!widget.instance) return
     widget.instance.tick(now)
-    if (!widget.active) return
+    if (!widget.live) return
     const specs = widget.instance.sources()
     for (let i = 0; i < specs.length; i++) {
       const s = specs[i]
+      if (s.kind === "stream" || s.kind === "file") continue
       const every = widget.host ? widget.host.interval(s) : s.every
       const last = widget.lastRun[s.slot]
       // Aligned to the period: `every 1m` turns over on the minute.
@@ -206,10 +234,38 @@ Item {
     else widget.host.runSource(widget, s, s.arg(), s.headers(), finish)
   }
 
+  // ---------------------------------------------------------------- live sources
+
+  // `stream(...)` (a line is a value) and `file(...)` (read again when it
+  // changes): started while the widget shows, stopped when it doesn't.
+  property var liveHandles: []
+  function startLive() {
+    if (!widget.instance || !widget.host || widget.liveHandles.length) return
+    const specs = widget.instance.sources()
+    const handles = []
+    for (let i = 0; i < specs.length; i++) {
+      const s = specs[i]
+      if (s.kind !== "stream" && s.kind !== "file") continue
+      const slot = s.slot
+      const onValue = function(text) { if (widget.instance) widget.instance.setSource(slot, String(text)) }
+      const h = s.kind === "stream" ? widget.host.stream(widget, s, s.arg(), onValue)
+        : widget.host.watch(widget, s, s.arg(), onValue)
+      if (h) handles.push(h)
+    }
+    widget.liveHandles = handles
+  }
+  function stopLive() {
+    const handles = widget.liveHandles
+    widget.liveHandles = []
+    for (let i = 0; i < handles.length; i++) handles[i].stop()
+  }
+
   // ---------------------------------------------------------------- actions
 
   function act(name, args) {
     if (name === "refresh") { widget.refreshSoon(); return }
+    if (name === "screen") { widget.openScreen(); return }
+    if (name === "close") { widget.closeScreen(); return }
     if (widget.host) widget.host.act(widget, name, args)
   }
 
@@ -221,5 +277,7 @@ Item {
     interval: 1000
     onTriggered: if (widget.instance && widget.host && widget.stateKey) widget.host.saveState(widget.stateKey, widget.instance.persisted())
   }
-  Component.onDestruction: if (widget.instance && widget.host && widget.stateKey && saveTimer.running) widget.host.saveState(widget.stateKey, widget.instance.persisted())
+  function saveNow() {
+    if (widget.instance && widget.host && widget.stateKey && saveTimer.running) widget.host.saveState(widget.stateKey, widget.instance.persisted())
+  }
 }

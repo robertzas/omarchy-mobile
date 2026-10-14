@@ -73,7 +73,7 @@ Item {
   property string sheet: ""
   property string settingsId: ""
   property string notice: ""
-  readonly property bool wantsKeyboard: sheet === "apps" || sheet === "settings" || sheet === "create"
+  readonly property bool wantsKeyboard: sheet === "apps" || sheet === "settings" || sheet === "create" || owlTyping
 
   // Bumped when desktop entries change, so app tiles look themselves up again.
   property int appsRevision: 0
@@ -432,7 +432,7 @@ Item {
     const info = owlInfo[widgetId]
     if (!info || !info.ok) return "unknown"
     const next = Object.assign({}, owlApprovals)
-    next[widgetId] = { commands: info.program.commands.slice(), network: network === true, at: new Date().toISOString() }
+    next[widgetId] = { commands: info.program.commands.slice(), devices: info.caps.devices.slice(), network: network === true, at: new Date().toISOString() }
     owlApprovals = next
     approvalsFile.setText(JSON.stringify(next, null, 2) + "\n")
     return "approved"
@@ -458,7 +458,34 @@ Item {
 
   // Sources run while the widget's page or a neighbour shows and no app
   // covers the home screen (an app on this workspace).
-  readonly property bool owlPaused: !!Hyprland.focusedWorkspace && Hyprland.focusedWorkspace.toplevels.values.length > 0
+  readonly property bool owlPaused: owlPanelOff || (!!Hyprland.focusedWorkspace && Hyprland.focusedWorkspace.toplevels.values.length > 0)
+
+  // The panel is off when its backlight's bl_power isn't 0, read the way
+  // omamobile-keys reads it (the device from omarchy-hw-display). sysfs has
+  // no change events, so it is read every 2 s, a cheap file read.
+  property bool owlPanelOff: false
+  property string owlBacklight: ""
+  Process {
+    command: ["omarchy-hw-display"]
+    running: root.owlEnabled
+    stdout: StdioCollector { id: displayName; waitForEnd: true; onStreamFinished: root.owlBacklight = String(displayName.text || "").trim().split("\n")[0] }
+  }
+  FileView {
+    id: blPower
+    path: root.owlBacklight ? "/sys/class/backlight/" + root.owlBacklight + "/bl_power" : ""
+    printErrors: false
+    onLoaded: root.owlPanelOff = OwlPhone.panelOff(text())
+  }
+  Timer {
+    interval: 2000
+    repeat: true
+    running: root.owlEnabled && root.owlBacklight !== ""
+    onTriggered: blPower.reload()
+  }
+
+  // An OWL Input has focus: the surface takes the keyboard.
+  property bool owlTyping: false
+  function owlKeyboard(on) { owlTyping = !!on }
   function owlActive(entryId) {
     const found = HomeModel.findItem(layout, entryId)
     return !!found && Math.abs(found.page - currentPage) <= 1 && !owlPaused

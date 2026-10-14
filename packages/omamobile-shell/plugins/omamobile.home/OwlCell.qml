@@ -35,24 +35,53 @@ Item {
     themeColors: owlCell.home ? owlCell.home.owlPalette : ({})
     approval: owlCell.card.approval
     active: owlCell.running && !!owlCell.home && !!owlCell.entry && owlCell.home.owlActive(owlCell.entry.id)
+    // While its screen is open, the screen's size is the view's own.
     tileVars: Phone.tileVars(owlCell.width, owlCell.height, owlCell.dp,
-                             owlCell.home ? owlCell.home.owlScreenWidth : owlCell.width,
-                             owlCell.home ? owlCell.home.owlScreenHeight : owlCell.height, Style.cornerRadius)
+                             owl.screenOpen ? view.width : owlCell.home ? owlCell.home.owlScreenWidth : owlCell.width,
+                             owl.screenOpen ? view.height : owlCell.home ? owlCell.home.owlScreenHeight : owlCell.height, Style.cornerRadius)
   }
 
   // The tile's own onTap, under the nodes (a node that handles taps wins).
   TapHandler {
-    enabled: owlCell.running && !owlCell.editing && !!owl.tree && !!owl.tree.onTap
+    enabled: owlCell.running && !owlCell.editing && !owl.screenOpen && !!owl.tree && !!owl.tree.onTap
     gesturePolicy: TapHandler.ReleaseWithinBounds
     onTapped: function(point) { owl.runHandler(owl.tree.onTap, [point.position.x / owlCell.dp, point.position.y / owlCell.dp]) }
+  }
+
+  // The screen's title and the way back, as our built-ins show their
+  // longer view in place ("‹" goes back). Back also comes from close().
+  Item {
+    id: screenBar
+    visible: owl.screenOpen
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.top: parent.top
+    height: owl.screenOpen ? Math.max(44, Style.font.subtitle * 2.2) : 0
+    Text {
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.leftMargin: Style.spacing.xl
+      anchors.rightMargin: Style.spacing.xl
+      anchors.verticalCenter: parent.verticalCenter
+      textFormat: Text.PlainText
+      text: "\u2039  " + (owl.screenTree && owl.screenTree.title ? owl.screenTree.title : "")
+      color: owlCell.home ? owlCell.home.foreground : Commons.Color.menu.text
+      font.family: Style.font.family
+      font.pixelSize: Style.font.subtitle
+      font.bold: true
+      elide: Text.ElideRight
+    }
+    MouseArea { anchors.fill: parent; enabled: !owlCell.editing; onClicked: owl.closeScreen() }
   }
 
   Owl.OwlView {
     id: view
     anchors.fill: parent
     anchors.margins: (owl.program ? owl.program.padding : 12) * owlCell.dp
+    anchors.topMargin: owl.screenOpen ? screenBar.height : (owl.program ? owl.program.padding : 12) * owlCell.dp
     visible: owlCell.running && owl.error === ""
-    tree: owl.tree
+    tree: owl.screenOpen ? owl.screenTree : owl.tree
+    terminals: owlCell.home && owlCell.home.owlHost ? owlCell.home.owlHost.terminalFor(owl) : null
     colors: owlCell.home ? owlCell.home.owlInk : ({})
     dp: owlCell.dp
     corners: Phone.cornersFor(Style.cornerRadius)
@@ -61,6 +90,7 @@ Item {
     homeDir: owlCell.home ? owlCell.home.homeDir : ""
     interactive: !owlCell.editing
     onHandlerRun: function(handler, args) { owl.runHandler(handler, args) }
+    onKeyboardWanted: function(on) { if (owlCell.home && owlCell.home.owlKeyboard) owlCell.home.owlKeyboard(on) }
   }
 
   // ---------- the scheduler and the crash guard

@@ -177,6 +177,7 @@ function Compiler(ast) {
   this.states = {}
   this.components = {}
   this.commands = []
+  this.actions = []           // the actions handlers can run, by name, first use first
   this.needsLinux = false
   this.animated = false
   this.terminal = false
@@ -291,6 +292,7 @@ Compiler.prototype = {
       onTap: onTap,
       triggers: triggers,
       commands: this.commands,
+      actions: this.actions,
       requires: requires,
       needsLinux: this.needsLinux || Object.keys(requires).length > 0,
       animated: this.animated,
@@ -676,6 +678,7 @@ Compiler.prototype = {
         self.fail(c.name + " takes " + words.join(", "), c.at)
       }
       self.uses(c.name, c.at)
+      if (self.actions.indexOf(c.name) < 0) self.actions.push(c.name)
       if ((c.name === "screen" || c.name === "close") && self.screenCall === null) self.screenCall = c.at
       if (c.name === "run" || c.name === "terminal" || c.name === "app") {
         self.commands.push(first !== null ? first : c.name + "(…) built from widget values")

@@ -50,9 +50,14 @@ function lineCol(src, at) {
 
 // What a compiler says about a file, in a shape both sides share.
 function summary(program) {
+  // Derived from the commands list alone, by the same function on both
+  // sides (the vibration and torch asks come from our compiler's actions,
+  // which the reference doesn't list).
+  const caps = P.capabilities(program)
+  caps.devices = []
   return { ok: true, name: program.name, size: program.size || null, minSize: program.minSize || null,
            commands: program.commands, requires: program.requires,
-           capabilities: P.capabilityList(P.capabilities(program)) }
+           capabilities: P.capabilityList(caps) }
 }
 function ours(src) {
   try { return summary(C.compile(src)) } catch (e) {

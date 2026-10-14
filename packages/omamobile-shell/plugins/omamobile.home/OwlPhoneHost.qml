@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Io
 import "HomeModel.js" as HomeModel
 import "owl/phone.js" as Phone
+import "owl/terminal.js" as Term
 
 // Everything an OWL widget reaches outside itself goes through here
 // (docs/WIDGET-INTEROP-PLAN.md §2.5, §3.3, §3.4): its commands (`bash -c`,
@@ -54,8 +55,6 @@ QtObject {
       host.command(widget, arg, Phone.sourceLimits(spec, false).timeout, done)
       return
     }
-    // stream: not served in this milestone; it reads as a command once.
-    if (spec.kind === "stream") { done({ error: "stream sources aren't served on the phone yet" }); return }
     done({ error: "unknown source " + spec.kind })
   }
 
@@ -104,9 +103,60 @@ QtObject {
     }
   }
 
+  // ---------------------------------------------------------------- live sources
+
+  // stream(...): one long-running command, a line is a value, restarted 5 s
+  // after it exits. At most two across the home screen (plan §3.3).
+  property int streamCount: 0
+  function stream(widget, spec, text, onLine) {
+    if (host.usesNetwork(text) && !host.networkAllowed(widget)) { widget.report(spec.name + ": the internet is off for this widget"); return null }
+    if (host.streamCount >= Phone.LIMITS.streams) { widget.report(spec.name + ": two streams already run on the home screen"); return null }
+    host.streamCount++
+    const proc = streamComponent.createObject(host, { command: ["bash", "-c", String(text)] })
+    proc.line = function(l) { onLine(String(l).slice(0, Phone.LIMITS.cmdOutput)) }
+    proc.running = true
+    return { stop: function() { if (proc.stopped) return; proc.stopped = true; host.streamCount--; proc.running = false; proc.destroy() } }
+  }
+
+  // file(...): read now and again whenever it changes (inotify through
+  // FileView), at most 1 MB.
+  function watch(widget, spec, path, onText) {
+    const p = String(path).indexOf("~/") === 0 ? Quickshell.env("HOME") + String(path).slice(1) : String(path)
+    const view = watchComponent.createObject(host, { path: p })
+    view.changedText = function(t) { onText(String(t).slice(0, Phone.LIMITS.bodyBytes)) }
+    return { stop: function() { view.destroy() } }
+  }
+
+  // A Terminal node's session (owl/OwlTerminal.qml).
+  function terminalFor(widget) {
+    return {
+      start: function(command, onOutput, onExit) {
+        const proc = terminalComponent.createObject(host, { command: Term.argv(command) })
+        proc.output = onOutput
+        proc.ended = onExit
+        proc.running = true
+        return { write: function(t) { if (proc.running) proc.write(t) }, stop: function() { proc.running = false; proc.destroy() } }
+      }
+    }
+  }
+
   // android.*, answered from Linux: battery from the kernel's power supply,
-  // the rest as the guide's shapes with what this phone can say so far.
+  // volume from wpctl, media from playerctl (MPRIS), modes from the torch LED
+  // and mako's modes, system from /proc.
   function android(widget, kind, done) {
+    const fromCommand = function(text, parse) {
+      host.command(widget, text, 5, function(r) { done({ value: parse(String(r.out || "")) }) })
+    }
+    if (kind === "volume") { fromCommand("wpctl get-volume @DEFAULT_AUDIO_SINK@", Phone.volumeFrom); return }
+    if (kind === "media") { fromCommand("playerctl metadata --format " + JSON.stringify(Phone.MEDIA_FORMAT) + " 2>/dev/null", Phone.mediaFrom); return }
+    if (kind === "modes") { fromCommand("brightnessctl --device=white:torch get 2>/dev/null || echo; makoctl mode 2>/dev/null", Phone.modesFrom); return }
+    if (kind === "system") {
+      fromCommand("cat /proc/meminfo; echo '@@'; cat /proc/uptime; echo '@@'; uname -r", function(t) {
+        const parts = t.split("@@\n")
+        return Phone.systemFrom(parts[0], parts[1], parts[2])
+      })
+      return
+    }
     if (kind === "battery") {
       host.command(widget, "cat /sys/class/power_supply/battery/capacity /sys/class/power_supply/battery/status 2>/dev/null", 5, function(r) {
         const lines = String(r.out || "").trim().split("\n")
@@ -118,8 +168,6 @@ QtObject {
     }
     if (kind === "alarm") { done({ value: { set: false, time: null, app: null } }); return }
     if (kind === "notifications") { done({ value: { available: false, count: 0, items: [] } }); return }
-    if (kind === "modes") { done({ value: { dnd: false, saver: false, ringer: "normal", torch: null } }); return }
-    if (kind === "media") { done({ value: { available: false, playing: false } }); return }
     if (kind === "device") { done({ value: { model: "Pixel 7 Pro", maker: "Google", android: null, sdk: null, soc: "gs201" } }); return }
     done({ value: null })
   }
@@ -153,36 +201,27 @@ QtObject {
       if (host.usesNetwork(s(0)) && !host.networkAllowed(widget)) { if (widget) widget.report("run: the internet is off for this widget"); return }
       host.command(widget, s(0), Phone.LIMITS.timeoutMax, function() { if (widget) widget.refreshSoon() })
       return
-    case "notify": Quickshell.execDetached(["notify-send", s(0), s(1)]); return
-    case "copy": Quickshell.execDetached(["wl-copy", "--", s(0)]); return
+    case "haptic": case "torch":
+      // Asked for on the approval sheet; never without it.
+      if (!host.approvalOf(widget) || (host.approvalOf(widget).devices || []).indexOf(name) < 0) {
+        if (widget) widget.report(name + ": not allowed for this widget")
+        return
+      }
+      host.execute(Phone.actionArgv(name, a))
+      return
+    case "notify": case "copy": case "volume": case "media":
+      host.execute(Phone.actionArgv(name, a))
+      return
     case "share":
       Quickshell.execDetached(["wl-copy", "--", s(0)])
       Quickshell.execDetached(["notify-send", "Copied", "Sharing isn't here yet, so it's on the clipboard"])
-      return
-    case "volume": {
-      const word = s(0)
-      const argv = word === "up" ? ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "5%+"]
-        : word === "down" ? ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "5%-"]
-        : word === "mute" ? ["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "1"]
-        : word === "unmute" ? ["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "0"]
-        : word === "toggle" ? ["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"]
-        : ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", Math.max(0, Math.min(100, Number(word) || 0)) + "%"]
-      Quickshell.execDetached(argv)
-      return
-    }
-    case "media":
-      Quickshell.execDetached(["playerctl", s(0) === "toggle" ? "play-pause" : s(0)])
       return
     case "launcher":
       if (host.home && (s(0) === "store" || s(0) === "drawer")) host.home.showSheet("widgets")
       else if (s(0) === "style" || s(0) === "themes") Quickshell.execDetached(["omarchy-menu", "summon", "style"])
       return
-    case "screen": case "close":
-      if (widget) widget.report(name + ": full-screen views aren't served on the phone yet")
-      return
     default:
-      // haptic, torch, androidApp, notification: not on this phone yet
-      // (haptics and the torch get announced before their first test).
+      // androidApp, notification: no Android here (Waydroid later).
       if (widget) widget.report(name + ": not available on this phone yet")
     }
   }
@@ -191,6 +230,9 @@ QtObject {
     if (host.usesNetwork(text) && !host.networkAllowed(widget)) { widget.report("run: the internet is off for this widget"); return }
     host.command(widget, text, Phone.LIMITS.timeoutMax, function(r) { done(String(r.out || "").replace(/\s+$/, "")) })
   }
+
+  // Every phone action starts here: tests replace it to see the argv.
+  property var execute: function(argv) { if (argv) Quickshell.execDetached(argv) }
 
   // ---------------------------------------------------------------- state and errors
 
@@ -248,6 +290,43 @@ QtObject {
   }
 
   property Component timerComponent: Component { Timer { } }
+
+  property Component streamComponent: Component {
+    Process {
+      id: streamProc
+      property var line: null
+      property bool stopped: false
+      stdout: SplitParser { onRead: function(data) { if (streamProc.line) streamProc.line(data) } }
+      onExited: if (!streamProc.stopped) restart.restart()
+      property Timer restart: Timer { interval: 5000; onTriggered: if (!streamProc.stopped) streamProc.running = true }
+    }
+  }
+
+  property Component watchComponent: Component {
+    FileView {
+      id: watched
+      property var changedText: null
+      watchChanges: true
+      printErrors: false
+      onFileChanged: reload()
+      onLoaded: if (watched.changedText) watched.changedText(watched.text())
+      onLoadFailed: if (watched.changedText) watched.changedText("")
+    }
+  }
+
+  property Component terminalComponent: Component {
+    Process {
+      id: termProc
+      property var output: null
+      property var ended: null
+      stdinEnabled: true
+      stdout: SplitParser {
+        splitMarker: ""
+        onRead: function(data) { if (termProc.output) termProc.output(data) }
+      }
+      onExited: if (termProc.ended) termProc.ended()
+    }
+  }
 
   property Component fileComponent: Component {
     FileView {
