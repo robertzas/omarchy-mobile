@@ -7,7 +7,7 @@ loses lines that arrive faster than about 400 MB/s, so the sensor driver
 now lengthens their lines (`samsung,max-line-throughput = <360>`, section
 CAM-M.5l). Front: F.5-F.7 passed. Telephoto: T.1, T.2, T.4, T.5 passed;
 its SEM1215SA lens NACKs (T.3), so it stays at a stop, out of focus.
-Kernel: int `cda0fb5a5` = `7.3.0-rc6-omamobile-push1-00500-gcda0fb5a5bbd`,
+Kernel: int `52763e295` = `7.3.0-rc6-omamobile-push1-00504-g52763e295d8a`,
 overlays as `device.conf` (now with `camera-tele`). Earlier status (2026-10-13, evening): **the ultrawide works end to end through
 libcamera (CAM5). The other three cameras are built offline and wait for
 the phone: main (Samsung S5KGN1, C-PHY, link 1; runbook CAM-M), front
@@ -3255,6 +3255,27 @@ Results (00490-00500, main camera unless said):
 - Costs of the limit: the main camera's 4080x3072 mode runs at most about
   9 fps (18526 clocks a line), 2016x1136 up to about 128 fps; the
   telephoto's 2016-wide modes about 30 fps.
+
+**Follow-ups (00502-00504):**
+- `dcf09ccb2` (int) / camera `media: gs201-csis: don't lose the first
+  buffer when streaming starts late`: with `min_queued_buffers = 2`, vb2
+  calls buf_queue with the queue already streaming when STREAMON came
+  before the buffers (libcamera's order), so the first buffer was taken
+  and then replaced: "videobuf2_common: driver bug: stop_streaming
+  operation is leaving buffer 0 in active state" after every libcamera
+  run. Now: no warning in 12 libcamera start/stops (each camera twice or
+  more), WDMA errors 0 in all.
+- **The limit is the WDMA's, not C-PHY's:** libcamera's default size for
+  the front is its 3840x2736 mode (4800-byte lines at 11.6 us, ~414 MB/s),
+  which lost its lines the same way; the front gets
+  `samsung,max-line-throughput = <360>` too and that mode now runs at 26
+  fps. The ultrawide's full mode (5040-byte lines at ~10.8 us, ~467 MB/s)
+  is the same failure (CAM5.2c's `LASTADDR`); the imx386 driver needs the
+  same rule.
+- libcamera's default size for the main and telephoto is the full mode;
+  its RGB888 output buffers (4 x 37 MB) then fail to allocate ("dma-heap
+  allocation failure"), a CMA-size limit, not a driver one. The binned
+  sizes run (main 30 fps, telephoto 26 fps).
 
 Next:
 1. Telephoto lens: the SEM1215SA NACKs at 0x34 with its own supplies;
