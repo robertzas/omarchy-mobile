@@ -21,8 +21,10 @@ guards it. **M4.1j passed (2026-10-13, 00511):** with that kernel the
 same reboot came back on its own in about 25 s, NV unchanged. Shutdown
 still printed two WARNs: CPIF's s51xx never freed the endpoint's MSI
 vectors, so the endpoint's MSI domain went with them allocated;
-fixed offline in `7b2b87cb7` (M4.1k, not yet on the phone). Keep reboots
-after a modem start attended until a second clean run. M4.2 needs a SIM. Section 6.3 lists what our CPIF
+fixed in `7b2b87cb7`. **M4.1k passed (2026-10-13, 00514):** the same
+reboot with no WARN at all, NV unchanged. That is the second clean
+reboot with the modem up, so a reboot after a modem start no longer
+needs the human at the phone. M4.2 needs a SIM. Section 6.3 lists what our CPIF
 port still lacks for data and suspend.
 Kernel branch `omamobile-modem` in `~/android/mainline/wt-modem` (head
 `d34bbbad4`, section 6.3, M3.4.5b and M4.1b-M4.1k), build in `~/android/mainline/out-modem` (last
@@ -2296,6 +2298,20 @@ grep -nE "WARNING:|Trying to free|already-free|Unbalanced|Unable to handle|Inter
 #   hang), or merge int without 7b2b87cb7/d34bbbad4; the modem must be stopped (or never started) on the
 #   boot that the push reboots. If slot B does not come up, slot A is stock as always.
 ```
+
+**M4.1k, results (2026-10-13, `7.3.0-rc6-omamobile-push1-00514-g9938ea8b8b8d`,
+int `9938ea8b8` = 00511 plus `omamobile-modem` through `d34bbbad4`; logs
+`logs/m4.1k-*`): PASSED.** Pushed with the modem off; the boot came up
+with 0 failed units and 0 UFS handler passes. M3.5 before: unchanged.
+Modules and preconditions as M4.1j; `systemctl start omamobile-modem`:
+ONLINE within 60 s, 0 UFS passes; the probe five times "error=0" plus
+GET_SMSC_ADDR error 11 (no SIM), radio state 3. Idle link
+("pcie_powered_on:0"), then `reboot-to omamobile`: the kmsg stream shows
+"s51xx PCIe Remove!!!" and `power_shutdown_cp` and **no WARNING, no
+"Trying to free nonexistent resource", no oops**; back on SSH in 23 s.
+New boot: 0 failed units, fingerprint listed, AoC, speaker protection,
+the four sensors and Wi-Fi up. M3.5 after: unchanged. Published as
+linux-omarchy-mobile `omamobile-int` snapshot `c237ad9d1`.
 
 **Before M4.2:** M4.1i passed; a SIM with its PIN lock off in the phone
 (M4.2's preconditions), the carrier's APN in
