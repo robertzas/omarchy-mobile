@@ -239,4 +239,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
    && -f $tmp/root/usr/share/omamobile/shell/widget-template/manifest.json \
    && -f $tmp/root/usr/share/omamobile/shell/widget-examples/countdown/Widget.qml ]] \
   || fail "install stages the widget tool, contract, template and examples"
+[[ -f $tmp/root/usr/share/omamobile/shell/OWL.md ]] || fail "install stages the OWL guide"
+grep -c 'Copyright (c) 2026 Simon Schubert and contributors' widgets/OWL.md >/dev/null || fail "the OWL guide keeps its copyright line"
+grep -c 'd355bdb2789f7bd1023d88b17f8a2898dc0ffa2b' widgets/OWL.md >/dev/null || fail "the OWL guide names its source commit"
 pass "install stages the package"
