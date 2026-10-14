@@ -3,11 +3,14 @@
 # phone-mirror: the phone's screen in a window on this computer, with mouse
 # and keyboard input, over the USB link (like scrcpy, over VNC).
 #
-#   tools/phone-mirror [--keep] [--viewer remmina|tigervnc|gvncviewer] [--height PX]
+#   tools/phone-mirror [--keep] [--fit] [--viewer tigervnc|gvncviewer|remmina] [--height PX]
 #
 # Starts mirroring on the phone (omamobile-mirror on, package omamobile-mirror),
 # opens a VNC viewer on 172.16.42.1:5900 titled "Omarchy Mobile phone", and turns
 # mirroring off again when the viewer closes (--keep leaves it on).
+#   --fit      the whole phone in the window, no scrolling: TigerVNC runs inside
+#              gamescope on this computer, which scales its 1440x3120 picture
+#              down to the window (and the mouse back up); needs gamescope
 #   --viewer   pick a viewer; default: tigervnc, then gvncviewer (remmina only on request;
 #              its VNC plugin rejects the phone's 1440x3120 frame)
 #   --height   window height in pixels (default 900); the width follows the
@@ -19,13 +22,15 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ADDRESS=172.16.42.1
 PORT=5900
 TITLE="Omarchy Mobile phone"
-KEEP=0 VIEWER= HEIGHT=900
+PHONE_W=1440 PHONE_H=3120	# the panel in pixels: what wayvnc sends (portrait)
+KEEP=0 FIT=0 VIEWER= HEIGHT=900
 
-usage() { sed -n '3,16s/^# \{0,1\}//p' "$0" >&2; exit 2; }
+usage() { sed -n '3,19s/^# \{0,1\}//p' "$0" >&2; exit 2; }
 die() { echo "phone-mirror: $*" >&2; exit 1; }
 while [[ $# -gt 0 ]]; do
   case $1 in
     --keep) KEEP=1 ;;
+    --fit) FIT=1 ;;
     --viewer) VIEWER=${2:?}; shift ;;
     --height) HEIGHT=${2:?}; shift ;;
     -h|--help) usage ;;
@@ -34,7 +39,7 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 [[ $HEIGHT =~ ^[0-9]+$ ]] && (( HEIGHT >= 200 )) || die "--height takes a number of pixels"
-WIDTH=$(( HEIGHT * 1440 / 3120 ))
+WIDTH=$(( HEIGHT * PHONE_W / PHONE_H ))
 
 have() { command -v "$1" >/dev/null; }
 remmina_vnc() { # Remmina without libvncserver has no VNC plugin
@@ -44,13 +49,16 @@ missing() {
   cat >&2 <<EOF
 phone-mirror: no VNC viewer found on this computer. Install one:
   sudo pacman -S tigervnc               # recommended: vncviewer, fast and full quality (no scaling: scroll)
+  sudo pacman -S gamescope              # with tigervnc: --fit shows the whole phone in the window
   sudo pacman -S gtk-vnc                # gvncviewer: works, but slower
 (Remmina's VNC plugin refuses the phone's 1440x3120 frame, "Rect too large",
 and reports a time-out; it is only used when asked for with --viewer remmina.)
 EOF
   exit 1
 }
-if [[ -z $VIEWER ]]; then
+if [[ -z $VIEWER ]] && (( FIT )); then
+  VIEWER=tigervnc
+elif [[ -z $VIEWER ]]; then
   # TigerVNC first: tested against the phone (2026-10-13). Remmina's VNC
   # plugin (libvncclient) rejects the 1440x3120 frame ("Rect too large").
   if have vncviewer; then VIEWER=tigervnc
@@ -64,6 +72,10 @@ case $VIEWER in
   gvncviewer) have gvncviewer || die "gvncviewer is not installed (gtk-vnc's example viewer)" ;;
   *) die "unknown viewer $VIEWER (remmina, tigervnc, gvncviewer)" ;;
 esac
+if (( FIT )); then
+  [[ $VIEWER == tigervnc ]] || die "--fit works with tigervnc (gvncviewer scales by itself; remmina can't show the phone)"
+  have gamescope || die "--fit needs gamescope: sudo pacman -S gamescope"
+fi
 
 tools/phone-ssh true 2>/dev/null || die "the phone does not answer on $ADDRESS (USB cable, tools/phone-ssh)"
 tools/phone-ssh command -v omamobile-mirror >/dev/null ||
@@ -112,9 +124,20 @@ disablepasswordstoring=1
 EOF
     remmina -c "$tmp/omamobile-phone.remmina" >/dev/null 2>&1 || true ;;
   tigervnc)
-    # Title "Omarchy Mobile phone - TigerVNC". TigerVNC does not scale: the
-    # window shows the phone at full size and scrolls.
-    vncviewer -geometry "${WIDTH}x${HEIGHT}" -RemoteResize=0 -Shared=1 "$ADDRESS::$PORT" || true ;;
+    if (( FIT )); then
+      # TigerVNC can't scale, and the phone can't send a smaller picture
+      # (Hyprland gives a mirrored output no wl_output for wayvnc to capture;
+      # packages/omamobile-mirror/README.md). So TigerVNC runs full screen on a
+      # 1440x3120 screen nested in gamescope, and gamescope scales that screen
+      # into a WIDTHxHEIGHT window here, on this computer's GPU, mapping the
+      # mouse back. The window is gamescope's: close it to stop.
+      gamescope -W "$WIDTH" -H "$HEIGHT" -w "$PHONE_W" -h "$PHONE_H" -S fit -F linear -- \
+        vncviewer -FullScreen=1 -RemoteResize=0 -Shared=1 "$ADDRESS::$PORT" || true
+    else
+      # Title "Omarchy Mobile phone - TigerVNC". TigerVNC does not scale: the
+      # window shows the phone at full size and scrolls (--fit: no scrolling).
+      vncviewer -geometry "${WIDTH}x${HEIGHT}" -RemoteResize=0 -Shared=1 "$ADDRESS::$PORT" || true
+    fi ;;
   gvncviewer)
     gvncviewer "$ADDRESS:$(( PORT - 5900 ))" || true ;;
 esac
