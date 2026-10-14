@@ -11,6 +11,12 @@ hl.window_rule({ match = { class = ".*" }, maximize = true })
 -- ...except the screensaver, which Omarchy shows fullscreen over the bars.
 hl.window_rule({ match = { class = "^org.omarchy.screensaver$" }, maximize = false })
 hl.window_rule({ match = { class = "^org.omarchy.screensaver$" }, fullscreen = true })
+-- File dialogs (open, save, choose a folder) come from Nautilus through the
+-- portal (portal/hyprland-portals.conf). One with a parent window would float
+-- at its desktop size; tiled, the rule above fills the screen between the
+-- bar and the on-screen keyboard, like a phone sheet. Nautilus's own windows
+-- tile anyway.
+hl.window_rule({ match = { class = "^org.gnome.Nautilus$" }, float = false })
 
 -- Lock after boot, like a phone: the session logs in automatically, then
 -- Omarchy's lock comes up with its PIN pad. Only once a PIN is set (the

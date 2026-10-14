@@ -32,6 +32,9 @@ install -Dm644 portal/hyprland-portals.conf "$destination/etc/xdg/xdg-desktop-po
 install -Dm644 portal/org.freedesktop.impl.portal.desktop.omamobile.service \
   "$destination/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.omamobile.service"
 install -Dm644 systemd/user/omamobile-portal-access.service "$destination/usr/lib/systemd/user/omamobile-portal-access.service"
+# The file chooser: xdg-desktop-portal-gnome on plain Wayland (its drop-in).
+install -Dm644 systemd/user/xdg-desktop-portal-gnome-omamobile.conf \
+  "$destination/usr/lib/systemd/user/xdg-desktop-portal-gnome.service.d/omamobile.conf"
 install -Dm644 polkit/49-omamobile-admin-self.rules "$destination/usr/share/polkit-1/rules.d/49-omamobile-admin-self.rules"
 install -Dm644 applications/omamobile-open-intent.desktop "$destination/usr/share/applications/omamobile-open-intent.desktop"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-shell/LICENSE"
