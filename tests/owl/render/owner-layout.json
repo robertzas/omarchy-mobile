@@ -1,0 +1,152 @@
+{
+ "version": 1,
+ "grid": {
+  "columns": 4,
+  "rows": 6
+ },
+ "home": 0,
+ "nextId": 20,
+ "pages": [
+  {
+   "items": [
+    {
+     "id": "w1",
+     "kind": "widget",
+     "type": "clock",
+     "x": 0,
+     "y": 0,
+     "w": 4,
+     "h": 2,
+     "config": {
+      "timeFormat": "",
+      "dateFormat": "dddd d MMMM"
+     }
+    },
+    {
+     "id": "w2",
+     "kind": "widget",
+     "type": "weather",
+     "x": 0,
+     "y": 2,
+     "w": 4,
+     "h": 1,
+     "config": {
+      "enabled": true,
+      "useLocation": true,
+      "place": "",
+      "latitude": null,
+      "longitude": null,
+      "units": "celsius"
+     }
+    },
+    {
+     "id": "w3",
+     "kind": "widget",
+     "type": "crypto",
+     "x": 0,
+     "y": 3,
+     "w": 2,
+     "h": 2,
+     "config": {
+      "enabled": true
+     }
+    },
+    {
+     "id": "w4",
+     "kind": "widget",
+     "type": "today",
+     "x": 2,
+     "y": 3,
+     "w": 2,
+     "h": 2,
+     "config": {
+      "enabled": true,
+      "useLocation": true,
+      "city": ""
+     }
+    },
+    {
+     "id": "a5",
+     "kind": "app",
+     "app": "chromium",
+     "x": 0,
+     "y": 5,
+     "w": 1,
+     "h": 1
+    },
+    {
+     "id": "a6",
+     "kind": "app",
+     "app": "org.gnome.Nautilus",
+     "x": 1,
+     "y": 5,
+     "w": 1,
+     "h": 1
+    },
+    {
+     "id": "a7",
+     "kind": "app",
+     "app": "foot",
+     "x": 2,
+     "y": 5,
+     "w": 1,
+     "h": 1
+    },
+    {
+     "id": "a8",
+     "kind": "app",
+     "app": "btop",
+     "x": 3,
+     "y": 5,
+     "w": 1,
+     "h": 1
+    }
+   ]
+  },
+  {
+   "items": [
+    {
+     "id": "w9",
+     "kind": "widget",
+     "type": "earthquakes",
+     "x": 0,
+     "y": 0,
+     "w": 4,
+     "h": 2,
+     "config": {
+      "enabled": false
+     }
+    },
+    {
+     "id": "w10",
+     "kind": "widget",
+     "type": "habits",
+     "x": 0,
+     "y": 2,
+     "w": 4,
+     "h": 2,
+     "config": {
+      "done": [
+       "read@2026-10-12"
+      ],
+      "habits": "read"
+     }
+    },
+    {
+     "id": "w11",
+     "kind": "widget",
+     "type": "forecast",
+     "x": 0,
+     "y": 4,
+     "w": 4,
+     "h": 2,
+     "config": {
+      "enabled": true,
+      "useLocation": false,
+      "city": "Berlin"
+     }
+    }
+   ]
+  }
+ ]
+}

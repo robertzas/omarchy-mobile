@@ -128,6 +128,11 @@ Item {
 
   function loadText(text) {
     if (loaded && text === lastWritten) return
+    // Ports from before the OWL built-ins: kept once as home.json.before-owl,
+    // approved where their OWL original needs no more than they had.
+    var ports = []
+    try { ports = HomeModel.portPlacements(JSON.parse(text)) } catch (e) { ports = [] }
+    if (ports.length) { owlBackupProc.running = true; migratePorts(ports) }
     var parsed = HomeModel.parse(text, userCatalog)
     if (!parsed) {
       // Unreadable (a hand edit gone wrong): keep showing what we have (the
@@ -139,6 +144,7 @@ Item {
     }
     corrupt = false
     layout = parsed
+    if (ports.length) saveTimer.restart()
     if (!loaded) { loaded = true; goToPage(layout.home, false) }
     else if (currentPage >= layout.pages.length) goToPage(layout.pages.length - 1, false)
   }
@@ -167,6 +173,12 @@ Item {
   }
 
   Timer { id: saveTimer; interval: 300; onTriggered: root.flush() }
+
+  // The layout as it was before its ports became OWL widgets, kept once.
+  Process {
+    id: owlBackupProc
+    command: ["sh", "-c", "[ -e \"$1.before-owl\" ] || cp -p \"$1\" \"$1.before-owl\"", "sh", root.layoutPath]
+  }
 
   Process {
     id: backupProc
@@ -422,6 +434,8 @@ Item {
   property var owlApprovals: ({})
   FileView {
     id: approvalsFile
+    // Read before the layout, which may approve migrated ports into it.
+    blockLoading: true
     path: root.approvalsPath
     watchChanges: true
     atomicWrites: true
@@ -434,7 +448,7 @@ Item {
     }
   }
   function approveOwl(widgetId, network) {
-    const info = owlInfo[widgetId]
+    const info = HomeModel.isOwlType(widgetId) ? owlBuiltinInfo(widgetId) : owlInfo[widgetId]
     if (!info || !info.ok) return "unknown"
     const next = Object.assign({}, owlApprovals)
     next[widgetId] = { commands: info.program.commands.slice(), devices: info.caps.devices.slice(), network: network === true, at: new Date().toISOString() }
@@ -450,7 +464,61 @@ Item {
   }
 
   // What a placed OWL widget shows: { state, message, record, info, approval }.
+  // ---------- built-ins: the OWL originals of the old ports
+
+  // Their files, from the omamobile-owl-widgets package (read once each).
+  property var owlBuiltinCache: ({})
+  Component { id: builtinFile; FileView { blockLoading: true; printErrors: false } }
+  function owlBuiltinInfo(type) {
+    if (owlBuiltinCache[type]) return owlBuiltinCache[type]
+    const storeId = HomeModel.owlStoreId(type)
+    const view = builtinFile.createObject(root, { path: owlStoreDir + "/widgets/" + storeId + "/widget.owl" })
+    const text = view.text()
+    view.destroy()
+    const info = text ? OwlCatalog.describe(type, text, layout.grid, owlCellHeight, owlDp)
+      : { ok: false, error: "The widget store package (omamobile-owl-widgets) doesn't have " + storeId, program: null, caps: null, refusals: [], name: storeId }
+    // Named and sized as the built-in always was.
+    const spec = HomeModel.widgetSpec(type, null)
+    if (spec) info.name = spec.name
+    info.text = text
+    owlBuiltinCache[type] = info
+    return info
+  }
+  // A port's placement becomes its OWL original (HomeModel.normalize); this
+  // approves it, without asking, only when it needs no more than the port had.
+  function migratePorts(ports) {
+    const next = Object.assign({}, owlApprovals)
+    let changed = false
+    ports.forEach(function(p) {
+      if (next[p.to]) return
+      const verdict = OwlCatalog.portApproval(HomeModel.portCapabilities(p.from), owlBuiltinInfo(p.to), p.enabled)
+      if (!verdict.approve) {
+        console.warn("omamobile.home: " + p.to + " needs your OK: " + verdict.extra.join("; "))
+        return
+      }
+      verdict.approve.from = p.from
+      verdict.approve.at = new Date().toISOString()
+      next[p.to] = verdict.approve
+      changed = true
+    })
+    if (!changed) return
+    owlApprovals = next
+    approvalsFile.setText(JSON.stringify(next, null, 2) + "\n")
+  }
+
   function owlCard(widgetId) {
+    if (HomeModel.isOwlType(widgetId)) {
+      const bi = owlBuiltinInfo(widgetId)
+      const ba = owlApprovals[widgetId] || null
+      const record = { id: widgetId, status: bi.text ? "ok" : "error", errors: bi.text ? [] : [bi.error], hash: "builtin",
+                       kind: "owl", owl: { text: bi.text } }
+      // Built-ins are always on: they are the home screen's own widgets.
+      const bc = OwlCatalog.cardState(true, true, record, bi, ba, guardCrashed[widgetId] === "builtin" ? "builtin" : "")
+      bc.record = record
+      bc.info = bi
+      bc.approval = ba
+      return bc
+    }
     const r = UserWidgets.findRecord(userScan, widgetId)
     const info = owlInfo[widgetId] || null
     const approval = owlApprovals[widgetId] || null
@@ -781,8 +849,10 @@ Item {
     goToPage(next.placed.page, true)
     if (keepSheet !== true) sheet = ""
     var spec = HomeModel.widgetSpec(type, userCatalog)
-    // Built-in network widgets start off and ask for their settings.
-    if (spec && spec.network && !spec.user) openSettings(next.placed.id)
+    // Built-in network widgets start off and ask for their settings; an OWL
+    // built-in asks on its approval sheet instead.
+    if (HomeModel.isOwlType(type)) { if (owlCard(type).state === "approve") openOwlApproval(type) }
+    else if (spec && spec.network && !spec.user) openSettings(next.placed.id)
     return next.placed.id
   }
 
@@ -1209,7 +1279,7 @@ Item {
       clip: cell.isWidget
       // A user widget goes through UserWidgetCell, which loads its code
       // only when the scan calls it ok and shows an error card otherwise.
-      source: cell.isUser && root.isOwlType(cell.modelData.type) ? Qt.resolvedUrl("OwlCell.qml")
+      source: (cell.isUser && root.isOwlType(cell.modelData.type)) || HomeModel.isOwlType(cell.modelData.type) ? Qt.resolvedUrl("OwlCell.qml")
         : cell.isUser ? Qt.resolvedUrl("UserWidgetCell.qml")
         : cell.isWidget ? Qt.resolvedUrl(cell.modelData.type.charAt(0).toUpperCase() + cell.modelData.type.slice(1) + "Widget.qml")
         : Qt.resolvedUrl("AppTile.qml")

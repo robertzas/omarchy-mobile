@@ -30,6 +30,8 @@ Item {
   // Sources and `every` run only while the widget is shown (its page or a
   // neighbour, and the home screen not covered).
   property bool active: false
+  // State to start with when nothing is saved yet: { name: value }.
+  property var seedState: ({})
   // The approval this widget runs under ({ commands, network }), for the host.
   property var approval: null
 
@@ -70,8 +72,8 @@ Item {
       widget.error = Compiler.formatError(widget.text, e)
       return
     }
-    const saved = widget.host && widget.stateKey ? widget.host.loadState(widget.stateKey) : null
-    widget.instance = new Runtime.Instance(widget.program, widget.bridge, saved || {})
+    const saved = Object.assign({}, widget.seedState || {}, widget.host && widget.stateKey ? widget.host.loadState(widget.stateKey) || {} : {})
+    widget.instance = new Runtime.Instance(widget.program, widget.bridge, saved)
     widget.render()
     if (widget.active) { widget.refresh(); widget.startLive() }
   }
@@ -232,6 +234,19 @@ Item {
     }
     if (s.kind.indexOf("android.") === 0) widget.host.android(widget, s.kind.slice(8), finish)
     else widget.host.runSource(widget, s, s.arg(), s.headers(), finish)
+  }
+
+  // A state's value by name (undefined: no such state), and setting one as
+  // a tap would: what reads it redraws, and it is saved if it persists.
+  function stateValue(name) {
+    if (!widget.instance) return undefined
+    const slot = widget.instance.stateSlot(name)
+    return slot < 0 ? undefined : V.toPlain(widget.instance.values[slot])
+  }
+  function setStateValue(name, value) {
+    if (!widget.instance) return
+    const slot = widget.instance.stateSlot(name)
+    if (slot >= 0) { widget.instance.setState(slot, V.fromPlain(value)); widget.refreshSoon() }
   }
 
   // ---------------------------------------------------------------- live sources

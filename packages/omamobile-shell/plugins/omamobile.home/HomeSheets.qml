@@ -424,8 +424,11 @@ Item {
             width: widgetsColumn.width
             glyph: modelData.icon
             title: modelData.name
-            subtitle: modelData.w + "×" + modelData.h + (modelData.network ? "  ·  uses the internet once you turn it on" : "")
-            onClicked: sheets.home.addWidgetHere(modelData.type)
+            subtitle: modelData.w + "×" + modelData.h + (modelData.network ? "  ·  uses the internet once you allow it" : "")
+            onClicked: {
+              if (HomeModel.isOwlType(modelData.type) && sheets.home.owlCard(modelData.type).state === "approve") sheets.home.openOwlApproval(modelData.type)
+              else sheets.home.addWidgetHere(modelData.type)
+            }
           }
         }
 
@@ -625,8 +628,10 @@ Item {
       readonly property var program: info && info.ok ? info.program : null
       readonly property var packages: program && program.requires && program.requires.pacman ? program.requires.pacman : []
       property bool internet: false
+      readonly property bool builtin: HomeModel.isOwlType(sheets.home.owlApproveId)
+      readonly property string placeType: builtin ? sheets.home.owlApproveId : UserWidgets.typeFor(sheets.home.owlApproveId)
       readonly property bool placed: {
-        const type = UserWidgets.typeFor(sheets.home.owlApproveId)
+        const type = approveFlick.placeType
         return sheets.home.layout.pages.some(function(p) { return p.items.some(function(i) { return i.type === type }) })
       }
 
@@ -741,7 +746,10 @@ Item {
 
         Label {
           width: parent.width
-          text: "From your widgets folder (" + UserWidgets.tildePath(sheets.home.widgetsDir, sheets.home.homeDir) + "/" + sheets.home.owlApproveId + "). Nobody reviewed it. This is a guard rail, not a sandbox: an allowed command runs with your rights."
+          text: (approveFlick.builtin
+            ? "A built-in widget: " + HomeModel.owlStoreId(sheets.home.owlApproveId) + " from the OWL widget store, reviewed there and shipped with Omarchy Mobile."
+            : "From your widgets folder (" + UserWidgets.tildePath(sheets.home.widgetsDir, sheets.home.homeDir) + "/" + sheets.home.owlApproveId + "). Nobody reviewed it.")
+            + " This is a guard rail, not a sandbox: an allowed command runs with your rights."
         }
 
         Row {
@@ -753,7 +761,7 @@ Item {
             onClicked: {
               const id = sheets.home.owlApproveId
               sheets.home.approveOwl(id, approveFlick.internet)
-              if (!approveFlick.placed) sheets.home.addWidgetHere(UserWidgets.typeFor(id))
+              if (!approveFlick.placed) sheets.home.addWidgetHere(approveFlick.placeType)
               else sheets.home.sheet = ""
             }
           }

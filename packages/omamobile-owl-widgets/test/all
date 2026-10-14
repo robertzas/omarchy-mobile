@@ -34,3 +34,13 @@ pass "the index lists every widget in store order with what it runs"
 [[ ! -e $share/widgets/bob/sneaky ]] || fail "refused widgets are not staged"
 [[ -f $tmp/root/usr/share/licenses/omamobile-owl-widgets/LICENSE && -f $share/order.txt ]] || fail "licence and order are staged"
 pass "only what passes ships, with the store's licence"
+
+# The home screen's built-ins are store widgets: each must ship.
+shell=../omamobile-shell/plugins/omamobile.home/HomeModel.js
+if [[ -f $shell ]]; then
+  node -e '
+const H = require(process.argv[1]); const st = require(process.argv[2]).widgets
+const missing = H.OWL_ORDER.map(H.owlStoreId).filter((id) => !st[id] || !["ok", "partial"].includes(st[id].status))
+if (missing.length) { console.error(missing.join(" ")); process.exit(1) }' "$(realpath "$shell")" "$(realpath status.json)" || fail "every built-in ships"
+  pass "every OWL built-in of the home screen ships"
+fi

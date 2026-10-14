@@ -465,7 +465,7 @@ test("every built-in is valid, sized inside its limits, and has its QML", () => 
   const names = new Set()
   for (const type of M.WIDGET_ORDER) {
     const s = M.REGISTRY[type]
-    assert.ok(/^[a-z][A-Za-z0-9]*$/.test(type), type)
+    assert.ok(/^[a-z][A-Za-z0-9]*$/.test(type) || /^owl:simonschubert\.[a-z0-9-]+$/.test(type), type)
     assert.ok(typeof s.name === "string" && s.name.length > 0 && s.name.length <= 40, type)
     assert.ok(!names.has(s.name), "two built-ins are called " + s.name)
     names.add(s.name)
@@ -477,6 +477,7 @@ test("every built-in is valid, sized inside its limits, and has its QML", () => 
     assert.ok(s.max[0] <= M.GRID.columns && s.max[1] <= M.GRID.rows, type + " fits the default grid")
     assert.strictEqual(typeof s.network, "boolean", type)
     assert.ok(s.config && typeof s.config === "object" && !Array.isArray(s.config), type)
+    if (M.isOwlType(type)) continue        // drawn by OwlCell.qml; the internet waits for its approval
     const file = type.charAt(0).toUpperCase() + type.slice(1) + "Widget.qml"
     assert.ok(fs.existsSync(path.join(HOME_DIR, file)), file)
     // Network widgets are opt-in: off until the user turns them on.
@@ -484,41 +485,83 @@ test("every built-in is valid, sized inside its limits, and has its QML", () => 
   }
 })
 
-test("the ports carry their schema, credit and folder", () => {
-  const ported = Object.keys(M.PORTED)
-  assert.ok(ported.length >= 47, ported.length)
-  assert.deepStrictEqual([...M.PORTED_ORDER].sort(), [...ported].sort())
-  const license = fs.readFileSync(path.join(HOME_DIR, "LICENSE-omarchy-widgets"), "utf8")
-  assert.ok(license.includes("Copyright (c) 2026 Simon Schubert and contributors"))
-  for (const type of ported) {
-    const s = M.REGISTRY[type]
-    assert.strictEqual(s, M.PORTED[type])
-    assert.ok(/^simonschubert\/[a-z0-9-]+$/.test(s.credit), type)
-    if (s.network) {
-      assert.ok(typeof s.source === "string" && s.source.length > 0, type + " names what it talks to")
-      assert.strictEqual(s.schema[0].key, "enabled", type + " can be turned on")
-    }
-    const keys = new Set()
-    for (const f of s.schema || []) {
-      assert.ok(/^[A-Za-z_][A-Za-z0-9_]{0,39}$/.test(f.key) && !keys.has(f.key), type + " " + f.key)
-      keys.add(f.key)
-      assert.ok(FIELD_TYPES.includes(f.type), type + " " + f.key)
-      assert.ok(Object.prototype.hasOwnProperty.call(s.config, f.key), type + ": " + f.key + " has a default, or setConfig drops it")
-      if (f.type === "enum") assert.ok(f.options.includes(s.config[f.key]), type + " " + f.key)
-    }
-    // The wrapper names the port's folder, and the port credits the original.
-    const file = type.charAt(0).toUpperCase() + type.slice(1) + "Widget.qml"
-    const wrapper = fs.readFileSync(path.join(HOME_DIR, file), "utf8")
-    const folder = /folder: "ported\/([a-z0-9-]+)"/.exec(wrapper)
-    assert.ok(folder, file)
-    assert.ok(wrapper.includes("LICENSE-omarchy-widgets") && wrapper.includes(s.credit), file)
-    assert.ok(fs.existsSync(path.join(HOME_DIR, "ported", folder[1], "Widget.qml")), folder[1])
-    // A placed port keeps what it saves: its settings survive a layout round trip.
+test("the OWL built-ins replace the 47 ports, named and sized as before", () => {
+  assert.strictEqual(M.OWL_ORDER.length, 47)
+  assert.ok(!fs.existsSync(path.join(HOME_DIR, "ported")) && !fs.existsSync(path.join(HOME_DIR, "PortedWidget.qml")))
+  for (const port of M.PORTED_ORDER) {
+    const type = M.owlTypeFor(port)
+    const s = M.REGISTRY[type], p = M.PORTED[port]
+    assert.ok(s && M.WIDGET_ORDER.includes(type) && !M.REGISTRY[port], port)
+    assert.deepStrictEqual([s.name, s.icon, s.min, s.max, s.size, s.network, s.credit], [p.name, p.icon, p.min, p.max, p.size, p.network, p.credit], port)
+    assert.strictEqual(M.owlStoreId(type), p.credit)
+    assert.ok(!fs.existsSync(path.join(HOME_DIR, port.charAt(0).toUpperCase() + port.slice(1) + "Widget.qml")), port + " has no QML left")
+    assert.strictEqual(s.location, M.PORT_LOCATION.includes(port))
+    if (s.location) assert.deepStrictEqual(s.schema.map((f) => f.key), ["useLocation"])
     const l = M.addWidget(M.emptyLayout(grid), 0, type)
-    const placed = l.pages[0].items[0]
-    assert.deepStrictEqual([placed.w, placed.h], s.size, type)
     assert.deepStrictEqual(M.parse(M.serialize(l)).pages[0].items[0].config, s.config, type)
   }
+})
+
+// The owner's real layout, by shape: apps one per cell along the bottom of
+// two pages, our clock and weather (with location), the Bitcoin widget
+// (the crypto port, internet on), today with location, and a few ports.
+const OWNER = {
+  version: 1, grid: { columns: 4, rows: 6 }, home: 0, nextId: 20,
+  pages: [
+    { items: [
+      { id: "w1", kind: "widget", type: "clock", x: 0, y: 0, w: 4, h: 2, config: { timeFormat: "", dateFormat: "dddd d MMMM" } },
+      { id: "w2", kind: "widget", type: "weather", x: 0, y: 2, w: 4, h: 1, config: { enabled: true, useLocation: true, place: "", latitude: null, longitude: null, units: "celsius" } },
+      { id: "w3", kind: "widget", type: "crypto", x: 0, y: 3, w: 2, h: 2, config: { enabled: true } },
+      { id: "w4", kind: "widget", type: "today", x: 2, y: 3, w: 2, h: 2, config: { enabled: true, useLocation: true, city: "" } },
+      { id: "a5", kind: "app", app: "chromium", x: 0, y: 5, w: 1, h: 1 },
+      { id: "a6", kind: "app", app: "org.gnome.Nautilus", x: 1, y: 5, w: 1, h: 1 },
+      { id: "a7", kind: "app", app: "foot", x: 2, y: 5, w: 1, h: 1 },
+      { id: "a8", kind: "app", app: "btop", x: 3, y: 5, w: 1, h: 1 }] },
+    { items: [
+      { id: "w9", kind: "widget", type: "earthquakes", x: 0, y: 0, w: 4, h: 2, config: { enabled: false } },
+      { id: "w10", kind: "widget", type: "habits", x: 0, y: 2, w: 4, h: 2, config: { done: ["read@2026-10-12"], habits: "read" } },
+      { id: "w11", kind: "widget", type: "forecast", x: 0, y: 4, w: 4, h: 2, config: { enabled: true, useLocation: false, city: "Berlin" } },
+      { id: "u12", kind: "widget", type: "user:derek.moon", x: 0, y: 0, w: 2, h: 2, config: {} }] }]
+}
+
+test("an old layout's ports become their OWL originals, in place, idempotently", () => {
+  const ports = M.portPlacements(OWNER)
+  assert.deepStrictEqual(ports.map((p) => [p.id, p.from, p.to, p.enabled]), [
+    ["w3", "crypto", "owl:simonschubert.crypto", true],
+    ["w4", "today", "owl:simonschubert.today", true],
+    ["w9", "earthquakes", "owl:simonschubert.earthquakes", false],
+    ["w10", "habits", "owl:simonschubert.habits", false],
+    ["w11", "forecast", "owl:simonschubert.forecast", true]])
+  const catalog = { "derek.moon": { name: "Moon", icon: "x", min: [1, 1], max: [4, 4], size: [2, 2], network: false, config: {}, user: true } }
+  const once = M.parse(JSON.stringify(OWNER), catalog)
+  const by = {}
+  once.pages.forEach((p, i) => p.items.forEach((it) => { by[it.id] = Object.assign({ page: i }, it) }))
+  // Same page, place and size; apps and our own widgets untouched.
+  for (const page of OWNER.pages) for (const it of page.items) {
+    const now = by[it.id]
+    assert.ok(now, it.id + " is still there")
+    assert.deepStrictEqual([now.x, now.y, now.w, now.h], [it.x, it.y, it.w, it.h], it.id)
+    if (it.kind === "app") assert.strictEqual(now.app, it.app)
+  }
+  assert.strictEqual(by.w1.type, "clock")
+  assert.strictEqual(by.w2.type, "weather")
+  assert.strictEqual(by.u12.type, "user:derek.moon")
+  assert.strictEqual(by.w3.type, "owl:simonschubert.crypto")
+  // Location stays on where it was on; a typed city and check-ins carry over as state.
+  assert.deepStrictEqual(by.w4.config, { useLocation: true, locationText: "", owlState: {} })
+  assert.deepStrictEqual(by.w11.config, { useLocation: false, locationText: "", owlState: { city: "Berlin" } })
+  assert.deepStrictEqual(by.w10.config, { owlState: { done: ["read@2026-10-12"] } })
+  // Idempotent: a migrated layout has no ports left and doesn't change again.
+  assert.deepStrictEqual(M.portPlacements(once), [])
+  const twice = M.parse(M.serialize(once), catalog)
+  assert.strictEqual(M.serialize(twice), M.serialize(once))
+})
+
+test("what each port could do, for approving its original without asking", () => {
+  assert.deepStrictEqual(M.portCapabilities("crypto"), { commands: false, network: true, hosts: ["coingecko.com"], files: false, notifications: false })
+  assert.deepStrictEqual(M.portCapabilities("feeds"), { commands: true, network: true, hosts: null, files: false, notifications: false })
+  assert.deepStrictEqual(M.portCapabilities("koiPond"), { commands: false, network: false, hosts: [], files: false, notifications: false })
+  assert.strictEqual(M.portCapabilities("weather"), null)
 })
 
 let failed = 0

@@ -3,6 +3,7 @@ import QtQuick
 import qs.Commons
 import qs.Commons as Commons
 import "UserWidgets.js" as UserWidgets
+import "HomeModel.js" as HomeModel
 import "owl/phone.js" as Phone
 import "owl" as Owl
 
@@ -20,7 +21,9 @@ Item {
   property var entry: null
   property bool editing: false
 
-  readonly property string widgetId: owlCell.entry ? UserWidgets.idOf(owlCell.entry.type) : ""
+  // A user widget's id, or a built-in's type ("owl:simonschubert.today").
+  readonly property string widgetId: !owlCell.entry ? "" : HomeModel.isOwlType(owlCell.entry.type) ? owlCell.entry.type : UserWidgets.idOf(owlCell.entry.type)
+  readonly property var config: owlCell.entry && owlCell.entry.config ? owlCell.entry.config : ({})
   readonly property var card: owlCell.home && owlCell.widgetId ? owlCell.home.owlCard(owlCell.widgetId)
     : ({ state: "waiting", message: "", record: null, info: null, approval: null })
   readonly property bool running: owlCell.card.state === "ok"
@@ -31,6 +34,8 @@ Item {
     text: owlCell.running && owlCell.card.record && owlCell.card.record.owl ? owlCell.card.record.owl.text : ""
     // Persisted state is per placement: the same widget placed twice keeps two states.
     stateKey: owlCell.entry ? owlCell.widgetId + "@" + owlCell.entry.id : ""
+    // What the old port's settings become (HomeModel.owlConfigFor), until the widget saves its own.
+    seedState: owlCell.config.owlState || ({})
     host: owlCell.home ? owlCell.home.owlHost : null
     themeColors: owlCell.home ? owlCell.home.owlPalette : ({})
     approval: owlCell.card.approval
@@ -91,6 +96,28 @@ Item {
     interactive: !owlCell.editing
     onHandlerRun: function(handler, args) { owl.runHandler(handler, args) }
     onKeyboardWanted: function(on) { if (owlCell.home && owlCell.home.owlKeyboard) owlCell.home.owlKeyboard(on) }
+  }
+
+  // ---------- location, for the weather built-ins
+
+  // The ports used the phone's position (GeoClue, about 1 km); their OWL
+  // originals take a place as `city`, and wttr.in reads "lat,lon" as one.
+  // The coordinates go in while the city is empty or still the last ones put
+  // in, so a city the user types wins. Needs its internet allowed.
+  readonly property bool wantsLocation: owlCell.running && owlCell.config.useLocation === true
+    && !!owlCell.card.approval && owlCell.card.approval.network === true
+  GeoLocation { id: geo; active: owlCell.wantsLocation }
+  onLocationTextChanged: owlCell.fillLocation()
+  readonly property string locationText: geo.fix ? Number(geo.fix.lat).toFixed(2) + "," + Number(geo.fix.lon).toFixed(2) : ""
+  Connections { target: owl; function onInstanceChanged() { owlCell.fillLocation() } }
+  function fillLocation() {
+    if (!owlCell.wantsLocation || !owlCell.locationText || !owl.instance) return
+    const city = owl.stateValue("city")
+    if (city === undefined) return
+    if (city !== "" && city !== owlCell.config.locationText) return
+    if (city === owlCell.locationText) return
+    owl.setStateValue("city", owlCell.locationText)
+    if (owlCell.home && owlCell.entry) owlCell.home.setConfig(owlCell.entry.id, { locationText: owlCell.locationText })
   }
 
   // Opens the widget's screen, as its own screen() does (tests, IPC).

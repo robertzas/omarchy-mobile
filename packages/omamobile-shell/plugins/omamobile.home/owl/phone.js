@@ -141,7 +141,7 @@ var RISKS = [
 ]
 
 function hostOf(url) {
-  var m = /^https?:\/\/([^\/?#:]+)/i.exec(url)
+  var m = /^https?:\/\/([a-z0-9.-]+)(?=[\/?#:]|$)/i.exec(url)
   return m ? m[1].toLowerCase() : ""
 }
 
@@ -151,6 +151,7 @@ function hostOf(url) {
 function capabilities(program) {
   var out = { commands: [], network: false, hosts: [], files: [], notifications: false, risks: [], refusals: [], devices: [], terminal: false }
   var builtFrom = false
+  var httpIndex = 0
   function risk(id, says, line) {
     if (!out.risks.some(function(r) { return r.id === id && r.line === line })) out.risks.push({ id: id, says: says, line: line })
   }
@@ -158,7 +159,11 @@ function capabilities(program) {
     var text = line.replace(/^if Linux is installed: /, "")
     if (text.indexOf("http GET ") === 0) {
       out.network = true
-      var h = hostOf(text.slice(9))
+      // A URL built while it runs still has a fixed host when its text
+      // starts with one (https://wttr.in/${q}): the compiler keeps that prefix.
+      var known = text.slice(9).indexOf("(a URL built") === 0 ? (program.httpPrefixes || [])[httpIndex] || "" : text.slice(9)
+      httpIndex++
+      var h = hostOf(known)
       if (h && out.hosts.indexOf(h) < 0) out.hosts.push(h)
       if (!h) risk("built", "reaches a web address built while it runs", line)
       return

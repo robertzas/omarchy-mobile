@@ -39,13 +39,17 @@ var REGISTRY = {
 
 var WIDGET_ORDER = ["clock", "weather", "battery", "media", "agenda", "notes", "toggles", "command"]
 
-// Built-ins ported from Simon Schubert's omarchy-widgets
+// Built-ins from Simon Schubert's omarchy-widgets
 // (https://github.com/SimonSchubert/omarchy-widgets, widgets/simonschubert/;
-// MIT, Copyright (c) 2026 Simon Schubert and contributors: see
-// LICENSE-omarchy-widgets). Each draws from ported/<folder>/ through
-// PortedWidget.qml. `schema` lists the settings the sheet shows (the user
-// widgets' manifest format); `source` names what a network one talks to;
-// `credit` is the original.
+// MIT, Copyright (c) 2026 Simon Schubert and contributors). They used to be
+// QML ports under ported/; they are now the OWL originals, run by our OWL
+// runtime from the omamobile-owl-widgets package (type "owl:<author>.<name>",
+// OwlCell.qml). This table, keyed by the old port's type, keeps what the
+// home screen knew about each: its name, icon and sizes on our grid, and
+// for the migration of old layouts (owlMigrate below) what the port could
+// do (`source`, the hosts a network one talked to; PORT_COMMANDS, the ones
+// that ran commands) and which of its settings become the OWL widget's
+// state. `credit` is the original.
 var PORTED = {
   airAndPollen: {"name": "Air and pollen", "icon": "󰵃", "min": [2, 1], "max": [4, 4], "size": [2, 1], "network": true, "config": {"enabled": false, "useLocation": true, "city": ""}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}, {"key": "useLocation", "type": "boolean", "label": "Use my location", "description": "The phone's position (Location), rounded to about 1 km", "defaultValue": true}, {"key": "city", "type": "string", "label": "City when there is no location", "defaultValue": "", "description": "Empty: wttr.in guesses from your address"}], "source": "wttr.in, air-quality-api.open-meteo.com", "credit": "simonschubert/air-and-pollen"},
   analogClock: {"name": "Analog clock", "icon": "󰅐", "min": [1, 1], "max": [4, 4], "size": [2, 2], "network": false, "config": {"seconds": true}, "schema": [{"key": "seconds", "type": "boolean", "label": "Second hand", "defaultValue": true}], "credit": "simonschubert/analog-clock"},
@@ -96,8 +100,92 @@ var PORTED = {
   yearProgress: {"name": "Year progress", "icon": "󰦖", "min": [2, 2], "max": [4, 4], "size": [2, 2], "network": false, "config": {}, "credit": "simonschubert/year-progress"}
 }
 var PORTED_ORDER = ["airAndPollen", "analogClock", "crypto", "bundesliga", "championsLeague", "countdowns", "departures", "earthquakes", "exchangeRates", "feeds", "fetch", "focus", "forecast", "freeGames", "github", "githubTrending", "habits", "hackerNews", "homeAssistant", "ifsc", "koiPond", "laLiga", "lavaLamp", "ligue1", "lobsters", "mlb", "calendar", "nba", "nhl", "notifications", "nowPlaying", "omarchyCommits", "owl", "pictureOfTheDay", "planesOverhead", "premierLeague", "releases", "launches", "serieA", "sunAndMoon", "today", "todo", "uptime", "wikipedia", "worldClock", "xkcd", "yearProgress"]
-Object.keys(PORTED).forEach(function(type) { REGISTRY[type] = PORTED[type] })
-WIDGET_ORDER = WIDGET_ORDER.concat(PORTED_ORDER)
+// The ports that ran commands of their own (scripts in their folders).
+var PORT_COMMANDS = ["feeds", "fetch", "github", "ifsc", "notifications", "todo", "worldClock"]
+// The ports that used the phone's position (GeoClue): the OWL originals get it
+// as their `city` state (rounded coordinates), OwlCell does that.
+var PORT_LOCATION = ["airAndPollen", "forecast", "planesOverhead", "sunAndMoon", "today"]
+// Port settings that mean the same as an OWL original's persisted state.
+var PORT_STATE = {
+  airAndPollen: { city: "city" }, forecast: { city: "city" }, planesOverhead: { city: "city" },
+  sunAndMoon: { city: "city" }, today: { city: "city" }, habits: { done: "done" },
+  owl: { born: "born", fed: "fed", pets: "pets" }, lavaLamp: { wax: "wax" },
+  departures: { stopId: "stopId", stopName: "stopName" }
+}
+var OWL_PREFIX = "owl:"
+
+// The OWL built-in that replaces a port: "earthquakes" -> "owl:simonschubert.earthquakes".
+function owlTypeFor(portType) {
+  return has(PORTED, portType) ? OWL_PREFIX + PORTED[portType].credit.replace("/", ".") : ""
+}
+function isOwlType(type) { return typeof type === "string" && type.indexOf(OWL_PREFIX) === 0 }
+// "owl:simonschubert.earthquakes" -> "simonschubert/earthquakes"
+function owlStoreId(type) { return isOwlType(type) ? type.slice(OWL_PREFIX.length).replace(".", "/") : "" }
+
+var OWL_BUILTINS = {}
+var OWL_ORDER = PORTED_ORDER.map(function(portType) {
+  var p = PORTED[portType]
+  var location = PORT_LOCATION.indexOf(portType) >= 0
+  var type = owlTypeFor(portType)
+  OWL_BUILTINS[type] = {
+    name: p.name, icon: p.icon, min: p.min, max: p.max, size: p.size, network: p.network,
+    // Whether it may use the internet is part of its approval now.
+    config: location ? { useLocation: true, locationText: "", owlState: {} } : { owlState: {} },
+    schema: location ? [{ key: "useLocation", type: "boolean", label: "Use my location",
+                          description: "The phone's position (Location), rounded to about 1 km", defaultValue: true }] : [],
+    source: p.source || "", credit: p.credit, owl: p.credit, port: portType, location: location
+  }
+  return type
+})
+Object.keys(OWL_BUILTINS).forEach(function(type) { REGISTRY[type] = OWL_BUILTINS[type] })
+WIDGET_ORDER = WIDGET_ORDER.concat(OWL_ORDER)
+
+// What the old port could do, for approving its OWL original without asking
+// (the home screen approves only what is no more than this):
+// { commands, network, hosts (null: any it was given), files, notifications }.
+function portCapabilities(portType) {
+  var p = PORTED[portType]
+  if (!p) return null
+  var listed = String(p.source || "")
+  var any = /you list|your /.test(listed)
+  return {
+    commands: PORT_COMMANDS.indexOf(portType) >= 0,
+    network: !!p.network,
+    hosts: !p.network ? [] : any ? null : listed.split(",").map(function(h) { return h.trim() }).filter(function(h) { return h }),
+    files: false,
+    notifications: portType === "notifications"
+  }
+}
+
+// An old port's settings as its OWL original's: `useLocation` stays with the
+// placement, settings with the same meaning seed its persisted state, and
+// `enabled` (its internet switch) goes into the approval (portApprovals).
+function owlConfigFor(portType, config) {
+  var c = config && typeof config === "object" ? config : {}
+  var out = { owlState: {} }
+  if (PORT_LOCATION.indexOf(portType) >= 0) out.useLocation = c.useLocation !== false
+  var map = PORT_STATE[portType] || {}
+  Object.keys(map).forEach(function(key) {
+    var v = c[key]
+    if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) return
+    out.owlState[map[key]] = copy(v)
+  })
+  return out
+}
+
+// The ports a stored layout still places: [{ id, from, to, enabled }], for the
+// home screen to back the file up and approve what it may.
+function portPlacements(raw) {
+  var out = []
+  ;(raw && Array.isArray(raw.pages) ? raw.pages : []).forEach(function(page) {
+    ;(page && Array.isArray(page.items) ? page.items : []).forEach(function(item) {
+      if (item && item.kind === "widget" && has(PORTED, item.type))
+        out.push({ id: String(item.id || ""), from: item.type, to: owlTypeFor(item.type),
+                   enabled: !!(item.config && item.config.enabled === true) })
+    })
+  })
+  return out
+}
 
 // What a fresh home gets, before the user changes anything: a clock and the
 // first of these apps that are installed along the bottom row.
@@ -340,13 +428,18 @@ function cleanItem(raw, grid, catalog) {
     if (!item.app) return null
     item.w = 1; item.h = 1
   } else if (raw.kind === "widget") {
-    var spec = specFor(raw.type, catalog)
+    // A port from before the OWL built-ins becomes its OWL original, in the
+    // same place and size (portPlacements lists them).
+    var portType = has(PORTED, raw.type) ? raw.type : ""
+    var type = portType ? owlTypeFor(portType) : raw.type
+    var spec = specFor(type, catalog)
     if (!spec) return null
-    item.type = raw.type
+    item.type = type
     var limits = sizeLimits(item, grid, catalog)
     item.w = clampInt(raw.w, limits.minW, limits.maxW, spec.size[0])
     item.h = clampInt(raw.h, limits.minH, limits.maxH, spec.size[1])
-    item.config = spec.user ? mergeUserConfig(spec.config, raw.config) : mergeConfig(spec.config, raw.config)
+    var stored = portType ? owlConfigFor(portType, raw.config) : raw.config
+    item.config = spec.user ? mergeUserConfig(spec.config, stored) : mergeConfig(spec.config, stored)
   } else {
     return null
   }
@@ -724,6 +817,9 @@ if (typeof module !== "undefined") {
     LAUNCH: LAUNCH, appLaunchArgv: appLaunchArgv, commandLaunchArgv: commandLaunchArgv, urlLaunchArgv: urlLaunchArgv,
     VERSION: VERSION, GRID: GRID, LIMITS: LIMITS, REGISTRY: REGISTRY, DEFAULT_APPS: DEFAULT_APPS,
     WIDGET_ORDER: WIDGET_ORDER, PORTED: PORTED, PORTED_ORDER: PORTED_ORDER,
+    OWL_BUILTINS: OWL_BUILTINS, OWL_ORDER: OWL_ORDER, PORT_COMMANDS: PORT_COMMANDS, PORT_LOCATION: PORT_LOCATION, PORT_STATE: PORT_STATE,
+    owlTypeFor: owlTypeFor, isOwlType: isOwlType, owlStoreId: owlStoreId, portCapabilities: portCapabilities,
+    owlConfigFor: owlConfigFor, portPlacements: portPlacements,
     USER_PREFIX: USER_PREFIX, USER_ID_RE: USER_ID_RE, MISSING_SPEC: MISSING_SPEC, isUserType: isUserType,
     specFor: specFor, mergeUserConfig: mergeUserConfig, removeWidgetType: removeWidgetType,
     widgetSpec: widgetSpec, widgetTypes: widgetTypes, systemTimeFormat: systemTimeFormat, sizeLimits: sizeLimits,

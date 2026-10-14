@@ -40,7 +40,7 @@ Item {
     return { id: "w" + c.x + c.y, kind: "widget", type: "user:" + c.id, x: c.x, y: c.y, w: c.w, h: c.h, config: {} } }) }] })
   readonly property var userScan: UserWidgets.parseScan(JSON.stringify({
     dir: mock.widgetsDir,
-    widgets: mock.widgets.map(function(w) { return { id: w.id, status: "ok", hash: "h-" + w.id, kind: "owl", owl: { text: w.text }, errors: [] } })
+    widgets: mock.widgets.filter(function(w) { return !HomeModel.isOwlType(w.id) }).map(function(w) { return { id: w.id, status: "ok", hash: "h-" + w.id, kind: "owl", owl: { text: w.text }, errors: [] } })
   }))
   readonly property real owlDp: OwlPhone.dpFor(480)
   readonly property real owlCellHeight: 908 / 6
@@ -57,7 +57,19 @@ Item {
     for (const id in mock.owlInfo) if (mock.owlInfo[id].ok) out[id] = mock.owlInfo[id].spec
     return out
   }
+  // Built-ins (owl:<author>.<name>): their text is in the job (from the store package).
   function owlCard(widgetId) {
+    if (HomeModel.isOwlType(widgetId)) {
+      const w = mock.widgets.filter(function(x) { return x.id === widgetId })[0]
+      const info = w ? OwlCatalog.describe(widgetId, w.text, { columns: 4, rows: 6 }, mock.owlCellHeight, mock.owlDp) : null
+      if (info) info.name = HomeModel.REGISTRY[widgetId].name
+      const rec = w ? { id: widgetId, status: "ok", errors: [], hash: "builtin", kind: "owl", owl: { text: w.text } } : null
+      const c = OwlCatalog.cardState(true, true, rec, info, mock.approvals[widgetId] || null, "")
+      c.record = rec
+      c.info = info
+      c.approval = mock.approvals[widgetId] || null
+      return c
+    }
     const r = UserWidgets.findRecord(mock.userScan, widgetId)
     const info = mock.owlInfo[widgetId] || null
     const approval = mock.approvals[widgetId] || null
@@ -94,7 +106,7 @@ Item {
       const e = w && w.fixture ? w.fixture.sources[spec.name] : null
       if (!e) { done({ error: "no fixture" }); return }
       if (e.value !== undefined) done({ value: e.value })
-      else done({ code: 0, ok: true, out: e.text, err: "" })
+      else done({ code: e.code === undefined ? 0 : e.code, ok: true, out: e.text, err: "" })
     },
     android: function(widget, kind, done) { done({ value: null }) },
     act: function() {}, runInto: function() {},
@@ -126,6 +138,13 @@ Item {
   function updateFromStore() {}
   function fetchStore() {}
   readonly property real owlCellHeightPublic: mock.owlCellHeight
+
+  // What the QML built-ins (clock, weather) read.
+  readonly property string systemTimeFormat: "HH:mm"
+  property var cache: ({})
+  function widgetCache(id) { return mock.cache[id] || null }
+  function setWidgetCache(id, v) { mock.cache[id] = v }
+  function setConfig() {}
 
   function guardBegin() {}
   function guardEnd() {}

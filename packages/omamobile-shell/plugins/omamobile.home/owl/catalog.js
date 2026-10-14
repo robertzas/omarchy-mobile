@@ -70,6 +70,37 @@ function cardState(enabled, scanned, record, info, approval, crashedHash) {
   return { state: "ok", message: "" }
 }
 
+// ---------------------------------------------------------------- built-ins that were ports
+
+// Whether a port's OWL original may be approved without asking: only when
+// it needs nothing the port didn't have (HomeModel.portCapabilities): no
+// commands where the port ran none, no internet or other hosts than the
+// port's, no files, notifications, vibration or torch it didn't use, and no
+// risk flag. -> { approve: record | null, extra: [what it needs beyond the port] }
+function portApproval(port, info, enabled) {
+  if (!port || !info || !info.ok) return { approve: null, extra: ["it doesn't compile"] }
+  var c = info.caps
+  var extra = []
+  if (c.commands.length && !port.commands) extra.push("runs commands")
+  if (c.network) {
+    if (!port.network) extra.push("uses the internet")
+    else if (port.hosts !== null) {
+      var outside = c.hosts.filter(function(h) {
+        return !port.hosts.some(function(p) { return h === p || h.slice(-(p.length + 1)) === "." + p })
+      })
+      if (outside.length) extra.push("talks to " + outside.join(", "))
+      if (!c.hosts.length) extra.push("talks to addresses built while it runs")
+    }
+  }
+  if (c.files.length) extra.push("reads files")
+  if (c.notifications && !port.notifications) extra.push("reads notifications")
+  if ((c.devices || []).length) extra.push(c.devices.join(" and "))
+  if (c.terminal) extra.push("has a terminal")
+  c.risks.forEach(function(r) { if (extra.indexOf(r.says) < 0 && r.id !== "notifications") extra.push(r.says) })
+  if (extra.length) return { approve: null, extra: extra }
+  return { approve: { commands: info.program.commands.slice(), devices: [], network: !!port.network && enabled === true, auto: true }, extra: [] }
+}
+
 // ---------------------------------------------------------------- the Store tab
 
 var CATEGORIES = ["news", "dev", "productivity", "time", "world", "fun", "home", "system"]
@@ -125,5 +156,5 @@ function storeCaps(w) {
 
 if (typeof module !== "undefined") {
   module.exports = { describe: describe, summary: summary, shortCommand: shortCommand, cardState: cardState, ICON: ICON,
-                     storeRows: storeRows, newer: newer, CATEGORIES: CATEGORIES }
+                     storeRows: storeRows, newer: newer, CATEGORIES: CATEGORIES, portApproval: portApproval }
 }

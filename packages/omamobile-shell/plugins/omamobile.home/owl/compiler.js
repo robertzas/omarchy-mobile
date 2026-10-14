@@ -177,6 +177,7 @@ function Compiler(ast) {
   this.states = {}
   this.components = {}
   this.commands = []
+  this.httpPrefixes = []
   this.actions = []           // the actions handlers can run, by name, first use first
   this.needsLinux = false
   this.animated = false
@@ -292,6 +293,7 @@ Compiler.prototype = {
       onTap: onTap,
       triggers: triggers,
       commands: this.commands,
+      httpPrefixes: this.httpPrefixes,
       actions: this.actions,
       requires: requires,
       needsLinux: this.needsLinux || Object.keys(requires).length > 0,
@@ -375,6 +377,8 @@ Compiler.prototype = {
       if (url.isConst && typeof url.value === "string" && !/^https?:\/\//.test(url.value))
         this.fail("http takes an http:// or https:// URL", e.args[0].at)
       this.commands.push("http GET " + this.listed(url, "(a URL built from widget values)"))
+      // The literal start of a built URL, so its host can still be known.
+      this.httpPrefixes.push(url.isConst ? String(url.value) : e.args[0].e === "text" && e.args[0].parts[0].e === "lit" ? String(e.args[0].parts[0].v) : "")
       g.kind = "http"
       g.arg = url
       g.every = Math.max(every === null ? 60 : every, 5)

@@ -368,4 +368,20 @@ test("the Store tab's rows: order, sizes, what they run, owned, updates", () => 
   assert.ok(K.newer("1.10", "1.9") && !K.newer("1.0", "1") && K.newer("2", "1.9"))
 })
 
+test("a port's OWL original is approved without asking only within what the port had", () => {
+  const K = load("catalog.js")
+  const H = require("../plugins/omamobile.home/HomeModel.js")
+  const grid = { columns: 4, rows: 6 }
+  const info = (text) => K.describe("x", text, grid, 151, 1.16)
+  const web = info('widget "w" {\n  meta { owl: 5 }\n  state city = "" persist\n  source wx = http("https://wttr.in/${city}?format=j1") json\n  Text { text: wx }\n}')
+  const today = K.portApproval(H.portCapabilities("today"), web, true)
+  eq([today.extra, today.approve.network, today.approve.auto], [[], true, true])
+  eq(K.portApproval(H.portCapabilities("today"), web, false).approve.network, false)
+  const curl = info('widget "w" {\n  source q = cmd("curl -s https://earthquake.usgs.gov/x")\n  Text { text: q }\n}')
+  eq(K.portApproval(H.portCapabilities("earthquakes"), curl, true).extra, ["runs commands"])
+  eq(K.portApproval(H.portCapabilities("feeds"), curl, true).approve.commands, ["curl -s https://earthquake.usgs.gov/x"])
+  eq(K.portApproval(H.portCapabilities("crypto"), web, true).extra, ["talks to wttr.in"])
+  eq(K.portApproval(H.portCapabilities("koiPond"), web, true).extra, ["uses the internet"])
+})
+
 if (failed) { console.log(failed + " failed"); process.exit(1) }
