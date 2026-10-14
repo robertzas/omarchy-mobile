@@ -1,0 +1,160 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for bin/omamobile images and flash (no phone, nothing flashed): with
+# a stub kernel output (a random Image, minimal DTBs, a random initramfs),
+# a gs201-style descriptor yields its five boot images and a gs101-style
+# one (no init_boot or vendor_kernel_boot) yields boot (ramdisk and OS
+# version), vendor_boot (DTB and initramfs) and dtbo; flash, against a fake
+# fastboot, writes exactly the descriptor's BOOT_IMAGES and refuses images
+# built for another device; load_device refuses bad descriptors. Skips when
+# AOSP's mkbootimg isn't under $SRC_DIR.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+skip() { printf 'ok - # skip: %s\n' "$1"; exit 0; }
+
+if [[ -z ${SRC_DIR:-} ]]; then
+  SRC_DIR=$(source ./omamobile.conf; [[ -f omamobile.local.conf ]] && source ./omamobile.local.conf; echo "$SRC_DIR")
+fi
+mkbootimg=$SRC_DIR/system/tools/mkbootimg
+[[ -f $mkbootimg/mkbootimg.py && -f $mkbootimg/unpack_bootimg.py ]] || skip "no AOSP mkbootimg under SRC_DIR=$SRC_DIR"
+[[ -f $SRC_DIR/system/libufdt/utils/src/mkdtboimg.py ]] || skip "no mkdtboimg.py under SRC_DIR=$SRC_DIR"
+for tool in dtc lz4 cpio python3; do command -v $tool >/dev/null || skip "no $tool"; done
+t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
+
+# A repository-shaped tree: the tool, its config, two descriptors, a
+# phone-ssh that always answers (flash waits for SSH after rebooting)
+R=$t/repo K=$t/out
+mkdir -p "$R/bin" "$R/tools" "$R/device/twelve" "$R/device/six" "$t/bin"
+cp bin/omamobile "$R/bin/omamobile"
+printf 'DEVICE="${DEVICE:-twelve}"\nSRC_DIR=%s\n' "$SRC_DIR" > "$R/omamobile.conf"
+printf '#!/bin/sh\nexit 0\n' > "$R/tools/phone-ssh"
+chmod +x "$R/tools/phone-ssh"
+descriptor() { # codename soc soc_ids board_id boot_images ufs_rw
+  cat <<EOF
+CODENAME=$1
+NAME="Test $1"
+SOC=$2
+COMPATIBLE="google,$2-$1"
+PACKAGE=omamobile-device-$1
+DTB=exynos/google/$2-$1.dtb
+SOC_IDS="$3"
+DTBO_SOURCE=$1-overlay.dts
+DTBO_BOARD_ID=$4
+DTBO_BOARD_REV=0x10000
+VENDOR_CMDLINE="console=tty0 earlycon=exynos4210,0x10A00000"
+VENDOR_PAGESIZE=0x800
+OS_VERSION=17.0.0
+OS_PATCH_LEVEL=2026-10
+BOOT_IMAGES="$5"
+UFS_RW="$6"
+INITRAMFS_INIT=initramfs/init
+PANEL_SIZE=1080x2400
+EOF
+}
+overlay() {
+  printf '/dts-v1/;\n/plugin/;\n/ {\n\tboard_id = <%s>;\n\tboard_rev = <0x10000>;\n\tfragment@0 {\n\t\ttarget-path = "/";\n\t\t__overlay__ {\n\t\t};\n\t};\n};\n' "$1"
+}
+descriptor twelve gs201 "b0:0x9855001 a0:0x9855000" 0x30306 "boot init_boot vendor_boot vendor_kernel_boot dtbo" \
+  "boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata" > "$R/device/twelve/device.conf"
+descriptor six gs101 "b0:0x9845001 a0:0x9845000" 0x20304 "boot vendor_boot dtbo" \
+  "boot_b vendor_boot_b dtbo_b userdata" > "$R/device/six/device.conf"
+overlay 0x30306 > "$R/device/twelve/twelve-overlay.dts"
+overlay 0x20304 > "$R/device/six/six-overlay.dts"
+
+# The stub kernel output
+dts=$K/arch/arm64/boot/dts/exynos/google
+mkdir -p "$dts" "$K/scripts/dtc"
+ln -s "$(command -v dtc)" "$K/scripts/dtc/dtc"
+head -c 300000 /dev/urandom > "$K/arch/arm64/boot/Image"
+head -c 100000 /dev/urandom | lz4 -l -q > "$K/initramfs.cpio.lz4"
+for d in "gs201-twelve 0x9855001" "gs101-six 0x9845001"; do
+  set -- $d
+  printf '/dts-v1/;\n/ {\n\tsoc_id = <%s 0x00>;\n\tcompatible = "google,%s";\n\t#address-cells = <2>;\n\t#size-cells = <1>;\n\tect { };\n\tchosen { bootargs = ""; };\n};\n' "$2" "$1" \
+    | dtc -q -I dts -O dtb -o "$dts/$1.dtb" -
+done
+
+om() { (cd "$R" && KERNEL_OUT=$K DEVICE=$1 PATH="$t/bin:$PATH" bin/omamobile "${@:2}") > "$t/log" 2>&1; }
+built() { (cd "$K/images" && ls *.img | tr '\n' ' '); }
+unpack() { # image -> $t/u/<image>/ plus its header summary in $t/u/<image>.txt
+  rm -rf "$t/u/$1" && mkdir -p "$t/u"
+  python3 -I "$mkbootimg/unpack_bootimg.py" --boot_img "$K/images/$1.img" --out "$t/u/$1" > "$t/u/$1.txt"
+}
+field() { sed -n "s/^$2: *//p" "$t/u/$1.txt" | head -1; }
+
+# gs201 layout: kernel in boot, OS version in init_boot, DTB and initramfs
+# in vendor_kernel_boot, vendor_boot empty
+om twelve images || { cat "$t/log"; fail "images builds the gs201-style layout"; }
+[[ $(built) == "boot.img dtb.img dtbo.img init_boot.img vendor_boot.img vendor_kernel_boot.img " ]] \
+  || fail "gs201 layout: five boot images and dtb.img (got $(built))"
+unpack init_boot
+[[ $(field init_boot 'os version') == 17.0.0 && $(field init_boot 'os patch level') == 2026-10 ]] || fail "gs201 layout: init_boot carries the OS version"
+unpack vendor_kernel_boot
+cmp -s "$t/u/vendor_kernel_boot/dtb" "$K/images/dtb.img" || fail "gs201 layout: vendor_kernel_boot carries dtb.img"
+cmp -s "$t/u/vendor_kernel_boot/vendor_ramdisk00" "$K/initramfs.cpio.lz4" || fail "gs201 layout: vendor_kernel_boot carries the initramfs"
+unpack vendor_boot
+[[ $(field vendor_boot 'dtb size') == 0 ]] || fail "gs201 layout: vendor_boot has no DTB"
+[[ $(cat "$K/images/DEVICE") == twelve ]] || fail "images records the device"
+pass "gs201-style descriptor: boot, init_boot, vendor_boot, vendor_kernel_boot, dtbo"
+twelve_sums=$(cd "$K/images" && sha256sum *.img)
+
+# gs101 layout: no init_boot or vendor_kernel_boot
+om six images || { cat "$t/log"; fail "images builds the gs101-style layout"; }
+[[ $(built) == "boot.img dtb.img dtbo.img vendor_boot.img " ]] || fail "gs101 layout: boot, vendor_boot, dtbo and dtb.img only (got $(built))"
+unpack boot
+[[ $(field boot 'os version') == 17.0.0 && $(field boot 'os patch level') == 2026-10 ]] || fail "gs101 layout: boot carries the OS version"
+[[ -s $t/u/boot/kernel && -s $t/u/boot/ramdisk ]] || fail "gs101 layout: boot carries the kernel and the generic ramdisk"
+unpack vendor_boot
+[[ $(field vendor_boot 'page size') == 0x00000800 ]] || fail "gs101 layout: vendor_boot page size"
+cmp -s "$t/u/vendor_boot/dtb" "$K/images/dtb.img" || fail "gs101 layout: vendor_boot carries dtb.img"
+cmp -s "$t/u/vendor_boot/vendor_ramdisk00" "$K/initramfs.cpio.lz4" || fail "gs101 layout: vendor_boot carries the initramfs"
+[[ $(cat "$K/images/DEVICE") == six ]] || fail "images records the device"
+pass "gs101-style descriptor: boot (ramdisk, OS version), vendor_boot (DTB, initramfs), dtbo"
+
+# images is deterministic, so the gs201 layout can be compared run to run
+om twelve images && [[ $(cd "$K/images" && sha256sum *.img) == "$twelve_sums" ]] || fail "images is deterministic"
+pass "images gives the same bytes on a second run"
+
+# flash against a fake fastboot that logs every call
+cat > "$t/bin/fastboot" <<'EOF'
+#!/bin/bash
+echo "$*" >> "$T/fastboot.log"
+[[ $1 == devices ]] && printf 'FAKE123\tfastboot\n'
+[[ $1 == flash ]] && echo OKAY
+exit 0
+EOF
+chmod +x "$t/bin/fastboot"
+export T=$t
+flashed() { grep '^flash ' "$t/fastboot.log" | cut -d' ' -f2 | tr '\n' ' '; }
+: > "$t/fastboot.log"
+om twelve flash || { cat "$t/log"; fail "flash runs for the gs201-style device"; }
+[[ $(flashed) == "boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b " ]] || fail "gs201 flash writes its five images (got $(flashed))"
+pass "flash writes exactly the gs201-style BOOT_IMAGES"
+: > "$t/fastboot.log"
+if om six flash; then fail "flash refuses images built for another device"; fi
+grep -c "holds images for 'twelve', not six" "$t/log" >/dev/null || { cat "$t/log"; fail "flash says whose images they are"; }
+[[ -z $(flashed) ]] || fail "flash writes nothing when the images are another device's"
+pass "flash refuses another device's images before writing anything"
+om six images
+: > "$t/fastboot.log"
+om six flash || { cat "$t/log"; fail "flash runs for the gs101-style device"; }
+[[ $(flashed) == "boot_b vendor_boot_b dtbo_b " ]] || fail "gs101 flash writes boot_b, vendor_boot_b and dtbo_b (got $(flashed))"
+pass "flash writes exactly the gs101-style BOOT_IMAGES"
+
+# Bad descriptors are refused before anything is built or written
+bad() { # what, sed expression on six's descriptor, expected message
+  cp "$R/device/six/device.conf" "$t/good.conf"
+  sed -i "$2" "$R/device/six/device.conf"
+  : > "$t/fastboot.log"
+  if om six flash; then fail "refuses $1"; fi
+  grep -c -- "$3" "$t/log" >/dev/null || { cat "$t/log"; fail "refuses $1 with: $3"; }
+  [[ -z $(flashed) ]] || fail "writes nothing for $1"
+  cp "$t/good.conf" "$R/device/six/device.conf"
+  pass "refuses $1"
+}
+bad "an unknown boot image" 's/^BOOT_IMAGES=.*/BOOT_IMAGES="boot vendor_boot dtbo recovery"/;s/^UFS_RW=.*/UFS_RW="boot_b vendor_boot_b dtbo_b recovery_b userdata"/' "not recovery"
+bad "a boot image named twice" 's/^BOOT_IMAGES=.*/BOOT_IMAGES="boot vendor_boot dtbo boot"/' "names boot twice"
+bad "BOOT_IMAGES without dtbo" 's/^BOOT_IMAGES=.*/BOOT_IMAGES="boot vendor_boot"/' "must include dtbo"
+bad "a boot image missing from UFS_RW" 's/^UFS_RW=.*/UFS_RW="boot_b vendor_boot_b userdata"/' "dtbo_b is not in UFS_RW"
+bad "a partition other than slot B in UFS_RW" 's/^UFS_RW=.*/UFS_RW="boot_b vendor_boot_b dtbo_b efs userdata"/' "not efs"

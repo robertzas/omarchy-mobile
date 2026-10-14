@@ -3,7 +3,8 @@
 # The installer's tests (no phone, nothing flashed): tools/install-phone
 # against a fake fastboot, tools/phone-provision against a synthetic backup
 # (and a container standing in for the phone, with Docker), the initramfs's
-# first-boot growth, omamobile-firstboot's own tests, and the smoke test of
+# first-boot growth, bin/omamobile's boot-image layouts and flash against a
+# fake fastboot, omamobile-firstboot's own tests, and the smoke test of
 # the newest root image in out/ if there is one.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
@@ -14,7 +15,7 @@ for f in tools/install-phone tools/phone-provision tools/build-rootfs tools/buil
 done
 sh -n device/*/initramfs/init
 echo "ok - scripts parse"
-for t in tests/install-phone tests/phone-provision tests/initramfs-grow packages/omamobile-firstboot/test/all; do
+for t in tests/install-phone tests/phone-provision tests/initramfs-grow tests/images-layout packages/omamobile-firstboot/test/all; do
   echo "# $t"
   "$t"
 done
