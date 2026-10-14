@@ -1,14 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Camera plan (cheetah / gs201): raw capture first, then libcamera
 
-Status (2026-10-14, night): **the front camera works end to end** (F.5
-raw, F.7 libcamera; CAM-M.5k section), the ultrawide unchanged. **Both
-C-PHY cameras (main, telephoto) stream on their links, but the WDMA
-writes none of their VC 0 data** (syncs only, then `LASTADDR`), after
-matching a working set-up's link, PHY, WDMA and sensor control values;
-telephoto T.1-T.4 passed, its lens NACKs. Kernel: int `8830971ff` =
-`7.3.0-rc6-omamobile-push1-00486-g8830971ffddb`, overlays as
-`device.conf` (now with `camera-tele`). Earlier status (2026-10-13, evening): **the ultrawide works end to end through
+Status (2026-10-14, night): **all four cameras stream real frames.**
+The C-PHY main and telephoto cameras needed one fix: the CSIS write DMA
+loses lines that arrive faster than about 400 MB/s, so the sensor driver
+now lengthens their lines (`samsung,max-line-throughput = <360>`, section
+CAM-M.5l). Front: F.5-F.7 passed. Telephoto: T.1, T.2, T.4, T.5 passed;
+its SEM1215SA lens NACKs (T.3), so it stays at a stop, out of focus.
+Kernel: int `cda0fb5a5` = `7.3.0-rc6-omamobile-push1-00500-gcda0fb5a5bbd`,
+overlays as `device.conf` (now with `camera-tele`). Earlier status (2026-10-13, evening): **the ultrawide works end to end through
 libcamera (CAM5). The other three cameras are built offline and wait for
 the phone: main (Samsung S5KGN1, C-PHY, link 1; runbook CAM-M), front
 (Samsung S5K3J1, D-PHY, link 0; CAM7) and telephoto (Samsung S5KGM5,
@@ -3210,6 +3210,60 @@ control).
 - **T.5 (bars, fresh boot): fails like the main camera:** WDMA FS 1,
   errors 223 (b14 x28, b15 x223), no data. (Without the lens driver loaded
   the sensor's format couldn't be set: `LENS=1` is needed.)
+
+### CAM-M.5l: the fix, lines no faster than the WDMA takes them (2026-10-14)
+
+Kernel `omamobile-camera` (built W=1 clean, merged into int, pushed):
+bring-up options `keep_failed`, debug counters (DMA 0x100 = 1, context
+counters at 0x144/0x154 logged at the first error and at stop),
+`sc_con`, `link_sel_bits`, `wdma_rows`, `wdma_fmt`, `all_slots`,
+`bw_limit0-2` (WDMA 0x560-0x568, read 0 on the phone), s5kgn1
+`extra_regs`, camera-cap-test `PRE_STREAM`; and the fix:
+`6c66d7456` (binding `samsung,max-line-throughput`), `15e0166b0` (s5kgn1
+writes a longer 0x0342 where a mode's lines would exceed it),
+`1e8739197` (cheetah: 360 MB/s for the main and telephoto sensors).
+
+Results (00490-00500, main camera unless said):
+- Every VC 0 run before the fix wrote **no data at all** (buffers handed
+  back with `keep_failed=1` all zeros) in formats 7, 6 and 0, on WDMA
+  channel 1 too, with SC_CON 7, with 0x488 bits for link 1, with all 32
+  address slots valid, with a 32-row WDMA frame and with a 284-line
+  sensor output.
+- The sensor's second stream is the phase data and can be switched off:
+  `0x0b02 = 0` (link errors from ~200 to 2 a frame); the image moves to
+  VC 1 with `0x0110 = 0x0102`. Neither helped: **the image on VC 1 failed
+  like on VC 0**, so the stream's VC is not the cause; the phase stream
+  (one line in four) landed because its lines are sparse.
+- **Line length decides** (link rate unchanged, `extra_regs=0x0342=N`):
+  2016x1136, 2520-byte lines: 3000 (2.3 us) fails, 6000 (4.6 us) fails,
+  7500 (5.7 us) fails, **9000 (6.9 us) lands every frame**, 12000 lands;
+  4080x3072, 5100-byte lines: 11552 (8.8 us) fails, **17328 (13.2 us)
+  lands**. About 400 MB/s within a line is the limit; CAM 664 MHz with INT
+  533 MHz and the octa pixel mode don't move it. The D-PHY cameras stay
+  under it (ultrawide 271 MB/s, front 343 MB/s).
+- **With the fix and default options (00500):** main 2016x1136 raw: 4 of
+  4 frames, errors 0, eight clean bars; 4080x3072: 3 of 3, errors 0;
+  libcamera (`cam -c2`, 2008x1136): 91 frames at 30.0 fps, errors 0.
+  Telephoto 2016x1512: bars clean (BGGR as flipped: libcamera shows the
+  eight bars in the right colours), raw 30 of 30 frames, errors 0;
+  4032x3024: 3 of 3; libcamera 91 frames at 26 fps, errors 0.
+- Pictures (raw long exposures, not committed: the room): **main** a sharp
+  real scene; **ultrawide** a real scene, upside down against the main
+  (mounted the other way: rotation 270 [I], as question 14 suspects);
+  **front** a real scene; **telephoto** only blurred shapes at 8 DN over
+  black (dark side of the room, lens at its stop).
+- Costs of the limit: the main camera's 4080x3072 mode runs at most about
+  9 fps (18526 clocks a line), 2016x1136 up to about 128 fps; the
+  telephoto's 2016-wide modes about 30 fps.
+
+Next:
+1. Telephoto lens: the SEM1215SA NACKs at 0x34 with its own supplies;
+   stock powers it inside the sensor's sequence (power it after the
+   sensor, then retry T.3/T.6).
+2. M.6/F.6 gain models, M.7/T.7 autofocus in libcamera, rotations
+   (question 14) with a picture of text per camera.
+3. Whether the 400 MB/s limit is the WDMA's write path (a bus QoS or
+   burst setting) rather than fixed: then the full-rate modes come back.
 
 ### CAM5.3: ultrawide quick wins. Risk: low to medium
 
