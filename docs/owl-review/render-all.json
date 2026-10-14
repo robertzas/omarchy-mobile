@@ -1,0 +1,1157 @@
+[
+ {
+  "id": "9g420/codex-quota",
+  "l4": {
+   "pass": true,
+   "worst": 0.0900030827522329,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.48
+  }
+ },
+ {
+  "id": "amirinanto-r37/go-limit",
+  "l4": {
+   "pass": true,
+   "worst": 0.000006218751252617949,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.04
+  }
+ },
+ {
+  "id": "arbadacarbayk/nostr-apps",
+  "l4": {
+   "pass": true,
+   "worst": 0.49500067949294646,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.01
+  }
+ },
+ {
+  "id": "arbadacarbayk/nostr-git",
+  "l4": {
+   "pass": true,
+   "worst": 0.0000019192695503988944,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.01
+  }
+ },
+ {
+  "id": "asphyksia/companion",
+  "l4": {
+   "pass": true,
+   "worst": 0.000011310100546779722,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.06
+  }
+ },
+ {
+  "id": "bryanperdana/retro-amp",
+  "l4": {
+   "pass": true,
+   "worst": 0.000014114379894181184,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.07
+  }
+ },
+ {
+  "id": "cbarland/asset-ticker",
+  "l4": {
+   "pass": true,
+   "worst": 0.09000112056732235,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.09
+  }
+ },
+ {
+  "id": "cipriandrei10/claude-top",
+  "l4": {
+   "pass": true,
+   "worst": 0.000002491474148769157,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.03
+  }
+ },
+ {
+  "id": "cipriandrei10/google-calendar",
+  "l4": {
+   "pass": true,
+   "worst": 0.0000034451484935971166,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.1
+  }
+ },
+ {
+  "id": "daileng/note",
+  "l4": {
+   "pass": true,
+   "worst": 0.5475026583671365,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.24
+  }
+ },
+ {
+  "id": "daileng/omarcharium",
+  "l4": {
+   "pass": true,
+   "worst": 0,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "daviddelpozo/f1",
+  "l4": {
+   "pass": true,
+   "worst": 0.000003826618211633104,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.04
+  }
+ },
+ {
+  "id": "derekross/bitcoin",
+  "l4": {
+   "pass": true,
+   "worst": 0.000007617473613663606,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.09
+  }
+ },
+ {
+  "id": "derekross/nostr-inbox",
+  "l4": {
+   "pass": true,
+   "worst": 0.09000000000000341,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.11
+  }
+ },
+ {
+  "id": "dimasmds/hootling",
+  "l4": {
+   "pass": true,
+   "worst": 0.0000070631504343054985,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "elchopchop/btcusd-minimal",
+  "l4": {
+   "pass": true,
+   "worst": 0.0000011537075081946568,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.16
+  }
+ },
+ {
+  "id": "emircanagac/bitcoin-ticker",
+  "l4": {
+   "pass": true,
+   "worst": 0.000003051757815342171,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "gbenselum/dns",
+  "l4": {
+   "pass": true,
+   "worst": 0.00000647306441692308,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 1.2
+  }
+ },
+ {
+  "id": "gbovee/balatro-joker",
+  "l4": {
+   "pass": true,
+   "worst": 0,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.04
+  }
+ },
+ {
+  "id": "hoangitk/bookmarks",
+  "l4": {
+   "pass": true,
+   "worst": 0.5850021100044245,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.05
+  }
+ },
+ {
+  "id": "hoangitk/reminders",
+  "l4": {
+   "pass": true,
+   "worst": 0.4950010228156998,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.08
+  }
+ },
+ {
+  "id": "hoangitk/vlc-player",
+  "l4": {
+   "pass": true,
+   "worst": 0.0000034213065873700543,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.05
+  }
+ },
+ {
+  "id": "im0001gt/tesla",
+  "l4": {
+   "pass": true,
+   "worst": 0.0000055727958709894665,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.03
+  }
+ },
+ {
+  "id": "iosue-iulianus/eredivisie",
+  "l4": {
+   "pass": true,
+   "worst": 0.1799999999999784,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.09
+  }
+ },
+ {
+  "id": "iosue-iulianus/loyalty-card",
+  "l4": {
+   "pass": true,
+   "worst": 0.000004207134224998299,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.08
+  }
+ },
+ {
+  "id": "jdblackwell/spacex",
+  "l4": {
+   "pass": true,
+   "worst": 0.000006206035592981607,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.08
+  }
+ },
+ {
+  "id": "jenskock/photoprism-random",
+  "l4": {
+   "pass": true,
+   "worst": 0.09000000000000341,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.22
+  }
+ },
+ {
+  "id": "jonasallencodes/digital-clock",
+  "l4": {
+   "pass": true,
+   "worst": 0.000001537799846573762,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "jubudge/flipper-zero",
+  "l4": {
+   "pass": true,
+   "worst": 0.000011813640583113738,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.1
+  }
+ },
+ {
+  "id": "kingdompaulo/ai-stars",
+  "l4": {
+   "pass": true,
+   "worst": 0.015093749999991246,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.04
+  }
+ },
+ {
+  "id": "lucassynnott/year-left",
+  "l4": {
+   "pass": true,
+   "worst": 0,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "luciano-sparti/timetree",
+  "l4": {
+   "pass": true,
+   "worst": 0.020214843749997158,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.1
+  }
+ },
+ {
+  "id": "lukedca/btclock",
+  "l4": {
+   "pass": true,
+   "worst": 0.000011927740871442438,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "missingpackage/2048",
+  "l4": {
+   "pass": true,
+   "worst": 0.000004112720489501953,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.05
+  }
+ },
+ {
+  "id": "missingpackage/dice",
+  "l4": {
+   "pass": true,
+   "worst": 0.48749999999999716,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.2
+  }
+ },
+ {
+  "id": "missingpackage/news",
+  "l4": {
+   "pass": true,
+   "worst": 0.0000019192695503988944,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "moustaphawaguihh-hue/lights-out",
+  "l4": {
+   "pass": true,
+   "worst": 0.09000000000000341,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "nyaadesu/agenda",
+  "l4": {
+   "pass": true,
+   "worst": 0.000005352497126409617,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.01
+  }
+ },
+ {
+  "id": "nyaadesu/ns",
+  "l4": {
+   "pass": true,
+   "worst": 0.000004661083153223444,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.15
+  }
+ },
+ {
+  "id": "petllama/gestures",
+  "l4": {
+   "pass": true,
+   "worst": 0.00001280546183579645,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "rcrohmana/classic-clock",
+  "l4": {
+   "pass": true,
+   "worst": 0.0000027165412745944195,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.01
+  }
+ },
+ {
+  "id": "rcrohmana/codex-quota",
+  "l4": {
+   "pass": true,
+   "worst": 0.000017479419739174773,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.18
+  }
+ },
+ {
+  "id": "samthambad/sg-psi",
+  "l4": {
+   "pass": true,
+   "worst": 0.000009875774381384872,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.84
+  }
+ },
+ {
+  "id": "setiapam/omaprayer",
+  "l4": {
+   "pass": true,
+   "worst": 0.5458333333333272,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 1.04
+  }
+ },
+ {
+  "id": "simonschubert/air-and-pollen",
+  "l4": {
+   "pass": true,
+   "worst": 7.891654938418924e-7,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.01
+  }
+ },
+ {
+  "id": "simonschubert/analog-clock",
+  "l4": {
+   "pass": true,
+   "worst": 0,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "simonschubert/bundesliga",
+  "l4": {
+   "pass": true,
+   "worst": 0.09000250291824585,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.08
+  }
+ },
+ {
+  "id": "simonschubert/calendar",
+  "l4": {
+   "pass": true,
+   "worst": 0.524999999999995,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "simonschubert/champions-league",
+  "l4": {
+   "pass": true,
+   "worst": 0.09000250291824585,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.11
+  }
+ },
+ {
+  "id": "simonschubert/countdown",
+  "l4": {
+   "pass": true,
+   "worst": 0,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.01
+  }
+ },
+ {
+  "id": "simonschubert/crypto",
+  "l4": {
+   "pass": true,
+   "worst": 0.000005352497126409617,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.01
+  }
+ },
+ {
+  "id": "simonschubert/departures",
+  "l4": {
+   "pass": true,
+   "worst": 0.0000012516975473886305,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.08
+  }
+ },
+ {
+  "id": "simonschubert/earthquakes",
+  "l4": {
+   "pass": true,
+   "worst": 0.000012981891643448762,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.01
+  }
+ },
+ {
+  "id": "simonschubert/exchange-rates",
+  "l4": {
+   "pass": true,
+   "worst": 0,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "simonschubert/feeds",
+  "l4": {
+   "pass": true,
+   "worst": 7.891654938418924e-7,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "simonschubert/fetch",
+  "l4": {
+   "pass": true,
+   "worst": 0.000005581378943020354,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 1.01
+  }
+ },
+ {
+  "id": "simonschubert/focus",
+  "l4": {
+   "pass": true,
+   "worst": 0.09000265836715471,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.12
+  }
+ },
+ {
+  "id": "simonschubert/forecast",
+  "l4": {
+   "pass": true,
+   "worst": 0.000002014636990566032,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.01
+  }
+ },
+ {
+  "id": "simonschubert/free-games",
+  "l4": {
+   "pass": true,
+   "worst": 7.891654938418924e-7,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.1
+  }
+ },
+ {
+  "id": "simonschubert/github",
+  "l4": {
+   "pass": true,
+   "worst": 0.000005582968384487685,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.11
+  }
+ },
+ {
+  "id": "simonschubert/github-trending",
+  "l4": {
+   "pass": true,
+   "worst": 7.891654938418924e-7,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.01
+  }
+ },
+ {
+  "id": "simonschubert/habits",
+  "l4": {
+   "pass": true,
+   "worst": 0.0000012660026520450174,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "simonschubert/hacker-news",
+  "l4": {
+   "pass": true,
+   "worst": 7.891654938418924e-7,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "simonschubert/home-assistant",
+  "l4": {
+   "pass": true,
+   "worst": 7.891654938418924e-7,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.01
+  }
+ },
+ {
+  "id": "simonschubert/ifsc",
+  "l4": {
+   "pass": true,
+   "worst": 0.000008761882781982422,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.08
+  }
+ },
+ {
+  "id": "simonschubert/koi-pond",
+  "l4": {
+   "pass": true,
+   "worst": 0,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "simonschubert/la-liga",
+  "l4": {
+   "pass": true,
+   "worst": 0.09000250291824585,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.05
+  }
+ },
+ {
+  "id": "simonschubert/launches",
+  "l4": {
+   "pass": true,
+   "worst": 0.000003094196330266641,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.01
+  }
+ },
+ {
+  "id": "simonschubert/lava-lamp",
+  "l4": {
+   "pass": true,
+   "worst": 0,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "simonschubert/ligue-1",
+  "l4": {
+   "pass": true,
+   "worst": 0.09000250291824585,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.04
+  }
+ },
+ {
+  "id": "simonschubert/lobsters",
+  "l4": {
+   "pass": true,
+   "worst": 7.891654938418924e-7,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "simonschubert/mlb",
+  "l4": {
+   "pass": true,
+   "worst": 0.09000250291824585,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "simonschubert/nba",
+  "l4": {
+   "pass": true,
+   "worst": 0.09000250291824585,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "simonschubert/nhl",
+  "l4": {
+   "pass": true,
+   "worst": 0.09000250291824585,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "simonschubert/notifications",
+  "l4": {
+   "pass": true,
+   "worst": 0.0000015473365806428774,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "simonschubert/now-playing",
+  "l4": {
+   "pass": true,
+   "worst": 0.000002205371856689453,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.05
+  }
+ },
+ {
+  "id": "simonschubert/omarchy-commits",
+  "l4": {
+   "pass": true,
+   "worst": 0.000005352497112198762,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "simonschubert/owl",
+  "l4": {
+   "pass": true,
+   "worst": 0.000011310100546779722,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.04
+  }
+ },
+ {
+  "id": "simonschubert/picture-of-the-day",
+  "l4": {
+   "pass": true,
+   "worst": 0.000004974365253929136,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "simonschubert/planes-overhead",
+  "l4": {
+   "pass": true,
+   "worst": 0.000011310100546779722,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.03
+  }
+ },
+ {
+  "id": "simonschubert/premier-league",
+  "l4": {
+   "pass": true,
+   "worst": 0.09000250291824585,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.1
+  }
+ },
+ {
+  "id": "simonschubert/releases",
+  "l4": {
+   "pass": true,
+   "worst": 7.891654938418924e-7,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "simonschubert/serie-a",
+  "l4": {
+   "pass": true,
+   "worst": 0.09000250291824585,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.05
+  }
+ },
+ {
+  "id": "simonschubert/sun-and-moon",
+  "l4": {
+   "pass": true,
+   "worst": 0.000017239093779153336,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.04
+  }
+ },
+ {
+  "id": "simonschubert/today",
+  "l4": {
+   "pass": true,
+   "worst": 0.000011310100546779722,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.03
+  }
+ },
+ {
+  "id": "simonschubert/todo",
+  "l4": {
+   "pass": true,
+   "worst": 0.000002276897419051238,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.07
+  }
+ },
+ {
+  "id": "simonschubert/uptime",
+  "l4": {
+   "pass": true,
+   "worst": 0.000009167194377823762,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "simonschubert/whats-new",
+  "l4": {
+   "pass": true,
+   "worst": 3.123283356387674e-7,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "simonschubert/wikipedia",
+  "l4": {
+   "pass": true,
+   "worst": 7.891654938418924e-7,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "simonschubert/world-clock",
+  "l4": {
+   "pass": true,
+   "worst": 0,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "simonschubert/xkcd",
+  "l4": {
+   "pass": true,
+   "worst": 0.000003445148479386262,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "simonschubert/year-progress",
+  "l4": {
+   "pass": true,
+   "worst": 0.000009548664081648894,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.1
+  }
+ },
+ {
+  "id": "ssalentin/claude-limits",
+  "l4": {
+   "pass": true,
+   "worst": 0,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.01
+  }
+ },
+ {
+  "id": "ssalentin/red-panda",
+  "l4": {
+   "pass": true,
+   "worst": 0,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.08
+  }
+ },
+ {
+  "id": "thedavidcoen/cursor-plan",
+  "l4": {
+   "pass": true,
+   "worst": 0.0000024380683925073754,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.01
+  }
+ },
+ {
+  "id": "thedavidcoen/terminal-profiles",
+  "l4": {
+   "pass": false,
+   "worst": 0,
+   "why": "not rendered on the reference side: has a Terminal: the reference's would start the widget's program"
+  },
+  "l5": {
+   "diffPercent": null
+  }
+ },
+ {
+  "id": "toniavanza/agy-limits",
+  "l4": {
+   "pass": true,
+   "worst": 0,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "travonted/nfl",
+  "l4": {
+   "pass": true,
+   "worst": 0.09000250291824585,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "travonted/vcard",
+  "l4": {
+   "pass": true,
+   "worst": 0.00000432252883797446,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.08
+  }
+ },
+ {
+  "id": "tusshar2000/ppt-maker",
+  "l4": {
+   "pass": true,
+   "worst": 0.0900005307197631,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.01
+  }
+ },
+ {
+  "id": "tusshar2000/widget-maker",
+  "l4": {
+   "pass": true,
+   "worst": 0.09000000000000341,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "vikrantpagare/buddha-meditation",
+  "l4": {
+   "pass": true,
+   "worst": 0,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.02
+  }
+ },
+ {
+  "id": "vikrantpagare/coin-flip",
+  "l4": {
+   "pass": true,
+   "worst": 0.000011310100546779722,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.16
+  }
+ },
+ {
+  "id": "weebowiz/dictation",
+  "l4": {
+   "pass": true,
+   "worst": 0.00000361204146770433,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.24
+  }
+ },
+ {
+  "id": "weebowiz/terminal-voice",
+  "l4": {
+   "pass": true,
+   "worst": 0.000004756450636023146,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.22
+  }
+ }
+]

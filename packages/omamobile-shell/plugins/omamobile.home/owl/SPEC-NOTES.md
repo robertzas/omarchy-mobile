@@ -73,4 +73,6 @@ Each entry: the decision, the guide section it clarifies, and how it is tested.
 
 ## Known differences
 
-None at L1-L3 for the 105 store widgets at `b63886b` (without data) and the 14 milestone widgets (with data); see `tests/owl/expected/` and `docs/owl-review/`. Layout (L4) and pixel (L5) differences are listed in [`docs/owl-review/README.md`](../../../../../docs/owl-review/README.md).
+None at L1-L3 for the 105 store widgets at `b63886b` (without data) and the 14 milestone widgets (with data). Layout (L4) matches within 1 dp for the 14 with data and 104 of 105 without (the other one isn't compared); see [`docs/owl-review/`](../../../../../docs/owl-review/README.md).
+
+**N39. `tileWidth`/`tileHeight` include the tile's padding**, as the guide says ("dp, including the tile padding"). The reference renderer reports the content area without it; the layout comparison gives both sides the reference's value. An open question for Simon.
