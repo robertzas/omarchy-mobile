@@ -17,11 +17,17 @@ Script: one READY USIM; after AT+CFUN=1 packet registration "searching" for
 to 0, then LTE (14); bearers get documentation-range addresses; ADD_PDN_INFO
 is followed by an IMS registration (state 2, voice|SMS); a dial goes
 dialing -> active, a hangup ends it; --incoming-sms delivers one SMS after
-the IMS registration. Every value is made up: numbers are fictional
-555-01xx ones, addresses are from the documentation ranges.
+the IMS registration. GET_RADIO_POWER answers POWER_OFF (3) until the
+first AT+CFUN, then STOP_NETWORK (1) or START_NETWORK (2), each change
+announced with IND_RADIO_STATE_CHANGED. Every value is made up: numbers are
+fictional 555-01xx ones, addresses are from the documentation ranges.
 
   tools/sit-sim --ipc PATH --router PATH [--transcript FILE] [--search-polls N]
-                [--incoming-sms] [--no-sim] [--reject-setup CAUSE]
+                [--incoming-sms] [--no-sim] [--reject-setup CAUSE] [--control PATH]
+
+--control PATH is a datagram socket for tests: "ring" (an incoming IMS call),
+"remote-hangup" (the far end ends the current call), "sms" (one text
+message), "wap-push" (one MMS notification: an 8-bit SMS to port 2948).
 
 The transcript is JSON lines: every message in and out, and a "violation"
 line for a request outside the RIL's allow-list, on the do-not-send list,
@@ -58,6 +64,7 @@ class Sim:
     def __init__(self, a):
         self.a = a
         self.radio = 0
+        self.radio_state = 3                     # POWER_OFF until AT+CFUN
         self.polls = 0
         self.nr_mode = 3
         self.ps_service = 1
@@ -100,7 +107,9 @@ class Sim:
             self.log(dir='in', type='at', cmd=line)
             if line in ('AT+CFUN=1', 'AT+CFUN=0'):
                 self.radio = int(line[-1])
+                self.radio_state = 2 if self.radio else 1
                 conn.send(b'\r\nOK\r\n')
+                self.indicate(0x0802, struct.pack('<I', self.radio_state))
             elif line == 'AT+CFUN?':
                 conn.send(b'\r\n+CFUN: %d\r\n\r\nOK\r\n' % self.radio)
             else:
@@ -157,7 +166,7 @@ class Sim:
         self.respond(mid, token, 0, bytes(payload))
 
     def r_0801(self, mid, token, p):            # GET_RADIO_POWER
-        self.respond(mid, token, 0, struct.pack('<I', 10 if self.radio else 0))
+        self.respond(mid, token, 0, struct.pack('<I', self.radio_state))
 
     def r_0749(self, mid, token, p):
         self.respond(mid, token, 0, bytes([self.nr_mode]))
@@ -249,10 +258,51 @@ class Sim:
         self.respond(mid, token)
         self.after(0.05, lambda: self.call_status(p[0], 6, 16))
 
+    def r_0d02(self, mid, token, p):            # AIMS_ANSWER
+        ringing = [c for c, state in self.calls.items() if state == 'ringing-in']
+        if not ringing:
+            return self.respond(mid, token, 6)
+        self.calls[ringing[0]] = 'active'
+        self.respond(mid, token)
+        self.after(0.05, lambda: self.call_status(ringing[0], 0))
+
+    def r_0d0a(self, mid, token, p):            # AIMS_SEND_DTMF
+        self.log(event='dtmf', call=p[0], key=chr(p[2]) if len(p) > 2 else '')
+        self.respond(mid, token)
+
+    # ---- the test control socket ---------------------------------------
+
+    def control(self, command):
+        self.log(event='control', command=command)
+        if command == 'ring':
+            call_id, caller = 2, TEST_SENDER.encode()
+            self.calls[call_id] = 'ringing-in'
+            self.indicate(0x0d01, struct.pack('<HBH', 1, call_id, len(caller)) + caller)
+            self.after(0.05, lambda: self.call_status(call_id, 4))
+        elif command == 'remote-hangup':
+            for call_id in list(self.calls):
+                self.calls.pop(call_id)
+                self.call_status(call_id, 6, 16)
+        elif command == 'sms':
+            self.incoming_sms()
+        elif command == 'wap-push':
+            self.wap_push()
+        else:
+            self.log(violation='unknown control command', command=command)
+
     def incoming_sms(self):
         tpdu = bytes.fromhex('000b912120550521f300006290922143650005e8329bfd06')   # "hello"
         data = bytes.fromhex('07912120550521f3') + tpdu
         self.indicate(0x0d1e, bytes([7, len(data)]) + data)
+
+    def wap_push(self):
+        # An 8-bit SMS-DELIVER with a port header (destination 2948, the WAP
+        # push port): the user data is a made-up WSP push, not a real MMS.
+        body = bytes.fromhex('0106226170706c69636174696f6e2f766e642e7761702e6d6d732d6d65737361676500') + b'omamobile-test'
+        ud = bytes.fromhex('0605040b8423f0') + body
+        tpdu = bytes.fromhex('440b912120550521f3000462909221436500') + bytes([len(ud)]) + ud
+        data = bytes.fromhex('07912120550521f3') + tpdu
+        self.indicate(0x0d1e, bytes([8, len(data)]) + data)
 
 
 def listen(path, kind):
@@ -275,6 +325,7 @@ def main():
     p.add_argument('--incoming-sms', action='store_true')
     p.add_argument('--no-sim', action='store_true')
     p.add_argument('--reject-setup', type=int, default=0)
+    p.add_argument('--control')
     p.add_argument('-v', '--verbose', action='store_true')
     a = p.parse_args()
     ipc = listen(a.ipc, socket.SOCK_SEQPACKET)
@@ -282,15 +333,25 @@ def main():
     sim = Sim(a)
     sim.log(event='listening')
     at_conns = []
+    control = None
+    if a.control:
+        try:
+            os.unlink(a.control)
+        except FileNotFoundError:
+            pass
+        control = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        control.bind(a.control)
     while True:
         timeout = max(0, sim.timers[0][0] - time.monotonic()) if sim.timers else None
-        watch = [ipc, router] + at_conns + ([sim.conn] if sim.conn else [])
+        watch = [ipc, router] + at_conns + ([sim.conn] if sim.conn else []) + ([control] if control else [])
         ready, _, _ = select.select(watch, [], [], timeout)
         now = time.monotonic()
         while sim.timers and sim.timers[0][0] <= now:
             heapq.heappop(sim.timers)[2]()
         for r in ready:
-            if r is ipc:
+            if r is control:
+                sim.control(control.recv(256).decode('ascii', 'replace').strip())
+            elif r is ipc:
                 sim.conn, _ = ipc.accept()
                 sim.log(event='connected')
             elif r is router:

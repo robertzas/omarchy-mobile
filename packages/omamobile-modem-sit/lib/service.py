@@ -18,6 +18,10 @@ it. No radio, NV, SIM or raw-request command is exposed.
   {"action": "sms-delete", "id": "..."}
   {"action": "screen-state", "on": true|false}
   {"action": "radio", "on": true|false}      AT+CFUN, the rollback short of a reboot
+  {"action": "subscribe"}                    keep the connection: one
+      {"event": "status", "status": {...}} line now and after every change
+      (the full private status, with the received SMS IDs). A subscriber
+      that can't keep up is dropped and resynchronises by reconnecting.
 
 /run/omamobile-sit/state.json (0644) is the same status without numbers,
 for pollers such as the shell's quick settings.
@@ -28,6 +32,7 @@ import hashlib
 import json
 import os
 import re
+import select
 import signal
 import socket
 import sqlite3
@@ -50,6 +55,38 @@ STATES = {0: 'active', 1: 'held', 2: 'dialing', 3: 'ringing-out', 4: 'ringing-in
 RATS = {0: '', 1: 'GPRS', 2: 'EDGE', 3: 'UMTS', 9: 'HSDPA', 10: 'HSUPA', 11: 'HSPA',
         14: 'LTE', 15: 'HSPA+', 16: 'GSM', 20: 'LTE-CA', 21: 'NR', 22: 'NR'}
 SOCKET = paths.RUN / 'socket'
+# GET_RADIO_POWER / IND_RADIO_STATE_CHANGED (MODEM-SIT-RESEARCH 3.1):
+# INITIALIZED and STOP_NETWORK are off, START_NETWORK on, POWER_OFF is the
+# state without a SIM (M4.1i), RESET is unavailable.
+RADIO = {0: 'off', 1: 'off', 2: 'on', 3: 'off', 4: 'unavailable'}
+# GET_SIM_STATUS application states, as AOSP's RIL_AppState (the bring-up's
+# "(2, 5)" is a USIM, READY; "state 2" is PIN, M4.1).
+APP_STATES = {0: 'unknown', 1: 'detected', 2: 'pin', 3: 'puk', 4: 'network-locked', 5: 'ready'}
+# 3GPP TS 22.101 10.1.1: 112 and 911 always, and these too without a SIM.
+EMERGENCY = ('112', '911')
+EMERGENCY_NO_SIM = ('000', '08', '110', '118', '119', '999')
+SUBSCRIBERS = 8
+
+
+def sim_status(payload):
+    """GET_SIM_STATUS without identifiers: the card state, and the USIM's
+    (else the first application's) state and PIN/PUK retries. AIDs and
+    labels are never read."""
+    if len(payload) < 3 or payload[2] > 8 or len(payload) < 3 + payload[2] * 63:
+        raise ValueError('Unexpected SIM status layout')
+    apps = [payload[i:i + 63] for i in range(3, 3 + payload[2] * 63, 63)]
+    app = next((a for a in apps if a[0] == 2), next((a for a in apps if a[0] == 1), apps[0] if apps else None))
+    card = payload[0]
+    if card == 0:
+        return dict(state='absent')
+    if card != 1:
+        return dict(state='error' if card == 2 else 'unknown')
+    if app is None:
+        return dict(state='detected')
+    status = dict(state=APP_STATES.get(app[1], 'unknown'))
+    if status['state'] in ('pin', 'puk', 'ready'):
+        status.update(pin_retries=app[59], puk_retries=app[60])
+    return status
 
 
 def database(path):
@@ -96,9 +133,13 @@ class Service:
         self.screen_on = None
         self.indication_counts = {}
         self.net = dict(reg='unknown', rat='', operator='', plmn='')
+        self.sim = dict(state='unknown')
+        self.radio = 'unknown'
         self.current_stage = 'starting'
         self.next_poll = 0
         self.published = None
+        self.subscribers = []
+        self.broadcast_line = None
 
     def stage(self, name):
         self.current_stage = name
@@ -203,6 +244,15 @@ class Service:
         elif ident == 0x0d05:
             record_registration(packet)
             self.publish()
+        elif ident == 0x0802:
+            # IND_RADIO_STATE_CHANGED: u32 at 0x08. Re-read the network too.
+            if len(packet) >= 12:
+                self.radio = RADIO.get(struct.unpack_from('<I', packet, 8)[0], 'unknown')
+            self.next_poll = 0
+            self.publish()
+        elif ident == 0x0210:
+            # IND_SIM_STATUS_CHANGED carries nothing we read: poll again.
+            self.next_poll = 0
         elif ident == 0x0d01:
             if len(packet) < 13:
                 raise ValueError('Truncated incoming call')
@@ -240,6 +290,17 @@ class Service:
         if time.monotonic() < self.next_poll:
             return
         self.next_poll = time.monotonic() + 30
+        # GET_SIM_STATUS and GET_RADIO_POWER: the probe's read-only requests.
+        try:
+            self.sim = sim_status(self.client.request(0x0200, timeout=5))
+        except (ModemError, TimeoutError, ValueError) as error:
+            print('SIM status poll failed:', type(error).__name__, flush=True)
+        try:
+            value = self.client.request(0x0801, timeout=5)
+            if len(value) >= 4:
+                self.radio = RADIO.get(struct.unpack_from('<I', value)[0], 'unknown')
+        except (ModemError, TimeoutError) as error:
+            print('Radio state poll failed:', type(error).__name__, flush=True)
         try:
             ps = self.client.request(0x0701, timeout=5)
             if len(ps) >= 4:
@@ -248,6 +309,9 @@ class Service:
                 self.net['rat'] = RATS.get(ps[3], str(ps[3]))
             if ps and ps[0] in (1, 5):
                 self.net.update(operator_name(self.client.request(0x0702, timeout=5)))
+            elif len(ps) >= 4:
+                # Not registered: no operator to show (not the last one seen).
+                self.net.update(operator='', plmn='')
         except (ModemError, TimeoutError, ValueError) as error:
             print('Status poll failed:', type(error).__name__, flush=True)
         self.publish()
@@ -320,16 +384,68 @@ class Service:
                      state='registered' if self.net['reg'] in ('home', 'roaming') else 'searching',
                      registration=self.net['reg'], tech=self.net['rat'],
                      operator=self.net['operator'] or self.net['plmn'],
-                     voice=voice, sms=sms, data=data, signal=0, audio=True)
+                     plmn=self.net['plmn'], operator_name=self.net['operator'],
+                     voice=voice, sms=sms, data=data, signal=0, audio=True,
+                     radio=self.radio, sim=dict(self.sim),
+                     emergency_numbers=list(EMERGENCY + (EMERGENCY_NO_SIM if self.sim['state'] == 'absent' else ())))
         calls = [{k: v for k, v in c.items() if k != 'modem_id'} for c in self.calls.values()]
         if public:
             # No numbers in the world-readable copy.
             calls = [dict(state=c['state'], direction=c['direction']) for c in calls]
             unread = self.db.execute('SELECT COUNT(*) FROM received WHERE consumed=0').fetchone()[0]
             return dict(modem=modem, calls=calls, sms=dict(unread=unread), updated=int(time.time()))
-        return dict(modem=modem, calls=calls,
+        received = [r[0] for r in self.db.execute('SELECT id FROM received WHERE consumed=0 ORDER BY rowid')]
+        return dict(modem=modem, calls=calls, sms=dict(received=['sit:' + i for i in received]),
                     audio=dict(available=True, running=self.audio is not None, mute=self.muted,
                                speaker=False, speaker_available=False, error=''))
+
+    def subscribe(self, connection):
+        """Keep an authorised connection for status events; refuse beyond
+        SUBSCRIBERS. The caller has already sent the request's reply."""
+        if len(self.subscribers) >= SUBSCRIBERS:
+            raise RuntimeError('Too many subscribers')
+        connection.setblocking(False)
+        self.subscribers.append(connection)
+        self.broadcast(force=connection)
+
+    def broadcast(self, force=None):
+        """Send the private status to every subscriber when it changed (and
+        to a new one at once). A subscriber whose buffer is full or that hung
+        up is dropped: it reconnects and gets a full status again."""
+        if not self.subscribers:
+            self.broadcast_line = None
+            return
+        line = (json.dumps(dict(event='status', status=self.status())) + '\n').encode()
+        if line == self.broadcast_line and force is None:
+            return
+        targets = self.subscribers if line != self.broadcast_line else [force]
+        self.broadcast_line = line
+        for connection in list(targets):
+            try:
+                if connection.send(line) != len(line):
+                    raise BlockingIOError
+            except OSError:
+                self.drop(connection)
+
+    def drop(self, connection):
+        if connection in self.subscribers:
+            self.subscribers.remove(connection)
+        connection.close()
+
+    def reap(self):
+        """Drop subscribers that hung up (they never send after subscribing)."""
+        if not self.subscribers:
+            return
+        readable, _, _ = select.select(self.subscribers, [], [], 0)
+        for connection in readable:
+            try:
+                data = connection.recv(4096)
+            except BlockingIOError:
+                continue
+            except OSError:
+                data = b''
+            if not data:
+                self.drop(connection)
 
     def publish(self):
         state = self.status(public=True)
@@ -502,6 +618,8 @@ def notify(message):
 
 
 def serve_one(service, connection, clients):
+    """One request on one connection. True if the connection became a
+    subscriber (the caller then keeps it open)."""
     connection.settimeout(2)
     try:
         _, uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
@@ -515,7 +633,14 @@ def serve_one(service, connection, clients):
             body += chunk
             if len(body) > 32768:
                 raise ValueError('Phone request too large')
-        result = service.dispatch(json.loads(body.split(b'\n', 1)[0]))
+        request = json.loads(body.split(b'\n', 1)[0])
+        if isinstance(request, dict) and request.get('action') == 'subscribe':
+            if len(service.subscribers) >= SUBSCRIBERS:
+                raise RuntimeError('Too many subscribers')
+            connection.sendall(json.dumps(dict(ok=True, result=dict(subscribed=True))).encode() + b'\n')
+            service.subscribe(connection)
+            return True
+        result = service.dispatch(request)
         response = dict(ok=True, result=result)
     except (ValueError, KeyError, TypeError, RuntimeError, OSError) as error:
         # Errors from wire data must never expose raw values.
@@ -525,6 +650,7 @@ def serve_one(service, connection, clients):
         connection.sendall(json.dumps(response).encode() + b'\n')
     except OSError:
         pass  # Durable send IDs prevent uncertain retries.
+    return False
 
 
 def probe():
@@ -623,12 +749,15 @@ def main():
             packet = client.next_indication(.05)
             if packet:
                 service.event(packet)
+            service.reap()
+            service.broadcast()
             try:
                 connection, _ = server.accept()
             except socket.timeout:
                 continue
-            with connection:
-                serve_one(service, connection, clients)
+            if not serve_one(service, connection, clients):
+                connection.close()
+            service.broadcast()
     finally:
         try:
             if service and service.live():
@@ -648,6 +777,9 @@ def main():
             if service:
                 service.audio_stop()
         finally:
+            if service:
+                for connection in list(service.subscribers):
+                    service.drop(connection)
             client.close()
             server.close()
             SOCKET.unlink(missing_ok=True)

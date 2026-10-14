@@ -135,7 +135,8 @@ connect. Replies are `{"ok": true, "result": ...}` or `{"ok": false,
 
 | Request | Result |
 |---|---|
-| `{"action": "status"}` | `modem` (`stage`, `registration`, `tech`, `operator`, `voice`, `sms`, `data`), `calls` (id, number, direction, state, reason), `audio` (running, mute) |
+| `{"action": "status"}` | `modem` (`stage`, `registration`, `tech`, `operator`, `plmn`, `operator_name`, `voice`, `sms`, `data`; from 0.3.0 also `radio` on/off/unavailable, `sim` (`state` absent/detected/pin/puk/network-locked/ready/error, PIN and PUK retries; never an AID, label, ICCID or IMSI) and `emergency_numbers`), `calls` (id, number, direction, state, reason), `sms` (`received`: the IDs not yet deleted), `audio` (running, mute) |
+| `{"action": "subscribe"}` (0.3.0) | `{"subscribed": true}`, then the connection stays open: `{"event": "status", "status": {...}}` (the status above) at once and after every change. At most 8 subscribers; one that stops reading is dropped and resynchronises by reconnecting. `omamobile-mmd` is its client |
 | `{"action": "dial", "number": "+1..."}` | `{"call": id}`; needs IMS voice registration; international form |
 | `{"action": "accept"\|"hangup"\|"delete-call", "id": ...}` | `{}` |
 | `{"action": "dtmf", "id": ..., "keys": "12#"}` | `{}` |

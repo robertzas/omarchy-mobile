@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -55,19 +56,20 @@ class SimulatorTests(unittest.TestCase):
 
     files = []
 
-    def start(self, *sim_args, daemon=True):
+    def start(self, *sim_args, daemon=True, bringup=True):
         sim_log = open(self.dir / 'sim.log', 'w')
         daemon_log = open(self.dir / 'daemon.log', 'w')
         self.files = [sim_log, daemon_log]
         self.procs.append(subprocess.Popen(
             [sys.executable, SIM, '--ipc', str(self.dir / 'ipc0'), '--router', str(self.dir / 'router'),
-             '--transcript', str(self.transcript), *sim_args], stdout=sim_log, stderr=sim_log))
+             '--transcript', str(self.transcript), '--control', str(self.dir / 'control'), *sim_args],
+            stdout=sim_log, stderr=sim_log))
         deadline = time.monotonic() + 5
         while not (self.dir / 'router').exists() and time.monotonic() < deadline:
             time.sleep(.05)
         if not daemon:
             return
-        self.daemon = subprocess.Popen([sys.executable, str(BIN / 'omamobile-sitd'), '--bringup'],
+        self.daemon = subprocess.Popen([sys.executable, str(BIN / 'omamobile-sitd')] + (['--bringup'] if bringup else []),
                                        env=self.env, stdout=daemon_log, stderr=subprocess.STDOUT)
         self.procs.append(self.daemon)
 
@@ -154,6 +156,67 @@ class SimulatorTests(unittest.TestCase):
         self.daemon.send_signal(signal.SIGTERM)
         self.assertEqual(self.daemon.wait(15), 0)
         self.assertFalse((self.dir / 'run' / 'socket').exists())
+
+    def control(self, command):
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.sendto(command.encode(), str(self.dir / 'control'))
+
+    def subscribe(self):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(10)
+        sock.connect(str(self.dir / 'run' / 'socket'))
+        sock.sendall(b'{"action": "subscribe"}\n')
+        self.addCleanup(sock.close)
+        reader = sock.makefile('r')
+        self.assertEqual(json.loads(reader.readline()), dict(ok=True, result=dict(subscribed=True)))
+        return reader
+
+    def next_status(self, reader, predicate, seconds=10):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            status = json.loads(reader.readline())['status']
+            if predicate(status):
+                return status
+        self.fail('no matching status event')
+
+    def test_no_sim_without_bringup_stays_read_only(self):
+        # The phone's T1 run: CP ONLINE, no SIM, the RIL serving without
+        # its start-up. Only read-only polls reach the modem.
+        self.start('--no-sim', bringup=False)
+        self.wait_ready()
+        reader = self.subscribe()
+        status = self.next_status(reader, lambda s: s['modem']['sim']['state'] != 'unknown')
+        modem = status['modem']
+        self.assertEqual((modem['sim'], modem['radio'], modem['registration']),
+                         (dict(state='absent'), 'off', 'not-registered'))
+        self.assertIn('999', modem['emergency_numbers'])
+        self.assertEqual((status['calls'], status['sms']), ([], dict(received=[])))
+        entries = self.transcript_entries()
+        self.assertFalse([e for e in entries if 'violation' in e or e.get('type') == 'at'])
+        self.assertLessEqual({e['id'] for e in entries if e.get('type') == 'req'}, {0x0200, 0x0701, 0x0801})
+
+    def test_subscription_follows_calls_and_messages(self):
+        self.start()
+        self.wait_ready()
+        reader = self.subscribe()
+        self.control('ring')
+        status = self.next_status(reader, lambda s: any(c['state'] == 'ringing-in' for c in s['calls']))
+        call = status['calls'][0]
+        self.assertEqual((call['direction'], call['number']), ('incoming', '+12025550123'))
+        self.cli('answer')
+        self.next_status(reader, lambda s: s['calls'][0]['state'] == 'active')
+        self.cli('dtmf', '1#')
+        self.control('remote-hangup')
+        self.next_status(reader, lambda s: s['calls'][0]['state'] == 'terminated')
+        self.control('wap-push')
+        status = self.next_status(reader, lambda s: s['sms']['received'])
+        listed = json.loads(self.cli('sms', 'list', '--json'))
+        self.assertEqual([m['id'] for m in listed], status['sms']['received'])
+        self.assertEqual(listed[0]['text'], '')
+        self.assertIn(b'application/vnd.wap.mms-message', bytes.fromhex(listed[0]['data']))
+        dtmf = [e['key'] for e in self.transcript_entries() if e.get('event') == 'dtmf']
+        self.assertEqual(dtmf, ['1', '#'])
+        self.assertFalse([e for e in self.transcript_entries() if 'violation' in e])
 
     def test_probe_is_read_only(self):
         self.start(daemon=False)
