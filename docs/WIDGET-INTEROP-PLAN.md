@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Widget interop plan: OWL widgets on the Omarchy Mobile home screen
 
-**Status:** design only, nothing implemented. Written 2026-10-13 and revised the same day: we write our own OWL runtime instead of vendoring Simon Schubert's. Implementation starts after the installer and reinstall work ([RELEASES](RELEASES.md) §6).
+**Status:** milestone 1 (P1-P3, most of P4, parts of P5-P7) built on branch `owl-widgets`, laptop only, behind a flag that is off; review package in [owl-review/](owl-review/README.md). Nothing installed on the phone. Originally design only. Written 2026-10-13 and revised the same day: we write our own OWL runtime instead of vendoring Simon Schubert's. Implementation starts after the installer and reinstall work ([RELEASES](RELEASES.md) §6).
 **Goal:** one widget catalogue for Omalauncher and Omarchy Mobile. A widget written for one runs on the other, and a person who uses both phones has one set of widgets.
 **Recommendation in one line:** write **our own OWL runtime for Quickshell** from the language specification, held to Simon's runtime by a conformance suite that runs on the laptop (§7). Make OWL the default format for new and AI-made widgets, and keep QML widgets for power users. Replace our 47 hand ports with the upstream `.owl` files as our runtime passes conformance for each one.
 

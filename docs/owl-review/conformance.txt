@@ -1,0 +1,19 @@
+widgets: L1 14/14, L2 14/14, L3 14/14
+probes: L1 25/25, L3 25/25
+store (105 widgets, no data): L1 105, L2 105, L3 105
+themes: 22/22 palettes match
+L4 layout: 13/14 within 1 dp (Text 2 dp)
+  ok     simonschubert/analog-clock  L4 worst 0.0 dp  L5 0% pixels differ
+  not ok simonschubert/calendar  L4 worst 6.0 dp (0.1 Grid h: 79.0 dp, reference 85.0 dp)  L5 1.54% pixels differ
+  ok     simonschubert/countdown  L4 worst 0.5 dp  L5 0.56% pixels differ
+  ok     simonschubert/year-progress  L4 worst 0.4 dp  L5 0.4% pixels differ
+  ok     simonschubert/focus  L4 worst 0.2 dp  L5 0.18% pixels differ
+  ok     simonschubert/habits  L4 worst 0.2 dp  L5 0.18% pixels differ
+  ok     simonschubert/earthquakes  L4 worst 0.5 dp  L5 0.89% pixels differ
+  ok     simonschubert/hacker-news  L4 worst 0.9 dp  L5 0.54% pixels differ
+  ok     simonschubert/exchange-rates  L4 worst 0.3 dp  L5 1.34% pixels differ
+  ok     derekross/bitcoin  L4 worst 0.2 dp  L5 0.95% pixels differ
+  ok     simonschubert/xkcd  L4 worst 0.5 dp  L5 0.21% pixels differ
+  ok     lucassynnott/year-left  L4 worst 0.0 dp  L5 0% pixels differ
+  ok     simonschubert/todo  L4 worst 0.4 dp  L5 0.53% pixels differ
+  ok     simonschubert/koi-pond  L4 worst 0.0 dp  L5 0% pixels differ

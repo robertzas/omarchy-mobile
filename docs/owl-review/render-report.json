@@ -1,0 +1,170 @@
+[
+ {
+  "id": "simonschubert/analog-clock",
+  "l4": {
+   "pass": true,
+   "nodes": 1,
+   "worst": 0,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "simonschubert/calendar",
+  "l4": {
+   "pass": false,
+   "nodes": 44,
+   "worst": 6.007499999999993,
+   "why": "0.1 Grid h: 79.0 dp, reference 85.0 dp"
+  },
+  "l5": {
+   "diffPercent": 1.54
+  }
+ },
+ {
+  "id": "simonschubert/countdown",
+  "l4": {
+   "pass": true,
+   "nodes": 14,
+   "worst": 0.4972499999999975,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.56
+  }
+ },
+ {
+  "id": "simonschubert/year-progress",
+  "l4": {
+   "pass": true,
+   "nodes": 24,
+   "worst": 0.39121643781661675,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.4
+  }
+ },
+ {
+  "id": "simonschubert/focus",
+  "l4": {
+   "pass": true,
+   "nodes": 8,
+   "worst": 0.19012500000000188,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.18
+  }
+ },
+ {
+  "id": "simonschubert/habits",
+  "l4": {
+   "pass": true,
+   "nodes": 53,
+   "worst": 0.24862499999999876,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.18
+  }
+ },
+ {
+  "id": "simonschubert/earthquakes",
+  "l4": {
+   "pass": true,
+   "nodes": 25,
+   "worst": 0.5265022349357764,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.89
+  }
+ },
+ {
+  "id": "simonschubert/hacker-news",
+  "l4": {
+   "pass": true,
+   "nodes": 27,
+   "worst": 0.8628696560859623,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.54
+  }
+ },
+ {
+  "id": "simonschubert/exchange-rates",
+  "l4": {
+   "pass": true,
+   "nodes": 16,
+   "worst": 0.3071249999999921,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 1.34
+  }
+ },
+ {
+  "id": "derekross/bitcoin",
+  "l4": {
+   "pass": true,
+   "nodes": 8,
+   "worst": 0.24862499999999876,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.95
+  }
+ },
+ {
+  "id": "simonschubert/xkcd",
+  "l4": {
+   "pass": true,
+   "nodes": 6,
+   "worst": 0.4972499999999975,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.21
+  }
+ },
+ {
+  "id": "lucassynnott/year-left",
+  "l4": {
+   "pass": true,
+   "nodes": 2,
+   "worst": 0,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ },
+ {
+  "id": "simonschubert/todo",
+  "l4": {
+   "pass": true,
+   "nodes": 17,
+   "worst": 0.40949624300003507,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0.53
+  }
+ },
+ {
+  "id": "simonschubert/koi-pond",
+  "l4": {
+   "pass": true,
+   "nodes": 1,
+   "worst": 0,
+   "why": ""
+  },
+  "l5": {
+   "diffPercent": 0
+  }
+ }
+]
