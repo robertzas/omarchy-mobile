@@ -87,6 +87,8 @@ tools/phone-ssh CMD    -> run anything; stream files with  ssh 'cat > f' < f
 | `tools/extract-vendor-firmware`, `extract-vendor-chroot`, `extract-fingerprint-vendor` | Google's files from the user's own factory image, on the laptop |
 | `tools/phone-mirror` | The phone's screen in a VNC viewer on the laptop with input (`omamobile-mirror on` on the phone, wayvnc on 172.16.42.1:5900 only); `--keep` leaves it on. Affects the phone's feel: announce it |
 | `tools/phone-install-package packages/X` | Build a package on the phone and install it |
+| `omamobile-update` (on the phone; `omamobile-omarchy`) | What `omarchy update` runs on the phone: Omarchy's own update with the phone's stand-ins (docs/RELEASES.md §5.4). `check --json` is read-only; an update changes the phone's packages and restarts the shell, so it is the human's call |
+| `omamobile-omarchy-patches status\|verify\|apply` (on the phone) | The Omarchy patch series: what is applied, already upstream or failed; `apply` re-applies it all or nothing (the pacman hook does this after every Omarchy upgrade). Log: `/var/log/omamobile/omarchy-patches.log` |
 | `tools/build-packages`, `tools/build-rootfs` | aarch64 packages (signed, `out/repo`) and the root image, built on the laptop in an Arch Linux ARM container (qemu-user); no phone |
 | `tools/install-phone` | The installer: fastboot checks, the owner's answers into a local image copy, then only slot B's images and `userdata`. Asks the human to type the codename; `--dry-run` first. Never run it without the human's go |
 | `tools/phone-provision` | After a fresh install: Google's files from the user's factory image and the phone's own data from the backup. `--fingerprint` copies Trusty's state but never starts the service |
@@ -177,7 +179,8 @@ Each entry gives the gotcha, then the reason or the fix. Details are in the link
   - live reload can keep the old code, so run `omarchy-restart-shell`;
   - pointer handlers declared directly on a window get no events, so put them on an Item inside it;
   - Qt 6.12's `QtQuick/Color` shadows Omarchy's `Commons.Color`, so import `qs.Commons as Commons`.
-- **pacman.conf order on aarch64:** `[omamobile]`, then `[omarchy]`, then Arch Linux ARM's repositories, so our Mesa and Omarchy's builds win. Use `omarchy update`, not `pacman -Syu`.
+- **pacman.conf order on aarch64:** `[omamobile]`, then `[omarchy]`, then Arch Linux ARM's repositories, so our Mesa and Omarchy's builds win. Use `omarchy update`, not `pacman -Syu`: on the phone it hands over to `omamobile-update` (patch 0012), which refuses a wrong order, low battery or a kernel/bootloader package, skips Snapper, the AUR and gum prompts, and holds boot-related migrations ([RELEASES](docs/RELEASES.md) §5.4).
+- **Omarchy upgrades overwrite our Omarchy patches;** `omamobile-omarchy`'s pacman hook puts them back (all or nothing, from Omarchy's own files). Edit the series in `packages/omamobile-omarchy/patches` (`patches/omarchy` links there), bump that package's version, and make every patch apply with `--fuzz=0` on the Omarchy the phone runs: `packages/omamobile-omarchy/test/all` applies it to the real aarch64 package. A patch Omarchy has absorbed is reported as upstream: drop it.
 - **`environment.d` can't unset a variable:** `VAR=` with an empty value is a syntax error, and the generator skips the line silently, so the old value stays. Set an explicit value instead (`omamobile-shell` uses `none`).
 - **GeoClue answers no client until an authorization agent is registered for the caller's user,** and queues the call with no timeout, so every client just times out. `omamobile-gnss` runs GeoClue's demo agent as a user unit; app allow-list entries skip only the agent's question, not the agent.
 - **Firewall changes** (ufw is on): arm `systemd-run --on-active=90 /usr/bin/ufw disable` first, then check with a fresh SSH connection.
@@ -193,7 +196,7 @@ Each entry gives the gotcha, then the reason or the fix. Details are in the link
 | `kernel/configs/omamobile.config` | Config fragment on top of arm64 `defconfig`, commented by plan |
 | `packages/omamobile-device-cheetah` | Boot-success marker, Wi-Fi and AoC start scripts, udev, modprobe and systemd policy |
 | `packages/omamobile-shell`, `-sensors`, `-gnss`, `-audio`, `-fingerprint`, `-modem` (chroot profile), `libfprint`, `neard`, `mesa`, `hyprland`, `omamobile-keyring` | Userspace packages |
-| `patches/omarchy/` | Omarchy changes waiting to land upstream |
+| `packages/omamobile-omarchy/patches/` (`patches/omarchy/` links there) | Omarchy changes waiting to land upstream, re-applied after every Omarchy upgrade |
 | `docs/DEVICES.md` | Supported-devices matrix |
 | `~/android/mainline/wt-*`, `out-*` | Kernel worktrees and build outputs (outside the repo) |
 | `~/android/reference/` | Stock captures and partition backups: private, never committed |
