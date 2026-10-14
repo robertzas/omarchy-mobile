@@ -225,6 +225,42 @@ eq(H.urlLaunchArgv("https://x"), ["omamobile-launch", "url", "https://x"])
 fi
 pass "one app per screen"
 
+# The update sheet (omamobile.update): enabled for new and existing users,
+# Omarchy's Update > Omarchy opens it, its model works, its QML lints, and
+# the PIN only ever goes to omamobile-update's stdin.
+python3 -c 'import json; assert {"id": "omamobile.update"} in json.load(open("profile/shell.json"))["plugins"]' \
+  || fail "the phone profile enables the update sheet"
+grep -c 'add_plugin omamobile.update' bin/omamobile-setup-user >/dev/null || fail "existing users get the update sheet"
+grep -c '"update.omarchy".*summon omamobile.update' bin/omamobile-setup-user >/dev/null || fail "Update > Omarchy opens the sheet"
+grep -c '"update.firmware": {"when": "false"}' bin/omamobile-setup-user >/dev/null || fail "Update > Firmware is hidden"
+if command -v node >/dev/null; then
+  node test/update-model.js || fail "update sheet model"
+fi
+if grep -nE 'console\.(log|info|warn|debug|error)\([^)]*(pin|secret|password)' plugins/omamobile.update/*.qml; then
+  fail "the PIN is never logged"
+fi
+grep -c 'startProc.write(startProc.secret + "\\n")' plugins/omamobile.update/Update.qml >/dev/null || fail "the PIN goes to stdin"
+if grep -nE 'command: .*(secret|pinField)' plugins/omamobile.update/Update.qml; then fail "the PIN is never in argv"; fi
+grep -c 'exclusionMode: ExclusionMode.Normal' plugins/omamobile.update/Update.qml >/dev/null || fail "the sheet stays above the on-screen keyboard"
+python3 -B - <<'PY' || fail "the update sheet lints clean"
+import importlib.machinery, importlib.util, os, sys
+loader = importlib.machinery.SourceFileLoader("omamobile_widget", "bin/omamobile-widget")
+spec = importlib.util.spec_from_loader("omamobile_widget", loader)
+tool = importlib.util.module_from_spec(spec)
+loader.exec_module(tool)
+if not tool.qmllint_path() or not os.path.isdir(os.path.join(tool.OMARCHY_PATH, "shell")):
+    print("ok - update sheet lint # SKIP no qmllint or Omarchy shell")
+    sys.exit(0)
+lint = tool.run_qmllint([os.path.abspath("plugins/omamobile.update/Update.qml")])
+# Quickshell's own type metadata, the same for every plugin with a window or a Process
+noise = ("is not creatable", "QProcess::ExitStatus")
+bad = lint["errors"] + [w for w in lint["warnings"] if not any(n in w for n in noise)]
+for line in bad:
+    print("  " + line)
+sys.exit(1 if bad else 0)
+PY
+pass "update sheet"
+
 bash -n bin/omamobile-setup-user || fail "omamobile-setup-user parses"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ./install "$tmp/root"

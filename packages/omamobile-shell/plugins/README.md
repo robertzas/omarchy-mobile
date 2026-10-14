@@ -19,6 +19,7 @@ logical at scale 3).
 | `omamobile.home` | `panel` (keepLoaded) | Home screens: pages of apps and widgets on the wallpaper, with an edit mode |
 | `omamobile.fingerprint` | `panel` (keepLoaded) | Fingerprint target over the sensor during verification, desktop guard, and the enrollment screen |
 | `omamobile.keyboard` | `panel` (keepLoaded) | A hide button right above the on-screen keyboard while it is up (also over the lock) |
+| `omamobile.update` | `panel` (keepLoaded) | The update sheet: Omarchy's update for a phone, in place of its terminal update |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
 
 ## Enabling
@@ -595,6 +596,43 @@ keyboard on demand (showing closes the sheet).
 
 IPC: `omarchy-shell shell call omamobile.keyboard showKeyboard|hideKeyboard|toggleKeyboard|state ''`
 (not `show`/`hide`: the IPC command line takes `show` for itself).
+
+## omamobile.update
+
+Omarchy's update in a sheet, since its terminal update (gum prompts and the
+ASCII logo) doesn't fit 480 px with the keyboard up. Everything goes through
+`omamobile-update` from `omamobile-omarchy` (its header and
+[RELEASES.md](../../../docs/RELEASES.md) §5.4 list what it keeps and skips of
+Omarchy's update).
+
+* **Ways in:** an "Update available" toast once per Omarchy release
+  (`omamobile-update notify-check`, two minutes after login and every six
+  hours), Omarchy's menu Update > Omarchy (pointed here by
+  `omamobile-setup-user`, which also hides Update > Firmware and Update >
+  Config > Plymouth), and `omarchy-shell shell summon omamobile.update '{}'`.
+  The plugin also answers Omarchy's `omarchy.system-update refresh|clear`.
+* **Overview** (`omamobile-update check --json`): the Omarchy release and the
+  package count, What's new (Omarchy's release notes, in the browser), the
+  battery (updates need 30% or the charger), the phone patches' state, and
+  anything blocking the update (battery, repository order, a kernel or
+  bootloader package in the transaction, another update running).
+* **PIN:** the account's PIN or password for sudo, with a 123/ABC switch,
+  above the on-screen keyboard (top layer, normal exclusion). It goes to
+  `omamobile-update start` on stdin, never argv or a file; a wrong one says
+  so and nothing runs.
+* **Progress:** the current step and line, with the whole output under
+  Details. The run is a systemd user unit (`omamobile-update.service`), so
+  closing the sheet doesn't stop it, and the shell restart at the end of every
+  update doesn't either: the new shell's instance reopens the sheet on the
+  run's progress or result.
+* **Result:** updated; updated with a restart needed (Restart now runs
+  `omarchy-system-reboot`); updated but the phone patches failed (the PIN pad
+  may be missing; the log's path); refused; or stopped, with the log's path
+  (`~/.local/state/omamobile/update/update.log`). Migrations held for review
+  are listed.
+
+IPC: `omarchy-shell shell call omamobile.update snapshot ''` (page, step,
+result; never the PIN).
 
 ## Testing in the desktop harness
 

@@ -215,6 +215,24 @@ if omarchy-done ensure omamobile-menu-pin; then
   fi
 fi
 
+# The phone's update sheet (omamobile.update, running omamobile-update from
+# omamobile-omarchy) in place of Omarchy's terminal update: the plugin, once,
+# and Update > Omarchy in Omarchy's menu opening it, through the menu
+# extension file. Update > Firmware (fwupd) and Update > Config > Plymouth
+# (an initramfs rebuild) are hidden: the phone boots from boot_b, which
+# bin/omamobile push writes, and its firmware is Google's.
+if omarchy-done ensure omamobile-update-plugin; then
+  add_plugin omamobile.update
+fi
+if omarchy-done ensure omamobile-menu-update; then
+  extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
+  mkdir -p "$(dirname "$extension")"
+  [[ -s $extension ]] || printf '{\n}\n' >"$extension"
+  if ! grep -q '"update.omarchy"' "$extension"; then
+    sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: updates through the phone'"'"'s update sheet; no fwupd or Plymouth rebuilds\n  "update.omarchy": {"icon": "\xee\xa4\x80", "iconFont": "omarchy", "label": "Omarchy", "action": "omarchy-shell shell summon omamobile.update '"'"'{}'"'"'"},\n  "update.firmware": {"when": "false"},\n  "update.config.plymouth": {"when": "false"},/' "$extension"
+  fi
+fi
+
 # Like Android, waking the phone from its screensaver shows the PIN lock
 # (patch 0006 honours the lock-after-screensaver toggle). Set once.
 if omarchy-done ensure omamobile-lock-after-screensaver; then
