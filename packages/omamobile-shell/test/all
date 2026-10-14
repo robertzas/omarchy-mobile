@@ -96,6 +96,9 @@ grep -c "omamobile-osk-watch" plugins/omamobile.fingerprint/Fingerprint.qml >/de
 grep -c "omamobile-osk-watch" plugins/omamobile.keyboard/Keyboard.qml >/dev/null || fail "the keyboard button follows the watcher"
 grep -c 'namespace = "^omamobile-osk-hide\$" }, above_lock = 2' hypr/phone.lua >/dev/null || fail "the hide button works over the lock"
 python3 -c 'import json; assert {"id": "omamobile.keyboard"} in json.load(open("profile/shell.json"))["plugins"]' || fail "the profile enables the keyboard button"
+cmp -s plugins/omamobile.home/owl/extrakeys.js plugins/omamobile.keyboard/extrakeys.js \
+  && cmp -s plugins/omamobile.home/owl/OwlExtraKeys.qml plugins/omamobile.keyboard/OwlExtraKeys.qml \
+  || fail "the terminal extra keys are the same in omamobile.home/owl and omamobile.keyboard"
 pass "on-screen keyboard watcher"
 
 # PIN or password: the choice is recorded per user, never the secret, and

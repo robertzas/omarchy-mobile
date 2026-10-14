@@ -423,4 +423,33 @@ test("the owner's layout: migration approvals, and never a package install witho
   eq(P.capabilities(C.compile('widget "w" {\n  source a = cmd("sudo pacman -S x")\n  Text { text: a }\n}')).refusals.length, 1)
 })
 
+test("terminal extra keys: the bytes a pty reads and the key presses wtype sends", () => {
+  const K = load("extrakeys.js")
+  // Esc to leave insert mode, Tab, arrows; Ctrl-C and friends as control codes.
+  eq([K.bytes("esc"), K.bytes("tab"), K.bytes("up"), K.bytes("left")], ["\u001b", "\t", "\u001b[A", "\u001b[D"])
+  eq([K.bytes("c", { ctrl: true }), K.bytes("C", { ctrl: true }), K.bytes("d", { ctrl: true }), K.bytes("z", { ctrl: true })], ["\u0003", "\u0003", "\u0004", "\u001a"])
+  eq([K.bytes("up", { ctrl: true }), K.bytes("right", { alt: true }), K.bytes("down", { ctrl: true, alt: true })], ["\u001b[1;5A", "\u001b[1;3C", "\u001b[1;7B"])
+  eq([K.bytes("b", { alt: true }), K.bytes("|", { alt: true }), K.bytes("esc", { alt: true }), K.bytes("x", { ctrl: true, alt: true })], ["\u001bb", "\u001b|", "\u001b", "\u001b\u0018"])
+  eq(["|", "/", "-", "~", ":"].map((k) => K.bytes(k)), ["|", "/", "-", "~", ":"])
+  eq([K.bytes("/", { ctrl: true }), K.bytes("unknown")], ["\u001f", ""])
+  // Every key on the rows and the Ctrl strip sends something.
+  K.ROWS.forEach((row) => row.forEach((k) => { if (!k.modifier) assert.ok(K.bytes(k.id) && K.wtypeArgv(k.id), k.id) }))
+  K.CTRL_LETTERS.forEach((l) => assert.strictEqual(K.bytes(l, { ctrl: true }).charCodeAt(0), l.charCodeAt(0) - 96))
+  // wtype: modifiers pressed around one key, never text through a shell.
+  eq(K.wtypeArgv("esc"), ["wtype", "-k", "Escape"])
+  eq(K.wtypeArgv("c", { ctrl: true }), ["wtype", "-M", "ctrl", "-k", "c", "-m", "ctrl"])
+  eq(K.wtypeArgv("left", { ctrl: true, alt: true }), ["wtype", "-M", "ctrl", "-M", "alt", "-k", "Left", "-m", "alt", "-m", "ctrl"])
+  eq(K.wtypeArgv("|"), ["wtype", "-k", "bar"])
+  eq(K.wtypeArgv("nope"), null)
+  // Ctrl and Alt are sticky for one key: held, then let go after it.
+  let r = K.tap({}, "ctrl")
+  eq([r.send, r.held], [null, { ctrl: true, alt: false }])
+  r = K.tap(r.held, "c")
+  eq([r.send, r.mods, r.held], ["c", { ctrl: true, alt: false }, { ctrl: false, alt: false }])
+  r = K.tap(K.tap({}, "alt").held, "alt")
+  eq(r.held, { ctrl: false, alt: false })
+  eq(K.tap({}, "esc").mods, { ctrl: false, alt: false })
+  eq([K.isTerminalClass("foot"), K.isTerminalClass("Alacritty"), K.isTerminalClass("chromium")], [true, true, false])
+})
+
 if (failed) { console.log(failed + " failed"); process.exit(1) }
