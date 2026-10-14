@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Derek Ross <derekross@gmail.com>
 #
-# omacam, Omarchy Mobile's camera app ("Camera"): Rust, GTK 4 and
+# omacam, Omarchy Mobile's camera app ("Camera"): photos and video; Rust, GTK 4 and
 # libadwaita on libcamera directly (docs/CAMERA-APP-PLAN.md). Its own
 # repository carries the same PKGBUILD for building from a checkout
 # (pkgbuild/PKGBUILD); this one builds a pinned release.
@@ -15,7 +15,7 @@
 # developer iterating on omacam cross-compiles instead (omacam's
 # bin/cross, about 3 minutes cold, seconds after).
 pkgname=omacam
-pkgver=0.1.6
+pkgver=0.1.7
 pkgrel=1
 pkgdesc="Camera: a phone camera with lens switching by zoom, on libcamera"
 arch=(aarch64)
@@ -25,6 +25,11 @@ depends=(
   gcc-libs
   glib2
   glibc
+  gst-plugin-pipewire   # video: the microphone
+  gst-plugins-base
+  gst-plugins-good      # video: mp4mux, videocrop, vp8enc
+  gst-plugins-ugly      # video: x264enc
+  gstreamer
   'gtk4>=4.14'
   hicolor-icon-theme
   'libadwaita>=1.5'
@@ -37,7 +42,7 @@ makedepends=(cargo clang pkgconf)
 optdepends=('loupe: open the last photo from the gallery button')
 options=('!debug' '!lto')
 source=("omacam-$pkgver.tar.gz::https://github.com/derekross/omacam/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('744b5516ec7207b3d991aa87c20618753530f9dc3e05c33e2fcaac6e424c6e48')
+sha256sums=('688e7208ed80511b839ec9eaadea59fe5e0fe7365b14a5f287f3f262f949c578')
 
 prepare() {
   cd "omacam-$pkgver"
