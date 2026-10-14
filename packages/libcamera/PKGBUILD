@@ -67,7 +67,11 @@
 #    sensor mode whose output is within 1% of the stream qualifies, so the
 #    front camera's 1080p video runs its binned mode (1912x1080) instead of
 #    the full-resolution one.
-#  - pkgrel 4.6, so it sorts above Arch Linux ARM's 0.7.2-4.
+#  - 0015-ipa-simple-agc-Step-out-of-a-pinned-histogram-quickl.patch: while
+#    nearly every pixel is in the darkest or brightest histogram bin, the
+#    AGC doubles or halves the exposure each step (the front camera took
+#    seconds to brighten from its starting exposure).
+#  - pkgrel 4.7, so it sorts above Arch Linux ARM's 0.7.2-4.
 #
 # Maintainers of the original: David Runge, Carl Smedstad.
 
@@ -80,7 +84,7 @@ pkgname=(
   python-libcamera
 )
 pkgver=0.7.2
-pkgrel=4.6
+pkgrel=4.7
 pkgdesc="A complex camera support library for Linux, Android, and ChromeOS (Omarchy Mobile: gs201 CSIS)"
 arch=(aarch64)
 url="https://libcamera.org/"
@@ -126,6 +130,7 @@ source=(
   0012-ipa-simple-Tune-the-Pixel-7-Pro-s-ultrawide-and-main.patch
   0013-libcamera-Add-the-Samsung-S5K3J1-and-S5KGM5-sensors.patch
   0014-pipeline-simple-Accept-a-sensor-configuration-within.patch
+  0015-ipa-simple-agc-Step-out-of-a-pinned-histogram-quickl.patch
 )
 sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd8847f7bec755c753c72f6b065df76de53c15f9af2e5901e83e7a144a2ddcd'
             '8b54cbdf6ed767ae8d52a14480a4653f4f3a1c2187c4ccf7ceb65eaa60c819cce514122591d6e0c2dfc39d7482739f8fdd4090dbaf63701445510eefc88fb19f'
@@ -142,7 +147,8 @@ sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd
             '9a20020ddda25158f0b071f6dd1f3e262bc747d4c8dad40a0d7e664a01224ea4053c569f4687b91d383bfa88a4031cb67b06c3e527a4064c39a3a8d1c9464168'
             '33378946a372a518abd9287f3abc4b5263c9508c5556d4a37db5351e90b825d6a714037fadb1647fad15debee596944d1ec46d22aae64626085507b77fe63fde'
             'db8f04170d22fa3b60a581e73e3fbc2a4878e6dcf57b038c1fd7b93c1d98bb4652bbc7a36990fcd1f0dd5c1fff43494566bd7e6e2179c4719944affd6b782ae5'
-            '8eea0945915d8780fa87cd75184830c0068f5d1b66e2a26d3e60cb38911e66bebdb86e50a3b57e0ed3ed3824f009a7dca75bba169432af32be1339f84f17f942')
+            '8eea0945915d8780fa87cd75184830c0068f5d1b66e2a26d3e60cb38911e66bebdb86e50a3b57e0ed3ed3824f009a7dca75bba169432af32be1339f84f17f942'
+            '1a77dcd0f93ab3de154160ff94ca9911ab3daafcda1cf154f5501961587e93f7c5b751679461935ba01fc8e8d959dd12362f0875513d33c8fc6d44a2a441c565')
 b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc58494400e69feeec99a77894252d582f0d8f183508e5d1b8220e70f3d5'
         '4a0e24feed22d32b83b0ec49c9a7616b77deb26cae82c17a38b54a81a0468e982852147bc2d5e3b611ba014ddbd7647acfe2e68591542420da73945ba1c0d6c2'
         'cba8b638543a16bf80c2ae7dc0737f3874476fd1ff694639b459184725848e193518778d0336eef3d55ba4329d9bc63981d0aa8d8d9b5507c9ade4f17f7f407d'
@@ -158,7 +164,8 @@ b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc5
         '25a43398a633fecdef47cae6fe86bc3aa59bc929c2b196e2b1f5c45929df3d2019b5646401a12df5c6c38d2186e3beb17bd162150e5d696e5a555c383f63b617'
         '661cc5d7a92a81cb01356e9801d70a9560eda11837edbe1168f1b56caf42ea72a326c3580bd5113d141b658db081fa3a1ce8e1a3df0401e74b3ecf2fd0ddc0f4'
         'a2a54a97ca9bd5526908986a19e51ea234db94b5f0104f2bab6adfcc8faf6ed2c9e399ed751ca06e8d7580fd413e1e0ced5c2bd9c90bce1d21805f03ead93020'
-        'd158f3c03ef80ea16fb4d34220859fefaebd377ed83bfe37439b10a2b42a631b2863d16d2e2d4404cd45a21a183242c38e2375fc1efbdd28c288be112fd94de5')
+        'd158f3c03ef80ea16fb4d34220859fefaebd377ed83bfe37439b10a2b42a631b2863d16d2e2d4404cd45a21a183242c38e2375fc1efbdd28c288be112fd94de5'
+        '81fe90074e5fcf9fda22be47bb1d61c669726144ede638179ac62c17b2525cd2c51bfab2e29c7e4a26436b8abb9979eda70c32a0809190e0db0d9823da202068')
 
 _pick() {
   local p="$1" f d; shift
@@ -187,6 +194,7 @@ prepare() {
   patch -Np1 < ../0012-ipa-simple-Tune-the-Pixel-7-Pro-s-ultrawide-and-main.patch
   patch -Np1 < ../0013-libcamera-Add-the-Samsung-S5K3J1-and-S5KGM5-sensors.patch
   patch -Np1 < ../0014-pipeline-simple-Accept-a-sensor-configuration-within.patch
+  patch -Np1 < ../0015-ipa-simple-agc-Step-out-of-a-pinned-histogram-quickl.patch
 
   # add version, so that utils/gen-version.sh may rely on it
   printf "%s\n" "$pkgver" > .tarball-version

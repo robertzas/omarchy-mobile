@@ -1,0 +1,62 @@
+From 7aeeaa181837ff3a55fc0b9d4573514f5dc8976a Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Wed, 14 Oct 2026 09:32:21 -0400
+Subject: [PATCH] ipa: simple: agc: Step out of a pinned histogram quickly
+
+When nearly every pixel falls in the darkest (or brightest) histogram
+bin, the mean sample value is at its limit and says only "much too
+dark" (or bright), not by how much. The proportional loop then steps by
+at most 15% a frame, and with the sensor's two-frame control delay the
+Google Pixel 7 Pro's front camera took several seconds to brighten from
+its starting exposure in a dim room.
+
+While the histogram is pinned at an end, double (or halve) the exposure
+each step instead. The sensor's control delay limits the overshoot to
+about one more step, which the proportional loop takes back once the
+histogram has moved off the end.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/agc.cpp | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index 0ad36d5..512888b 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -70,6 +70,21 @@ static constexpr float kExpProportionalGainFar = 0.1;
+  */
+ static constexpr float kExpMaxStep = 0.15;
+ 
++/*
++ * A histogram pinned at one end (nearly everything in the darkest or the
++ * brightest bin) says only "much too dark" or "much too bright", not by how
++ * much, and the bounded steps above then take seconds to get out: from a
++ * camera's starting exposure in a dim room, the front camera of a phone
++ * took several seconds to brighten. Step by these factors until the
++ * histogram moves off the end. The sensor's control delay limits the
++ * overshoot to about one more step, which the proportional loop then
++ * takes back.
++ */
++static constexpr double kExposurePinnedDark = 1.05;
++static constexpr double kExposurePinnedBright = kExposureBinsCount - 0.05;
++static constexpr float kExpPinnedUp = 2.0;
++static constexpr float kExpPinnedDown = 0.5;
++
+ /*
+  * Low light. Once the exposure and the sensor's analogue gain are both at
+  * their limits, the loop goes on with digital gain, up to this factor, which
+@@ -121,6 +136,10 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	float step = std::clamp(static_cast<float>(error) * gain,
+ 				-kExpMaxStep, kExpMaxStep);
+ 	float factor = 1.0f + step;
++	if (exposureMSV <= kExposurePinnedDark)
++		factor = kExpPinnedUp;
++	else if (exposureMSV >= kExposurePinnedBright)
++		factor = kExpPinnedDown;
+ 
+ 	if (factor > 1.0f) {
+ 		/* Scene too dark: increase exposure first, then gain. */
+-- 
+2.55.0
+
