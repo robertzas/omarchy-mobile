@@ -39,6 +39,10 @@ o.bind("XF86PowerOff", "System menu", "omamobile-keys power-up", { locked = true
 -- omamobile-keys decide (a short wait for power, as on Android).
 hl.unbind("XF86AudioLowerVolume")
 o.bind("XF86AudioLowerVolume", "Volume down", "omamobile-keys volume-down", { locked = true, repeating = true })
+-- Volume up goes through omamobile-keys too, so both volume keys can take a
+-- photo while the Camera app is in front (and raise the volume otherwise).
+hl.unbind("XF86AudioRaiseVolume")
+o.bind("XF86AudioRaiseVolume", "Volume up", "omamobile-keys volume-up", { locked = true, repeating = true })
 
 -- A fresh phone (no name and email, or no PIN): a notification offers the
 -- onboarding that Omarchy's installer does on a computer.

@@ -9,6 +9,10 @@
 #                      locked: screen on
 #   power + volume down together: screenshot (Omarchy's, full screen)
 #   volume down alone   lowers the volume after a 0.15 s wait for power
+#   volume up           raises the volume
+#   either volume key while the Camera app (omacam) is in front and the phone
+#                       is unlocked: take a photo (omacam --remote shutter),
+#                       as Android's camera does; held keys take one photo
 # Hyprland can't bind a chord of two plain keys or a long press that fires
 # while held, so each key reports here and the gesture is worked out from
 # when the keys went down. Hyprland cancels power's release bind once another
@@ -33,6 +37,15 @@ recent() {
 
 locked() {
   [[ $(omarchy-shell lock isLocked 2>/dev/null) == "true" ]]
+}
+
+# The Camera app is the focused window of an unlocked phone. omacam decides
+# itself whether its "volume keys take photos" setting is on.
+camera_in_front() {
+  command -v omacam >/dev/null || return 1
+  [[ $(hyprctl activewindow -j 2>/dev/null | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("class", ""))
+except Exception: print("")') == omacam ]] && ! locked
 }
 
 screensaver_up() {
@@ -127,6 +140,17 @@ case "${1:-}" in
       ) >/dev/null 2>&1 &
     fi
     ;;
+  volume-up)
+    press=$(now)
+    previous=$(cat "$state/volume-up" 2>/dev/null || echo 0)
+    echo "$press" >"$state/volume-up"
+    if camera_in_front; then
+      # One photo per press: key repeat while held takes no more.
+      ((press - previous < 700)) || omacam --remote shutter
+    else
+      omarchy-audio-output-volume raise
+    fi
+    ;;
   volume-down)
     press=$(now)
     previous=$(cat "$state/volume-down" 2>/dev/null || echo 0)
@@ -134,6 +158,9 @@ case "${1:-}" in
     # Power still held, or pressed just before: the screenshot chord.
     if [[ -f $state/power ]]; then
       chord
+    # The Camera app in front: a photo, once per press.
+    elif camera_in_front; then
+      ((press - previous < 700)) || omacam --remote shutter
     # Part of a chord that's still held: no volume change.
     elif in_chord; then
       :
@@ -159,7 +186,7 @@ case "${1:-}" in
     rm -f "$state/power"
     ;;
   *)
-    echo "Usage: omamobile-keys power-down|power-up|volume-down" >&2
+    echo "Usage: omamobile-keys power-down|power-up|volume-down|volume-up" >&2
     exit 1
     ;;
 esac

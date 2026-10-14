@@ -288,3 +288,5 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 grep -c 'Copyright (c) 2026 Simon Schubert and contributors' widgets/OWL.md >/dev/null || fail "the OWL guide keeps its copyright line"
 grep -c 'd355bdb2789f7bd1023d88b17f8a2898dc0ffa2b' widgets/OWL.md >/dev/null || fail "the OWL guide names its source commit"
 pass "install stages the package"
+
+test/keys.sh || fail "omamobile-keys volume keys"
