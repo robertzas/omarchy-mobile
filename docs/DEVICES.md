@@ -19,6 +19,7 @@ The status of each phone, as verified on real hardware. What's still missing and
 | Device | Codename | SoC | Boot | Storage | Display | GPU | Touch | Buttons | USB net | Wi-Fi | Bluetooth | Battery | Charging | Haptics | Torch | GNSS | AoC | Speakers/mics | Sensors | Modem | NFC | Cameras | Suspend | Fingerprint |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Pixel 7 Pro | cheetah | gs201 (Tensor G2) | works | works | works (120 Hz) | works (DVFS) | works | works | works | works | works (audio) | works | testing | works | works | works | works | partial (quiet, thin) | works | WIP (boots; needs a SIM) | works | WIP (ultrawide works by hand) | WIP | works (opt-in) |
+| Pixel Fold | felix | gs201 (Tensor G2) | WIP ([#3](https://github.com/derekross/omarchy-mobile/issues/3)) | no | WIP (cover: simplefb console only) | no | no | no | works | no | no | no | no | no | no | no | no | no | no | no | no | no | no | no |
 | *Template* | *codename* | *SoC* | | | | | | | | | | | | | | | | | | | | | | |
 
 ## cheetah (Pixel 7 Pro) in detail
@@ -56,7 +57,7 @@ Devices we'd like to support, with the closest starting point. Open an issue to 
 | --- | --- | --- | --- |
 | Pixel 7 | panther | gs201 | cheetah's SoC support; needs its own board DTS (panel, touch, battery) |
 | Pixel 7a | lynx | gs201 | as panther |
-| Pixel Fold | felix | gs201 | as panther, with two panels |
+| Pixel Fold | felix | gs201 | **WIP, community port: [#3](https://github.com/derekross/omarchy-mobile/issues/3)**; as panther, with two panels (DECON1 drives the cover, DECON0 the inner panel) |
 | Pixel Tablet | tangorpro | gs201 | as panther; no modem |
 | Pixel 6 | oriole | gs101 | **WIP, community port: [#2](https://github.com/derekross/omarchy-mobile/issues/2)**; our preferred second device. Upstream mainline `gs101-oriole.dts` |
 | Pixel 6 Pro | raven | gs101 | upstream mainline `gs101-raven.dts`; shares oriole's port ([#2](https://github.com/derekross/omarchy-mobile/issues/2)) |
