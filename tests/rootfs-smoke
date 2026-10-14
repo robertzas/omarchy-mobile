@@ -65,6 +65,15 @@ release=$(sed -n 's/^kernel modules: \([^ ]*\) .*/\1/p' <<<"$manifest")
 grep -q '^omamobile-device-[a-z0-9]* .* omamobile$' <<<"$manifest" || fail "a device package from [omamobile] in the MANIFEST"
 pass "MANIFEST, device package, modules for $release"
 
+# Images from before omamobile-omarchy patched Omarchy in build-inside
+if exists /usr/bin/omamobile-omarchy-patches; then
+  exists /usr/share/libalpm/hooks/95-omamobile-omarchy-patches.hook || fail "the Omarchy re-patch hook is installed"
+  patches=$(cat_ /var/lib/omamobile/omarchy-patches/status.json)
+  grep -q '"result": "ok"' <<<"$patches" || fail "the Omarchy patch series is applied (status.json: $(head -c 300 <<<"$patches"))"
+  grep -q 'omamobile-update' <<<"$(cat_ /usr/bin/omarchy-update)" || fail "omarchy update hands over to omamobile-update"
+  pass "Omarchy patch series applied, re-patch hook installed"
+fi
+
 exists /etc/pacman.d/gnupg && fail "no pacman keyring (it holds a private key)"
 d "ls /etc/ssh" | grep -q ssh_host_ && fail "no SSH host keys"
 [[ $(cat_ /etc/machine-id) == uninitialized ]] || fail "machine id uninitialized"

@@ -49,7 +49,7 @@ done
 # Default order: dependencies of our own packages first (check() of a later
 # package can then install an earlier one from the repository being built).
 ORDER=(omamobile-keyring libfprint neard omamobile-apps omamobile-device-cheetah omamobile-audio
-       omamobile-sensors omamobile-gnss omamobile-fingerprint omamobile-mirror omamobile-shell
+       omamobile-sensors omamobile-gnss omamobile-fingerprint omamobile-mirror omamobile-omarchy omamobile-shell
        omamobile-modem omamobile-modem-sit omamobile-speaker-tuning omamobile-waydroid
        omamobile-firstboot mesa hyprland libcamera)
 if ((${#dirs[@]} == 0)) && ((${#imports[@]} == 0)); then
