@@ -390,7 +390,40 @@ tools/phone-ssh 'sudo -u <user> omacam --list'
 
 ---
 
-## 7. Questions for the owner
+## 7. The owner's answers (2026-10-14)
+
+The owner took every suggestion:
+
+| # | Decision |
+| --- | --- |
+| Q1 | Name `omacam`, shown as "Camera" |
+| Q2 | GPL-3.0-or-later |
+| Q3 | Its own repository |
+| Q4 | Direct libcamera; no portal sheet for the built-in camera app |
+| Q5 | Location tags off by default, with a toggle |
+| Q6 | A small in-app viewer of the last shots, plus Loupe |
+| Q7 | Shutter sound on by default, with a setting |
+| Q8 | Send Snapshot the zoom, rotation and mirror fixes anyway |
+| Q9 | Try cosmic-camera on the phone first (P0) and talk to its author |
+| Q10 | Lock-screen camera button and double-press power, later (shell work) |
+| Q11 | Opus |
+| Q12 | Rust with GTK 4/libadwaita |
+
+**Q12 has an Omarchy precedent.** Of the Omacom apps, omacut, hype,
+signed, omawrite and omacalc are C++/Qt Quick, and
+[gliff](https://github.com/omacom/gliff) (MIT) is Rust with gtk4-rs and
+libadwaita. gliff's `crates/gliff/src/theme.rs` follows the Omarchy theme
+the way omacam should: it reads
+`~/.local/state/omarchy/current/theme/colors.toml`, maps the palette onto
+the CSS variables libadwaita styles every widget from, forces the light or
+dark scheme to match, and watches the directory, which Omarchy swaps on
+every theme change. Credit and follow that approach (MIT, compatible with
+GPL-3.0-or-later), so omacam looks and behaves like a standard Omarchy app.
+An app *inside* Quickshell is not an option: a camera app crashing would
+take the shell with it, and the shell's QML components can't be imported
+by a separate app anyway.
+
+## 8. Questions for the owner (as asked)
 
 | # | Question |
 | --- | --- |
