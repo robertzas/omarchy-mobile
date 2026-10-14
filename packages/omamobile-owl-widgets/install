@@ -1,24 +1,32 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Stage omamobile-owl-widgets into DESTDIR from a checkout of the widget
-# store at the pinned commit: the widgets status.json lets ship (they pass
-# our conformance suite), the store's order, its licence, and an index built
-# with our own compiler. Never activates anything.
-#   ./install DESTDIR STORE_CHECKOUT [OWL_RUNTIME_DIR]
+# store at the pinned commit: the widgets index.json lets ship (status ok or
+# partial; it is built by update-index.js with our compiler and committed
+# here), each checked against the index's sha256, the store's order, its
+# licence and the index. Needs nothing but bash, python3 and sha256sum, so
+# the package builds on its own. Never activates anything.
+#   ./install DESTDIR STORE_CHECKOUT [INDEX]
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-destination=${1:?Usage: ./install DESTDIR STORE_CHECKOUT [OWL_RUNTIME_DIR]}
+destination=${1:?Usage: ./install DESTDIR STORE_CHECKOUT [INDEX]}
 store=${2:?the store checkout}
-owl=${3:-/usr/share/omamobile/shell/plugins/omamobile.home/owl}
+index=${3:-$here/index.json}
 [[ $destination == /* && $destination != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
 share=$destination/usr/share/omamobile/owl-widgets
 mkdir -p "$share"
-node "$here/build-index.js" "$store" "$owl" "$here/status.json" > "$share/index.json"
-# Only what the index lets ship: status ok or partial.
-python3 -c 'import json,sys; [print(w["id"]) for w in json.load(open(sys.argv[1]))["widgets"] if w["status"] in ("ok", "partial")]' "$share/index.json" |
-while IFS= read -r id; do
-  install -Dm644 "$store/widgets/$id/widget.owl" "$share/widgets/$id/widget.owl"
+python3 -c '
+import json, sys
+for w in json.load(open(sys.argv[1]))["widgets"]:
+    if w.get("status") in ("ok", "partial"):
+        print(w["id"], w["sha256"])' "$index" |
+while read -r id sum; do
+  file=$store/widgets/$id/widget.owl
+  [[ -f $file ]] || { echo "the store has no $id" >&2; exit 1; }
+  [[ $(sha256sum < "$file" | cut -d" " -f1) == "$sum" ]] || { echo "$id doesn't match the index (wrong store commit?)" >&2; exit 1; }
+  install -Dm644 "$file" "$share/widgets/$id/widget.owl"
 done
+install -Dm644 "$index" "$share/index.json"
 [[ -f $store/order.txt ]] && install -Dm644 "$store/order.txt" "$share/order.txt"
 install -Dm644 "$store/LICENSE" "$destination/usr/share/licenses/omamobile-owl-widgets/LICENSE"
 install -Dm644 "$here/version" "$share/version"

@@ -63,7 +63,7 @@ if [[ -d /omarchy-shell ]]; then
   done
   # The store package, staged here from the pinned store, for the Store tab.
   rm -rf /tmp/owl-store-root
-  "$src/packages/omamobile-owl-widgets/install" /tmp/owl-store-root /ref/omarchy-widgets "$src/packages/omamobile-shell/plugins/omamobile.home/owl"
+  "$src/packages/omamobile-owl-widgets/install" /tmp/owl-store-root /ref/omarchy-widgets
   export OWL_STORE_DIR=/tmp/owl-store-root/usr/share/omamobile/owl-widgets
   # Before and after the OWL built-ins: main's plugin (with the QML ports,
   # from $OWL_BEFORE_TREE) and this branch's, the owner's layout shape.

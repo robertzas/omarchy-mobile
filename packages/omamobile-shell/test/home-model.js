@@ -505,33 +505,20 @@ test("the OWL built-ins replace the 47 ports, named and sized as before", () => 
 // The owner's real layout, by shape: apps one per cell along the bottom of
 // two pages, our clock and weather (with location), the Bitcoin widget
 // (the crypto port, internet on), today with location, and a few ports.
-const OWNER = {
-  version: 1, grid: { columns: 4, rows: 6 }, home: 0, nextId: 20,
-  pages: [
-    { items: [
-      { id: "w1", kind: "widget", type: "clock", x: 0, y: 0, w: 4, h: 2, config: { timeFormat: "", dateFormat: "dddd d MMMM" } },
-      { id: "w2", kind: "widget", type: "weather", x: 0, y: 2, w: 4, h: 1, config: { enabled: true, useLocation: true, place: "", latitude: null, longitude: null, units: "celsius" } },
-      { id: "w3", kind: "widget", type: "crypto", x: 0, y: 3, w: 2, h: 2, config: { enabled: true } },
-      { id: "w4", kind: "widget", type: "today", x: 2, y: 3, w: 2, h: 2, config: { enabled: true, useLocation: true, city: "" } },
-      { id: "a5", kind: "app", app: "chromium", x: 0, y: 5, w: 1, h: 1 },
-      { id: "a6", kind: "app", app: "org.gnome.Nautilus", x: 1, y: 5, w: 1, h: 1 },
-      { id: "a7", kind: "app", app: "foot", x: 2, y: 5, w: 1, h: 1 },
-      { id: "a8", kind: "app", app: "btop", x: 3, y: 5, w: 1, h: 1 }] },
-    { items: [
-      { id: "w9", kind: "widget", type: "earthquakes", x: 0, y: 0, w: 4, h: 2, config: { enabled: false } },
-      { id: "w10", kind: "widget", type: "habits", x: 0, y: 2, w: 4, h: 2, config: { done: ["read@2026-10-12"], habits: "read" } },
-      { id: "w11", kind: "widget", type: "forecast", x: 0, y: 4, w: 4, h: 2, config: { enabled: true, useLocation: false, city: "Berlin" } },
-      { id: "u12", kind: "widget", type: "user:derek.moon", x: 0, y: 0, w: 2, h: 2, config: {} }] }]
-}
+// (test/owner-layout.json, also used by owl-core.js and the render harness)
+const OWNER = require("./owner-layout.json")
 
 test("an old layout's ports become their OWL originals, in place, idempotently", () => {
   const ports = M.portPlacements(OWNER)
-  assert.deepStrictEqual(ports.map((p) => [p.id, p.from, p.to, p.enabled]), [
+  assert.deepStrictEqual(ports.map((p) => [p.id, p.from, p.to, p.internet]), [
     ["w3", "crypto", "owl:simonschubert.crypto", true],
     ["w4", "today", "owl:simonschubert.today", true],
     ["w9", "earthquakes", "owl:simonschubert.earthquakes", false],
     ["w10", "habits", "owl:simonschubert.habits", false],
-    ["w11", "forecast", "owl:simonschubert.forecast", true]])
+    ["w11", "forecast", "owl:simonschubert.forecast", true],
+    ["w13", "fetch", "owl:simonschubert.fetch", false],
+    ["w14", "owl", "owl:simonschubert.owl", false],
+    ["w15", "koiPond", "owl:simonschubert.koi-pond", false]])
   const catalog = { "derek.moon": { name: "Moon", icon: "x", min: [1, 1], max: [4, 4], size: [2, 2], network: false, config: {}, user: true } }
   const once = M.parse(JSON.stringify(OWNER), catalog)
   const by = {}
@@ -551,6 +538,7 @@ test("an old layout's ports become their OWL originals, in place, idempotently",
   assert.deepStrictEqual(by.w4.config, { useLocation: true, locationText: "", owlState: {} })
   assert.deepStrictEqual(by.w11.config, { useLocation: false, locationText: "", owlState: { city: "Berlin" } })
   assert.deepStrictEqual(by.w10.config, { owlState: { done: ["read@2026-10-12"] } })
+  assert.deepStrictEqual(by.w14.config, { owlState: { born: 1791800000, fed: 1791880000, pets: 4 } })
   // Idempotent: a migrated layout has no ports left and doesn't change again.
   assert.deepStrictEqual(M.portPlacements(once), [])
   const twice = M.parse(M.serialize(once), catalog)

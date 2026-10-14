@@ -173,15 +173,17 @@ function owlConfigFor(portType, config) {
   return out
 }
 
-// The ports a stored layout still places: [{ id, from, to, enabled }], for the
-// home screen to back the file up and approve what it may.
+// The ports a stored layout still places: [{ id, from, to, internet }], for
+// the home screen to back the file up and approve what it may. `internet`
+// is the port's own "Use the internet" switch (its `enabled`), not whether
+// the original is approved: owl/catalog.js migrationApprovals decides that.
 function portPlacements(raw) {
   var out = []
   ;(raw && Array.isArray(raw.pages) ? raw.pages : []).forEach(function(page) {
     ;(page && Array.isArray(page.items) ? page.items : []).forEach(function(item) {
       if (item && item.kind === "widget" && has(PORTED, item.type))
         out.push({ id: String(item.id || ""), from: item.type, to: owlTypeFor(item.type),
-                   enabled: !!(item.config && item.config.enabled === true) })
+                   internet: !!(item.config && item.config.enabled === true) })
     })
   })
   return out

@@ -42,7 +42,7 @@ if (side === "after") {
   for (const p of H.portPlacements(owner)) {
     const text = fs.readFileSync(path.join(storeDir, H.owlStoreId(p.to), "widget.owl"), "utf8")
     widgets.push({ id: p.to, text, fixture: { sources: fixtures[p.to] || {} } })
-    const v = K.portApproval(H.portCapabilities(p.from), K.describe(p.to, text, H.GRID, 908 / 6, 480 / 6 / 69), p.enabled)
+    const v = K.portApproval(H.portCapabilities(p.from), K.describe(p.to, text, H.GRID, 908 / 6, 480 / 6 / 69), p.internet)
     if (v.approve) approvals[p.to] = v.approve
   }
 }

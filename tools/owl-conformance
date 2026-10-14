@@ -50,6 +50,11 @@ fi
 if (( render )); then
   docker run --rm --network none -u "$(id -u):$(id -g)" "${mounts[@]}" "$image" \
     node /src/tests/owl/store-status.js "/src/$out/report.json" "/src/$out/render-all.json" > "$out/status.json"
-  if [[ " ${args[*]} " == *" --record "* ]]; then cp "$out/status.json" packages/omamobile-owl-widgets/status.json; fi
+  if [[ " ${args[*]} " == *" --record "* ]]; then
+    cp "$out/status.json" packages/omamobile-owl-widgets/status.json
+    # The index the package ships, built from that status with our compiler.
+    docker run --rm --network none -u "$(id -u):$(id -g)" "${mounts[@]}" "$image" \
+      node /src/packages/omamobile-owl-widgets/update-index.js /ref/omarchy-widgets > packages/omamobile-owl-widgets/index.json
+  fi
 fi
 echo "report: $out/report.json"
