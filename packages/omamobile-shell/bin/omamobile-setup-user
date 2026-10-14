@@ -108,10 +108,16 @@ LUA
 fi
 
 # squeekboard needs Hyprland's input-method slot, which Omarchy's fcitx5 (run
-# for desktop compose sequences) would otherwise take. Masked for this user
-# only, once; unmask to bring it back.
-if omarchy-done ensure omamobile-osk-input-method; then
-  systemctl --user mask --now omarchy-fcitx5.service
+# for desktop compose sequences) would otherwise take. The package's drop-in
+# (omarchy-fcitx5.service.d/omamobile.conf) keeps fcitx5 from starting. Up to
+# 0.1.48 this masked the unit instead, and Omarchy's first run, which enables
+# it with `enable --now`, failed on the mask and re-ran (re-sending its "Update
+# System" and welcome notifications) at every login: undo that mask, once.
+if omarchy-done ensure omamobile-fcitx5-unmask; then
+  if [[ $(readlink ~/.config/systemd/user/omarchy-fcitx5.service 2>/dev/null) == /dev/null ]]; then
+    systemctl --user unmask omarchy-fcitx5.service
+    systemctl --user daemon-reload
+  fi
 fi
 
 # Suspend isn't supported on the phone's kernel yet: take it out of the system
