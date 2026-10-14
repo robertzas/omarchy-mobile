@@ -1,0 +1,21 @@
+{
+ "ok": true,
+ "name": "todo",
+ "size": [
+  3,
+  4
+ ],
+ "minSize": [
+  3,
+  2
+ ],
+ "commands": [
+  "f=~/notes/todo.md\nmkdir -p \"${f%/*}\"\n[ -f \"$f\" ] || printf '# todo\\n\\n- [ ] tap an item to check it off\\n- [ ] tap the title to edit this list\\n' > \"$f\"\ngrep -n '^\\s*[-*] \\[ \\] ' \"$f\" | sed 's/^\\([0-9]*\\):\\s*[-*] \\[ \\] /\\1:/'",
+  "$EDITOR ~/notes/todo.md",
+  "run(…) built from widget values"
+ ],
+ "requires": {},
+ "capabilities": [
+  "commands"
+ ]
+}

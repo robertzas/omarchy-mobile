@@ -1,0 +1,30 @@
+{
+ "compile": {
+  "ok": true,
+  "name": "w",
+  "size": null,
+  "minSize": [
+   1,
+   1
+  ],
+  "commands": [
+   "sudo reboot"
+  ],
+  "requires": {},
+  "capabilities": [
+   "commands"
+  ]
+ },
+ "walk": {
+  "root": [
+   {
+    "kind": "Text",
+    "props": {
+     "text": "null"
+    },
+    "anim": {},
+    "children": []
+   }
+  ]
+ }
+}

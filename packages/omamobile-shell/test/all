@@ -43,6 +43,10 @@ if command -v node >/dev/null; then
   node test/sensor-model.js || fail "fingerprint sensor model"
   node test/tiles-model.js || fail "quick-settings tile layout"
   node test/home-model.js || fail "home screen model"
+  # Our OWL runtime's core: probes against the reference runtime's recorded
+  # outputs, the resource caps, sh() quoting, and the phone's rules.
+  node test/owl-core.js >/dev/null || { node test/owl-core.js | grep -v '^ok'; fail "OWL runtime core"; }
+  pass "OWL runtime core"
 else
   pass "Wi-Fi and Bluetooth models # SKIP no node"
 fi

@@ -1,0 +1,281 @@
+// SPDX-License-Identifier: MIT
+// Unit tests for the OWL runtime's core (plugins/omamobile.home/owl/*.js),
+// under node with no container: our probes against the reference runtime's
+// recorded outputs (owl-probes/*.expected.json), the resource caps, sh()
+// quoting, the level rules, and the phone's sizing, palette and capability
+// rules.
+"use strict"
+process.env.TZ = "Europe/Berlin"
+const fs = require("fs"), path = require("path"), assert = require("assert")
+const { load } = require("./owl-load.js")
+const { walk } = require("./owl-walk.js")
+const V = load("values.js"), B = load("builtins.js"), C = load("compiler.js"), R = load("runtime.js")
+const P = load("phone.js"), L = load("layout.js")
+
+let failed = 0
+function test(name, f) {
+  try { f(); console.log("ok - " + name) } catch (e) { failed++; console.log("not ok - " + name + "\n  " + String(e && e.stack || e).split("\n").slice(0, 4).join("\n  ")) }
+}
+const eq = assert.deepStrictEqual
+
+function instance(src, extra) {
+  const reports = []
+  const acts = []
+  const host = Object.assign({
+    theme: (n) => ({ accent: 0xff7aa2f7, foreground: 0xffc0caf5, background: 0xff1a1b26, red: 0xfff7768e })[n] || null,
+    tile: (n) => ({ cols: 3, rows: 3, tileWidth: 200, tileHeight: 200 })[n],
+    act: (n, a) => acts.push([n].concat(a)), runInto() {}, report: (m) => reports.push(m), changed() {}
+  }, extra || {})
+  const program = C.compile(src)
+  return { program, inst: new R.Instance(program, host, {}), reports, acts }
+}
+function rejects(src, pattern) {
+  try { C.compile(src) } catch (e) {
+    assert.ok(e instanceof C.CompileError, "a CompileError")
+    if (pattern) assert.match(e.message, pattern)
+    return e
+  }
+  assert.fail("compiled, but should be refused")
+}
+
+// ---------------------------------------------------------------- probes against the reference
+const probeDir = path.join(__dirname, "owl-probes")
+const fixture = JSON.parse(fs.readFileSync(path.join(probeDir, "fixture.json"), "utf8"))
+const probes = fs.readdirSync(probeDir).filter((f) => f.endsWith(".owl")).map((f) => f)
+  .concat(fs.readdirSync(path.join(probeDir, "bad")).filter((f) => f.endsWith(".owl")).map((f) => "bad/" + f))
+for (const f of probes) {
+  test("probe " + f + " matches the reference runtime", () => {
+    const src = fs.readFileSync(path.join(probeDir, f), "utf8")
+    const exp = JSON.parse(fs.readFileSync(path.join(probeDir, f.replace(/\.owl$/, ".expected.json")), "utf8"))
+    let got
+    try {
+      const p = C.compile(src)
+      got = { ok: true, commands: p.commands }
+    } catch (e) {
+      const at = C.position(src, e.at)
+      got = { ok: false, at: at.line + ":" + at.column }
+    }
+    eq(got.ok, exp.compile.ok)
+    if (!got.ok) { eq(got.at, exp.compile.at); return }
+    eq(got.commands, exp.compile.commands)
+    eq(JSON.parse(walk(src, fixture)), exp.walk)
+  })
+}
+
+// ---------------------------------------------------------------- language rules
+test("errors carry line, column and a caret", () => {
+  const src = 'widget "w" {\n  Text { txt: "a" }\n}\n'
+  const e = rejects(src, /Text has no property 'txt'/)
+  eq(C.formatError(src, e).split("\n"), ["2:10: Text has no property 'txt' (text, style, color, fontSize, bold, italic, font, align, maxLines, width, height, size, fill, weight, padding, background, border, borderColor, radius, opacity, rotation, scale, offset, clip, visible)", "    Text { txt: \"a\" }", "           ^"])
+})
+test("a feature above the declared level is refused, with the fix", () => {
+  rejects('widget "w" {\n  every 5s { }\n  Text { text: "a" }\n}', /every needs owl 4: add meta \{ owl: 4 \}/)
+  rejects('widget "w" {\n  meta { owl: 5 }\n  source a = cmd(sh("x"))\n  Text { text: a }\n}', /sh needs owl 6/)
+  rejects('widget "w" {\n  meta { owl: 8 }\n  Text { text: "a" }\n}', /needs owl 8; this phone supports up to 7/)
+  C.compile('widget "w" {\n  meta { owl: 4 }\n  state n = 0\n  every 5s { n = n + 1 }\n  Text { text: n }\n}')
+})
+test("the commands list names every command, URL and file, in order", () => {
+  const p = C.compile('widget "w" {\n  meta { owl: 6 }\n  state city = "x"\n  source a = cmd("date")\n  source b = http("https://example.org/a")\n  source c = file("~/notes.txt")\n' +
+    '  source d = cmd("curl wttr.in/${sh(city)}") optional\n  Button { text: "go"; onTap: { run("notify-send hi"); terminal("btop"); url("https://example.org") } }\n  Button { text: "x"; onTap: city = run("cat ~/city") }\n}')
+  eq(p.commands, ["date", "http GET https://example.org/a", "read file ~/notes.txt", "if Linux is installed: cmd(…) built from widget values",
+    "notify-send hi", "btop", "cat ~/city"])
+})
+test("constant expressions fold, and a bad constant call is a compile error", () => {
+  const p = C.compile('widget "w" {\n  source a = cmd("echo ${1 + 2} ${upper("x")}")\n  Text { text: a }\n}')
+  eq(p.commands, ["echo 3 X"])
+  rejects('widget "w" {\n  Text { text: fmtTime(0, "\'") }\n}', /bad time pattern/)
+})
+test("bare words only where the property takes them", () => {
+  C.compile('widget "w" {\n  Column { align: center; Text { text: "a"; style: muted; font: icon } }\n}')
+  rejects('widget "w" {\n  Text { text: center }\n}', /'center' isn't a value here/)
+  // A declared name wins over the word.
+  const { inst } = instance('widget "w" {\n  let center = "end"\n  Text { text: "a"; align: center }\n}')
+  eq(inst.render(false).children[0].p.align, "end")
+})
+
+// ---------------------------------------------------------------- values
+test("numbers print as the launcher prints them", () => {
+  eq([3, 0.5, 1e21, 1e-4, 10000000.5, -0, 1e15, 2 / 3].map(V.numberText), ["3", "0.5", "1.0E21", "1.0E-4", "1.00000005E7", "0", "1.0E15", "0.6666666666666666"])
+  eq(V.fixedText(1.005, 2), "1.01")
+  eq(V.fixedText(-0.04, 1), "-0.0")
+  eq(V.fixedText(2.5, 0), "3")
+  eq(V.floatText(0.1), "0.1")
+  eq(V.floatText(28.9), "28.9")
+})
+test("numeric text acts as a number, null passes through", () => {
+  const { inst } = instance('widget "w" {\n  source s = cmd("x")\n  Text { text: "${s > 80} ${s + 1} ${s * 2} ${round(null)} ${num("81%")}" }\n}')
+  inst.setSource(0, "81\n")
+  eq(inst.render(false).children[0].p.text, "true 811 162 … 81")
+})
+test("JSON keeps its key order", () => {
+  eq(V.display(V.parseJson('{"10": 1, "2": 2, "a": 3}')), "{10: 1, 2: 2, a: 3}")
+  assert.throws(() => V.parseJson("{bad"))
+})
+
+// ---------------------------------------------------------------- sh()
+test("sh() makes one shell word of anything, hostile text included", () => {
+  const { execFileSync } = require("child_process")
+  const hostile = ["it's", "a b", "$(touch /tmp/owl-pwned)", "`id`", "x; rm -rf ~", "\n\n'\"\\", "", "--help", "*"]
+  for (const h of hostile) {
+    const word = B.shellWord(h)
+    const out = execFileSync("bash", ["-c", "printf %s " + word], { encoding: "utf8" })
+    eq(out, V.textOf(h) === "…" ? "" : V.textOf(h))
+  }
+  assert.ok(!fs.existsSync("/tmp/owl-pwned"))
+})
+
+// ---------------------------------------------------------------- caps
+test("a widget that loops hits the step budget, as an error in that value only", () => {
+  const { inst, reports } = instance('widget "w" {\n  let big = range(1000).map(i => range(1000).map(j => i * j))\n  Column { Text { text: len(big) } Text { text: "still here" } }\n}')
+  const tree = inst.render(false)
+  eq(tree.children[0].c[0].p.text, "…")
+  eq(tree.children[0].c[1].p.text, "still here")
+  assert.ok(reports.some((m) => /too much work/.test(m)), reports.join("|"))
+})
+test("501 nodes are refused, 500 are fine; a screen has its own 1000", () => {
+  const many = (n) => 'widget "w" {\n  Column {\n' + Array.from({ length: n - 1 }, () => '    Text { text: "x" }\n').join("") + "  }\n}"
+  C.compile(many(500))
+  rejects(many(501), /more than 500 nodes/)
+})
+test("more than 2000 drawing calls in a frame stop that Canvas at 2000", () => {
+  const { inst, reports } = instance('widget "w" {\n  Canvas { for i in range(1000) { rect(0, 0, 1, 1)\n rect(1, 1, 1, 1)\n rect(2, 2, 1, 1) } }\n}')
+  const node = inst.render(false).children[0]
+  eq(node.draw(100, 100).length, 2000)
+  assert.ok(reports.some((m) => /more than 2000 drawing calls/.test(m)))
+})
+test("lists stop at 1000 items", () => {
+  const { inst } = instance('widget "w" {\n  Text { text: len(range(5000)) + len(range(600) + range(600)) }\n}')
+  eq(inst.render(false).children[0].p.text, "2000")
+})
+test("a trigger that feeds itself is cut off", () => {
+  let runs = 0
+  const { inst } = instance('widget "w" {\n  meta { owl: 4 }\n  state n = 0\n  on n { n = n + 1 }\n  Button { text: n; onTap: n = 1 }\n}', {
+    changed() { runs++ }
+  })
+  inst.render(false).children[0].h.onTap(0, 0)
+  assert.ok(runs < 20, "ran " + runs + " times")
+})
+test("the host can hold triggers back (10 a second on the phone)", () => {
+  let allowed = 0
+  const { inst } = instance('widget "w" {\n  meta { owl: 4 }\n  state n = 0\n  every 1s { n = n + 1 }\n  Text { text: n }\n}', {
+    allowTrigger() { return allowed++ < 3 }
+  })
+  for (let i = 0; i < 10; i++) inst.fire(0)
+  eq(inst.render(false).children[0].p.text, "3")
+})
+test("history and prev sample when a source updates; persisted state comes back", () => {
+  const src = 'widget "w" {\n  source s = cmd("x")\n  state keep = 1 persist\n  let h = history(s, 3) persist\n  let p = prev(s)\n  Text { text: "${h} ${p}"; onTap: keep = keep + 1 }\n}'
+  const { inst } = instance(src)
+  for (const v of ["1", "2", "3", "4"]) inst.setSource(0, v)
+  eq(inst.render(false).children[0].p.text, "[2, 3, 4] 3")
+  inst.render(false).children[0].h.onTap(0, 0)
+  const saved = inst.persisted()
+  eq(saved, { keep: 2, h: ["2", "3", "4"] })
+  const again = new R.Instance(C.compile(src), { theme: () => null, tile: () => null, act() {}, runInto() {}, report() {}, changed() {} }, saved)
+  eq(again.render(false).children[0].p.text, "[2, 3, 4] …")
+})
+test("at fires once its time has come, also after a restart", () => {
+  const { inst } = instance('widget "w" {\n  meta { owl: 4 }\n  state endsAt = 100\n  state done = 0\n  at endsAt { done = done + 1; endsAt = 0 }\n  Text { text: done }\n}')
+  inst.tick(50)
+  eq(inst.render(false).children[0].p.text, "0")
+  inst.tick(101)
+  eq(inst.render(false).children[0].p.text, "1")
+  const late = instance('widget "w" {\n  meta { owl: 4 }\n  state endsAt = 100\n  state done = 0\n  at endsAt { done = 1; endsAt = 0 }\n  Text { text: done }\n}')
+  late.inst.tick(500)
+  eq(late.inst.render(false).children[0].p.text, "1")
+})
+test("actions reach the host with their values; an unloaded first value still reaches it", () => {
+  const { inst, acts } = instance('widget "w" {\n  meta { owl: 7 }\n  Button { text: "x"; onTap: { url("https://example.org/${1 + 1}"); notify("a", "b"); haptic() } }\n}')
+  inst.render(false).children[0].h.onTap(0, 0)
+  eq(acts, [["url", "https://example.org/2"], ["notify", "a", "b"], ["haptic"]])
+})
+test("time is read only by what draws with it", () => {
+  const { inst } = instance('widget "w" {\n  state on = false\n  Column { if on { Canvas { circle(time, 1, 1) } } Text { text: "x"; onTap: on = true } }\n}')
+  let tree = inst.render(false)
+  assert.ok(!tree.readsTime)
+  tree.children[0].c[0].h.onTap(0, 0)
+  tree = inst.render(false)
+  tree.children[0].c[0].draw(10, 10)
+  assert.ok(inst.readsTime)
+})
+
+// ---------------------------------------------------------------- the phone
+test("dp and sizes convert from Omalauncher's grid to ours", () => {
+  const dp = P.dpFor(480)
+  assert.ok(Math.abs(dp - 1.1594) < 1e-3)
+  const grid = { columns: 4, rows: 6 }
+  const cellH = 908 / 6
+  eq(P.homeSpec({ size: [6, 3], minSize: [3, 2] }, grid, cellH, dp), { size: [4, 2], min: [2, 2], max: [4, 6] })
+  eq(P.homeSpec({ size: [3, 2], minSize: [1, 1] }, grid, cellH, dp), { size: [2, 1], min: [1, 1], max: [4, 6] })
+  eq(P.homeSpec({ size: [6, 5], minSize: [3, 3] }, grid, cellH, dp).size, [4, 3])
+  eq(P.homeSpec({ size: [6, 3], minSize: [2, 2] }, { columns: 6, rows: 8 }, cellH, dp).size, [6, 2])
+  const t = P.tileVars(228, 290.67, dp, 480, 924, 0)
+  eq([t.cols, t.rows, Math.round(t.tileWidth)], [3, 4, 197])
+  eq([P.cornersFor(0), P.cornersFor(4), P.cornersFor(12)], [0, 0.5, 1])
+})
+test("the palette fills in what a theme leaves out", () => {
+  const p = P.palette(P.parseColorsToml('background = "#1a1b26"\nforeground = "#c0caf5"\naccent = "#7aa2f7"\ncolor1 = "#f7768e"\ncolor3 = "#e0af68"\n'))
+  eq(V.hex8(p.red), "#fff7768e")
+  eq(V.hex8(p.orange), V.hex8(V.mixArgb(p.red, p.yellow, 0.5)))
+  eq(p.surface, p.lighter_background)
+  eq(p.color9, p.bright_red)
+  const card = P.cardPalette(p, { foreground: 0xffffffff, dimForeground: 0xaaffffff, background: 0xcc000000 })
+  eq([card.foreground, card.muted], [0xffffffff, 0xaaffffff])
+})
+test("capabilities are derived from the commands list, with risks flagged", () => {
+  const caps = (src) => P.capabilities(C.compile(src))
+  let c = caps('widget "w" {\n  requires { pacman: ["curl"] }\n  source a = cmd("curl -s https://api.example.org/x | jq .")\n  Text { text: a }\n}')
+  eq([c.commands.length, c.network, c.hosts, c.risks.length, c.refusals.length], [1, true, ["api.example.org"], 0, 0])
+  c = caps('widget "w" {\n  meta { owl: 5 }\n  source a = http("https://example.org/feed")\n  Text { text: a }\n}')
+  eq([c.commands.length, c.network, c.hosts], [0, true, ["example.org"]])
+  c = caps('widget "w" {\n  source a = cmd("sudo pacman -Syu")\n  Text { text: a }\n}')
+  eq(c.refusals.length, 1)
+  c = caps('widget "w" {\n  source a = cmd("curl -s https://x.example/i.sh | bash")\n  Text { text: a; onTap: run("rm -rf ~/.cache/x") }\n}')
+  eq(c.risks.map((r) => r.id), ["pipe-to-shell", "rm-rf"])
+  c = caps('widget "w" {\n  meta { owl: 6 }\n  state q = "x"\n  source a = cmd("grep ${sh(q)} ~/.ssh/config")\n  Text { text: a }\n}')
+  eq(c.risks.map((r) => r.id), ["built"])
+  c = caps('widget "w" {\n  meta { owl: 2 }\n  Terminal { }\n}')
+  eq(c.refusals, ["Terminal isn't supported on this phone yet"])
+  assert.ok(P.approvalMatches({ commands: ["a", "b"] }, { commands: ["a", "b"] }))
+  assert.ok(!P.approvalMatches({ commands: ["a"] }, { commands: ["a", "b"] }))
+})
+test("the phone's source limits", () => {
+  eq(P.sourceLimits({ kind: "cmd", every: 1, timeout: 120 }, false), { every: 2, timeout: 30 })
+  eq(P.sourceLimits({ kind: "http", every: 10, timeout: 10 }, false), { every: 60, timeout: 10 })
+  eq(P.sourceLimits({ kind: "clock", every: 1, timeout: 0 }, false).every, 1)
+})
+
+// ---------------------------------------------------------------- layout
+const mono = { width: (text, size) => text.length * size * 0.6, lineHeight: (size) => size * 1.17 }
+function laid(src, w, h, sources) {
+  const { inst } = instance(src)
+  ;(sources || []).forEach((v, i) => inst.setSource(i, v))
+  const tree = inst.render(false)
+  return L.layout(tree.children, w, h, mono)
+}
+test("a Column stacks, a weighted child takes what is left", () => {
+  const box = laid('widget "w" {\n  Column { Text { text: "ab"; fontSize: 10 } Spacer { weight: 1 } Progress { value: 5 } }\n}', 200, 100)
+  const kids = box.children
+  eq(kids.map((k) => [k.kind, Math.round(k.y), Math.round(k.h)]), [["Text", 0, 12], ["Spacer", 16, 72], ["Progress", 92, 8]])
+  eq(kids[0].w, 200)
+})
+test("a Row gives fixed widths first, then weights; align centres across", () => {
+  const box = laid('widget "w" {\n  Row { align: center; Text { text: "ab"; width: 40 } Text { text: "x"; weight: 1 } Box { size: 20 } }\n}', 200, 50)
+  eq(box.children.map((k) => [k.kind, Math.round(k.x), Math.round(k.w)]), [["Text", 0, 40], ["Text", 48, 124], ["Box", 180, 20]])
+  eq(Math.round(box.children[2].y), 15)
+  assert.ok(box.children[0].y > 17 && box.children[0].y < 18)
+})
+test("justify places children when nothing is weighted", () => {
+  const box = laid('widget "w" {\n  Row { justify: spaceBetween; fill: width; Box { size: 10 } Box { size: 10 } Box { size: 10 } }\n}', 100, 20)
+  eq(box.children.map((k) => Math.round(k.x)), [0, 45, 90])
+})
+test("text wraps, and maxLines and title stay within their lines", () => {
+  const box = laid('widget "w" {\n  Column { Text { text: "aaaa bbbb cccc"; fontSize: 10 } Text { text: "aaaa bbbb cccc"; fontSize: 10; maxLines: 1 } Text { text: "a very long title"; style: title } }\n}', 60, 200)
+  eq(box.children.map((k) => k.lines), [2, 1, 1])
+})
+test("Grid splits its width into equal columns", () => {
+  const box = laid('widget "w" {\n  Grid { columns: 3; gap: 4; for i in range(5) { Text { text: i } } }\n}', 100, 100)
+  eq(box.children.map((k) => [Math.round(k.x * 10) / 10, Math.round(k.w * 10) / 10]).slice(0, 4), [[0, 30.7], [34.7, 30.7], [69.3, 30.7], [0, 30.7]])
+})
+
+if (failed) { console.log(failed + " failed"); process.exit(1) }

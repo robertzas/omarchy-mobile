@@ -1,0 +1,19 @@
+// Our own probe of list and map functions (expected output recorded from the reference runtime).
+widget "probe lists" {
+  meta { owl: 7 }
+  source items = cmd("x") json
+  source j = cmd("x") json
+  let xs = [5, "3", 9, "x", null, 1]
+  Column {
+    for e, i in [
+      xs.map(x => num(x, 0) * 2), xs.filter(x => num(x) != null), xs.find(x => x == 9), xs.any(x => x == null), xs.all(x => x != 7), count(xs), count(xs, x => x),
+      sum(xs), sum(items, it => it.n), avg(items, it => it.n), sort(xs), sortBy(items, it => it.n).map(it => it.id), sortBy(items, it => it.tag).map(it => it.id), reverse("abc"),
+      take(xs, 2), drop(xs, 4), take(xs, -1), first(null), last("abc"), indexOf(xs, 9), indexOf(xs, "9"), unique(["a", "a", 1, "1", null, null]), flatten([[1], 2, [[3]]]),
+      keys(j), values(j.a), entries(j.a), get(j, "10"), get(j.list, "0"), get(items, "0"), range(0), range(-2, 2), range(10, 0, -3), range(0, 1, 0.3),
+      items.map((it, k) => "${k}${it.id}"), items.filter((it, k) => k > 0).map(it => it.tag), xs.map(x => x).take(3), [1, 2] + [3], [1] + 2, {a: 1} + {b: 2}, len(range(2000)), range(5000).map(x => x).length,
+      items[0].id, items[5].id, items.0.n, items[-1].n, items["1"].id, j.a.b, j.missing.deeper ?? "dflt", null ?? null ?? 3, false ?? 4, 0 || "zero", "" && 1, [] || "empty"
+    ] {
+      Text { text: "${i}: ${e}" }
+    }
+  }
+}

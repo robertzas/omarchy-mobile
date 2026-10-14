@@ -1,0 +1,26 @@
+{
+ "ok": true,
+ "name": "exchange rates",
+ "size": [
+  6,
+  2
+ ],
+ "minSize": [
+  3,
+  2
+ ],
+ "commands": [
+  "f=~/.config/omarchy-proot/exchange-rates\nmkdir -p \"${f%/*}\"\n[ -f \"$f\" ] || printf 'USD\\nEUR\\nGBP\\nJPY\\n' > \"$f\"\ncodes=$(grep -v '^#' \"$f\" | grep . | tr a-z A-Z)\nbase=$(head -n1 <<< \"$codes\")\nto=$(tail -n +2 <<< \"$codes\" | paste -sd, -)\ncurl -fsLm 10 \"https://api.frankfurter.dev/v1/$(date -d '30 days ago' +%F)..?base=$base&symbols=$to\" | jq -c --arg to \"$to\" '\n  (.rates | to_entries | sort_by(.key) | map(.value)) as $days | $days[-1] as $now | $days[-2] as $prev |\n  {base, rates: [$to | split(\",\")[] | select($now[.]) | {code: ., rate: $now[.], change: (($now[.] / $prev[.] - 1) * 100), hist: [$days[][.]]}]}'",
+  "$EDITOR ~/.config/omarchy-proot/exchange-rates"
+ ],
+ "requires": {
+  "pacman": [
+   "curl",
+   "jq"
+  ]
+ },
+ "capabilities": [
+  "commands",
+  "network"
+ ]
+}

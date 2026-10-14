@@ -1,0 +1,20 @@
+{
+ "ok": true,
+ "name": "bitcoin",
+ "size": [
+  6,
+  2
+ ],
+ "minSize": [
+  3,
+  2
+ ],
+ "commands": [
+  "http GET https://api.coinbase.com/v2/prices/BTC-USD/spot",
+  "http GET https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=900"
+ ],
+ "requires": {},
+ "capabilities": [
+  "network"
+ ]
+}

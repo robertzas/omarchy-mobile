@@ -1,0 +1,15 @@
+{
+ "ok": true,
+ "name": "focus",
+ "size": [
+  3,
+  3
+ ],
+ "minSize": [
+  3,
+  2
+ ],
+ "commands": [],
+ "requires": {},
+ "capabilities": []
+}

@@ -1,0 +1,8 @@
+{
+ "compile": {
+  "ok": false,
+  "at": "3:30",
+  "message": "'frobnicate' isn't an action (terminal, app, run, url, launcher, refresh, media, androidApp, copy, notify, volume, notification, screen, close, torch, share, haptic)"
+ },
+ "walk": null
+}

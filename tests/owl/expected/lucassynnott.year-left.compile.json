@@ -1,0 +1,15 @@
+{
+ "ok": true,
+ "name": "year",
+ "size": [
+  3,
+  4
+ ],
+ "minSize": [
+  2,
+  2
+ ],
+ "commands": [],
+ "requires": {},
+ "capabilities": []
+}

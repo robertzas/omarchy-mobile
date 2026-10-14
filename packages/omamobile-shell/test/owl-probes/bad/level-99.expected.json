@@ -1,0 +1,8 @@
+{
+ "compile": {
+  "ok": false,
+  "at": "2:10",
+  "message": "this widget needs owl 99; the launcher supports up to 7, so update the launcher"
+ },
+ "walk": null
+}

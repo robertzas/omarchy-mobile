@@ -1,0 +1,541 @@
+{
+ "compile": {
+  "ok": true,
+  "name": "probe nodes",
+  "size": [
+   4,
+   3
+  ],
+  "minSize": [
+   2,
+   2
+  ],
+  "commands": [
+   "x"
+  ],
+  "requires": {},
+  "capabilities": [
+   "commands"
+  ]
+ },
+ "walk": {
+  "root": [
+   {
+    "kind": "Column",
+    "props": {
+     "align": "center",
+     "fill": "true",
+     "gap": "6",
+     "justify": "spaceEvenly"
+    },
+    "anim": {},
+    "children": [
+     {
+      "kind": "Row",
+      "props": {
+       "gap": "3",
+       "wrap": "true"
+      },
+      "anim": {},
+      "children": [
+       {
+        "kind": "Box",
+        "props": {
+         "weight": "1"
+        },
+        "children": [
+         {
+          "kind": "Column",
+          "props": {
+           "gap": "0"
+          },
+          "anim": {},
+          "children": [
+           {
+            "kind": "Text",
+            "props": {
+             "style": "cpu",
+             "text": "cpu"
+            },
+            "anim": {},
+            "children": []
+           },
+           {
+            "kind": "Text",
+            "props": {
+             "color": "accent",
+             "style": "title",
+             "text": "2%"
+            },
+            "anim": {},
+            "children": []
+           }
+          ]
+         }
+        ]
+       },
+       {
+        "kind": "Column",
+        "props": {
+         "gap": "0"
+        },
+        "anim": {},
+        "children": [
+         {
+          "kind": "Text",
+          "props": {
+           "style": "mem",
+           "text": "mem"
+          },
+          "anim": {},
+          "children": []
+         },
+         {
+          "kind": "Text",
+          "props": {
+           "color": "red",
+           "style": "title",
+           "text": "[2]"
+          },
+          "anim": {},
+          "children": []
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "bold": "2",
+       "font": "icon",
+       "italic": "true",
+       "maxLines": "2",
+       "text": "big"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Button",
+      "props": {
+       "color": "green",
+       "text": "0:a"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Button",
+      "props": {
+       "color": "muted",
+       "text": "1:b"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Button",
+      "props": {
+       "color": "green",
+       "text": "2:c"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Grid",
+      "props": {
+       "columns": "3",
+       "gap": "2"
+      },
+      "anim": {},
+      "children": [
+       {
+        "kind": "Box",
+        "props": {
+         "background": "#00000000",
+         "border": "1",
+         "borderColor": "accent",
+         "radius": "2",
+         "size": "10"
+        },
+        "anim": {},
+        "children": []
+       },
+       {
+        "kind": "Box",
+        "props": {
+         "background": "#00000000",
+         "border": "1",
+         "borderColor": "border",
+         "radius": "2",
+         "size": "10"
+        },
+        "anim": {},
+        "children": []
+       },
+       {
+        "kind": "Box",
+        "props": {
+         "background": "#00000000",
+         "border": "1",
+         "borderColor": "accent",
+         "radius": "2",
+         "size": "10"
+        },
+        "anim": {},
+        "children": []
+       },
+       {
+        "kind": "Box",
+        "props": {
+         "background": "#00000000",
+         "border": "1",
+         "borderColor": "border",
+         "radius": "2",
+         "size": "10"
+        },
+        "anim": {},
+        "children": []
+       },
+       {
+        "kind": "Box",
+        "props": {
+         "background": "#00000000",
+         "border": "1",
+         "borderColor": "accent",
+         "radius": "2",
+         "size": "10"
+        },
+        "anim": {},
+        "children": []
+       }
+      ]
+     },
+     {
+      "kind": "Ring",
+      "props": {
+       "size": "40",
+       "start": "225",
+       "sweep": "270",
+       "thickness": "4",
+       "value": "0.25"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Sparkline",
+      "props": {
+       "area": "true",
+       "min": "0",
+       "thickness": "1.5",
+       "values": "[1, 3, 2, null, 5]"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Sparkline",
+      "props": {
+       "area": "green",
+       "height": "20",
+       "values": "[2]"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Slider",
+      "props": {
+       "max": "10",
+       "step": "1",
+       "value": "2"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Image",
+      "props": {
+       "fit": "cover",
+       "height": "30",
+       "src": "~/pics/a.png",
+       "tint": "accent",
+       "width": "30"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Shader",
+      "props": {
+       "code": "half4 main(float2 p) { return half4(1); }",
+       "fallback": "surface",
+       "uniforms": "{tint: accent, speed: 0.5, at: [1, 2]}"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "clip": "true",
+       "offset": "[1, -1]",
+       "opacity": "0.7",
+       "padding": "[4, 2]",
+       "rotation": "5",
+       "scale": "1.1",
+       "text": "… 300 3 true 0 400",
+       "visible": "true"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Canvas",
+      "props": {
+       "height": "60"
+      },
+      "anim": {},
+      "draw": [
+       {
+        "op": "rect",
+        "args": [
+         "0",
+         "0",
+         "300",
+         "200"
+        ],
+        "named": {
+         "fill": "surface",
+         "radius": "4"
+        }
+       },
+       {
+        "op": "circle",
+        "args": [
+         "150",
+         "100",
+         "100"
+        ],
+        "named": {
+         "stroke": "border",
+         "width": "2"
+        }
+       },
+       {
+        "op": "arc",
+        "args": [
+         "150",
+         "100",
+         "96",
+         "45",
+         "270"
+        ],
+        "named": {
+         "fill": "accent"
+        }
+       },
+       {
+        "op": "line",
+        "args": [
+         "0",
+         "0",
+         "300",
+         "200"
+        ],
+        "named": {
+         "cap": "square",
+         "color": "red"
+        }
+       },
+       {
+        "op": "path",
+        "args": [
+         "[[0, 0], {x: 5, y: 9}, bad]"
+        ],
+        "named": {
+         "closed": "true",
+         "fill": "Gradient(radial=false, coords=[0.0, 0.0, 10.0, 0.0], colors=[red, blue])"
+        }
+       },
+       {
+        "op": "text",
+        "args": [
+         "hi 2",
+         "4",
+         "8"
+        ],
+        "named": {
+         "align": "start",
+         "bold": "true",
+         "color": "muted",
+         "size": "9"
+        }
+       },
+       {
+        "op": "image",
+        "args": [
+         "~/x.png",
+         "1",
+         "2",
+         "3",
+         "4"
+        ],
+        "named": {}
+       },
+       {
+        "op": "translate",
+        "args": [
+         "3",
+         "4"
+        ],
+        "named": {},
+        "ops": [
+         {
+          "op": "scale",
+          "args": [
+           "2",
+           "2",
+           "0",
+           "0"
+          ],
+          "named": {},
+          "ops": [
+           {
+            "op": "rect",
+            "args": [
+             "0",
+             "0",
+             "1",
+             "1"
+            ],
+            "named": {}
+           }
+          ]
+         }
+        ]
+       },
+       {
+        "op": "clip",
+        "args": [
+         "0",
+         "0",
+         "10",
+         "10"
+        ],
+        "named": {},
+        "ops": [
+         {
+          "op": "layer",
+          "args": [
+           "0.5"
+          ],
+          "named": {},
+          "ops": [
+           {
+            "op": "rotate",
+            "args": [
+             "30"
+            ],
+            "named": {},
+            "ops": [
+             {
+              "op": "circle",
+              "args": [
+               "1",
+               "1",
+               "1"
+              ],
+              "named": {}
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       },
+       {
+        "op": "sprite",
+        "args": [
+         "[ab., .bb]",
+         "2",
+         "2",
+         "3"
+        ],
+        "named": {
+         "palette": "{a: accent, b: #ff0000}"
+        }
+       },
+       {
+        "op": "sprite",
+        "args": [
+         "xx\nx.",
+         "10",
+         "10",
+         "2"
+        ],
+        "named": {
+         "fill": "green"
+        }
+       },
+       {
+        "op": "rect",
+        "args": [
+         "0",
+         "50",
+         "4",
+         "4"
+        ],
+        "named": {}
+       },
+       {
+        "op": "rect",
+        "args": [
+         "10",
+         "50",
+         "4",
+         "4"
+        ],
+        "named": {}
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "screen": [
+   {
+    "kind": "Column",
+    "props": {
+     "scroll": "true"
+    },
+    "anim": {},
+    "children": [
+     {
+      "kind": "Text",
+      "props": {
+       "style": "huge",
+       "text": "screen"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Input",
+      "props": {
+       "clear": "true",
+       "focus": "true",
+       "placeholder": "type",
+       "text": ""
+      },
+      "anim": {},
+      "children": []
+     }
+    ]
+   }
+  ]
+ }
+}

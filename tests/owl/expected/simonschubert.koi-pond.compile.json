@@ -1,0 +1,15 @@
+{
+ "ok": true,
+ "name": "koi pond",
+ "size": [
+  6,
+  3
+ ],
+ "minSize": [
+  2,
+  2
+ ],
+ "commands": [],
+ "requires": {},
+ "capabilities": []
+}

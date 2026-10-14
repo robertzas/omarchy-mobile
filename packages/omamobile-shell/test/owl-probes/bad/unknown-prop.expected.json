@@ -1,0 +1,8 @@
+{
+ "compile": {
+  "ok": false,
+  "at": "2:10",
+  "message": "Text has no property 'txt' (text, style, color, fontSize, bold, italic, font, align, maxLines, width, height, size, fill, weight, padding, background, border, borderColor, radius, opacity, rotation, scale, offset, clip, visible)"
+ },
+ "walk": null
+}

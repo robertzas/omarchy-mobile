@@ -1,0 +1,8 @@
+{
+ "compile": {
+  "ok": false,
+  "at": "3:1",
+  "message": "expected '}', found end of file"
+ },
+ "walk": null
+}

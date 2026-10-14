@@ -1,0 +1,28 @@
+{
+ "compile": {
+  "ok": true,
+  "name": "w",
+  "size": null,
+  "minSize": [
+   1,
+   1
+  ],
+  "commands": [
+   "a terminal running the login shell"
+  ],
+  "requires": {},
+  "capabilities": [
+   "commands"
+  ]
+ },
+ "walk": {
+  "root": [
+   {
+    "kind": "Terminal",
+    "props": {},
+    "anim": {},
+    "children": []
+   }
+  ]
+ }
+}

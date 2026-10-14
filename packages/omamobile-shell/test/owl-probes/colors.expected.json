@@ -1,0 +1,126 @@
+{
+ "compile": {
+  "ok": true,
+  "name": "probe colors",
+  "size": null,
+  "minSize": [
+   1,
+   1
+  ],
+  "commands": [],
+  "requires": {},
+  "capabilities": []
+ },
+ "walk": {
+  "root": [
+   {
+    "kind": "Column",
+    "props": {},
+    "anim": {},
+    "children": [
+     {
+      "kind": "Text",
+      "props": {
+       "background": "surface",
+       "color": "accent",
+       "text": "a"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "background": "muted",
+       "color": "#ff8800",
+       "text": "b"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "background": "#80ff0080",
+       "color": "#ff6280c3",
+       "text": "c"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "background": "#b3ffaa00",
+       "color": "#ff2966a3",
+       "text": "d"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "background": "red",
+       "color": "#ff123456",
+       "text": "e"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "background": "color13",
+       "color": "bright_cyan",
+       "text": "f"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "background": "#00000000",
+       "color": "nonsense",
+       "text": "g"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Progress",
+      "props": {
+       "color": "Gradient(radial=false, coords=[0.0, 0.0, 1.0, 0.0], colors=[accent, red])",
+       "track": "Gradient(radial=true, coords=[5.0, 5.0, 10.0], colors=[#ffffffff, #ff000000, yellow])",
+       "value": "30"
+      },
+      "anim": {},
+      "children": []
+     },
+     {
+      "kind": "Box",
+      "props": {
+       "opacity": "0.5"
+      },
+      "anim": {
+       "opacity": "{type: spring, damping: 0.3, stiffness: 900}",
+       "rotation": "{type: tween, duration: 1, easing: in}",
+       "scale": "{type: tween, duration: 0.3, easing: ease}"
+      },
+      "children": []
+     },
+     {
+      "kind": "Text",
+      "props": {
+       "style": "label",
+       "text": "[accent, #ff00ff00, #ff010203]"
+      },
+      "anim": {},
+      "children": []
+     }
+    ]
+   }
+  ]
+ }
+}

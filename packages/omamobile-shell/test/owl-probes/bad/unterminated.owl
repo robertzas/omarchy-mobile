@@ -1,0 +1,2 @@
+widget "w" {
+  Text { text: "a" 

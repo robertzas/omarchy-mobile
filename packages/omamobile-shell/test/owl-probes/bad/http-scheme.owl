@@ -1,0 +1,4 @@
+widget "w" {
+  source n = http("ftp://x")
+  Text { text: n }
+}

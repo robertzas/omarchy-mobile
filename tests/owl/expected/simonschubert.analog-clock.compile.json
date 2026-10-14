@@ -1,0 +1,15 @@
+{
+ "ok": true,
+ "name": "analog clock",
+ "size": [
+  3,
+  3
+ ],
+ "minSize": [
+  2,
+  2
+ ],
+ "commands": [],
+ "requires": {},
+ "capabilities": []
+}

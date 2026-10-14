@@ -1,0 +1,8 @@
+{
+ "compile": {
+  "ok": false,
+  "at": "2:30",
+  "message": "screen() and close() need a screen { } block in the widget"
+ },
+ "walk": null
+}

@@ -1,0 +1,8 @@
+{
+ "compile": {
+  "ok": false,
+  "at": "3:3",
+  "message": "circle(...) draws, so it goes inside a Canvas"
+ },
+ "walk": null
+}

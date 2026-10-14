@@ -1,0 +1,4 @@
+widget "w" {
+  meta { owl: 99 }
+  Text { text: "a" }
+}
