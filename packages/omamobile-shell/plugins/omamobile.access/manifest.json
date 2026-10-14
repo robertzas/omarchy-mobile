@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "omamobile.access",
+  "name": "Permission sheet",
+  "version": "0.1.0",
+  "author": "Omarchy Mobile",
+  "license": "MIT",
+  "description": "The phone's permission question (camera, location, screenshots, background): a bottom sheet with the app's icon and two large buttons, shown by omamobile-portal-access, the xdg-desktop-portal Access backend.",
+  "kinds": ["panel"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "Access.qml"
+  }
+}

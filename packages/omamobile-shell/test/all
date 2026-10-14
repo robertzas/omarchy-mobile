@@ -242,12 +242,44 @@ sys.exit(1 if bad else 0)
 PY
 pass "update sheet"
 
+# The permission sheet: the portal Access backend (its pure parts, then the
+# D-Bus service on a private bus against a fake omarchy-shell), the sheet's
+# model, and the wiring that makes the portal pick it under Hyprland.
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-portal-access || fail "omamobile-portal-access parses"
+if command -v dbus-run-session >/dev/null; then
+  dbus-run-session -- python3 -B test/portal-access.py >/dev/null 2>&1 || { dbus-run-session -- python3 -B test/portal-access.py | grep -v '^ok'; fail "omamobile-portal-access"; }
+else
+  python3 -B test/portal-access.py >/dev/null || fail "omamobile-portal-access helpers"
+fi
+if command -v node >/dev/null; then
+  node test/access-model.js >/dev/null || fail "permission sheet model"
+fi
+python3 -c 'import json; assert {"id": "omamobile.access"} in json.load(open("profile/shell.json"))["plugins"]' \
+  || fail "the phone profile enables the permission sheet"
+grep -c 'add_plugin omamobile.access' bin/omamobile-setup-user >/dev/null || fail "existing users get the permission sheet"
+grep -cx 'org.freedesktop.impl.portal.Access=omamobile;gtk' portal/hyprland-portals.conf >/dev/null || fail "Hyprland's portals.conf picks the sheet for Access only"
+! grep -c '^default' portal/hyprland-portals.conf >/dev/null || fail "the override leaves the default portals alone"
+grep -cx 'DBusName=org.freedesktop.impl.portal.desktop.omamobile' portal/omamobile.portal >/dev/null || fail "omamobile.portal names the service"
+grep -cx 'BusName=org.freedesktop.impl.portal.desktop.omamobile' systemd/user/omamobile-portal-access.service >/dev/null || fail "the unit owns the bus name"
+if grep -n 'above_lock' hypr/phone.lua | grep -c 'omamobile-access' >/dev/null; then fail "the permission sheet never shows over the lock"; fi
+# Offscreen review shots in the OWL container only (test/access-render).
+if [[ -n ${OMAMOBILE_ACCESS_RENDER:-} ]]; then
+  bash test/access-render "$OMAMOBILE_ACCESS_RENDER" >/dev/null || fail "permission sheet render"
+fi
+pass "permission sheet"
+
 bash -n bin/omamobile-setup-user || fail "omamobile-setup-user parses"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ./install "$tmp/root"
 [[ -x $tmp/root/usr/bin/omamobile-setup-user && -f $tmp/root/usr/share/omamobile/shell/profile/shell.json ]] \
   || fail "install stages the setup script and the profile"
 [[ -x $tmp/root/usr/bin/omamobile-launch ]] || fail "install stages omamobile-launch"
+[[ -x $tmp/root/usr/bin/omamobile-portal-access && -f $tmp/root/usr/share/xdg-desktop-portal/portals/omamobile.portal \
+   && -f $tmp/root/etc/xdg/xdg-desktop-portal/hyprland-portals.conf \
+   && -f $tmp/root/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.omamobile.service \
+   && -f $tmp/root/usr/lib/systemd/user/omamobile-portal-access.service \
+   && -f $tmp/root/usr/share/omamobile/shell/plugins/omamobile.access/AccessSheet.qml ]] \
+  || fail "install stages the permission sheet and its portal files"
 [[ -x $tmp/root/usr/bin/omamobile-widget && -f $tmp/root/usr/share/omamobile/shell/WIDGETS.md \
    && -f $tmp/root/usr/share/omamobile/shell/widget-template/manifest.json \
    && -f $tmp/root/usr/share/omamobile/shell/widget-examples/countdown/Widget.qml ]] \

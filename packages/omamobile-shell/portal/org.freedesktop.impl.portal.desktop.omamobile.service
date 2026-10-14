@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.freedesktop.impl.portal.desktop.omamobile
+Exec=/usr/bin/omamobile-portal-access
+SystemdService=omamobile-portal-access.service

@@ -239,6 +239,12 @@ fi
 if omarchy-done ensure omamobile-update-plugin; then
   add_plugin omamobile.update
 fi
+# The permission sheet (omamobile.access): the question xdg-desktop-portal
+# asks before an app first uses the camera or the location, shown by
+# omamobile-portal-access in place of GTK's desktop dialog.
+if omarchy-done ensure omamobile-access-plugin; then
+  add_plugin omamobile.access
+fi
 if omarchy-done ensure omamobile-menu-update; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
   mkdir -p "$(dirname "$extension")"

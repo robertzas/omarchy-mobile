@@ -11,6 +11,7 @@ depends=(omarchy omamobile-apps omamobile-omarchy omamobile-owl-widgets bash squ
          pipewire-audio pipewire-pulse pipewire-alsa wireplumber
          inotify-tools qt6-declarative)
 optdepends=('fprintd: fingerprint setup and unlock (with omamobile-fingerprint)')
+backup=(etc/xdg/xdg-desktop-portal/hyprland-portals.conf)
 install=omamobile-shell.install
 
 package() {

@@ -25,6 +25,13 @@ install -Dm644 environment.d/20-omamobile-osk.conf "$destination/usr/lib/environ
 install -Dm644 squeekboard/keyboards/terminal/us.yaml "$destination/usr/share/omamobile/squeekboard/keyboards/terminal/us.yaml"
 install -Dm644 systemd/omamobile-nfc-open.service "$destination/usr/lib/systemd/system/omamobile-nfc-open.service"
 install -Dm644 systemd/user/omarchy-fcitx5-omamobile.conf "$destination/usr/lib/systemd/user/omarchy-fcitx5.service.d/omamobile.conf"
+# The permission sheet: the portal's Access backend, its D-Bus activation and
+# the portals.conf that picks it under Hyprland (omamobile.access shows it).
+install -Dm644 portal/omamobile.portal "$destination/usr/share/xdg-desktop-portal/portals/omamobile.portal"
+install -Dm644 portal/hyprland-portals.conf "$destination/etc/xdg/xdg-desktop-portal/hyprland-portals.conf"
+install -Dm644 portal/org.freedesktop.impl.portal.desktop.omamobile.service \
+  "$destination/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.omamobile.service"
+install -Dm644 systemd/user/omamobile-portal-access.service "$destination/usr/lib/systemd/user/omamobile-portal-access.service"
 install -Dm644 polkit/49-omamobile-admin-self.rules "$destination/usr/share/polkit-1/rules.d/49-omamobile-admin-self.rules"
 install -Dm644 applications/omamobile-open-intent.desktop "$destination/usr/share/applications/omamobile-open-intent.desktop"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-shell/LICENSE"

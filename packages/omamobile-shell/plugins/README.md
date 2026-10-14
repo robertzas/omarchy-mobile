@@ -20,6 +20,7 @@ logical at scale 3).
 | `omamobile.fingerprint` | `panel` (keepLoaded) | Fingerprint target over the sensor during verification, desktop guard, and the enrollment screen |
 | `omamobile.keyboard` | `panel` (keepLoaded) | A hide button right above the on-screen keyboard while it is up (also over the lock) |
 | `omamobile.update` | `panel` (keepLoaded) | The update sheet: Omarchy's update for a phone, in place of its terminal update |
+| `omamobile.access` | `panel` (keepLoaded) | The permission sheet: xdg-desktop-portal's "Allow Camera to use the camera?", in place of GTK's desktop dialog |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
 
 ## Enabling
@@ -633,6 +634,58 @@ Omarchy's update).
 
 IPC: `omarchy-shell shell call omamobile.update snapshot ''` (page, step,
 result; never the PIN).
+
+## omamobile.access
+
+The question xdg-desktop-portal asks before an app first uses the camera, the
+location, screenshots or the wallpaper (and before a sandboxed app runs in
+the background). xdg-desktop-portal-gtk asked it with a 476x920 desktop dialog
+that touch didn't reach; the phone asks with a bottom sheet: the app's icon
+(from its `.desktop` file) with the permission's glyph, the question in
+sentence case ("Allow Camera to use the camera?"), the portal's reason, and
+two full-width 56 px buttons, Allow over Don't allow (or the caller's
+`grant_label`/`deny_label`, "Grant access"/"Deny access" for location).
+
+* **The backend** is `omamobile-portal-access`, a small Python D-Bus service
+  (`org.freedesktop.impl.portal.desktop.omamobile`, user unit
+  `omamobile-portal-access.service`, started by D-Bus activation).
+  `/etc/xdg/xdg-desktop-portal/hyprland-portals.conf` sets
+  `org.freedesktop.impl.portal.Access=omamobile;gtk`; xdg-desktop-portal 1.22
+  reads it before `/usr/share/xdg-desktop-portal/hyprland-portals.conf` and
+  falls through to that file for every other interface, so its
+  `default=hyprland;gtk` still holds (portals.conf(5)). A user's own
+  `~/.config/xdg-desktop-portal/hyprland-portals.conf` comes first and can
+  pick another backend.
+* **The round trip:** `AccessDialog` in; `omarchy-shell lock isLocked` (a
+  locked phone gets no sheet); `omarchy-shell shell call omamobile.access
+  request '<json>'`; a tap runs `busctl --user call
+  org.freedesktop.impl.portal.desktop.omamobile /org/omamobile/AccessSheet
+  org.omamobile.AccessSheet Answer ss <id> allow|deny`; the service answers
+  the portal with response 0 (Allow) or 1 (Don't allow) and the `choices`
+  results at their defaults (no 1.22 portal passes any).
+* **What is remembered:** the portal stores every response as the app's
+  permission (0 as yes, anything else as no; `busctl --user call
+  org.freedesktop.impl.portal.PermissionStore ... Lookup ss devices camera`
+  shows them). So only a tap gives a response. No answer in 90 s, a locked
+  phone, a shell that can't show the sheet, or the app closing its request
+  gives the portal a D-Bus error instead: that request is denied, nothing is
+  stored, and the app asks again next time. The sheet goes away with it
+  (`shell call omamobile.access dismiss '{"id": ...}'`).
+* **Where it draws:** the overlay layer, over apps, the bar and quick
+  settings, but never over the lock screen (no `above_lock` rule): a sheet
+  open when the phone locks waits under the lock until its 90 s run out.
+  Requests queue, one sheet at a time. The scrim ignores taps: the question
+  needs an answer. A shell restart loses the queue; the service's timeout
+  ends those requests.
+
+IPC: `omarchy-shell shell call omamobile.access snapshot ''`.
+
+Tests: `test/portal-access.py` (the rewording, the `.desktop` lookup, and the
+service on a private bus against a fake `omarchy-shell`: Allow, Don't allow,
+choices, timeout, Close, locked, no shell), `test/access-model.js`, and
+`test/access-render`, offscreen review shots in the OWL container (see its
+header; `test/all` runs it when `OMAMOBILE_ACCESS_RENDER` names an output
+directory).
 
 ## Testing in the desktop harness
 

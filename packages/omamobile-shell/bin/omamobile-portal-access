@@ -1,0 +1,345 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Omarchy Mobile's permission sheet: org.freedesktop.impl.portal.Access.
+
+xdg-desktop-portal asks its Access backend before an app first uses the
+camera, the location, screenshots, the wallpaper or the background ("Allow
+Camera to Use the Camera?"). xdg-desktop-portal-gtk answers with a desktop
+dialog that doesn't fit a 480 px phone and that touch didn't reach. This
+service answers instead, through the omamobile.access sheet in the shell:
+
+  portal -> AccessDialog(handle, app_id, parent, title, subtitle, body, options)
+  here   -> `omarchy-shell lock isLocked` (no sheet on the lock screen), then
+            `omarchy-shell shell call omamobile.access request '<json>'`
+  sheet  -> busctl --user call ... org.omamobile.AccessSheet Answer ss <id> allow|deny
+  here   -> response 0 (allow) or 1 (don't allow), results {"choices": [...]}
+
+Only a tap answers with a response. The portal stores any response as the
+app's permanent permission (0 as "yes", anything else as "no"), so a
+timeout, a sheet the shell can't show, a locked phone or the app closing
+its request answers with a D-Bus error instead: the portal denies that one
+request and stores nothing, and the app asks again next time.
+
+Environment, for the tests: OMAMOBILE_ACCESS_SHELL (the omarchy-shell to
+call), OMAMOBILE_ACCESS_TIMEOUT (seconds before the sheet gives up),
+XDG_DATA_DIRS / XDG_DATA_HOME (where app .desktop files are found).
+"""
+
+import configparser
+import json
+import os
+import re
+import secrets
+import signal
+import sys
+
+BUS_NAME = "org.freedesktop.impl.portal.desktop.omamobile"
+PORTAL_PATH = "/org/freedesktop/portal/desktop"
+ACCESS_IFACE = "org.freedesktop.impl.portal.Access"
+REQUEST_IFACE = "org.freedesktop.impl.portal.Request"
+SHEET_PATH = "/org/omamobile/AccessSheet"
+SHEET_IFACE = "org.omamobile.AccessSheet"
+PLUGIN = "omamobile.access"
+ERROR = "org.freedesktop.portal.Error.Failed"
+DEFAULT_TIMEOUT = 90
+
+# The portal's symbolic icon names -> a glyph in the shell's font.
+GLYPHS = {
+    "camera-web-symbolic": "󰄀",
+    "camera-photo-symbolic": "󰄀",
+    "find-location-symbolic": "󰍎",
+    "preferences-desktop-wallpaper-symbolic": "󰸉",
+    "applets-screenshooter-symbolic": "󰹑",
+    "audio-input-microphone-symbolic": "󰍬",
+}
+DEFAULT_GLYPH = "󰒃"
+
+
+# ---------------------------------------------------------------- pure helpers
+
+def sentence_case(text, keep=""):
+    """Title Case -> sentence case, sparing `keep` (the app's name) and any
+    word that isn't plain Capitalized (GNOME, iPhone, URLs)."""
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    parts = text.split(keep, 1) if keep and keep in text else [text]
+    out = []
+    for index, part in enumerate(parts):
+        def lower(match, first=(index == 0)):
+            word = match.group(0)
+            if first and match.start() == 0:
+                return word
+            return word.lower() if re.fullmatch(r"[A-Z][a-z]+(['’][a-z]+)?", word) else word
+        out.append(re.sub(r"[A-Za-z]+(?:['’][a-z]+)?", lower, part))
+    return keep.join(out)
+
+
+def phone_title(title, app_name):
+    """"Allow Camera to Use the Camera?" -> "Allow Camera to use the camera?"."""
+    text = sentence_case(title, keep=app_name)
+    if text.startswith("Allow to "):  # the portal's title for an app without an id
+        text = "Allow an app to " + text[len("Allow to "):]
+    return text or ("Allow %s?" % app_name if app_name else "Allow this?")
+
+
+def phone_body(subtitle, body):
+    """The subtitle as a sentence, and the portal's "can be changed from the
+    privacy settings" (the phone has no such page) as what is true here."""
+    lines = []
+    sub = str(subtitle or "").strip()
+    if sub:
+        lines.append(sub if sub[-1] in ".!?" else sub + ".")
+    text = str(body or "").strip()
+    if text:
+        if re.search(r"can be changed at any time from the .*settings", text, re.I):
+            lines.append("Your choice is remembered for this app.")
+        else:
+            lines.append(text if text[-1] in ".!?" else text + ".")
+    return "\n".join(lines)
+
+
+def labels(options):
+    """(deny, grant) button labels: the caller's, in sentence case, or ours."""
+    deny = str(options.get("deny_label") or "").strip()
+    grant = str(options.get("grant_label") or "").strip()
+    return (sentence_case(deny) or "Don't allow", sentence_case(grant) or "Allow")
+
+
+def glyph_for(icon):
+    return GLYPHS.get(str(icon or ""), DEFAULT_GLYPH)
+
+
+def default_choices(choices):
+    """The choices' initial values, as the results' a(ss). The sheet shows
+    no choice controls (no portal in 1.22 passes any), so the defaults go back."""
+    out = []
+    for choice in choices or []:
+        try:
+            ident, _label, _options, initial = choice
+        except (TypeError, ValueError):
+            continue
+        out.append((str(ident), str(initial)))
+    return out
+
+
+def answer_reply(answer, choices):
+    """A tap -> (response, results), or None for anything else."""
+    if answer == "allow":
+        response = 0
+    elif answer == "deny":
+        response = 1
+    else:
+        return None
+    results = {}
+    picked = default_choices(choices)
+    if picked:
+        results["choices"] = picked
+    return response, results
+
+
+def data_dirs():
+    home = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local/share")
+    dirs = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
+    return [home] + [d for d in dirs.split(":") if d]
+
+
+def app_info(app_id):
+    """(name, icon) from the app's .desktop file, or ("", "") without one."""
+    app_id = str(app_id or "")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", app_id):
+        return "", ""
+    for base in data_dirs():
+        path = os.path.join(base, "applications", app_id + ".desktop")
+        if not os.path.isfile(path):
+            continue
+        parser = configparser.RawConfigParser(strict=False, interpolation=None)
+        parser.optionxform = str
+        try:
+            parser.read(path, encoding="utf-8")
+            entry = parser["Desktop Entry"]
+        except (configparser.Error, KeyError, UnicodeDecodeError):
+            continue
+        return entry.get("Name", "").strip(), entry.get("Icon", "").strip()
+    return "", ""
+
+
+def sheet_request(request_id, app_id, title, subtitle, body, options):
+    """What the sheet shows, as the JSON `request` takes."""
+    name, icon = app_info(app_id)
+    deny, grant = labels(options)
+    return {
+        "id": request_id,
+        "appId": str(app_id or ""),
+        "appName": name or str(app_id or "") or "An app",
+        "appIcon": icon,
+        "glyph": glyph_for(options.get("icon")),
+        "title": phone_title(title, name or str(app_id or "")),
+        "body": phone_body(subtitle, body),
+        "denyLabel": deny,
+        "grantLabel": grant,
+    }
+
+
+def shell_command():
+    explicit = os.environ.get("OMAMOBILE_ACCESS_SHELL")
+    if explicit:
+        return explicit
+    base = os.environ.get("OMARCHY_PATH") or "/usr/share/omarchy"
+    candidate = os.path.join(base, "bin", "omarchy-shell")
+    return candidate if os.path.exists(candidate) else "omarchy-shell"
+
+
+def shell_env():
+    env = dict(os.environ)
+    env.setdefault("OMARCHY_PATH", "/usr/share/omarchy")
+    return env
+
+
+# ---------------------------------------------------------------- D-Bus side
+
+def main():
+    import dbus
+    import dbus.mainloop.glib
+    import dbus.service
+    from gi.repository import Gio, GLib
+
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    bus = dbus.SessionBus()
+    loop = GLib.MainLoop()
+    timeout = float(os.environ.get("OMAMOBILE_ACCESS_TIMEOUT") or DEFAULT_TIMEOUT)
+
+    class Failed(dbus.DBusException):
+        _dbus_error_name = ERROR
+
+    pending = {}
+
+    def log(text):
+        sys.stderr.write(text + "\n")
+        sys.stderr.flush()
+
+    def run_shell(args, done):
+        """omarchy-shell ARGS, asynchronously; done(ok, stdout)."""
+        try:
+            proc = Gio.Subprocess.new([shell_command()] + args,
+                                      Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
+        except GLib.Error as error:
+            done(False, str(error))
+            return
+
+        def finished(proc, result):
+            try:
+                _ok, out, _err = proc.communicate_utf8_finish(result)
+            except GLib.Error as error:
+                done(False, str(error))
+                return
+            done(proc.get_successful(), (out or "").strip())
+
+        proc.communicate_utf8_async(None, None, finished)
+
+    class Handle(dbus.service.Object):
+        """The impl Request at the portal's handle: Close() when the app
+        gives up on its request."""
+
+        def __init__(self, path, request_id):
+            dbus.service.Object.__init__(self, bus, path)
+            self.request_id = request_id
+
+        @dbus.service.method(REQUEST_IFACE, in_signature="", out_signature="")
+        def Close(self):
+            finish(self.request_id, None, "closed by the app")
+
+    def finish(request_id, answer, why=""):
+        entry = pending.pop(request_id, None)
+        if not entry:
+            return False
+        if entry["timer"]:
+            GLib.source_remove(entry["timer"])
+        try:
+            entry["handle"].remove_from_connection()
+        except (LookupError, KeyError, ValueError):
+            pass
+        reply = answer_reply(answer, entry["choices"])
+        if reply is None:
+            log("%s: not answered (%s)" % (entry["app_id"] or "an app", why))
+            if entry["shown"]:
+                run_shell(["shell", "call", PLUGIN, "dismiss", json.dumps({"id": request_id})], lambda ok, out: None)
+            entry["err"](Failed("The permission sheet was not answered: %s" % why))
+        else:
+            log("%s: %s" % (entry["app_id"] or "an app", answer))
+            response, results = reply
+            payload = {}
+            if "choices" in results:
+                payload["choices"] = dbus.Array([dbus.Struct(pair, signature="ss") for pair in results["choices"]],
+                                                signature="(ss)")
+            entry["ok"](dbus.UInt32(response), dbus.Dictionary(payload, signature="sv"))
+        return True
+
+    class Portal(dbus.service.Object):
+        @dbus.service.method(ACCESS_IFACE, in_signature="osssssa{sv}", out_signature="ua{sv}",
+                             async_callbacks=("ok", "err"))
+        def AccessDialog(self, handle, app_id, parent_window, title, subtitle, body, options, ok, err):
+            request_id = secrets.token_hex(8)
+            try:
+                handle_obj = Handle(str(handle), request_id)
+            except Exception as error:  # a second object at the same path
+                err(Failed("Can't export the request: %s" % error))
+                return
+            request = sheet_request(request_id, str(app_id), str(title), str(subtitle), str(body), dict(options))
+            entry = {"ok": ok, "err": err, "handle": handle_obj, "timer": 0, "shown": False,
+                     "app_id": str(app_id), "choices": options.get("choices", [])}
+            pending[request_id] = entry
+
+            def timed_out():
+                entry["timer"] = 0
+                finish(request_id, None, "timed out")
+                return False
+
+            entry["timer"] = GLib.timeout_add(int(timeout * 1000), timed_out)
+
+            def shown(okay, out):
+                if request_id not in pending:
+                    return
+                if okay and out == "ok":
+                    entry["shown"] = True
+                else:
+                    finish(request_id, None, "the shell can't show the sheet (%s)" % (out or "no shell"))
+
+            def lock_state(okay, out):
+                if request_id not in pending:
+                    return
+                if not okay:
+                    finish(request_id, None, "the shell isn't running")
+                elif out == "true":
+                    finish(request_id, None, "the phone is locked")
+                else:
+                    run_shell(["shell", "call", PLUGIN, "request", json.dumps(request)], shown)
+
+            run_shell(["lock", "isLocked"], lock_state)
+
+    class Sheet(dbus.service.Object):
+        @dbus.service.method(SHEET_IFACE, in_signature="ss", out_signature="b")
+        def Answer(self, request_id, answer):
+            if str(answer) not in ("allow", "deny"):
+                return False
+            return finish(str(request_id), str(answer))
+
+    Portal(bus, PORTAL_PATH)
+    Sheet(bus, SHEET_PATH)
+    name = dbus.service.BusName(BUS_NAME, bus, do_not_queue=True)  # noqa: F841 (held while we run)
+
+    try:
+        from gi.repository import GLibUnix
+        signal_add = GLibUnix.signal_add
+    except ImportError:
+        signal_add = GLib.unix_signal_add
+    signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, loop.quit)
+    signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, loop.quit)
+    loop.run()
+    for request_id in list(pending):
+        finish(request_id, None, "the service stopped")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

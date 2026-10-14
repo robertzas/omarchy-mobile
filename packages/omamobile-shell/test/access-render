@@ -1,0 +1,81 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Offscreen review shots of the permission sheet (omamobile.access), in a dark
+# and a light Omarchy theme, with checks on the buttons' size and place.
+# Runs inside the OWL conformance container (tests/owl/Dockerfile: Qt,
+# Quickshell, the fonts), never on a desktop:
+#
+#   docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src" \
+#     -v /usr/share/omarchy/themes:/themes:ro -v /usr/share/omarchy/shell:/omarchy-shell:ro \
+#     omamobile-owl-conformance:p1 bash /src/packages/omamobile-shell/test/access-render /src/logs/access-render
+#
+# test/all runs it when OMAMOBILE_ACCESS_RENDER names an output directory.
+set -euo pipefail
+out=${1:?Usage: access-render OUTDIR}
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+plugin=$here/../plugins/omamobile.access
+[[ -d /omarchy-shell && -d /themes ]] || { echo "access-render: needs /omarchy-shell and /themes (the container's mounts)" >&2; exit 2; }
+command -v quickshell >/dev/null || { echo "access-render: no quickshell" >&2; exit 2; }
+mkdir -p "$out" /tmp/xdg
+export XDG_RUNTIME_DIR=/tmp/xdg QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+
+h=/tmp/access-harness
+rm -rf "$h"; mkdir -p "$h"
+# Omarchy's Commons and Ui, with its palette qualified as on the phone
+# (Qt 6.12's QtQuick Color shadows a bare `Color.`; AGENTS.md, Userspace).
+for m in Commons Ui services; do cp -r "/omarchy-shell/$m" "$h/$m"; done
+find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
+  -e 's/(^|[^.[:alnum:]_])Color\./\1Commons.Color./g' \
+  -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
+for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
+cp -r "$plugin" "$h/access"
+cp "$here/access-render.qml" "$h/"
+magick -size 112x112 xc:none -fill '#3584e4' -draw 'roundrectangle 4,4 108,108 26,26' \
+  -fill white -draw 'circle 56,58 56,32' -fill '#3584e4' -draw 'circle 56,58 56,44' "$h/app-icon.png"
+
+status=0
+for theme in tokyo-night catppuccin-latte; do
+  home=/tmp/access-home-$theme
+  mkdir -p "$home/.local/state/omarchy/current"
+  ln -sfn "/themes/$theme" "$home/.local/state/omarchy/current/theme"
+  python3 - "$out" "$theme" "$h/app-icon.png" > "$h/job-$theme.json" <<'PY'
+import json, sys
+out, theme, icon = sys.argv[1:]
+def shot(name, **request):
+    base = {"id": "ab12cd34ef56ab78", "appName": "Camera", "appIcon": icon, "glyph": "󰄀",
+            "title": "Allow Camera to use the camera?",
+            "body": "Camera wants to access the camera.\nYour choice is remembered for this app.",
+            "denyLabel": "Don't allow", "grantLabel": "Allow"}
+    base.update(request)
+    return {"name": name, "png": "%s/access-%s-%s.png" % (out, name, theme), "request": base}
+print(json.dumps({"shots": [
+    shot("camera"),
+    shot("location", appName="Maps", appIcon="", glyph="󰍎", title="Allow Maps to access your location?",
+         body="Maps wants to use your location.\nYour choice is remembered for this app.",
+         denyLabel="Deny access", grantLabel="Grant access"),
+    shot("long", appName="A Very Long Application Name", appIcon="", glyph="󰒃",
+         title="Allow A Very Long Application Name to run in the background?",
+         body="A Very Long Application Name wants to be started automatically and run in the background.\nYour choice is remembered for this app."),
+]}))
+PY
+  HOME=$home QT_SCALE_FACTOR=3 ACCESS_JOB="$h/job-$theme.json" timeout 120 quickshell -p "$h/access-render.qml" > "$h/log-$theme" 2>&1 || true
+  grep -E "shot |geometry |Error|TypeError|ReferenceError" "$h/log-$theme" | sed -E 's/^.*(shot |geometry |Error|TypeError|ReferenceError)/\1/' | tee -a "$out/access-render.txt"
+  python3 - "$h/log-$theme" "$theme" <<'PY' || status=1
+import json, re, sys
+log, theme = sys.argv[1:]
+text = open(log).read()
+bad = [l for l in text.splitlines() if re.search(r"(TypeError|ReferenceError|is not a type|Error:)", l)]
+shots = re.findall(r"geometry (\S+) (\[.*\])", text)
+ok = len(shots) == 3 and not bad
+for name, geo in shots:
+    buttons = json.loads(geo)
+    fits = len(buttons) == 2 and all(b["h"] >= 56 and b["x"] >= 0 and b["x"] + b["w"] <= 480 and b["y"] + b["h"] <= 1040 for b in buttons)
+    stacked = len(buttons) == 2 and buttons[0]["y"] + buttons[0]["h"] <= buttons[1]["y"]
+    print("%s - %s %s: two buttons, at least 56 px, on screen, allow above deny" % ("ok" if fits and stacked else "not ok", theme, name))
+    ok = ok and fits and stacked
+for l in bad:
+    print("  " + l)
+sys.exit(0 if ok else 1)
+PY
+done
+exit $status
