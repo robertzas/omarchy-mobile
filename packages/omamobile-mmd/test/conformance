@@ -1,0 +1,24 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Conformance with real ModemManager clients, in a container (never on the
+# laptop's own buses, never a nested compositor): mmcli, GNOME Calls and
+# Chatty from Arch Linux's packages against omamobile-mmd -> omamobile-sitd ->
+# tools/sit-sim, on a private system bus, the GUI apps under Xvfb. Also runs
+# test/test_api.py against the container's ModemManager introspection XML.
+#   packages/omamobile-mmd/test/conformance
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.."
+image=omamobile-mmd-conformance:1
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  docker build -t "$image" - <<'DOCKERFILE'
+FROM archlinux:latest
+RUN pacman -Syu --noconfirm --needed modemmanager gnome-calls chatty python-gobject dbus \
+      xorg-server-xvfb libmm-glib procps-ng which && pacman -Scc --noconfirm
+DOCKERFILE
+fi
+docker run --rm -e CONFORMANCE_LOGS -v "$PWD:/src:ro" "$image" bash -c '
+  set -e
+  pacman -Q modemmanager gnome-calls chatty libmm-glib | sed "s/^/# /"
+  cd /src/packages/omamobile-mmd/test
+  PYTHONDONTWRITEBYTECODE=1 python3 -W ignore -m unittest test_api 2>&1 | tail -1 | sed "s/^/# test_api against the installed XML: /"
+  PYTHONDONTWRITEBYTECODE=1 python3 -W ignore conformance.py'

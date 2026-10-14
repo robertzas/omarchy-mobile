@@ -1,0 +1,15 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-mmd into DESTDIR. Enables nothing.
+#   ./install DESTDIR
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+d=${1:?Usage: ./install DESTDIR}
+[[ $d == /* && $d != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+install -Dm755 bin/omamobile-mmd "$d/usr/bin/omamobile-mmd"
+for f in lib/*.py; do install -Dm644 "$f" "$d/usr/lib/omamobile-mmd/${f#lib/}"; done
+install -Dm644 systemd/omamobile-mmd.service "$d/usr/lib/systemd/system/omamobile-mmd.service"
+install -Dm644 dbus/org.freedesktop.ModemManager1.conf "$d/usr/share/dbus-1/system.d/org.freedesktop.ModemManager1.conf"
+install -Dm644 polkit/org.freedesktop.ModemManager1.policy "$d/usr/share/polkit-1/actions/org.freedesktop.ModemManager1.policy"
+install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-mmd/LICENSE"
+install -Dm644 version "$d/usr/share/omamobile/mmd/version"

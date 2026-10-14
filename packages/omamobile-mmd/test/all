@@ -1,0 +1,46 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omamobile-mmd: the interface tables against ModemManager's XML
+# (when installed, or MM_INTROSPECTION_DIR), the bridge against a fake
+# omamobile-sitd on a private D-Bus daemon (never the machine's own bus),
+# libmm-glib as a client (when its typelib is installed), the whole chain
+# down to tools/sit-sim (from the repository only), then the staged layout.
+# test/conformance runs mmcli, GNOME Calls and Chatty in a container.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+export PYTHONDONTWRITEBYTECODE=1
+
+bash -n install || fail "install parses"
+for f in bin/* lib/*.py test/*.py; do
+  python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$f" || fail "$f parses"
+done
+pass "scripts parse"
+
+command -v dbus-daemon >/dev/null || fail "dbus-daemon (package dbus) is needed for the tests"
+out=$(cd test && python3 -W ignore -m unittest -v test_api test_bridge test_libmm test_chain 2>&1) || {
+  printf '%s\n' "$out" | grep -v -e Deprecat -e EventLoopPolicy | tail -40; fail "unit and bus tests"; }
+skips=$(printf '%s\n' "$out" | grep -c "skipped '" || true)
+pass "API, bridge, libmm-glib and chain tests$( ((skips)) && echo " (# SKIP $skips: $(printf '%s\n' "$out" | grep -o "skipped '[^']*'" | sort -u | tr '\n' ' '))")"
+
+stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
+./install "$stage"
+for f in usr/bin/omamobile-mmd usr/lib/omamobile-mmd/bridge.py usr/lib/omamobile-mmd/mm_api.py \
+         usr/lib/systemd/system/omamobile-mmd.service \
+         usr/share/dbus-1/system.d/org.freedesktop.ModemManager1.conf \
+         usr/share/polkit-1/actions/org.freedesktop.ModemManager1.policy \
+         usr/share/licenses/omamobile-mmd/LICENSE; do
+  [[ -e $stage/$f ]] || fail "staged $f"
+done
+python3 "$stage/usr/bin/omamobile-mmd" --help >/dev/null || fail "the staged daemon imports its library"
+# Nothing may make the bridge start the modem: no Requires/Wants/BindsTo on
+# the modem side, no D-Bus activation file.
+grep -E '^(Requires|Wants|BindsTo|Requisite)=' systemd/omamobile-mmd.service && fail "the unit pulls something in"
+[[ -z $(find "$stage" -path '*dbus-1/system-services*' -print -quit) ]] || fail "no D-Bus activation file"
+grep -qx 'Conflicts=ModemManager.service' systemd/omamobile-mmd.service || fail "the unit conflicts with ModemManager"
+if command -v systemd-analyze >/dev/null; then
+  systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/omamobile-mmd.service" 2>&1 |
+    grep -v -e 'not executable' -e 'No such file' -e 'omamobile-sitd.service' -e '^$' && fail "unit verify" || true
+fi
+pass "staged layout and unit"

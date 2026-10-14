@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+pkgname=omamobile-mmd
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omarchy Mobile ModemManager-compatible bridge: org.freedesktop.ModemManager1 served from omamobile-sitd"
+arch=(aarch64)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(python python-gobject glib2 dbus polkit 'omamobile-modem-sit>=0.3.0')
+checkdepends=(dbus)
+# It owns ModemManager's bus name and ships its bus policy and polkit
+# actions. Nothing in Arch or Arch Linux ARM hard-depends on modemmanager
+# (gnome-calls, chatty, networkmanager, geoclue: libmm-glib only; mmsd-tng
+# is AUR-only, libmm-glib too), so there is no provides=.
+conflicts=(modemmanager)
+install=omamobile-mmd.install
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}

@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: MIT
+# omamobile-mmd: ModemManager's D-Bus API (org.freedesktop.ModemManager1) in
+# front of omamobile-sitd. Not enabled by the package. It never starts sitd
+# or the modem: it only serves what sitd's socket offers, and shows no modem
+# until sitd is up. Enabled, it starts with omamobile-sitd (WantedBy below).
+# There is no D-Bus activation file, so no client can start it either.
+[Unit]
+Description=Omarchy Mobile ModemManager-compatible bridge (omamobile-sitd on D-Bus)
+After=dbus.service omamobile-sitd.service
+Conflicts=ModemManager.service
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.ModemManager1
+ExecStart=/usr/bin/omamobile-mmd
+Restart=on-failure
+RestartSec=5
+# Root, as ModemManager: the bus policy lets only root own the name. No
+# capabilities, devices or network: a D-Bus connection and sitd's socket.
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=omamobile-sitd.service

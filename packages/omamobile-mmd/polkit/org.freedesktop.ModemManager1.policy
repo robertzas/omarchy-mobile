@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- omamobile-mmd checks ModemManager's action IDs, so polkit rules written for
+     ModemManager mean the same here. Defaults as ModemManager built with
+     -Dpolkit=permissive: the active local session may use the phone without a
+     password prompt; Control and Firmware need an administrator. -->
+<policyconfig>
+  <vendor>Omarchy Mobile</vendor>
+  <vendor_url>https://github.com/derekross/omarchy-mobile</vendor_url>
+  <icon_name>phone</icon_name>
+  <action id="org.freedesktop.ModemManager1.Control">
+    <description>Control the modem manager</description>
+    <message>Authentication is required to control the modem manager</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+  <action id="org.freedesktop.ModemManager1.Device.Control">
+    <description>Control the modem: radio on and off, network and SIM settings</description>
+    <message>Authentication is required to control the modem: radio on and off, network and SIM settings</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+  <action id="org.freedesktop.ModemManager1.Contacts">
+    <description>Read and change the contacts stored on the modem</description>
+    <message>Authentication is required to read and change the contacts stored on the modem</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+  <action id="org.freedesktop.ModemManager1.Messaging">
+    <description>Send, store and delete text messages</description>
+    <message>Authentication is required to send, store and delete text messages</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+  <action id="org.freedesktop.ModemManager1.Voice">
+    <description>Place, answer and end phone calls</description>
+    <message>Authentication is required to place, answer and end phone calls</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+  <action id="org.freedesktop.ModemManager1.Time">
+    <description>Read the time from the mobile network</description>
+    <message>Authentication is required to read the time from the mobile network</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+  <action id="org.freedesktop.ModemManager1.Location">
+    <description>Read the location from the modem</description>
+    <message>Authentication is required to read the location from the modem</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+  <action id="org.freedesktop.ModemManager1.USSD">
+    <description>Send USSD codes to the mobile network</description>
+    <message>Authentication is required to send USSD codes to the mobile network</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+  <action id="org.freedesktop.ModemManager1.CellBroadcast">
+    <description>Read and delete cell broadcast messages</description>
+    <message>Authentication is required to read and delete cell broadcast messages</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+  <action id="org.freedesktop.ModemManager1.Firmware">
+    <description>Change the modem firmware</description>
+    <message>Authentication is required to change the modem firmware</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

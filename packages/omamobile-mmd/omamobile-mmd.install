@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+post_install() {
+  echo "omamobile-mmd: installed, not enabled. It serves ModemManager's D-Bus API"
+  echo "  from omamobile-sitd and never starts the modem. Enabled, it starts with"
+  echo "  omamobile-sitd (MODEM-PLAN T1)."
+}
+post_upgrade() {
+  systemctl daemon-reload 2>/dev/null || true
+}
+pre_remove() {
+  systemctl disable --now omamobile-mmd.service 2>/dev/null || true
+}
