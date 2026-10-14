@@ -77,10 +77,12 @@ case $tile in
     if [ "$want" = on ]; then exec omarchy-toggle-idle stay-awake; else exec omarchy-toggle-idle allow-idle; fi
     ;;
   screen-record)
+    # omamobile-screenrecord: Omarchy's gpu-screen-recorder can't drive the
+    # phone's Mali (Mesa) GPU; this records with wf-recorder instead.
     if [ "$want" = on ]; then
-      exec omarchy-capture-screenrecording --fullscreen
+      exec omamobile-screenrecord start ${3:-}
     else
-      exec omarchy-capture-screenrecording --stop-recording
+      exec omamobile-screenrecord stop
     fi
     ;;
   mobile-data)

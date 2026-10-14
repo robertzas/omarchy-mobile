@@ -1,7 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Camera plan (cheetah / gs201): raw capture first, then libcamera
 
-Status (2026-10-13, evening): **the ultrawide works end to end through
+Status (2026-10-14, night): **the front camera works end to end** (F.5
+raw, F.7 libcamera; CAM-M.5k section), the ultrawide unchanged. **Both
+C-PHY cameras (main, telephoto) stream on their links, but the WDMA
+writes none of their VC 0 data** (syncs only, then `LASTADDR`), after
+matching a working set-up's link, PHY, WDMA and sensor control values;
+telephoto T.1-T.4 passed, its lens NACKs. Kernel: int `8830971ff` =
+`7.3.0-rc6-omamobile-push1-00486-g8830971ffddb`, overlays as
+`device.conf` (now with `camera-tele`). Earlier status (2026-10-13, evening): **the ultrawide works end to end through
 libcamera (CAM5). The other three cameras are built offline and wait for
 the phone: main (Samsung S5KGN1, C-PHY, link 1; runbook CAM-M), front
 (Samsung S5K3J1, D-PHY, link 0; CAM7) and telephoto (Samsung S5KGM5,
@@ -3093,6 +3100,116 @@ tools/camera-stage --watchdog x --cmd 'modprobe sec_acpm; modprobe gpio_s2mpg13;
 tools/phone-ssh 'modprobe phy_gs201_mipi_dcphy_rx; modprobe gs201_csis; sleep 1; dmesg | grep "link 0 ->"; for d in /dev/media*; do media-ctl -d $d -p | grep -E "s5k3j1|link 0"; done'
 #   pass: "link 0 -> WDMA context 0, 4 D-PHY data lanes"; "s5k3j1 N-0010" -> "gs201-csis link 0"
 ```
+
+### CAM-M.5k and F.4: overnight runs (2026-10-13/14). Risk: medium (DMA)
+
+One DMA attempt a fresh boot throughout. Kernel commits on
+`omamobile-camera` (all bring-up parameters, defaults unchanged, W=1
+clean), each merged into `omamobile-int` and pushed:
+
+| Commit | Parameter |
+|---|---|
+| `d35fc97cf` | gs201_csis `wdma_late=N` (enable the channel from the link interrupt at the Nth link frame end), `cmn_cfg_csis1=0` (leave DMA common 0x48 alone; its value is logged) |
+| `09f7627b4` | gs201_csis `wdma_recover=1` (channel off at an error, on again at the next link frame end) |
+| `04d6c778a` | gs201_csis `wdma_after_link=1`, `data_ctrl_clear=1`, `qurgent=0` (order and values of a set-up known to capture this camera) |
+| `6359944ae` | gs201_csis `link_rmw=1` (read-modify-write the common control and channel configs; the values after the soft reset are logged) |
+| `6f85a34bc` | gs201_csis `int0_mask=`; s5kgn1 `basic_ctrls=1` (no digital gain or zero test pattern writes) |
+| `420da1faa` | s5kgn1 `extra_regs="addr=val,..."` (writes after the mode tables) |
+
+Results, all VC 0, 2016x1136, `PATTERN=0` unless said (logs
+`logs/camera-20261013-21*.log`):
+
+- **F.4 passed** (int `0db95c439`, 00470): "link 0: D-PHY 4 lanes at
+  1665024000 bps, settle 8"; FS/FE 147 in 5 s (30 fps); link errors 148,
+  INT0 b3 (`ERR_WRONG_CONFIG`) only, once a frame, as on the ultrawide.
+- **M.5j-2 (octa, same boot as F.4, 00470): fails differently.** WDMA
+  done 1, errors 152: b14 (`LASTDATA`) x151, b15 x148; WDMA FS 2, FE 1;
+  the first error came before the sensor's stream-on returned.
+- **wdma_late=2 (00472):** "WDMA started at link frame end 2"; the first
+  error in the next frame after hundreds of line ends ("so far ... lines
+  618", interrupt-coalesced, a lower bound; M.5h: 5); WDMA FS 1 in the run.
+  **The early start explained the "five line ends", not the failure.**
+- **cmn_cfg_csis1=0 (00472):** "DMA common 0x48 was 0x00000100" on a fresh
+  boot: our write never changed it. Same failure.
+- **wdma_recover=1 (00474):** errors at link frames 3, 4 and 5, then the
+  channel took no frame start and raised no error for the rest of the run:
+  switching the enable bit off and on doesn't revive it.
+- **The reference set-up's WDMA order and values together** (00476:
+  `wdma_late=1 wdma_after_link=1 data_ctrl_clear=1 qurgent=0 wdma_ctrl=3
+  lrte_config=0x7fff7fff`): same failure. Data control read 0, QURGENT 0.
+- **+ link_rmw=1** (00478): the link after its soft reset reads CMN_CTRL
+  0x00004000, ISP_CONFIG 0x000n00fc (VC n, data type 0x3f), DBG 0: nothing
+  for read-modify-write to keep. Same failure.
+- **+ int0_mask=0** (00480, no link error interrupts; 288 instead of
+  ~21000): same failure.
+- **+ s5kgn1 basic_ctrls=1, frame length 14528 (even)** (00480): same
+  failure.
+
+- **s5kgn1 extra_regs=0x0312=2,0x0342=6000** (00482, half the output
+  rate, 30 fps at frame length 7264: the frame rate confirms the line
+  length took effect): same failure ("so far ... lines 426"). **0x0342=6000
+  alone** (twice the horizontal blanking at the full link rate): same
+  ("lines 443"). Not the line timing.
+- **wdma_late=1 extra_lines=1136** (double height, 00482): same failure.
+- **keep_failed=1 wdma_recover=1, bars, cached_buffers=0** (00486): the
+  buffer the error ended is **all zeros**: the WDMA wrote no data at all.
+  The DMA block's debug counters (0x100 = 1; context 0's line/data count
+  at 0x154) read lines 0x39-0x53, data 0-0x65 at the first error; frames
+  0x90 at stop (the counter sees every frame). The sensor powered before
+  the link (`PRE_STREAM`: runtime PM control "on"): same.
+- **The telephoto fails the same way (T.5, below)**: both C-PHY cameras,
+  neither D-PHY camera.
+
+**Why (offline):** with these, our link, PHY (per-trio registers read
+back identical: 0x1450, 9, 0x82b8, 1, 0x8600, 0x4000, 0x200, 0x638, 0x40,
+settle 7, 0x32, 0x1503, 0x32), WDMA and sensor controls match the set-up
+known to capture this camera, register for register, and the channel
+still loses a line end within its first frame. What is left: the timing
+on the wire (the sensor's output rate: 2716 Msps per trio by its output
+PLL) against the link-to-WDMA hand-over; the next test halved it (above): no change.
+So the C-PHY links' VC 0 data (and the telephoto's) never reaches memory
+while its syncs reach the WDMA; the ultrawide and the front (D-PHY) and
+the main camera's VC 1 stream (sparse lines) land. Next hypotheses, each
+one boot: SC_CON values other than 1 (`sc_con=2..7`: the "PDP mux" is the
+one known switch between syncs-only and data), CSIS sysreg 0x488 bits for
+the link (`sysreg_link_sel=1`), and the HAL's C-PHY link start (REA on
+`liblyric_hwl.so`: what it writes for a C-PHY context besides the common
+control).
+
+**CAM7 F.5-F.7 (2026-10-13, 00482/00486): the front camera works.**
+- **F.5 bars (00482, fresh boot):** "link 0 on: 1920x1368 ... 4 lanes ...
+  CAM 400000000 Hz, INT 400000000 Hz"; FS/FE 4, WDMA done 4, errors 0;
+  13 307 904 bytes; eight clean bars **starting at row 0, column 0**
+  (every even row equals row 600): channel 0's RAW10 filter drops the
+  leading 4224 words (question 12 answered).
+- **F.5 real image (same boot, `analogue_gain=256`, exposure 4716):** 8
+  frames, errors 0; p50 ~90, p99 ~830: a real scene (the room's ceiling
+  lamp, shelves, a microphone, a monitor), GRBG debayer correct.
+- **F.7 (libcamera 0.7.2-4.6 + libcamera-tools installed for `cam`):**
+  `cam -l` lists four cameras (front `.../camera-sensor@10`, main `@3d`,
+  ultrawide `@1a`, telephoto `@2d`); `cam -c1 ... 1912x1368 RGB888`: 60
+  frames at 30.0 fps, WDMA errors 0; the picture right-coloured.
+- **Ultrawide regression (00486):** libcamera 60 frames at 30 fps, WDMA
+  errors 0; raw bars clean. The scene was black (black level 64 at the
+  longest exposure and gain 480: the rear cameras faced darkness tonight),
+  so its picture couldn't be judged.
+
+**CAM-T T.1-T.5 (2026-10-13, 00482-00486, overlay `camera-tele` added to
+`device.conf`):**
+- **T.1 passed:** gpp6-2, gpp7-0, gpp8-0/1 inputs, gpp8-2 output low
+  (torch HWEN), all unclaimed.
+- **T.2 passed:** "s5kgn1 3-002d: S5KGM5, model 0x08d5, vertical flip".
+- **T.3: the lens doesn't answer:** "sem1215 3-0034: Error reading reg
+  0x0201: -6", "no focus calibration (-6), range 0-1023". Stock powers
+  the SEM1215SA with the sensor's sequence; with only its own supplies it
+  NACKs [I]. Not needed for a picture; next: power it after the sensor.
+- **T.4 passed:** "link 4 -> WDMA context 0, 2 C-PHY trios, LRTE packet
+  delimiters"; "link 4: C-PHY 2 trios at 1802240000 sps, settle 7";
+  0x600 = 0xffff7fff; FS/FE 135 (30 fps); INT0 b3 only (~325 a frame: a
+  second stream, as on the main camera).
+- **T.5 (bars, fresh boot): fails like the main camera:** WDMA FS 1,
+  errors 223 (b14 x28, b15 x223), no data. (Without the lens driver loaded
+  the sensor's format couldn't be set: `LENS=1` is needed.)
 
 ### CAM5.3: ultrawide quick wins. Risk: low to medium
 

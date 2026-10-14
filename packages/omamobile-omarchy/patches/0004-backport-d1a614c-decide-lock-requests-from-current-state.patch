@@ -1,3 +1,6 @@
+# Refreshed against Omarchy 4.0.4 (edge 4.0.4-2) with 0000-0003 applied, so it
+# applies without fuzz (omamobile-omarchy-patches uses --fuzz=0); the changed
+# lines and the resulting file are the same as before.
 commit d1a614ce6629f33810c832c690b087586bd6f4c5
 Author: David Heinemeier Hansson <david@hey.com>
 Date:   Sun Oct 11 08:37:45 2026 +0200
@@ -16,7 +19,7 @@ diff --git a/shell/plugins/lock/Service.qml b/shell/plugins/lock/Service.qml
 index e6bc4ea..c775ba0 100644
 --- a/shell/plugins/lock/Service.qml
 +++ b/shell/plugins/lock/Service.qml
-@@ -57,6 +57,13 @@ Item {
+@@ -37,6 +37,13 @@
    property bool strandedLockResolved: false
  
    readonly property bool locked: lockRequested || sessionLock.locked || sessionLock.secure
@@ -28,9 +31,9 @@ index e6bc4ea..c775ba0 100644
 +    return lockRequested || sessionLock.locked || sessionLock.secure
 +  }
    readonly property bool authenticating: authenticatingPassword || fingerprintAuthenticating
-   readonly property var batteryService: shell && shell.services ? shell.firstPartyServiceFor("omarchy.battery") : null
-   readonly property bool powerSaverActive: batteryService ? batteryService.powerSaverOnBattery : false
-@@ -109,7 +116,7 @@ Item {
+ 
+   function realScreenCount() {
+@@ -85,7 +92,7 @@
      if (strandedLockResolved || strandedLockCheckProc.running) return
  
      // A lock this shell took is nobody's orphan.
@@ -39,7 +42,7 @@ index e6bc4ea..c775ba0 100644
        strandedLockResolved = true
        return
      }
-@@ -118,7 +125,7 @@ Item {
+@@ -94,7 +101,7 @@
    }
  
    function recoverStrandedLock() {
@@ -48,7 +51,7 @@ index e6bc4ea..c775ba0 100644
  
      strandedLock = false
      logEvent("lock-stranded: recovering")
-@@ -218,7 +225,7 @@ Item {
+@@ -149,7 +156,7 @@
    }
  
    function finishUnlock() {
@@ -57,7 +60,7 @@ index e6bc4ea..c775ba0 100644
  
      lockRequested = false
      pendingSessionLock = false
-@@ -688,7 +695,7 @@ Item {
+@@ -401,7 +408,7 @@
        root.strandedLockResolved = true
  
        // A lock taken while this was in flight is this shell's own.
@@ -66,7 +69,7 @@ index e6bc4ea..c775ba0 100644
        root.recoverStrandedLock()
      }
    }
-@@ -833,17 +840,17 @@ Item {
+@@ -529,17 +536,17 @@
  
      function lock(): string {
        if (!root.passwordPamConfigured) return "missing-pam"

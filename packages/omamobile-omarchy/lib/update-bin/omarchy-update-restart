@@ -1,0 +1,46 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile (on PATH only during omamobile-update): Omarchy's restart
+# step without its questions. Omarchy decides "kernel updated" when no
+# pacman-owned vmlinuz matches the running kernel; the phone's kernel isn't a
+# pacman package (bin/omamobile push writes boot_b), so that test would always
+# fire. The phone needs a restart when Omarchy asked for one or Hyprland was
+# replaced; services Omarchy marked are restarted and the shell too, as on a
+# desktop. Nothing reboots here: the update sheet offers the restart.
+out=${OMAMOBILE_UPDATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/omamobile-update}/restart.json
+reasons=() warnings=()
+
+modules=${OMAMOBILE_MODULES_DIR:-/usr/lib/modules}/$(uname -r)
+[[ -d $modules ]] || warnings+=("No modules for the running kernel in $modules")
+
+[[ -f $HOME/.local/state/omarchy/reboot-required ]] && reasons+=("Omarchy asked for a restart")
+
+pid=$(pgrep -x Hyprland | head -1)
+if [[ -n $pid ]] && [[ $(readlink "/proc/$pid/exe" 2>/dev/null) == *"(deleted)"* ]]; then
+  reasons+=("Hyprland was updated")
+fi
+
+for file in "$HOME"/.local/state/omarchy/restart-*-required; do
+  [[ -f $file ]] || continue
+  name=${file##*/}
+  service=${name#restart-}
+  service=${service%-required}
+  echo "Restarting $service"
+  omarchy-state clear "$name" || rm -f "$file"
+  "omarchy-restart-$service" || warnings+=("Restarting $service failed")
+done
+
+echo -e "\e[32m\nRestarting shell\e[0m"
+omarchy-restart-shell || true
+
+mkdir -p "${out%/*}"
+python3 -I - "$out" "${#reasons[@]}" "${reasons[@]}" "${warnings[@]}" <<'PY'
+import json, sys
+out, n = sys.argv[1], int(sys.argv[2])
+rest = sys.argv[3:]
+with open(out, "w") as f:
+    json.dump({"needs_reboot": n > 0, "reasons": rest[:n], "warnings": rest[n:]}, f)
+PY
+if (( ${#reasons[@]} )); then
+  echo "Restart the phone to finish: ${reasons[*]}"
+fi

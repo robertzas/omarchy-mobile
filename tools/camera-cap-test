@@ -37,6 +37,8 @@
 #                /tmp/cam-<W>x<H>.raw
 #   SECS=n       how long to stream (default 5)
 #   SENSOR_OPTS= sensor module parameters for one run (it is reloaded)
+#   PRE_STREAM=  a command run just before streaming ($SENSOR_DEV: the
+#                sensor's I2C device, e.g. 0-003d)
 #   CSIS_OPTS=   extra gs201_csis parameters for one experiment, e.g.
 #                "cam_khz=0" (no CAM DVFS vote: CAM3b.5a), "int_khz=0" or
 #                "sysreg_link_sel=1" (one per boot)
@@ -108,6 +110,14 @@ v4l2-ctl -d "$VIDEO" --set-fmt-video=width="$W",height="$H",pixelformat=$FOURCC 
 v4l2-ctl -d "$VIDEO" --get-fmt-video | grep -E "Width|Pixel Format|Bytes per Line|Size Image"
 
 DBG=$(ls -d /sys/kernel/debug/1a4$((4 + LINK))0000.csis 2>/dev/null | head -1)
+# PRE_STREAM=cmd: a bring-up command run just before streaming (e.g. power
+# the sensor up first through its runtime PM control); $SENSOR_DEV is its
+# I2C device name
+SENSOR_DEV=${SENSOR_ENT##* }
+if [ -n "${PRE_STREAM:-}" ]; then
+	say "pre-stream: $PRE_STREAM"
+	eval "$PRE_STREAM"
+fi
 if [ "$DMA" = 1 ]; then
 	OUT=/tmp/cam-${W}x${H}.raw
 	say "streaming $FRAMES frames to $OUT (DMA on, channel $CH)"

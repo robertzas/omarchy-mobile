@@ -448,8 +448,9 @@ Item {
     onTriggered: Quickshell.execDetached(["omarchy-capture-screenshot", "fullscreen"])
   }
 
-  // Screen recording through Omarchy's gpu-screen-recorder wrapper. Start
-  // puts the sheet away; a second tap (here or Omarchy's own) stops it.
+  // Screen recording through omamobile-screenrecord (wf-recorder; Omarchy's
+  // gpu-screen-recorder can't drive the phone's GPU). A tap while off opens
+  // the Screen record page to choose the sound; a tap while recording stops.
   QtObject {
     id: screenRecord
     readonly property bool available: root.probedHas("record")
@@ -458,10 +459,16 @@ Item {
     readonly property string status: !available ? "No recorder" : enabled ? "Recording" : "Off"
     function toggle() {
       if (!available) return
-      var start = !enabled
-      root.setOptimistic("screen-record", start)
-      if (start) root.dismiss()
-      Quickshell.execDetached(["sh", root.scriptPath("tile-action.sh"), "screen-record", start ? "on" : "off"])
+      if (!enabled) { root.openPage("record"); root.dismiss(); return }
+      root.setOptimistic("screen-record", false)
+      Quickshell.execDetached(["sh", root.scriptPath("tile-action.sh"), "screen-record", "off"])
+      probeLater.restart()
+    }
+    function start(audio) {
+      recordPanelItem.close()
+      root.setOptimistic("screen-record", true)
+      root.dismiss()
+      Quickshell.execDetached(["sh", root.scriptPath("tile-action.sh"), "screen-record", "on", audio])
       probeLater.restart()
     }
   }
@@ -543,13 +550,18 @@ Item {
 
   // One page at a time.
   function openPage(page) {
-    if (page === "wifi") {
-      bluetoothPanelItem.close()
-      wifiPicker.open()
-    } else {
-      wifiPicker.close()
-      bluetoothPanelItem.open()
-    }
+    if (page !== "wifi") wifiPicker.close()
+    if (page !== "bluetooth") bluetoothPanelItem.close()
+    if (page !== "record") recordPanelItem.close()
+    if (page === "wifi") wifiPicker.open()
+    else if (page === "bluetooth") bluetoothPanelItem.open()
+    else if (page === "record") recordPanelItem.open()
+  }
+
+  RecordPanel {
+    id: recordPanelItem
+    onBackRequested: root.backToSheet(recordPanelItem)
+    onStartRequested: function(audio) { screenRecord.start(audio) }
   }
 
   // A page's back glyph: close it and bring the sheet back.

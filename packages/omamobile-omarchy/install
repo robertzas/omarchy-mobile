@@ -1,0 +1,20 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-omarchy into DESTDIR. Activates nothing by itself: the pacman
+# hook applies the patch series after the package transaction.
+#   ./install DESTDIR
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+d=${1:?Usage: ./install DESTDIR}
+[[ $d == /* && $d != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+install -Dm755 bin/omamobile-omarchy-patches "$d/usr/bin/omamobile-omarchy-patches"
+install -Dm755 bin/omamobile-update "$d/usr/bin/omamobile-update"
+for f in lib/update-bin/*; do
+  install -Dm755 "$f" "$d/usr/lib/omamobile-omarchy/update-bin/${f##*/}"
+done
+for f in patches/*.patch; do
+  install -Dm644 "$f" "$d/usr/share/omamobile/omarchy/patches/${f##*/}"
+done
+install -Dm644 libalpm/95-omamobile-omarchy-patches.hook "$d/usr/share/libalpm/hooks/95-omamobile-omarchy-patches.hook"
+install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-omarchy/LICENSE"
+install -Dm644 version "$d/usr/share/omamobile/omarchy/version"

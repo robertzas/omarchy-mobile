@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Runs inside the Arch Linux ARM build container (privileged, for pacstrap's
 # mounts), started by tools/build-rootfs. Mounts:
-#   /src      this repository (read-only): rootfs/, patches/omarchy/
+#   /src      this repository (read-only): rootfs/
 #   /repo     out/repo (read-only): the signed [omamobile] repository
 #   /modules  the kernel modules tarball (read-only)
 #   /target   an empty volume: the root file system is assembled here
@@ -80,37 +80,24 @@ depmod -b "$T" -a "$KERNEL_RELEASE"
 # bin/omamobile push compares this with its tarball, so it won't push them again
 echo "$MODULES_SHA256" > "$T/usr/lib/modules/$KERNEL_RELEASE/.omamobile-tarball"
 
-say "Omarchy patches (patches/omarchy)"
-# The patches are against Omarchy's source tree (paths under
-# /usr/share/omarchy). Omarchy 4 installs some bin/ scripts in /usr/bin and
-# links them from bin/, and patch won't follow a link: point those paths at
-# the link's target, relative to the image's root.
-rebase_patch() {
-  local line path target
-  while IFS= read -r line; do
-    if [[ $line =~ ^(---|\+\+\+)\ ([a-z])/([^[:space:]]+)(.*)$ ]]; then
-      path=${BASH_REMATCH[3]} target=usr/share/omarchy/${BASH_REMATCH[3]}
-      if [[ -L $T/usr/share/omarchy/$path && $(readlink "$T/usr/share/omarchy/$path") == /* ]]; then
-        target=$(readlink "$T/usr/share/omarchy/$path"); target=${target#/}
-      fi
-      printf '%s %s/%s%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "$target" "${BASH_REMATCH[4]}"
-    else
-      printf '%s\n' "$line"
-    fi
-  done < "$1"
-}
-applied=() not_applied=()
-for p in /src/patches/omarchy/*.patch; do
-  n=${p##*/}
-  rebase_patch "$p" > /tmp/patch
-  if patch -d "$T" -p1 --forward --dry-run --silent < /tmp/patch >/dev/null 2>&1; then
-    patch -d "$T" -p1 --forward --silent --no-backup-if-mismatch < /tmp/patch >/dev/null
-    applied+=("$n")
-  else
-    not_applied+=("$n")
-  fi
-done
-echo "    applied: ${#applied[@]}, not applying: ${not_applied[*]:-none}"
+say "Omarchy patches (omamobile-omarchy)"
+# The same code path as every Omarchy upgrade on a phone: the package's pacman
+# hook already applied the series when pacstrap installed it; this runs it
+# again (a no-op when it is in place) and stops the build if it isn't, since
+# an image without the lock's PIN pad can't be unlocked by touch.
+applied=() upstream=()
+if [[ -x $T/usr/bin/omamobile-omarchy-patches ]]; then
+  arch-chroot "$T" omamobile-omarchy-patches apply --quiet ||
+    { arch-chroot "$T" omamobile-omarchy-patches status; tail -40 "$T/var/log/omamobile/omarchy-patches.log"; die "the Omarchy patch series does not apply"; }
+  status=$(arch-chroot "$T" omamobile-omarchy-patches status)
+  read -r -a applied <<<"$(sed -n 's/^applied: //p' <<<"$status")"
+  read -r -a upstream <<<"$(sed -n 's/^already in omarchy: //p' <<<"$status")"
+  echo "    applied: ${#applied[@]}, already in Omarchy: ${upstream[*]:-none}"
+elif [[ " $ALLOW_MISSING " == *" omamobile-omarchy "* ]]; then
+  echo "    omamobile-omarchy is missing (allowed): Omarchy is unpatched"
+else
+  die "omamobile-omarchy is not installed"
+fi
 
 say "Services"
 systemctl --root="$T" enable NetworkManager.service systemd-networkd.service systemd-resolved.service \
@@ -144,7 +131,7 @@ say "MANIFEST"
   echo "omarchy channel: $OMARCHY_CHANNEL"
   echo "kernel modules: $KERNEL_RELEASE (tarball sha256 $MODULES_SHA256)"
   echo "omarchy patches applied: ${applied[*]:-none}"
-  echo "omarchy patches not applied: ${not_applied[*]:-none}"
+  echo "omarchy patches already in omarchy: ${upstream[*]:-none}"
   echo "omarchy packages not built for aarch64: ${unavailable[*]:-none}"
   echo "omarchy packages skipped: ${skip[*]:-none}"
   echo "omamobile packages missing (allowed): ${skipped_ours[*]:-none}"

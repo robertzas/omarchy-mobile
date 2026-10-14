@@ -1,0 +1,88 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Screen recording on the phone, for the Screen record tile.
+#   omamobile-screenrecord start [mic|system|none]|stop|status
+# Omarchy's recorder (gpu-screen-recorder) supports AMD, Intel and NVIDIA GPUs
+# only; on the phone's Mali (Mesa) it stops with "unknown gpu vendor". This
+# records through the compositor's screencopy with wf-recorder and encodes on
+# the CPU (x264 ultrafast), at half the panel's resolution by default.
+# Settings: ~/.config/omamobile/screenrecord.conf, KEY=value lines (read as
+# data, never sourced), or the same names as OMAMOBILE_RECORD_* variables:
+#   AUDIO  mic (default: the built-in microphone, for narration), system (what
+#          the phone plays), none
+#   WIDTH  720 (default; "native" keeps the panel's size)
+#   FPS    30 (default)
+# Videos go to XDG_VIDEOS_DIR (default ~/Videos).
+set -euo pipefail
+
+state=${XDG_RUNTIME_DIR:-/tmp}/omamobile-screenrecord
+pidfile=$state/pid
+notify() {
+  if command -v omarchy-notification-send >/dev/null 2>&1; then omarchy-notification-send -t 3000 "$@"
+  elif command -v notify-send >/dev/null 2>&1; then notify-send -t 3000 "$@"; fi
+}
+running() { [[ -s $pidfile ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; }
+conf() { # conf KEY DEFAULT: the env var, else the config file, else DEFAULT
+  local env="OMAMOBILE_RECORD_$1" v=""
+  if [[ -n ${!env:-} ]]; then v=${!env}
+  elif [[ -r ${XDG_CONFIG_HOME:-$HOME/.config}/omamobile/screenrecord.conf ]]; then
+    v=$(sed -n "s/^[[:space:]]*$1=[\"']\{0,1\}\([^\"']*\)[\"']\{0,1\}[[:space:]]*\$/\1/p" \
+      "${XDG_CONFIG_HOME:-$HOME/.config}/omamobile/screenrecord.conf" | tail -1)
+  fi
+  echo "${v:-$2}"
+}
+
+case ${1:-} in
+  status)
+    running && echo on || echo off ;;
+  start)
+    running && { echo "already recording" >&2; exit 0; }
+    command -v wf-recorder >/dev/null || { notify "Screen recording needs wf-recorder"; exit 1; }
+    dir=${XDG_VIDEOS_DIR:-$HOME/Videos}
+    mkdir -p "$dir" "$state"
+    output=$(hyprctl monitors -j | python3 -c 'import json,sys
+m=json.load(sys.stdin); f=[x for x in m if x.get("focused")] or m
+print(f[0]["name"] if f else "")')
+    [[ -n $output ]] || { notify "Screen recording: no display found"; exit 1; }
+    width=$(conf WIDTH 720) fps=$(conf FPS 30) audio=${2:-$(conf AUDIO mic)}
+    [[ $audio == mic || $audio == system || $audio == none ]] || audio=mic
+    [[ $fps =~ ^[0-9]+$ ]] || fps=30
+    # HD video in BT.709, tagged as such. Untagged output left players
+    # guessing the color matrix, and the usual guess played it back duller.
+    # Full range, because wf-recorder marks the stream full range anyway
+    # (yuv420p(pc)): limited-range data under that flag would look washed out.
+    scale="scale=iw:ih"
+    if [[ $width != native ]]; then
+      [[ $width =~ ^[0-9]+$ ]] || width=720
+      scale="scale=$width:-2"
+    fi
+    filter=(-F "$scale:out_color_matrix=bt709:out_range=pc"
+      -p x264-params=colorprim=bt709:transfer=bt709:colormatrix=bt709:range=pc)
+    sound=() what="no sound"
+    case $audio in
+      mic) sound=(--audio) what="with the microphone" ;;   # PipeWire's default source: the built-in mic
+      system)
+        sink=$(pactl get-default-sink 2>/dev/null || true)
+        [[ -n $sink ]] && sound=(--audio="$sink.monitor") what="with the phone's sound" ;;
+    esac
+    file=$dir/screenrecording-$(date +%Y-%m-%d_%H-%M-%S).mp4
+    echo "$file" > "$state/file"
+    setsid wf-recorder -o "$output" -c libx264 -p preset=ultrafast -p crf=23 "${filter[@]}" -r "$fps" "${sound[@]}" \
+      -f "$file" -y </dev/null >"$state/log" 2>&1 &
+    echo $! > "$pidfile"
+    sleep 1
+    if running; then notify "Recording the screen, $what" "Tap Screen record again to stop"
+    else notify "Screen recording failed to start" "$(tail -1 "$state/log")"; rm -f "$pidfile"; exit 1; fi ;;
+  stop)
+    running || { rm -f "$pidfile"; exit 0; }
+    pid=$(cat "$pidfile")
+    kill -INT "$pid" 2>/dev/null || true
+    for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+    kill -0 "$pid" 2>/dev/null && kill -TERM "$pid" 2>/dev/null || true
+    rm -f "$pidfile"
+    file=$(cat "$state/file" 2>/dev/null || true)
+    if [[ -s $file ]]; then notify "Screen recording saved" "${file/#$HOME/\~}"
+    else notify "Screen recording failed" "$(tail -1 "$state/log" 2>/dev/null)"; fi ;;
+  *)
+    echo "usage: omamobile-screenrecord start [mic|system|none]|stop|status" >&2; exit 2 ;;
+esac

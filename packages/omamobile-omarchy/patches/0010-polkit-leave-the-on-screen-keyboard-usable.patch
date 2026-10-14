@@ -1,3 +1,9 @@
+# Polkit prompt usable with an on-screen keyboard: on the top layer with
+# OnDemand focus and normal exclusion, so squeekboard is drawn above it, gets
+# its touches and keeps its reserved area; the field is re-focused after a
+# wrong password so the keyboard shows again (FINGERPRINT-PLAN.md).
+#
+# Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4).
 diff --git i/shell/plugins/polkit/PolkitAgent.qml w/shell/plugins/polkit/PolkitAgent.qml
 index acd6514c..e98356dd 100644
 --- i/shell/plugins/polkit/PolkitAgent.qml

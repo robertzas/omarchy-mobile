@@ -15,8 +15,10 @@
 #   rootfs/packages.omamobile  ours, from out/repo (tools/build-packages), plus
 #                              the device package (PACKAGE in device.conf)
 # then adds the [omamobile] repository itself (file:///var/lib/omamobile/repo),
-# the kernel modules from the current kernel build, and Omarchy's pending
-# patches (patches/omarchy). Device packages are installed, not just cached:
+# and the kernel modules from the current kernel build. Omarchy's pending
+# patches come with omamobile-omarchy, whose pacman hook applies them as it
+# does after every Omarchy upgrade on a phone (build-inside checks that they
+# are in place). Device packages are installed, not just cached:
 # there is one device so far, and the first boot then has no package step
 # that can fail (RELEASES §12, decision 6).
 #

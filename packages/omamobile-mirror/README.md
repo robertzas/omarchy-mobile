@@ -30,7 +30,7 @@ On the computer, with the phone on the USB cable:
 ```sh
 tools/phone-mirror                     # mirror on, viewer open; closing the viewer turns it off
 tools/phone-mirror --keep              # leave mirroring on after the viewer closes
-tools/phone-mirror --viewer tigervnc --height 1000
+tools/phone-mirror --fit --height 1000      # the whole phone in a 461x1000 window (gamescope)
 ```
 
 On the phone (root over `tools/phone-ssh`, or the user in a terminal):
@@ -52,9 +52,35 @@ if there is none:
 
 | Viewer | Install (Arch) | Notes |
 | --- | --- | --- |
-| Remmina (preferred) | `sudo pacman -S remmina libvncserver` | scales the phone into a portrait window; the window title is "Omarchy Mobile phone" |
-| TigerVNC `vncviewer` | `sudo pacman -S tigervnc` | title "Omarchy Mobile phone - TigerVNC"; TigerVNC has no client-side scaling, so the 1440x3120 picture scrolls in the window |
-| `gvncviewer` | (gtk-vnc's example viewer) | last resort |
+| TigerVNC `vncviewer` (default) | `sudo pacman -S tigervnc` | fast, full quality; title "Omarchy Mobile phone - TigerVNC". It has no scaling, so the 1440x3120 picture scrolls in the window, unless `--fit` |
+| TigerVNC in gamescope (`--fit`) | `sudo pacman -S tigervnc gamescope` | the whole phone in the window: gamescope scales TigerVNC's full-screen 1440x3120 picture into the window on the computer's GPU and scales the mouse back |
+| `gvncviewer` | `sudo pacman -S gtk-vnc` | scales to the window, but slowly |
+| Remmina | `sudo pacman -S remmina libvncserver` | only with `--viewer remmina`; its VNC plugin rejects the frame ("Rect too large") |
+
+### Why the phone always sends 1440x3120
+
+The phone can't send a smaller picture with Hyprland 0.56, so scaling
+happens on the computer (`--fit`). Checked against the Hyprland v0.56.2
+source (commit efb5099, the build on the phone and laptop) and wayvnc
+v0.10.2:
+
+- Hyprland can make a headless output and mirror the panel into it at
+  another size: `hyprctl output create headless <name>` and
+  `hyprctl eval 'hl.monitor({ output = "<name>", mode = "720x1560", mirror = "<panel>" })'`.
+  But a mirrored output gets no `wl_output` global (ProtocolManager.cpp:
+  "mirrored outputs should have their global removed, as they are not
+  physical parts of the layout"; the global is skipped when the output
+  appears as a mirror, and removed if it becomes one later). wlr-screencopy
+  and ext-image-copy-capture name what they capture by `wl_output`, so
+  wayvnc can't see the mirror, let alone capture it.
+- wayvnc has no option to scale the picture (its options: `--output`,
+  `--max-fps`, `--disable-resizing`, `--desktop`, ...).
+- A headless output that is *not* a mirror is a second screen: Hyprland
+  gives it a workspace, the shell's bar and wallpaper appear on it, and
+  something (wl-mirror, fullscreen on it) would have to draw a scaled copy
+  of the panel there. wayvnc's pointer would then land on that copy, not
+  on the panel's apps: view-only, with a second screen the shell isn't
+  built for. Not done.
 
 ## Settings
 
@@ -148,14 +174,15 @@ tools/phone-ssh true && tools/phone-ssh 'systemctl stop fw-deadman.timer'   # a 
 
 ### What to expect
 
-Each frame is 1440x3120. wayvnc sends only the parts of the screen that
+Each frame is 1440x3120 (see above), with or without `--fit`. wayvnc sends only the parts of the screen that
 changed, so a still screen costs almost nothing, but a full-screen animation
 is a large update on the phone's CPU and the USB link. At the default
 30 fps limit expect a smooth-enough picture for demos with a delay of roughly
 a frame or two plus encoding time, and lower frame rates during full-screen
 scrolling. Input from the viewer is a mouse, not a touchscreen: a click is a
 tap, and drags work where the app accepts a mouse drag; multi-touch gestures
-don't. Hyprland may show a pointer on the phone while the viewer moves it.
+don't. Hyprland may show a pointer on the phone while the viewer moves it. With
+`--fit` the scaling costs the computer's GPU, not the phone's.
 Rotation changes the shared picture's shape; the viewer follows it.
 
 ## Notes

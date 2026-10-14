@@ -162,6 +162,36 @@ The same Alpine-based initramfs, with release differences:
 
 **What a bad kernel costs:** slot B has no A/B of its own. If the new images don't boot, ABL's retries run out and the phone falls back to stock Android on slot A (or, once the boot-success marker has marked slot B, needs fastboot). Recovery is the release bundle's installer with the previous bundle, or `fastboot flash <image>_b` with the saved images. That is the same exposure the project has today; making it smaller (a second set of images on spare space, or a boot counter in the initramfs) is a later step.
 
+### 5.4 Updating a phone: `omarchy update` and the Omarchy patches
+
+`omamobile-omarchy` (in every image built from 2026-10-13 on, and a dependency of `omamobile-shell`, so `omarchy update` brings it to older phones) owns both halves; the details are in the headers of its `bin/omamobile-update` and `bin/omamobile-omarchy-patches`.
+
+**The patches survive upgrades.** The series lives in `packages/omamobile-omarchy/patches` (`patches/omarchy` links there) and ships in the package. Its pacman hook (`95-omamobile-omarchy-patches.hook`, PostTransaction on `omarchy`, `omarchy-dev` and itself) re-applies it after every transaction that replaces Omarchy's files, and `rootfs/build-inside` runs the same tool, so image builds and upgrades take one code path. Every run starts from Omarchy's own files (checked against the package's mtree), applies the series in a scratch tree with `--fuzz=0`, verifies it by reversing it back to Omarchy's files, and only then swaps the files in. A patch whose reverse applies is already in Omarchy (a backport that landed): it is skipped and reported, and should be dropped from the series. Any other failure leaves Omarchy's files exactly as shipped, logs to `/var/log/omamobile/omarchy-patches.log` and notifies the user (the lock's PIN pad may be missing until a fixed series ships). A file that matches neither Omarchy's copy nor the last patched one was changed by something else and is never overwritten.
+
+**The update takes the phone's path.** Patch 0012 hands `omarchy update` to `omamobile-update`, which runs Omarchy's own `omarchy-update -y` unchanged, with stand-ins first on `PATH` for the steps that don't belong on a phone. Step by step:
+
+| Omarchy's step | On the phone |
+| --- | --- |
+| transcript (`script` to `/tmp/omarchy-update.log`) | kept; `omamobile-update` makes the pty itself, so one sudo timestamp covers the whole run |
+| update lock, 10 GiB free-space check | kept |
+| `omarchy-update-confirm` (gum) | replaced by the sheet's Update button, plus refusals: battery below 30% unless charging; `[omamobile]` not first or `[omarchy]` after Arch Linux ARM's repositories; a kernel, bootloader, Snapper or fwupd package in the transaction |
+| `omarchy-update-pkg-prune` (paccache) | kept |
+| `omarchy-snapshot create` (Snapper, Limine's snapshot menu) | skipped: ext4 root, no Snapper (exit 127, which Omarchy takes for "Snapper absent") |
+| stay-awake inhibitor | kept (the screen stays on during the update) |
+| `omarchy-update-dev`, keyrings | kept |
+| `pacman -Syu` with Omarchy's guard, `--overwrite /usr/share/omarchy/*` and conflict handler | kept; `[omamobile]` first, so its Mesa, Hyprland and libcamera win; the patch hook runs at the end of the transaction |
+| `omarchy-migrate` | kept, but migrations that mention Limine, mkinitcpio, UKIs, efibootmgr, sbctl, Snapper, GRUB, `/boot/`, fwupd, x86 kernels or NVIDIA, or ask with gum, are held: marked done for Omarchy, listed in `~/.local/state/omamobile/update/held-migrations`, and run after a review with `omamobile-update run-migration <name>` |
+| `omarchy-hook post-update`, `omarchy-update-mise` | kept |
+| `omarchy-update-aur-pkgs` (yay) | skipped: foreign packages are listed, never rebuilt on the phone |
+| `omarchy-update-orphan-pkgs` (gum) | orphans listed, never removed |
+| `omarchy-update-analyze-logs`, `omarchy-update-status` | kept (the initcpio check finds nothing; the status reaches the update sheet) |
+| `omarchy-update-restart` (gum; "kernel updated" whenever no pacman-owned `vmlinuz` matches `uname -r`, which on the phone is always) | replaced: a restart is needed only for Omarchy's `reboot-required` or a replaced Hyprland; marked services and the shell restart as on a desktop; nothing reboots by itself |
+| Update > Firmware (fwupd), Update > Config > Plymouth | hidden from the phone's menu (not part of the update) |
+
+The kernel is not touched: it still reaches the phone through `bin/omamobile push` until the boot hook above exists. `OMAMOBILE_UPDATE=1 omarchy-update` runs Omarchy's flow unwrapped (an escape hatch, not for normal use); `pacman -Syu` stays blocked by Omarchy's guard.
+
+**The phone's update UI** is `omamobile-shell`'s `omamobile.update` sheet: a toast when Omarchy has a release (tap to open) and Update > Omarchy in the menu open it; it shows what's new, the battery and the phone patches, asks for the PIN, shows progress with the output under Details, and ends on the result. The run is a systemd user unit, so it survives the shell restart at its end.
+
 ## 6. Release bundles and the installer
 
 For a first install, or to recover a phone that won't boot. One bundle per device per release.
@@ -263,7 +293,7 @@ Per release, in order. Stop at any failed step.
 2. **Curate:** move what has passed into `omamobile` (§8); publish `omamobile` and the `omamobile-int` snapshot; tag `omamobile-int-<date>`.
 3. **Build** the kernel from the tag in the pinned container, release `LOCALVERSION`; pack `linux-omamobile`.
 4. **Images** for every device: `DEVICE=<codename> bin/omamobile images`, twice, checksums equal.
-5. **Packages:** every changed package has a bumped `version`, its `test/all` passes, `tools/repo-build` builds and signs them and the database.
+5. **Packages:** every changed package has a bumped `version`, its `test/all` passes, `tools/build-packages` builds and signs them and the database on the laptop (`tools/repo-build` on a phone only as an opt-in shortcut).
 6. **Test install** on each released device, attended: the bundle's `install` on a phone whose stock slot A and backups are known good; first boot, device package installed, `omarchy update` clean, then a package-hook kernel update and a reboot into it.
 7. **Identifiers:** grep the bundle, the root image's file list, `MANIFEST` and the release notes for MAC addresses (`[0-9a-f]{2}(:[0-9a-f]{2}){5}`), serial numbers, SSIDs and account names; confirm no file from a factory image is in any artifact.
 8. **Sign** the bundles and the root image; verify the signatures from a clean keyring.

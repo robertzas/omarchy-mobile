@@ -1,3 +1,9 @@
+# Brightness: panels whose backlight driver can power them down follow DPMS
+# through bl_power (4 off, 0 on): on the phone, DPMS alone doesn't reach a
+# panel run from the bootloader's framebuffer. Only where the user may write
+# bl_power (the device package's udev rule).
+#
+# Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4).
 diff --git i/bin/omarchy-brightness-display w/bin/omarchy-brightness-display
 index 5a3e534..3c754bb 100755
 --- i/bin/omarchy-brightness-display

@@ -1,0 +1,822 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Keep Omarchy Mobile's Omarchy patch series applied, across Omarchy upgrades.
+
+  omamobile-omarchy-patches apply  [--root DIR] [--series DIR] [--hook]
+  omamobile-omarchy-patches status [--root DIR] [--json]
+  omamobile-omarchy-patches verify [--root DIR]
+  omamobile-omarchy-patches restore [--root DIR]   Omarchy's own files back
+
+The series (/usr/share/omamobile/omarchy/patches, *.patch in name order) is
+written against Omarchy's source tree. Every run starts again from Omarchy's
+own files, never from the patched ones:
+
+  1. Pristine files. For each file the series touches (and each file an
+     earlier run touched), Omarchy's version as shipped: the file on disk if
+     its sha256 is the one in the package's mtree (pacman's local database),
+     else the copy this tool kept from an earlier run, else the file from the
+     package in pacman's cache, else what reversing the previously applied
+     series gives. A file that matches none of these was changed by something
+     else: nothing is touched, and the run fails.
+  2. Staging. The pristine files go into a scratch tree, and each patch is
+     applied there in order with patch --forward --fuzz=0. A patch whose
+     reverse applies instead is already in Omarchy (an upstream backport that
+     landed): it is skipped and reported. Any other patch that doesn't apply
+     stops the run with Omarchy's files left as they are.
+  3. Verification. On a copy of the staged tree, the applied patches are
+     reversed in reverse order; the result must equal the pristine files byte
+     for byte.
+  4. Swap. Only then are the staged files written over Omarchy's (one rename
+     each), and the pristine copies and the state are saved.
+
+Paths: a patch path P is /usr/share/omarchy/P, unless that is a symlink with
+an absolute target (Omarchy 4 installs its bin/ scripts in /usr/bin and links
+them), in which case the link's target is patched (patch won't follow links).
+
+A run whose Omarchy version, series and files all match the last successful
+run does nothing. apply exits 0 when the series is in place (patches already
+in Omarchy count as in place), 1 when it isn't (Omarchy's files are then
+exactly as shipped, or as they were), 2 on a usage error.
+
+Files:
+  /var/lib/omamobile/omarchy-patches/state.json   the last successful run
+  /var/lib/omamobile/omarchy-patches/status.json  the last run, for the shell
+  /var/lib/omamobile/omarchy-patches/pristine/    Omarchy's copies of patched files
+  /var/lib/omamobile/omarchy-patches/applied/     the series last applied
+  /var/log/omamobile/omarchy-patches.log          what every run did
+
+On a failure (not at image build, where --root is not /) every logged-in user
+gets a desktop notification that opens the shell's update sheet.
+
+Environment (tests): OMAMOBILE_PATCH (the patch program), OMAMOBILE_NOTIFY_CMD
+(called with a title and a body instead of the desktop notification).
+"""
+import datetime
+import fcntl
+import gzip
+import hashlib
+import json
+import os
+import pwd
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+OMARCHY = "usr/share/omarchy"
+SERIES = "usr/share/omamobile/omarchy/patches"
+STATE_DIR = "var/lib/omamobile/omarchy-patches"
+LOG = "var/log/omamobile/omarchy-patches.log"
+LOCAL_DB = "var/lib/pacman/local"
+PKG_CACHE = "var/cache/pacman/pkg"
+PACKAGES = ("omarchy", "omarchy-dev")
+PATCH = os.environ.get("OMAMOBILE_PATCH", "patch")
+TOOL_VERSION = "1"
+
+HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+HEADER = re.compile(r"^(---|\+\+\+) (\S+)(.*)$", re.S)
+GIT = re.compile(r"^diff --git (\S+) (\S+)(.*)$", re.S)
+
+
+class Failure(Exception):
+    """Stops a run; Omarchy's files are untouched."""
+
+    def __init__(self, message, patch=None, output=""):
+        super().__init__(message)
+        self.patch = patch
+        self.output = output
+
+
+# ---------------------------------------------------------------- small helpers
+
+
+def now():
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def sha256_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def sha256_file(path):
+    with open(path, "rb") as f:
+        return sha256_bytes(f.read())
+
+
+def read_bytes(path):
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def is_file(path):
+    return os.path.isfile(path) and not os.path.islink(path)
+
+
+def write_json(path, data, mode=0o644):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".new"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+        f.write("\n")
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def load_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+class Log:
+    def __init__(self, root, quiet=False):
+        self.path = os.path.join(root, LOG)
+        self.quiet = quiet
+        self.lines = []
+
+    def __call__(self, message):
+        self.lines.append(message)
+        if not self.quiet:
+            print(message, flush=True)
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(self.path, "a") as f:
+                f.write("%s %s\n" % (now(), message))
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------- pacman's database
+
+
+def unvis(path):
+    """mtree escapes (\\040 for a space, ...) back to bytes, as text."""
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), path)
+
+
+def parse_mtree(text):
+    """{relative path: ("file", sha256) | ("link", target) | ("dir", None)}"""
+    entries = {}
+    defaults = {}
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        words = line.split()
+        if words[0] == "/set":
+            for w in words[1:]:
+                k, _, v = w.partition("=")
+                defaults[k] = v
+            continue
+        if words[0] == "/unset":
+            for w in words[1:]:
+                defaults.pop(w, None)
+            continue
+        path = unvis(words[0])
+        if path.startswith("./"):
+            path = path[2:]
+        if path.startswith("."):  # .PKGINFO, .BUILDINFO, .INSTALL
+            continue
+        keys = dict(defaults)
+        for w in words[1:]:
+            k, _, v = w.partition("=")
+            keys[k] = v
+        kind = keys.get("type", "file")
+        if kind == "file":
+            entries[path] = ("file", keys.get("sha256digest"))
+        elif kind == "link":
+            entries[path] = ("link", unvis(keys.get("link", "")))
+        else:
+            entries[path] = (kind, None)
+    return entries
+
+
+def installed_omarchy(root):
+    """[(name, version, local db dir)] of the Omarchy packages installed."""
+    found = []
+    db = os.path.join(root, LOCAL_DB)
+    try:
+        names = sorted(os.listdir(db))
+    except OSError:
+        return found
+    for entry in names:
+        desc = os.path.join(db, entry, "desc")
+        try:
+            with open(desc) as f:
+                fields = f.read().split("\n\n")
+        except OSError:
+            continue
+        info = {}
+        for block in fields:
+            lines = block.strip().splitlines()
+            if len(lines) >= 2 and lines[0].startswith("%"):
+                info[lines[0].strip("%")] = lines[1]
+        if info.get("NAME") in PACKAGES:
+            found.append((info["NAME"], info.get("VERSION", "?"), os.path.join(db, entry)))
+    return found
+
+
+def package_files(packages):
+    files = {}
+    for _name, _version, path in packages:
+        try:
+            with gzip.open(os.path.join(path, "mtree"), "rt", errors="replace") as f:
+                files.update(parse_mtree(f.read()))
+        except OSError:
+            continue
+    return files
+
+
+def from_package_cache(root, packages, rel):
+    """The file as shipped, from a cached package of the installed version."""
+    cache = os.path.join(root, PKG_CACHE)
+    for name, version, _ in packages:
+        try:
+            candidates = sorted(os.listdir(cache))
+        except OSError:
+            return None
+        for f in candidates:
+            if not f.startswith("%s-%s-" % (name, version)) or f.endswith(".sig") or ".pkg.tar" not in f:
+                continue
+            try:
+                out = subprocess.run(["bsdtar", "-xOf", os.path.join(cache, f), rel],
+                                     capture_output=True, timeout=120)
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if out.returncode == 0:
+                return out.stdout
+    return None
+
+
+# ---------------------------------------------------------------- patches
+
+
+def strip_one(path):
+    """patch -p1."""
+    return path.split("/", 1)[1] if "/" in path else path
+
+
+def target_path(root, rel):
+    """Where a path of Omarchy's tree lives in this root (see the header)."""
+    rel = os.path.normpath(rel)
+    if rel.startswith("..") or os.path.isabs(rel):
+        raise Failure("patch path outside Omarchy's tree: %s" % rel)
+    path = os.path.join(OMARCHY, rel)
+    full = os.path.join(root, path)
+    if os.path.islink(full):
+        link = os.readlink(full)
+        if os.path.isabs(link):
+            path = os.path.normpath(link.lstrip("/"))
+        else:
+            path = os.path.normpath(os.path.join(os.path.dirname(path), link))
+        if path.startswith(".."):
+            raise Failure("link %s points outside the root" % rel)
+    return path
+
+
+def parse_patch(text):
+    """[(line, kind)] with kind "old", "new", "git" for path headers, else
+    None; hunk bodies are counted so a removed "-- comment" line is never
+    taken for a header."""
+    lines = text.splitlines(keepends=True)
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = HUNK.match(line)
+        if m:
+            out.append((line, None))
+            old = int(m.group(1)) if m.group(1) is not None else 1
+            new = int(m.group(2)) if m.group(2) is not None else 1
+            i += 1
+            while (old > 0 or new > 0) and i < len(lines):
+                body = lines[i]
+                if body.startswith("\\"):
+                    pass
+                elif body.startswith("-"):
+                    old -= 1
+                elif body.startswith("+"):
+                    new -= 1
+                else:  # " " context, or an empty line some tools leave for one
+                    old -= 1
+                    new -= 1
+                out.append((body, None))
+                i += 1
+            while i < len(lines) and lines[i].startswith("\\"):
+                out.append((lines[i], None))
+                i += 1
+            continue
+        if line.startswith("--- ") and i + 1 < len(lines) and lines[i + 1].startswith("+++ "):
+            out.append((line, "old"))
+            out.append((lines[i + 1], "new"))
+            i += 2
+            continue
+        if line.startswith("diff --git "):
+            out.append((line, "git"))
+        else:
+            out.append((line, None))
+        i += 1
+    return out
+
+
+class Patch:
+    def __init__(self, path, root):
+        self.name = os.path.basename(path)
+        self.text = read_bytes(path).decode("utf-8", errors="surrogateescape")
+        self.files = []      # real paths, in order
+        self.creates = set()  # real paths the patch creates
+        out = []
+        old_path = None
+        for line, kind in parse_patch(self.text):
+            if kind in ("old", "new"):
+                m = HEADER.match(line)
+                path = m.group(2)
+                if path == "/dev/null":
+                    real = None
+                    out.append(line)
+                else:
+                    real = target_path(root, strip_one(path))
+                    out.append("%s %s/%s%s" % (m.group(1), "a" if kind == "old" else "b", real, m.group(3)))
+                    if real not in self.files:
+                        self.files.append(real)
+                if kind == "old":
+                    old_path = path
+                elif old_path == "/dev/null" and real:
+                    self.creates.add(real)
+            elif kind == "git":
+                m = GIT.match(line)
+                a = target_path(root, strip_one(m.group(1)))
+                b = target_path(root, strip_one(m.group(2)))
+                out.append("diff --git a/%s b/%s%s" % (a, b, m.group(3)))
+            else:
+                out.append(line)
+        if not self.files:
+            raise Failure("%s changes no file" % self.name, self.name)
+        self.rewritten = "".join(out).encode("utf-8", errors="surrogateescape")
+
+
+def load_series(series_dir, root):
+    try:
+        names = sorted(n for n in os.listdir(series_dir) if n.endswith(".patch"))
+    except OSError:
+        raise Failure("no patch series in %s" % series_dir)
+    patches = [Patch(os.path.join(series_dir, n), root) for n in names]
+    h = hashlib.sha256(TOOL_VERSION.encode())
+    for p in patches:
+        h.update(p.name.encode() + b"\0" + p.text.encode("utf-8", "surrogateescape") + b"\0")
+    return patches, h.hexdigest()
+
+
+def run_patch(tree, patch, reverse=False, dry_run=False):
+    pf = os.path.join(tree, ".omamobile-patch")
+    with open(pf, "wb") as f:
+        f.write(patch.rewritten)
+    args = [PATCH, "-d", tree, "-p1", "--fuzz=0", "--no-backup-if-mismatch", "-r", "-", "-i", pf]
+    args += ["-R", "-f"] if reverse else ["-N", "-f"]
+    if dry_run:
+        args.append("--dry-run")
+    try:
+        out = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+    finally:
+        os.unlink(pf)
+    return out.returncode == 0, (out.stdout + out.stderr).strip()
+
+
+def copy_tree_files(src_root, dst_root, paths):
+    for rel in paths:
+        src = os.path.join(src_root, rel)
+        if is_file(src):
+            dst = os.path.join(dst_root, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
+
+
+def leftovers(tree):
+    bad = []
+    for dirpath, _dirs, files in os.walk(tree):
+        for f in files:
+            if f.endswith((".rej", ".orig")):
+                bad.append(os.path.relpath(os.path.join(dirpath, f), tree))
+    return bad
+
+
+# ---------------------------------------------------------------- notification
+
+
+def notify(root, title, body, log):
+    cmd = os.environ.get("OMAMOBILE_NOTIFY_CMD")
+    if cmd:
+        subprocess.run([cmd, title, body], timeout=30)
+        return
+    if os.path.realpath(root) != "/" or os.geteuid() != 0:
+        return
+    try:
+        uids = [int(u) for u in os.listdir("/run/user") if u.isdigit() and int(u) >= 1000]
+    except OSError:
+        return
+    for uid in uids:
+        bus = "/run/user/%d/bus" % uid
+        if not os.path.exists(bus):
+            continue
+        try:
+            user = pwd.getpwuid(uid).pw_name
+        except KeyError:
+            continue
+        env = ["env", "DBUS_SESSION_BUS_ADDRESS=unix:path=" + bus, "XDG_RUNTIME_DIR=/run/user/%d" % uid]
+        if shutil.which("omarchy-notification-send"):
+            send = ["omarchy-notification-send", "-u", "critical", "-g", "\U000f0026", title, body,
+                    "--exec", "omarchy-shell", "shell", "summon", "omamobile.update", '{"page":"patches"}']
+        elif shutil.which("notify-send"):
+            send = ["notify-send", "-u", "critical", "-a", "Omarchy Mobile", title, body]
+        else:
+            return
+        try:
+            subprocess.run(["runuser", "-u", user, "--"] + env + send, timeout=15,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            log("notified %s" % user)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+
+# ---------------------------------------------------------------- apply
+
+
+def pristine_for(root, rel, owned, store, packages, log, patched=None):
+    """Omarchy's bytes for rel (None: absent), or raise LookupError. With
+    `patched` (the sha256 the last run left), a file that is neither Omarchy's
+    nor ours was changed by something else: Failure."""
+    if rel not in owned:
+        return None
+    kind, want = owned[rel]
+    if kind != "file" or not want:
+        raise Failure("%s is not a regular file in Omarchy's package" % rel)
+    cur = os.path.join(root, rel)
+    if is_file(cur):
+        data = read_bytes(cur)
+        if sha256_bytes(data) == want:
+            return data
+        if patched and sha256_bytes(data) != patched:
+            raise Failure("%s was changed outside Omarchy's package and this series. Put Omarchy's files back "
+                          "(sudo pacman -S omarchy), then run omamobile-omarchy-patches apply" % rel)
+    kept = os.path.join(store, rel)
+    if is_file(kept):
+        data = read_bytes(kept)
+        if sha256_bytes(data) == want:
+            return data
+    data = from_package_cache(root, packages, rel)
+    if data is not None and sha256_bytes(data) == want:
+        log("  %s: Omarchy's copy from the package cache" % rel)
+        return data
+    raise LookupError(rel)
+
+
+def reverse_recover(root, rels, owned, series_dirs, work, log):
+    """Pristine bytes for rels by reversing an earlier series on the current
+    files: {rel: bytes} for the ones that then match the package, else {}."""
+    for label, sdir in series_dirs:
+        if not os.path.isdir(sdir):
+            continue
+        try:
+            patches, _ = load_series(sdir, root)
+        except Failure:
+            continue
+        tree = tempfile.mkdtemp(dir=work, prefix="reverse-")
+        touched = sorted({f for p in patches for f in p.files} | set(rels))
+        copy_tree_files(root, tree, touched)
+        for p in reversed(patches):
+            ok, _ = run_patch(tree, p, reverse=True, dry_run=True)
+            if ok:
+                run_patch(tree, p, reverse=True)
+        got = {}
+        for rel in rels:
+            path = os.path.join(tree, rel)
+            if is_file(path) and sha256_file(path) == owned[rel][1]:
+                got[rel] = read_bytes(path)
+        if len(got) == len(rels):
+            log("  recovered Omarchy's copies by reversing the %s series" % label)
+            return got
+    return {}
+
+
+def apply(root, series_dir, log, hook=False):
+    state_dir = os.path.join(root, STATE_DIR)
+    os.makedirs(state_dir, exist_ok=True)
+    lock = open(os.path.join(state_dir, "lock"), "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+
+    packages = installed_omarchy(root)
+    status = {"time": now(), "log": "/" + LOG, "series": "/" + SERIES, "applied": [], "upstream": [],
+              "failed": None, "omarchy": None, "message": ""}
+    if not packages:
+        status.update(result="no-omarchy", message="Omarchy is not installed; nothing to patch")
+        log(status["message"])
+        write_json(os.path.join(state_dir, "status.json"), status)
+        return 0
+    status["omarchy"] = " ".join("%s %s" % (n, v) for n, v, _ in packages)
+    previous = load_json(os.path.join(state_dir, "state.json")) or {}
+    try:
+        patches, series_hash = load_series(series_dir, root)
+    except Failure as e:
+        return fail(root, status, e, log, hook)
+    status["series_hash"] = series_hash
+
+    # Nothing to do: same Omarchy, same series, files as we left them
+    if (previous.get("omarchy") == status["omarchy"] and previous.get("series_hash") == series_hash
+            and previous.get("files")):
+        intact = True
+        for rel, info in previous["files"].items():
+            path = os.path.join(root, rel)
+            have = sha256_file(path) if is_file(path) else None
+            if have != info.get("patched"):
+                intact = False
+                break
+        if intact:
+            status.update(result="ok", applied=previous.get("applied", []), upstream=previous.get("upstream", []),
+                          message="already applied (%s)" % status["omarchy"], files=previous["files"])
+            log("%s: series already applied" % status["omarchy"])
+            write_json(os.path.join(state_dir, "status.json"), status)
+            return 0
+
+    log("%s: applying %d patches%s" % (status["omarchy"], len(patches), " (after a package transaction)" if hook else ""))
+    owned = package_files(packages)
+    created_before = set(previous.get("created", []))
+    touched = []
+    for rel in [f for p in patches for f in p.files] + sorted(previous.get("files", {})):
+        if rel not in touched:
+            touched.append(rel)
+    creates = {f for p in patches for f in p.creates}
+
+    work = tempfile.mkdtemp(prefix="omamobile-omarchy-patches-", dir=state_dir)
+    try:
+        # 1. Omarchy's own files
+        store = os.path.join(state_dir, "pristine")
+        bases, unresolved = {}, []
+        for rel in touched:
+            cur = os.path.join(root, rel)
+            if os.path.islink(cur):
+                return fail(root, status, Failure("%s is a symlink; refusing to patch through it" % rel), log, hook)
+            if rel not in owned:
+                if is_file(cur) and rel not in creates and rel not in created_before:
+                    return fail(root, status, Failure("%s exists, is not Omarchy's, and is not one this series creates" % rel), log, hook)
+                bases[rel] = None
+                continue
+            try:
+                recorded = previous.get("files", {}).get(rel, {}).get("patched")
+                bases[rel] = pristine_for(root, rel, owned, store, packages, log, recorded)
+            except Failure as e:
+                return fail(root, status, e, log, hook)
+            except LookupError:
+                unresolved.append(rel)
+        if unresolved:
+            got = reverse_recover(root, unresolved, owned,
+                                  [("previous", os.path.join(state_dir, "applied")), ("current", series_dir)],
+                                  work, log)
+            missing = [r for r in unresolved if r not in got]
+            if missing:
+                return fail(root, status, Failure(
+                    "changed outside Omarchy's package and this series: %s. Put Omarchy's files back "
+                    "(sudo pacman -S omarchy), then run omamobile-omarchy-patches apply" % ", ".join(missing)), log, hook)
+            bases.update(got)
+
+        # 2. Stage and apply in order
+        stage = os.path.join(work, "stage")
+        os.makedirs(stage)
+        for rel, data in bases.items():
+            os.makedirs(os.path.dirname(os.path.join(stage, rel)), exist_ok=True)
+            if data is not None:
+                with open(os.path.join(stage, rel), "wb") as f:
+                    f.write(data)
+        applied, upstream = [], []
+        for p in patches:
+            ok, out = run_patch(stage, p, dry_run=True)
+            if ok:
+                ok, out = run_patch(stage, p)
+                if not ok:
+                    return fail(root, status, Failure("%s failed after a clean dry run" % p.name, p.name, out), log, hook)
+                applied.append(p)
+                log("  applied   %s" % p.name)
+                continue
+            back, _ = run_patch(stage, p, reverse=True, dry_run=True)
+            if back:
+                upstream.append(p)
+                log("  upstream  %s (Omarchy already has it; drop it from the series)" % p.name)
+                continue
+            return fail(root, status, Failure("%s does not apply to %s" % (p.name, status["omarchy"]), p.name, out), log, hook)
+        bad = leftovers(stage)
+        if bad:
+            return fail(root, status, Failure("patch left %s" % ", ".join(bad)), log, hook)
+
+        # 3. Verify: reversing what was applied gives Omarchy's files back
+        check = os.path.join(work, "verify")
+        shutil.copytree(stage, check, symlinks=True)
+        for p in reversed(applied):
+            ok, out = run_patch(check, p, reverse=True)
+            if not ok:
+                return fail(root, status, Failure("%s does not reverse cleanly" % p.name, p.name, out), log, hook)
+        for rel, data in bases.items():
+            path = os.path.join(check, rel)
+            have = read_bytes(path) if is_file(path) else None
+            if have != data:
+                return fail(root, status, Failure("verification: %s differs from Omarchy's after reversing" % rel), log, hook)
+
+        # 4. Swap: pristine copies first, then the files, then the state
+        new_store = os.path.join(work, "pristine")
+        os.makedirs(new_store)
+        for rel, data in bases.items():
+            if data is not None:
+                os.makedirs(os.path.dirname(os.path.join(new_store, rel)), exist_ok=True)
+                with open(os.path.join(new_store, rel), "wb") as f:
+                    f.write(data)
+        old_store = os.path.join(work, "pristine.old")
+        if os.path.isdir(store):
+            os.rename(store, old_store)
+        os.rename(new_store, store)
+
+        files, created, changed = {}, [], 0
+        for rel in touched:
+            staged = os.path.join(stage, rel)
+            real = os.path.join(root, rel)
+            if is_file(staged):
+                data = read_bytes(staged)
+                if not is_file(real) or read_bytes(real) != data:
+                    os.makedirs(os.path.dirname(real), exist_ok=True)
+                    mode = os.stat(real).st_mode & 0o7777 if is_file(real) else 0o644
+                    if rel in owned and not is_file(real):
+                        mode = 0o644
+                    tmp = real + ".omamobile-new"
+                    with open(tmp, "wb") as f:
+                        f.write(data)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.chmod(tmp, mode)
+                    os.replace(tmp, real)
+                    changed += 1
+                files[rel] = {"owned": rel in owned, "pristine": sha256_bytes(bases[rel]) if bases[rel] is not None else None,
+                              "patched": sha256_bytes(data)}
+                if rel not in owned:
+                    created.append(rel)
+            elif is_file(real):
+                os.unlink(real)  # one an earlier series created
+                changed += 1
+        applied_dir = os.path.join(state_dir, "applied")
+        new_applied = os.path.join(work, "applied")
+        os.makedirs(new_applied)
+        for p in applied:
+            with open(os.path.join(new_applied, p.name), "w", encoding="utf-8", errors="surrogateescape") as f:
+                f.write(p.text)
+        if os.path.isdir(applied_dir):
+            os.rename(applied_dir, os.path.join(work, "applied.old"))
+        os.rename(new_applied, applied_dir)
+        state = {"omarchy": status["omarchy"], "series_hash": series_hash, "time": now(),
+                 "applied": [p.name for p in applied], "upstream": [p.name for p in upstream],
+                 "files": {r: i for r, i in files.items()}, "created": created}
+        write_json(os.path.join(state_dir, "state.json"), state)
+        msg = "%d applied, %d already in Omarchy; %d files changed" % (len(applied), len(upstream), changed)
+        status.update(result="ok", applied=state["applied"], upstream=state["upstream"], files=state["files"],
+                      message=msg, changed=changed)
+        write_json(os.path.join(state_dir, "status.json"), status)
+        log("%s: %s" % (status["omarchy"], msg))
+        return 0
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def fail(root, status, error, log, hook):
+    status.update(result="failed", message=str(error),
+                  failed={"patch": error.patch, "output": error.output[-4000:]} if error.patch else None)
+    log("FAILED: %s" % error)
+    if error.output:
+        for line in error.output.splitlines()[-40:]:
+            log("  | " + line)
+    log("Omarchy's files were left as they were; the series is not applied.")
+    write_json(os.path.join(root, STATE_DIR, "status.json"), status)
+    notify(root, "Phone patches not applied",
+           "An Omarchy update changed files the phone's patches need, so the lock screen's PIN pad may be "
+           "missing. Omarchy's own files are in place. See /%s" % LOG, log)
+    return 1
+
+
+def restore(root, log):
+    """Omarchy's own files back (the package is being removed)."""
+    state_dir = os.path.join(root, STATE_DIR)
+    state = load_json(os.path.join(state_dir, "state.json"))
+    if not state:
+        log("restore: nothing recorded")
+        return 0
+    packages = installed_omarchy(root)
+    owned = package_files(packages)
+    store = os.path.join(state_dir, "pristine")
+    ok = True
+    for rel in sorted(state.get("files", {})):
+        real = os.path.join(root, rel)
+        if rel in owned:
+            try:
+                data = pristine_for(root, rel, owned, store, packages, log)
+            except (LookupError, Failure):
+                log("restore: no copy of Omarchy's %s; reinstall omarchy" % rel)
+                ok = False
+                continue
+            if not is_file(real) or read_bytes(real) != data:
+                tmp = real + ".omamobile-new"
+                with open(tmp, "wb") as f:
+                    f.write(data)
+                os.chmod(tmp, os.stat(real).st_mode & 0o7777 if is_file(real) else 0o644)
+                os.replace(tmp, real)
+        elif is_file(real):
+            os.unlink(real)
+    if ok:
+        os.unlink(os.path.join(state_dir, "state.json"))
+        write_json(os.path.join(state_dir, "status.json"),
+                   {"result": "restored", "time": now(), "message": "Omarchy's own files restored", "log": "/" + LOG})
+        log("restore: Omarchy's own files are back")
+    return 0 if ok else 1
+
+
+# ---------------------------------------------------------------- status, verify
+
+
+def status_cmd(root, as_json):
+    status = load_json(os.path.join(root, STATE_DIR, "status.json"))
+    if as_json:
+        print(json.dumps(status or {"result": "never"}, indent=2, sort_keys=True))
+        return 0
+    if not status:
+        print("result: never run")
+        return 1
+    print("result: %s" % status.get("result"))
+    print("omarchy: %s" % (status.get("omarchy") or "-"))
+    print("time: %s" % status.get("time"))
+    print("applied: %s" % " ".join(status.get("applied") or []))
+    print("already in omarchy: %s" % " ".join(status.get("upstream") or []))
+    failed = status.get("failed") or {}
+    print("failed: %s" % (failed.get("patch") or ("-" if status.get("result") != "failed" else "yes")))
+    print("message: %s" % status.get("message", ""))
+    return 0 if status.get("result") in ("ok", "no-omarchy") else 1
+
+
+def verify(root):
+    state = load_json(os.path.join(root, STATE_DIR, "state.json"))
+    packages = installed_omarchy(root)
+    current = " ".join("%s %s" % (n, v) for n, v, _ in packages)
+    if not state:
+        print("FAIL no successful run recorded")
+        return 1
+    ok = True
+    if state.get("omarchy") != current:
+        print("FAIL applied to %s, installed is %s" % (state.get("omarchy"), current or "nothing"))
+        ok = False
+    for rel, info in sorted(state.get("files", {}).items()):
+        path = os.path.join(root, rel)
+        have = sha256_file(path) if is_file(path) else None
+        if have != info.get("patched"):
+            print("FAIL %s is not the patched file" % rel)
+            ok = False
+    if ok:
+        print("ok    %d patches in place on %s (%d already in Omarchy)" % (
+            len(state.get("applied", [])), current, len(state.get("upstream", []))))
+    return 0 if ok else 1
+
+
+def main(argv):
+    args = list(argv)
+    if not args or args[0] in ("-h", "--help"):
+        print(__doc__.split("\n\n")[1])
+        return 0 if args else 2
+    cmd = args.pop(0)
+    root, series, hook, as_json, quiet = "/", None, False, False, False
+    while args:
+        a = args.pop(0)
+        if a == "--root" and args:
+            root = args.pop(0)
+        elif a == "--series" and args:
+            series = args.pop(0)
+        elif a == "--hook":
+            hook = True
+        elif a == "--json":
+            as_json = True
+        elif a == "--quiet":
+            quiet = True
+        else:
+            print("unknown argument: %s" % a, file=sys.stderr)
+            return 2
+    root = os.path.abspath(root)
+    if cmd == "apply":
+        log = Log(root, quiet)
+        try:
+            return apply(root, series or os.path.join(root, SERIES), log, hook)
+        except Failure as e:
+            return fail(root, {"time": now(), "log": "/" + LOG, "applied": [], "upstream": [], "omarchy": None}, e, log, hook)
+    if cmd == "restore":
+        return restore(root, Log(root, quiet))
+    if cmd == "status":
+        return status_cmd(root, as_json)
+    if cmd == "verify":
+        return verify(root)
+    print("unknown command: %s" % cmd, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

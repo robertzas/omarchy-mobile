@@ -1,0 +1,49 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omamobile-omarchy, from a copy of this directory alone: syntax,
+# the staged layout and hook, the re-patch tool against synthetic Omarchy
+# trees (and the real aarch64 omarchy package when the root image build's
+# pacman cache or OMARCHY_PKG has one), and omamobile-update against fakes.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+
+for f in install omamobile-omarchy.install lib/update-bin/* test/update.sh; do
+  bash -n "$f" || fail "$f parses"
+done
+for f in bin/omamobile-omarchy-patches bin/omamobile-update test/patches.py; do
+  python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$f" || fail "$f parses"
+done
+pass "scripts parse"
+
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+./install "$t/stage"
+for f in usr/bin/omamobile-omarchy-patches usr/bin/omamobile-update \
+         usr/share/libalpm/hooks/95-omamobile-omarchy-patches.hook \
+         usr/share/licenses/omamobile-omarchy/LICENSE usr/share/omamobile/omarchy/version; do
+  [[ -e $t/stage/$f ]] || fail "not staged: $f"
+done
+for f in omarchy-snapshot omarchy-update-aur-pkgs omarchy-update-orphan-pkgs omarchy-update-confirm \
+         omarchy-update-firmware omarchy-update-restart omarchy-migrate sudo; do
+  [[ -x $t/stage/usr/lib/omamobile-omarchy/update-bin/$f ]] || fail "stand-in not staged: $f"
+done
+[[ $(ls "$t/stage/usr/share/omamobile/omarchy/patches" | wc -l) == $(ls patches/*.patch | wc -l) ]] || fail "every patch staged"
+pass "install stages the tools, stand-ins, series and hook"
+
+hook=libalpm/95-omamobile-omarchy-patches.hook
+for want in 'Operation = Install' 'Operation = Upgrade' 'Target = omarchy' 'Target = omarchy-dev' \
+            'Target = omamobile-omarchy' 'When = PostTransaction' 'Exec = /usr/bin/omamobile-omarchy-patches apply --hook'; do
+  grep -qxF "$want" "$hook" || fail "hook: $want"
+done
+grep -q AbortOnFail "$hook" && fail "hook: a failed re-patch must not abort pacman"
+pass "the hook re-applies after Omarchy or this package changes"
+
+# Every patch file says what it is for, before its first diff
+for p in patches/*.patch; do
+  [[ $(sed -n '1p' "$p") == \#* || $(sed -n '1p' "$p") == commit* ]] || fail "$p starts with a header"
+done
+pass "every patch has a header"
+
+python3 -B test/patches.py || fail "re-patch tool"
+bash test/update.sh || fail "omamobile-update"

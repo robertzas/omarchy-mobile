@@ -108,10 +108,16 @@ LUA
 fi
 
 # squeekboard needs Hyprland's input-method slot, which Omarchy's fcitx5 (run
-# for desktop compose sequences) would otherwise take. Masked for this user
-# only, once; unmask to bring it back.
-if omarchy-done ensure omamobile-osk-input-method; then
-  systemctl --user mask --now omarchy-fcitx5.service
+# for desktop compose sequences) would otherwise take. The package's drop-in
+# (omarchy-fcitx5.service.d/omamobile.conf) keeps fcitx5 from starting. Up to
+# 0.1.48 this masked the unit instead, and Omarchy's first run, which enables
+# it with `enable --now`, failed on the mask and re-ran (re-sending its "Update
+# System" and welcome notifications) at every login: undo that mask, once.
+if omarchy-done ensure omamobile-fcitx5-unmask; then
+  if [[ $(readlink ~/.config/systemd/user/omarchy-fcitx5.service 2>/dev/null) == /dev/null ]]; then
+    systemctl --user unmask omarchy-fcitx5.service
+    systemctl --user daemon-reload
+  fi
 fi
 
 # Suspend isn't supported on the phone's kernel yet: take it out of the system
@@ -212,6 +218,24 @@ if omarchy-done ensure omamobile-menu-pin; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
   if [[ -f $extension ]] && ! grep -q '"system.pin"' "$extension"; then
     sed -i '0,/^{/s//{\n  "system.pin": {"icon":"󰌾","label":"PIN","description":"Set or change the PIN that unlocks this phone","action":"omamobile-set-pin"},/' "$extension"
+  fi
+fi
+
+# The phone's update sheet (omamobile.update, running omamobile-update from
+# omamobile-omarchy) in place of Omarchy's terminal update: the plugin, once,
+# and Update > Omarchy in Omarchy's menu opening it, through the menu
+# extension file. Update > Firmware (fwupd) and Update > Config > Plymouth
+# (an initramfs rebuild) are hidden: the phone boots from boot_b, which
+# bin/omamobile push writes, and its firmware is Google's.
+if omarchy-done ensure omamobile-update-plugin; then
+  add_plugin omamobile.update
+fi
+if omarchy-done ensure omamobile-menu-update; then
+  extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
+  mkdir -p "$(dirname "$extension")"
+  [[ -s $extension ]] || printf '{\n}\n' >"$extension"
+  if ! grep -q '"update.omarchy"' "$extension"; then
+    sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: updates through the phone'"'"'s update sheet; no fwupd or Plymouth rebuilds\n  "update.omarchy": {"icon": "\xee\xa4\x80", "iconFont": "omarchy", "label": "Omarchy", "action": "omarchy-shell shell summon omamobile.update '"'"'{}'"'"'"},\n  "update.firmware": {"when": "false"},\n  "update.config.plymouth": {"when": "false"},/' "$extension"
   fi
 fi
 

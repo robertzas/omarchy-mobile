@@ -1,0 +1,38 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile (on PATH only during omamobile-update): Omarchy's migrations,
+# minus the ones that touch what a phone doesn't have or must not change: the
+# bootloader and boot entries (Limine, mkinitcpio, UKIs, efibootmgr, sbctl),
+# Snapper, x86 kernels and drivers, fwupd, or that ask questions with gum.
+# A held migration is marked done in Omarchy's state (so Omarchy's login
+# notice doesn't keep offering it) and listed in
+# ~/.local/state/omamobile/update/held-migrations; after a review,
+# omamobile-update run-migration <name> runs it. OMAMOBILE_HOLD_MIGRATIONS=0
+# holds nothing.
+real=${OMAMOBILE_REAL_BIN:-/usr/bin}/omarchy-migrate
+case ${1:-} in
+  --pending | --check | -h | --help) exec "$real" "$@" ;;
+esac
+
+pattern='limine|mkinitcpio|initcpio|efibootmgr|sbctl|snapper|grub-|bootctl|fwupd|/boot/|plymouth-set-default-theme|dracut|linux-omarchy|nvidia|gum (confirm|choose|input|write|filter|file)'
+if [[ ${OMAMOBILE_HOLD_MIGRATIONS:-1} == 1 ]]; then
+  omarchy_path=${OMARCHY_PATH:-/usr/share/omarchy}
+  state=${OMARCHY_MIGRATION_STATE:-$HOME/.local/state/omarchy/migrations}
+  held=$HOME/.local/state/omamobile/update/held-migrations
+  for file in "$omarchy_path"/migrations/*.sh; do
+    [[ -f $file ]] || continue
+    name=${file##*/}
+    [[ -f $state/$name ]] && continue
+    match=$(grep -m1 -oE "$pattern" "$file" || true)
+    [[ -n $match ]] || continue
+    match=${match%%$'\n'*}
+    title=$(sed -n '1s/^echo "\(.*\)"$/\1/p' "$file")
+    mkdir -p "$state" "${held%/*}"
+    touch "$state/$name"
+    printf '%s\t%s\t%s\n' "$name" "$match" "${title:-}" >>"$held"
+    [[ -n ${OMAMOBILE_UPDATE_DIR:-} ]] && printf '%s\t%s\t%s\n' "$name" "$match" "${title:-}" >>"$OMAMOBILE_UPDATE_DIR/held"
+    echo "Holding migration ${name%.sh}${title:+ ($title)}: it mentions $match."
+    echo "  Review it, then: omamobile-update run-migration $name"
+  done
+fi
+exec "$real" "$@"
