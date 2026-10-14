@@ -3349,6 +3349,42 @@ runtime PM tied to streaming in the ak7375 driver or in libcamera.
    does. Nothing powers a sensor until a stream starts, except the lens
    (above) and each sensor's chip-ID read at probe.
 
+**CAM5.4 result (2026-10-14, int `4fb221c0a` =
+`7.3.0-rc6-omamobile-push1-00533-g4fb221c0aafc`, device-cheetah 0.1.31,
+omamobile-apps 0.1.1): GNOME Snapshot works with all four cameras.**
+- `snapshot` 51.0 and `pipewire-libcamera` 1.6.9 (Arch Linux ARM) are now
+  `depends` of omamobile-apps.
+- **Loading at boot:** the modules stay blacklisted for autoload;
+  `omamobile-camera.timer` runs `omamobile-camera-start` 40 s into the boot
+  (PMIC drivers, sensors and lenses, DC-PHY, CSIS; a marker skips the next
+  boot's load if one never finished). On the phone: "camera drivers
+  loaded; 4 media devices", no I2C timeout, no vb2 warning.
+- **The session couldn't debayer:** WirePlumber (the user's) logged "Could
+  not open any dma-buf provider": the DMA-BUF heaps were root-only, so
+  libcamera's software ISP was off and apps got no usable format
+  (`pipewiresrc`: "target not found"). `70-omamobile-dma-heap.rules` gives
+  the video group and the seat's user `system`, `reserved` and
+  `default_cma_region`; the rule applies when the heaps appear at boot,
+  before the session.
+- **Names and order:** `50-omamobile-cameras.conf` (WirePlumber) names the
+  sources by their sensor's DT path (checked against the bound drivers:
+  `0-003d` S5KGN1, `2-001a` IMX386, `3-002d` S5KGM5, `1-0010` S5K3J1):
+  "Main camera" (default, priority 1000), "Front camera", "Ultrawide
+  camera", "Telephoto camera", and disables the raw CSIS v4l2 devices.
+  `gst-device-monitor-1.0 Video/Source` as the user lists the four names.
+- **Rotations (question 14 answered):** with the phone upright, Snapshot
+  showed the main camera upright and the other three upside down. The DT
+  now has main 90, ultrawide 270, telephoto 90 (still vertically flipped),
+  front 90; PipeWire reports `api.libcamera.rotation` 90/270/90/90. The
+  ultrawide's raw frames were already upside down against the main's
+  (its module is mounted the other way). The owner checks the result.
+- Snapshot picks the binned modes (2016x1136 on the back cameras,
+  1920x1116 on the front); the owner switched through all four, every
+  stream with WDMA errors 0.
+- Open: the telephoto's lens (it NACKs; longer waits hung its bus, CAM-T
+  T.3), so the telephoto has no autofocus; the main and ultrawide AK7375
+  lenses stay powered while PipeWire holds their subdevs (power: measure).
+
 ### CAM7: the front camera (Samsung S5K3J1, D-PHY on link 0). Risk: medium
 
 **Facts.** [V] from the user's own HAL (section 4.5) unless marked: chip ID
