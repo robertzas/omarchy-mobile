@@ -77,6 +77,26 @@ load_device() {
     [[ $p == *_b || $p == userdata ]] || die "$file: UFS_RW may hold only *_b partitions and userdata, not $p"
   done
   for p in $DEV_BOOT_IMAGES; do slot_b_allowed "$p" || die "$file: ${p}_b is not in UFS_RW"; done
+  # images builds one of two layouts from these names: a typo must not
+  # quietly pick the other one.
+  local seen=" "
+  for p in $DEV_BOOT_IMAGES; do
+    [[ " boot init_boot vendor_boot vendor_kernel_boot dtbo " == *" $p "* ]] \
+      || die "$file: BOOT_IMAGES may hold only boot, init_boot, vendor_boot, vendor_kernel_boot and dtbo, not $p"
+    [[ $seen != *" $p "* ]] || die "$file: BOOT_IMAGES names $p twice"
+    seen+="$p "
+  done
+  for p in boot vendor_boot dtbo; do
+    [[ $seen == *" $p "* ]] || die "$file: BOOT_IMAGES must include $p"
+  done
+}
+
+# The images in $1 were built for $DEVICE: flash and push must not write
+# another device's images (images records the codename in DEVICE).
+images_for_device() {
+  local got
+  got=$(cat "$1/DEVICE" 2>/dev/null || true)
+  [[ $got == "$DEVICE" ]] || die "$1 holds images for '${got:-an unknown device}', not $DEVICE (run: DEVICE=$DEVICE omamobile images)"
 }
 
 # Is <image>_b on the device's storage-guard allowlist?
@@ -340,6 +360,7 @@ cmd_images() {
       --dtb "$img/dtb.img" --ramdisk_type 1 --ramdisk_name '' --vendor_ramdisk_fragment "$KERNEL_OUT/initramfs.cpio.lz4" \
       --vendor_boot "$img/vendor_boot.img"
   fi
+  printf '%s\n' "$DEV_CODENAME" > "$img/DEVICE"
   ls -lh "$img"/*.img
 }
 
@@ -404,6 +425,7 @@ cmd_fastboot() {
 cmd_flash() {
   local img="$KERNEL_OUT/images" p
   load_device
+  images_for_device "$img"
   in_fastboot || die "phone not in fastboot (try: omamobile fastboot)"
   for p in $DEV_BOOT_IMAGES; do
     slot_b_allowed "$p" || die "${p}_b is not on device/$DEVICE's storage-guard allowlist; refusing"
@@ -424,6 +446,7 @@ cmd_flash() {
 cmd_push() {
   local img="$KERNEL_OUT/images" ssh="$ROOT/tools/phone-ssh" p dev want got rel
   load_device
+  images_for_device "$img"
   "$ssh" true || die "phone not reachable at 172.16.42.1"
   # A kernel whose modules aren't installed boots without its drivers (the GPU
   # among them): install them first. A config change can keep the release

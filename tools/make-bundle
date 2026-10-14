@@ -58,6 +58,9 @@ say "Assembling $dir"
 install -m755 tools/install-phone "$dir/install"
 install -m644 "$conf" "$dir/device.conf"
 install -m644 packages/omamobile-keyring/omamobile.gpg "$dir/omamobile.gpg"
+# bin/omamobile images records the device it built for
+built_for=$(cat "$KERNEL_OUT/images/DEVICE" 2>/dev/null || true)
+[[ $built_for == "$DEVICE" ]] || die "$KERNEL_OUT/images holds images for '${built_for:-an unknown device}', not $DEVICE"
 for p in $boot_images; do
   [[ -f $KERNEL_OUT/images/$p.img ]] || die "missing $KERNEL_OUT/images/$p.img (bin/omamobile images)"
   install -m644 "$KERNEL_OUT/images/$p.img" "$dir/images/$p.img"

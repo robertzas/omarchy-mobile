@@ -101,10 +101,12 @@ What `bin/omamobile` checks, so a wrong descriptor fails the build rather than t
 
 - the descriptor's format, required keys and `CODENAME`;
 - `UFS_RW` holds only `*_b` and `userdata`, and covers every `BOOT_IMAGES` entry;
+- `BOOT_IMAGES` names only `boot`, `init_boot`, `vendor_boot`, `vendor_kernel_boot` and `dtbo`, each once, and includes `boot`, `vendor_boot` and `dtbo`;
 - `UFS_RW` in the initramfs `init` is the descriptor's, byte for byte (until step 2 generates it);
 - the DTB really is built with the first `SOC_IDS` value, and each rewrite took;
 - the dtbo source carries `DTBO_BOARD_ID` and `DTBO_BOARD_REV`;
 - `push` and `flash` refuse any image whose `_b` partition is not on the allowlist.
+- `images` records the device in `images/DEVICE`, and `push`, `flash` and `tools/make-bundle` refuse images built for another device.
 
 Step 1 changed no output for cheetah: `images` produced the same checksums for every file before and after, and `initramfs` staged an identical tree (§9).
 
