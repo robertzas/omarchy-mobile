@@ -15,7 +15,9 @@ OwlNodeBase {
     x: textNode.innerX
     y: textNode.innerY
     width: textNode.innerW
-    height: textNode.innerH
+    // A pixel to spare, so the last line the layout counted isn't elided
+    // for a rounding error.
+    height: textNode.innerH + 1
     textFormat: Text.PlainText
     text: textNode.p.text === undefined || textNode.p.text === null ? "…" : String(textNode.p.text)
     color: textNode.p.color || textNode.ink(textNode.style[1] ? "muted" : "foreground")

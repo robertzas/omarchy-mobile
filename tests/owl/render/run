@@ -24,3 +24,29 @@ cp "$here"/*.qml "$h/"
 node "$here/jobs.js" "$out" /ref/omarchy-widgets/widgets > "$h/job.json"
 QT_SCALE_FACTOR=3 OWL_JOB="$h/job.json" timeout 600 quickshell -p "$h/tiles.qml" 2>&1 | grep -E "rendered|ERROR|rror|report:" | grep -v "^.*DEBUG.*rendered" | head -40 || true
 node "$here/compare.js" "$out"
+
+# The review screenshots, in a dark and a light Omarchy theme. Omarchy's
+# shell modules (Commons, Ui) come from the laptop, read-only.
+if [[ -d /omarchy-shell ]]; then
+  hh=/tmp/owl-home
+  rm -rf "$hh"; mkdir -p "$hh" "$out/screens"
+  # A copy, with Omarchy's palette qualified: Qt 6.12's QtQuick Color type
+  # shadows a bare `Color.` (AGENTS.md, Userspace). The phone's shell has
+  # the same fix in its own files.
+  for m in Commons Ui services; do cp -r "/omarchy-shell/$m" "$hh/$m"; done
+  find "$hh/Commons" "$hh/Ui" "$hh/services" -name '*.qml' -exec sed -i -E \
+    -e 's/(^|[^.[:alnum:]_])Color\./\1Commons.Color./g' \
+    -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
+  # Commons' own files see the module through a self-import.
+  for f in "$hh"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
+  ln -s "$src/packages/omamobile-shell/plugins/omamobile.home" "$hh/home"
+  cp "$here"/home.qml "$here"/MockHome.qml "$hh/"
+  for theme in tokyo-night catppuccin-latte; do
+    home=/tmp/home-$theme
+    mkdir -p "$home/.local/state/omarchy/current"
+    ln -sfn "/themes/$theme" "$home/.local/state/omarchy/current/theme"
+    node "$here/home-jobs.js" "$out/screens" /ref/omarchy-widgets/widgets "$theme" > "$hh/job-$theme.json"
+    HOME=$home QT_SCALE_FACTOR=3 OWL_HOME_JOB="$hh/job-$theme.json" timeout 600 quickshell -p "$hh/home.qml" 2>&1 \
+      | grep -E "shot |owl report|Error|error:|ReferenceError|TypeError" | grep -v hyprctl | head -40 || true
+  done
+fi

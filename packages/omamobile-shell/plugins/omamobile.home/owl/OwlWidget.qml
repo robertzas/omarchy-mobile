@@ -42,8 +42,9 @@ Item {
 
   // ---------------------------------------------------------------- loading
 
-  onTextChanged: widget.load()
-  Component.onCompleted: widget.load()
+  // Once every binding has its value (stateKey, host), not mid-way.
+  onTextChanged: Qt.callLater(widget.load)
+  Component.onCompleted: Qt.callLater(widget.load)
 
   function load() {
     widget.instance = null
@@ -171,7 +172,8 @@ Item {
 
   function refresh() {
     widget.lastRun = ({})
-    widget.tick(Date.now() / 1000)
+    // A host may fix the clock (the screenshot harness does).
+    widget.tick(widget.host && widget.host.now ? widget.host.now() : Date.now() / 1000)
   }
   function refreshSoon() { refreshTimer.restart() }
   Timer { id: refreshTimer; interval: 250; onTriggered: widget.refresh() }

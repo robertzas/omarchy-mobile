@@ -41,7 +41,9 @@ OwlNodeBase {
       if (!canvasNode.draw || width <= 0 || height <= 0) return
       const dp = canvasNode.dp
       const ops = canvasNode.draw(width / dp, height / dp)
-      canvasNode.readsTime = !!ops.readsTime
+      // Told after this paint: a frame requested during a paint is lost.
+      const reads = !!ops.readsTime
+      if (reads !== canvasNode.readsTime) Qt.callLater(function() { canvasNode.readsTime = reads })
       ctx.scale(dp, dp)
       const ratio = canvasNode.view ? canvasNode.view.devicePixelRatio : 1
       Paint.paintList(ctx, ops, { foreground: canvasNode.ink("foreground") },
