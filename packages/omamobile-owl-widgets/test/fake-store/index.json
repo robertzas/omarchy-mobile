@@ -1,0 +1,94 @@
+{
+ "version": 1,
+ "source": "fake store",
+ "widgets": [
+  {
+   "id": "alice/clock",
+   "author": "alice",
+   "status": "partial",
+   "note": "a note",
+   "name": "clock",
+   "description": "A clock with the date, for the tests",
+   "category": "time",
+   "version": "2.1",
+   "license": "MIT",
+   "owl": 1,
+   "size": [
+    6,
+    2
+   ],
+   "minSize": [
+    1,
+    1
+   ],
+   "requires": [
+    "curl"
+   ],
+   "commands": [
+    "curl -s https://weather.example.org/now"
+   ],
+   "capabilities": [
+    "commands",
+    "network"
+   ],
+   "hosts": [
+    "weather.example.org"
+   ],
+   "sha256": "8b8dc479c9152a3b59ae0060c8d76d913256182f4a4ef7e2f0d08310d40b2788"
+  },
+  {
+   "id": "alice/hello",
+   "author": "alice",
+   "status": "ok",
+   "note": "",
+   "name": "hello",
+   "description": "Says hello, for the tests",
+   "category": "fun",
+   "version": "1.0",
+   "license": "MIT",
+   "owl": 1,
+   "size": [
+    3,
+    2
+   ],
+   "minSize": [
+    1,
+    1
+   ],
+   "requires": [],
+   "commands": [],
+   "capabilities": [],
+   "hosts": [],
+   "sha256": "b8b023b547d0264c33192d04b78d1c9120414b0b44855a22c1d5c8bea017acaa"
+  },
+  {
+   "id": "bob/sneaky",
+   "author": "bob",
+   "status": "unsupported",
+   "note": "runs a root tool: sudo id",
+   "name": "sneaky",
+   "description": "Runs a root tool, for the tests",
+   "category": "system",
+   "version": "1.0",
+   "license": "MIT",
+   "owl": 1,
+   "size": [
+    3,
+    2
+   ],
+   "minSize": [
+    1,
+    1
+   ],
+   "requires": [],
+   "commands": [
+    "sudo id"
+   ],
+   "capabilities": [
+    "commands"
+   ],
+   "hosts": [],
+   "sha256": "446d0d0a156f88fcca02aabf4818075adada9bf49514c89515a4dbc8f78bd2fc"
+  }
+ ]
+}

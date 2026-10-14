@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: MIT
-// Builds the store index for omamobile-owl-widgets with our own OWL compiler
-// (omamobile-shell's plugins/omamobile.home/owl/): for each widget the
-// status says may ship, its id, name, author, description, category,
+// Builds index.json, the store index omamobile-owl-widgets ships, with our
+// own OWL compiler (omamobile-shell's plugins/omamobile.home/owl/): for each
+// widget the status lets ship, its id, name, author, description, category,
 // version, language level, sizes, packages, the full commands list, the
 // derived capabilities, and the sha256 of its file. Nothing is run.
+// The index is committed with the package, so building the package needs
+// no compiler: install only copies the files and checks their sha256.
+// Run it from the repository when the pinned commit or status.json changes:
 //
-//   node build-index.js <store checkout> <owl runtime dir> <status.json>
+//   node update-index.js <store checkout> [owl runtime dir] [status.json] > index.json
 "use strict"
 const fs = require("fs"), path = require("path"), crypto = require("crypto"), Module = require("module")
-const [store, owlDir, statusFile] = process.argv.slice(2)
+const store = process.argv[2]
+const owlDir = process.argv[3] || path.join(__dirname, "../omamobile-shell/plugins/omamobile.home/owl")
+const statusFile = process.argv[4] || path.join(__dirname, "status.json")
 
 const cache = {}
 function load(name) {

@@ -12,9 +12,10 @@ pkgdesc="Omarchy Mobile: OWL home-screen widgets from the omarchy-widgets store 
 arch=(any)
 url="https://github.com/SimonSchubert/omarchy-widgets"
 license=(MIT)
-# Data only. omamobile-shell depends on this package for its built-in widgets;
-# the index is built with the shell's compiler from this source tree.
-makedepends=(git nodejs python)
+# Data only; omamobile-shell depends on this package for its built-in widgets.
+# index.json is built with the shell's compiler (update-index.js) and
+# committed here, so this builds on its own (tools/phone-install-package).
+makedepends=(git python)
 source=("omarchy-widgets::git+https://github.com/SimonSchubert/omarchy-widgets.git#commit=$_commit")
 sha256sums=(SKIP)
 
@@ -23,5 +24,5 @@ check() {
 }
 
 package() {
-  "$startdir/install" "$pkgdir" "$srcdir/omarchy-widgets" "$startdir/../omamobile-shell/plugins/omamobile.home/owl"
+  "$startdir/install" "$pkgdir" "$srcdir/omarchy-widgets"
 }
