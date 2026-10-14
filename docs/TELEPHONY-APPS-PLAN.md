@@ -506,6 +506,26 @@ T4 and T5 can run in parallel with T6 and T7 if a second person helps.
 | **Privacy:** numbers and texts in logs, databases or screenshots | sitd's rule extends to the bridge and the apps: states and IDs only in logs; runbook excerpts grep'd for digit runs (MODEM-PLAN M4) |
 | **Licences:** ofono2mm (FuriLabs) is GPL-2.0, mmsd-tng and vvmd are GPL-2.0, Calls and Chatty are GPL-3.0-or-later | The bridge is ours (MIT, in this repository), structured after Droidian's BSD-3-Clause original; GPL projects are read, not copied, except into the GPL-3.0-or-later apps where licences allow |
 
+### 10.1a The owner's answers (2026-10-14)
+
+| # | Decision |
+| --- | --- |
+| 1 | Apps named "Phone" (`omaphone`) and "Messages" (`omamessages`), in one repository |
+| 2 | GPL-3.0-or-later |
+| 3 | The ModemManager-compatible bridge (`omamobile-mmd`) in Python, like `omamobile-sitd` |
+| 4 | Contacts as a vCard folder, synced over CardDAV |
+| 5 | Mobile data handed to NetworkManager from T3 |
+| 6 | Open: the warning texts and the arranged emergency test call |
+| 7 | Lock-screen notifications show "New message" only by default; sender and text as an option |
+| 8 | Open: carrier, SIM and APN (kept out of the repository) |
+| 9 | IMEI and IMSI stay empty over D-Bus; a one-time import of the Android message and call history, if the owner wants it |
+| 10 | Rebuild PipeWire for Bluetooth headset calls, when the call-audio phase gets there |
+| 11 | RCS is a non-goal |
+| 12 | One headless agent shared by both apps |
+| 13 | Our own small wake helper for alarms |
+
+The bridge (T0-T1) starts now, in parallel with the camera app.
+
 ### 10.2 Questions for the owner
 
 | # | Question |
