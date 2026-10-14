@@ -19,6 +19,7 @@ install -Dm644 lib/props.conf "$l/props.conf"
 install -Dm644 prebuilt/omamobile-fp-shim.so "$l/omamobile-fp-shim.so"
 install -Dm755 prebuilt/omamobile-fp-bridge "$l/omamobile-fp-bridge"
 install -Dm644 vendor/systemd/system/omamobile-fp.service "$d/usr/lib/systemd/system/omamobile-fp.service"
+install -Dm644 vendor/pam.d/omarchy-lock-fingerprint "$d/etc/pam.d/omarchy-lock-fingerprint"
 install -Dm644 vendor/systemd/system/fprintd.service.d/omamobile-udfps.conf \
   "$d/usr/lib/systemd/system/fprintd.service.d/omamobile-udfps.conf"
 install -Dm644 vendor/modprobe.d/omamobile-fingerprint-lhbm.conf "$d/usr/lib/modprobe.d/omamobile-fingerprint-lhbm.conf"

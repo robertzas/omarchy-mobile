@@ -13,6 +13,8 @@
 #   vendor/firmware/bcmdhd.cal        -> brcm/brcmfmac4389c1-pcie.<board>.txt       (NVRAM)
 #   vendor/firmware/bcmdhd_clm.blob   -> brcm/brcmfmac4389c1-pcie.<board>.clm_blob  (regulatory)
 #   vendor/firmware/brcm/BCM.hcd      -> brcm/BCM.<board>.hcd                       (btbcm)
+#   vendor/firmware/aoc.bin           -> aoc.bin                 (the AoC DSP: audio and sensors; GSA-authenticated)
+#   vendor/etc/sensors/registry/      -> /usr/share/omamobile/sensors/registry/  (the AoC's sensor list)
 #   vendor/firmware/cs40l26.wmfw      -> cs40l26.wmfw            (cs40l26-vibra, RAM firmware)
 #   vendor/firmware/cs40l26.bin       -> cs40l26.bin             (cs40l26-vibra, wavetable)
 #   vendor/firmware/cs40l26-svc.bin   -> cs40l26-svc.bin         (tuning, not loaded yet)
@@ -52,6 +54,7 @@ MAP=(
   "firmware/bcmdhd.cal|brcm/$FW_BASE.$BOARD.txt"
   "firmware/bcmdhd_clm.blob|brcm/$FW_BASE.$BOARD.clm_blob"
   "firmware/brcm/BCM.hcd|brcm/BCM.$BOARD.hcd"
+  "firmware/aoc.bin|aoc.bin"
   "firmware/cs40l26.wmfw|cs40l26.wmfw"
   "firmware/cs40l26.bin|cs40l26.bin"
   "firmware/cs40l26-svc.bin|cs40l26-svc.bin"
@@ -175,11 +178,13 @@ if [[ "$(od -An -tx2 -j 1080 -N2 "$img" | tr -d ' ')" == ef53 ]]; then
     debugfs -R "dump /$1 $2" "$img" 2>/dev/null
     [[ -s "$2" ]]
   }
+  get_dir() { mkdir -p "$2" && debugfs -R "rdump /$1 $2" "$img" 2>/dev/null && [[ -d "$2/$(basename "$1")" ]]; }
 elif [[ "$(magic_at "$img" 1024)" == e0f5e1e2 ]]; then
   need fsck.erofs "install erofs-utils"
   say "vendor.img is EROFS; extracting it with fsck.erofs"
   fsck.erofs --extract="$WORK/vendor" --no-preserve "$img" >/dev/null
   get_file() { [[ -s "$WORK/vendor/$1" ]] && cp "$WORK/vendor/$1" "$2"; }
+  get_dir() { [[ -d "$WORK/vendor/$1" ]] && mkdir -p "$2" && cp -r "$WORK/vendor/$1" "$2/"; }
 else
   die "vendor.img is neither ext4 nor EROFS"
 fi
@@ -201,6 +206,13 @@ for entry in "${MAP[@]}"; do
   chmod 0644 "$dest/$to"
   printf '  /vendor/%-28s -> /%s/%s\n' "$from" "$DEST_REL" "$to"
 done
+
+# The AoC's sensor registry (which sensors this board has, their buses and
+# settings), read by omamobile-sensor-proxy; without it only virtual sensors.
+reg="$OUT/usr/share/omamobile/sensors"
+get_dir etc/sensors/registry "$reg" || die "/vendor/etc/sensors/registry is missing from this image"
+chmod -R u=rwX,go=rX "$reg"
+printf '  /vendor/%-28s -> /%s\n' "etc/sensors/registry/" "usr/share/omamobile/sensors/registry/"
 
 if [[ -n $CAMERA_APEX ]]; then
   get_file apex/com.google.pixel.camera.hal.apex "$CAMERA_APEX" ||

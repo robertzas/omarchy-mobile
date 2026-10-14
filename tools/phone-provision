@@ -11,7 +11,8 @@
 #
 # From the factory image (tools/extract-*; nothing Google's leaves the laptop
 # except into this phone):
-#   firmware     Wi-Fi, Bluetooth, haptics, speaker amplifiers -> /usr/lib/firmware/updates
+#   firmware     the AoC, Wi-Fi, Bluetooth, haptics, speaker amplifiers -> /usr/lib/firmware/updates
+#   sensors      the AoC's sensor registry -> /usr/share/omamobile/sensors/registry
 #   chroots      gnss and modem vendor trees -> /usr/lib/omamobile-vendor/<profile>
 #                (and waves with --with-waves)
 #   fingerprint  the HAL's Android tree -> /usr/lib/omamobile-fp/{root,MANIFEST,SOURCE}
@@ -177,11 +178,13 @@ if ((skip_extract == 0)); then
   say "Pushing Google's files"
   if ((dry)); then
     note "would push the firmware tree to /usr/lib/firmware/updates"
+    note "would replace the AoC sensor registry in /usr/share/omamobile/sensors/registry"
     for p in "${profiles[@]}"; do note "would replace /usr/lib/omamobile-vendor/$p/{root,MANIFEST,SOURCE,...}"; done
     note "would replace /usr/lib/omamobile-fp/{root,MANIFEST,SOURCE}"
     ((have_unicorn)) && note "would push the camera data to /usr/lib/firmware/omamobile/camera" && camera_done=1
   else
     push_tree "$W/fw/usr/lib/firmware/updates" /usr/lib/firmware/updates merge
+    push_tree "$W/fw/usr/share/omamobile/sensors/registry" /usr/share/omamobile/sensors/registry replace
     for p in "${profiles[@]}"; do push_tree "$W/chroot-$p" "/usr/lib/omamobile-vendor/$p" replace; done
     push_tree "$W/fp-vendor" /usr/lib/omamobile-fp replace
     if ((have_unicorn)); then

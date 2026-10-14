@@ -15,3 +15,12 @@ if [[ -n ${1:-} ]]; then
   ln -sf "/usr/share/zoneinfo/$1" /etc/localtime
 fi
 systemctl enable --now systemd-timesyncd >/dev/null 2>&1 || true
+
+# The phone's services from the other Omarchy Mobile packages: enabled here,
+# once, because packages don't enable units themselves (the device package
+# ships its own boot units as .wants links). The fingerprint service stays
+# off: its first start writes Trusty's secure storage (FINGERPRINT-PLAN).
+for unit in omamobile-sensor-proxy.service omamobile-speaker-protection.service \
+    omamobile-nfc-open.service omamobile-gnss-nmea.socket omamobile-gnss-lto.timer; do
+  systemctl cat "$unit" >/dev/null 2>&1 && systemctl enable "$unit" >/dev/null 2>&1 || true
+done

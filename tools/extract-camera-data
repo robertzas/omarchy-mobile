@@ -1138,6 +1138,7 @@ def main():
                     help="imx386: the init settings with phase detection on (default off)")
     ap.add_argument("--list", action="store_true", help="only print what was found")
     args = ap.parse_args()
+    os.makedirs(args.dir, exist_ok=True)
     names = list(SENSORS) if args.sensor == "all" else [args.sensor]
     if args.output and len(names) > 1:
         ap.error("-o needs one --sensor")
