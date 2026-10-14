@@ -173,6 +173,20 @@ for dir in "${build[@]}"; do
       echo "    test/all passed ($(grep -c '^ok' "$work/test.log") checks, natively)"
     fi
   fi
+  # The upstream signers a PKGBUILD names (validpgpkeys), fetched here on the
+  # host (cached) so makepkg in the container can verify .sig sources
+  pgp=$work/pgp.asc
+  : > "$pgp"
+  keys=$(sed -n '/^validpgpkeys=(/,/)/p' "$dir/PKGBUILD" | grep -oE '[0-9A-F]{40}' || true)
+  if [[ -n $keys ]]; then
+    kr=$ALARM_CACHE/pgp && mkdir -p "$kr" && chmod 700 "$kr"
+    for k in $keys; do
+      GNUPGHOME=$kr gpg -q --batch --list-keys "$k" >/dev/null 2>&1 ||
+        GNUPGHOME=$kr gpg -q --batch --keyserver "$ALARM_KEYSERVER" --recv-keys "$k" ||
+        echo "    warning: could not fetch upstream key $k"
+    done
+    GNUPGHOME=$kr gpg -q --batch --armor --export $keys > "$pgp" 2>/dev/null || true
+  fi
   # Our own earlier packages resolve from the repository being built
   have_repo=0
   [[ -f $repo/omamobile.db ]] && have_repo=1
@@ -200,6 +214,7 @@ for dir in "${build[@]}"; do
         pacman -Sp --print-format %n "$dep" >/dev/null 2>&1 && install+=("$dep")
       done
       ((${#install[@]})) && pacman -S --noconfirm --needed --asdeps --overwrite "/usr/share/pacman/keyrings/*" "${install[@]}" >/dev/null
+      [[ -s /work/pgp.asc ]] && su builder -c "gpg -q --batch --import /work/pgp.asc"
       flags=(-f --nodeps --noconfirm)
       [[ $INCHECK == 1 ]] || flags+=(--nocheck)
       su builder -c "SRCDEST=/srcdest PKGDEST=/work/out PKGEXT=.pkg.tar.zst makepkg ${flags[*]}" 2>&1 | tail -25
