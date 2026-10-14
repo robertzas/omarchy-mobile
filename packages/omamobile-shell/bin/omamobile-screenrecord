@@ -47,16 +47,17 @@ print(f[0]["name"] if f else "")')
     width=$(conf WIDTH 720) fps=$(conf FPS 30) audio=${2:-$(conf AUDIO mic)}
     [[ $audio == mic || $audio == system || $audio == none ]] || audio=mic
     [[ $fps =~ ^[0-9]+$ ]] || fps=30
-    # Standard HD video: BT.709, limited range, 4:2:0, and tagged as such.
-    # Untagged full-range output (wf-recorder's default, yuvj420p) left
-    # players guessing, and the usual guess (BT.709) played it back duller.
+    # HD video in BT.709, tagged as such. Untagged output left players
+    # guessing the color matrix, and the usual guess played it back duller.
+    # Full range, because wf-recorder marks the stream full range anyway
+    # (yuv420p(pc)): limited-range data under that flag would look washed out.
     scale="scale=iw:ih"
     if [[ $width != native ]]; then
       [[ $width =~ ^[0-9]+$ ]] || width=720
       scale="scale=$width:-2"
     fi
-    filter=(-F "$scale:out_color_matrix=bt709:out_range=tv" -x yuv420p
-      -p x264-params=colorprim=bt709:transfer=bt709:colormatrix=bt709)
+    filter=(-F "$scale:out_color_matrix=bt709:out_range=pc"
+      -p x264-params=colorprim=bt709:transfer=bt709:colormatrix=bt709:range=pc)
     sound=() what="no sound"
     case $audio in
       mic) sound=(--audio) what="with the microphone" ;;   # PipeWire's default source: the built-in mic
