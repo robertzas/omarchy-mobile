@@ -353,3 +353,28 @@ Not part of the reinstall. The M4.1i repeat comes after the M3.5 checksums
 ## 10. Results
 
 (Date, `uname -r`, image version and size, each step's outcome.)
+
+### 2026-10-13: first clean reinstall (cheetah, 7.3.0-rc6-omamobile-push1-00470-g0db95c439674)
+
+Passed: P1-P4, B1-B4 (root image 15 min, 2.5 GB compressed, all smoke checks
+ok, 36 offline tests ok), I1 (bootloader `cloudripper-17.0-15199429` on both
+slots), I2, I3, first boot (user account, Omarchy's full user setup, file
+system grown to 109 GB), V1-V3 (radio partitions unchanged).
+
+Found and fixed in the repository (c8762a2) after the install; a new install
+no longer needs these by hand:
+- `aoc.bin` and the AoC sensor registry weren't extracted or pushed: no AoC,
+  audio or sensors until they were (extract-vendor-firmware, phone-provision);
+- extract-camera-data didn't create its output directory;
+- the sensor proxy, speaker protection, NFC opener and GNSS socket/timer
+  weren't enabled (omamobile-setup-system 0.1.29 enables them);
+- fprintd wasn't a dependency, and the lock's fingerprint PAM file was
+  missing (omamobile-fingerprint 0.1.7).
+Also: `bin/omamobile fastboot`'s crash fallback looped the old install's
+reboots; reach fastboot with Volume Down + Power instead when the phone runs
+Linux and adb isn't available (I1).
+The bring-up overlays are applied by `bin/omamobile images` from
+`device.conf`'s `DTB_OVERLAYS` (b46a2de); without them the image boots with
+no audio, NFC, GNSS, fingerprint or cameras.
+Fingerprint: state restored from the Phase 0 backup, service started with the
+human's go, a finger re-enrolled.
