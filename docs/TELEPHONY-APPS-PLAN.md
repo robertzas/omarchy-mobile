@@ -3,6 +3,13 @@
 
 **Status (2026-10-14):** **T0 and T1 done** without a SIM: `omamobile-modem-sit` 0.3.0 (event subscription, SIM and radio state) and `omamobile-mmd` 0.1.0, the ModemManager-compatible bridge, pass their tests, mmcli, GNOME Calls 51.1 and Chatty 0.8.9 in a container, and a no-SIM run on the phone (FAILED/sim-missing, as MM shows it; NetworkManager sees the modem). Results and runbook: [MODEM-PLAN](../device/cheetah/MODEM-PLAN.md) "T0/T1: the ModemManager bridge". T2 needs the SIM. Packaging decided: its own package `omamobile-mmd` (not `omamobile-mm`), `conflicts=(modemmanager)` and no `provides=` (nothing depends on `modemmanager`), no D-Bus activation file, Python with PyGObject's Gio rather than dbus-fast (on the phone already, and it gives the caller's bus name for polkit). The bridge owns the bus name from its start and shows the modem once sitd's socket answers. Hold, swap, conference, call waiting, signal strength and SIM PIN moved to T8 (new SIT requests, untestable without a SIM).
 
+**T6 and T7, first version (2026-10-14), offline only.** The apps are built as **omatel**: Phone (`omaphone`), Messages (`omamessages`) and `omatel-agent`, one headless agent for both (Q12), in one local repository (`~/Projects/omatel`, GPL-3.0-or-later, not published). They passed:
+- 94 Rust tests (unit tests; the ModemManager proxies against a scripted MM; the agent end to end on private buses);
+- a chain test in a container: agent, then `omamobile-mmd`, `omamobile-sitd` and `tools/sit-sim`;
+- screenshots in a headless Weston.
+
+The package is `packages/omatel`: one build, three packages, not in `omamobile-apps`' defaults. Nothing has run on the phone. Results, deviations from §9, what is stubbed, and the runbook for the first phone test are in [§10.1b](#101b-t6-and-t7-the-first-version-2026-10-14). Shell work (T5), call audio (T4) and MMS (T3) are not part of this.
+
 The rest of this status line is the design snapshot: design only. Nothing is built and nothing on the phone has changed. The only phone queries were read-only: package versions, unit states, and the RTC's name and wake flag. Kernel on the phone: `7.3.0-rc6-omamobile-push1-00543-g1f83c16c0aba`. Installed: `omamobile-modem` 0.1.4 and `omamobile-modem-sit` 0.2.0, both units disabled, no SIM; `libmm-glib` 1.24.2 (pulled in by NetworkManager and GeoClue), `squeekboard` 1.43.1, `quickshell` 0.3.2, `omarchy` 4.0.4. Not installed: ModemManager, oFono, GNOME Calls, Chatty, mmsd-tng, evolution-data-server.
 
 **Goal:** a phone that makes and takes calls and sends and receives SMS and MMS, through two apps of ours modelled on AOSP Dialer and AOSP Messaging and remade in Rust for Omarchy Mobile.
@@ -527,6 +534,105 @@ T4 and T5 can run in parallel with T6 and T7 if a second person helps.
 | 13 | Our own small wake helper for alarms |
 
 The bridge (T0-T1) starts now, in parallel with the camera app.
+
+### 10.1b T6 and T7: the first version (2026-10-14)
+
+Everything here was built and tested on the laptop, offline, against a scripted ModemManager and the real bridge in a container. **Nothing has run on the phone and nothing on the phone changed.** The code is in a local repository, `~/Projects/omatel`, at version 0.1.0 (Rust, GTK 4 and libadwaita, GPL-3.0-or-later). It is not published: the owner decides that.
+
+**What is built:**
+
+| Part | What it does |
+| --- | --- |
+| `omatel-agent` (one per user, a systemd user unit, D-Bus activatable) | Follows the modem through MM's API, through `omamobile-mmd` or the real ModemManager, as it comes and goes. Serves `org.omamobile.Phone1` and `org.omamobile.Messages1` (§9.1, with the interface moved from the dialer into the agent). Incoming calls: the IncomingCall signal, a critical notification with Answer and Decline, the feedbackd ringtone, and Phone's answer page. Blocked callers are hung up at once and logged. The call log is written from Call state changes, with a missed-call notification offering Call back and Message. Outgoing calls carry post-dial tones (`,`). SMS: committed to disk, then `Messaging.Delete`, with duplicates filtered; WAP push is left for mmsd-tng. One notification per conversation with an inline reply. Sends run in the background, with delivery reports and retry |
+| Phone (`omaphone`) | Tabs Favourites, Recents, Contacts and Keypad (a bottom view switcher). A large dialpad with T9 smart dial and a persistent emergency banner. Call details. A contact page and editor, `.vcf` import and export, blocking. In-call: timer, mute, speaker, a touch-tone keypad, hang up. Answer page with "Reply with message". `tel:` and `callto:` links, and a Contacts launcher entry |
+| Messages (`omamessages`) | The conversation list: pinned, archived, muted, unread, drafts, FTS5 search, and a long-press action sheet. Threads with bubbles, day separators, delivery states, and tap-to-retry. Compose to a contact or a number; blocked numbers; settings; JSON export and import (§9.4); `sms:`, `smsto:`, `mms:` and `mmsto:` links with `?body=`. MMS: the schema and a disabled attach button only |
+| Shared crates | `omatel-mm` (zbus 5 proxies for MM 1.24), `omatel-store` (SQLite, WAL, `synchronous=FULL`, migrations, FTS5, a `transport` column), `omatel-contacts` (a vdir vCard folder; vCard 2.1-4.0 in, 3.0 out, keeping unknown lines; E.164 through the `phonenumber` crate, Apache-2.0, GPL-3-compatible), `omatel-notify` (inline reply through `NotificationReplied`), `omatel-theme` (Omarchy `colors.toml`, as omacam), `omatel-api` |
+
+**Decisions that differ from §9:**
+
+- **One agent, not two app services.** This is Q12. The apps are plain GTK apps that start when opened. The agent serves the Phone1 and Messages1 names, so the shell's lock card (T5) talks to the agent, not to the app.
+- **Storage.** All three databases are in `~/.local/share/omatel/` (`messages.db`, `calls.db`, `blocked.db`), not in a directory per app: one agent writes them all. The apps write only their own changes (flags, drafts, deletions). Settings live in `~/.config/omatel/settings.toml`, shared by the three programs.
+- **Packaging.** One PKGBUILD, `packages/omatel`, with `pkgbase=omatel` and `pkgname=(omatel-agent omaphone omamessages)`. That is one cargo build instead of two, and either app can be installed alone because both depend on the agent. This replaces the two PKGBUILDs §9.5 planned.
+- **The enabled state.** The agent's user unit ships **not enabled**. The T6 runbook enables it (step P3). D-Bus activation starts it whenever an app needs it.
+
+**Results:**
+
+- **Rust tests (`scripts/check.sh`: rustfmt, clippy `-D warnings`): 94 pass.** Of those:
+  - 7 in `omatel-mm`'s own unit tests;
+  - 5 run `omatel-mm` against the scripted MM: an incoming call with Accept and DTMF, an outgoing call answered and one refused, SMS in and out, a delivery report, a failed send, and a WAP push;
+  - 11 run the agent end to end on two private buses:
+    - calls: answered, missed, declined, blocked, outgoing with post-dial tones, busy;
+    - **emergency numbers refused, and never reaching the modem**;
+    - messages: SMS stored then deleted, a duplicate, WAP push left alone, an inline reply, a delivery report and a retry, "New message" only while locked, muted, blocked and disabled notifications;
+    - a modem that appears late.
+- **The chain test, `scripts/chain-test.sh`: passes.** The agent runs on `omamobile-mmd` 0.1.0, `omamobile-sitd` 0.3.0 and `tools/sit-sim` from this tree, in a container. It checks:
+  - an incoming call announced, answered, with a DTMF tone, hung up and logged;
+  - an outgoing call answered;
+  - 911 refused, with no AIMS_DIAL;
+  - an SMS stored and deleted from the bridge;
+  - a reply from the notification sent through the RIL exactly once;
+  - the WAP push left on the bridge;
+  - no transcript violations;
+  - no number or text in the agent's log.
+- **A bug the chain test found, now fixed in the agent:** the bridge announces its first fetch with `Added(received=false)`, as MM does for messages it already had, and the agent first skipped those. The bridge itself is unchanged.
+- **Screenshots** were taken in a headless Weston in a container, at 456x900:
+  - `omaphone` (12) and `omamessages` (11) on fictional demo data;
+  - 9 with the agent and the mock MM running: ringing, answered, muted through the agent's API, ended, then the call in Recents; a message arriving and a reply sent.
+  - They are in `~/Projects/omatel/target/ui-shots/` and are not committed.
+- **Measured on the laptop in the container** (the phone will be slower; P5 measures it there):
+
+  | What | Value |
+  | --- | --- |
+  | Agent on the bus | 66 ms after its start |
+  | Agent memory | 18 MB RSS, after a call and two messages (target under 40 MB) |
+  | Phone, start to first frame saved | 0.6 s (warm) |
+  | Messages, start to first frame saved | 0.3 s (warm) |
+  | Apps with a call or a thread open | about 64-67 MB RSS each |
+- **Cross-compile:** omatel's `bin/cross build` uses omacam's image and sysroot. For the package build time, see `packages/omatel/README.md`.
+
+**Stubbed or deferred:**
+
+- **Call audio (T4).**
+  - `SetMute` and `SetRoute` go to callaudiod when it runs. Without it they are recorded and reported (`AudioRouting` false), and the in-call screen says that routing arrives with call audio support.
+  - Bluetooth is accepted as a route but does nothing.
+  - Whatever voice path `omamobile-sitd` sets up itself (EP5/EP4) is outside the agent.
+- **Ringing:** through feedbackd (`phone-incoming-call`) when it runs. It isn't installed on the phone, so the call is announced silently until it is installed or the shell plays a ringtone (T5).
+- **MMS (T3):** schema and placeholders only. WAP pushes stay on the modem for mmsd-tng.
+- **Shell (T5):**
+  - The notification hints are in place: `category`, `desktop-entry`, and `x-omamobile-private` with `x-omamobile-public-summary`.
+  - Inline reply needs the Omarchy patch from §7.2. Until then Messages shows a Reply button that opens the app.
+  - The lock-screen call card is not built.
+  - Lock-state detection uses logind's LockedHint and `org.freedesktop.ScreenSaver`. Omarchy's Quickshell lock may set neither. Then notifications show details unless the shell honours the public-summary hint, which is a T5 item.
+- **Not built:**
+  - **Emergency calls:** refused everywhere, with the §3.2 texts.
+  - Hold, swap and conference (T8).
+  - Visual voicemail (T9).
+  - CardDAV sync: the vdir is ready for vdirsyncer or pimsync.
+  - Re-showing notification details after unlock.
+  - A UI for favourites order.
+  - Contact photos (initials only).
+- **A bridge gap, not a bug:** `omamobile-mmd` has no SMS status reports (T8). Sent messages therefore stay "Sent", and the agent keeps each sent `Sms` object on the bridge while it waits for a report, for up to 48 h.
+
+**First phone test, without a SIM: UI and agent (P0-P6).** Every step needs the human's go, and the human holds the phone. Announce first: windows open on the phone.
+
+| Step | Commands | Expect / Pass | Stop condition | Rollback | Risk |
+| --- | --- | --- | --- | --- | --- |
+| P0 read-only | `tools/phone-ssh 'pacman -Q omamobile-mmd omamobile-modem-sit; systemctl is-active omamobile-mmd omamobile-sitd'` | Versions and states as recorded | anything unexpected | none | none |
+| P1 build | `tools/build-packages packages/omatel` (laptop; the source tarball is described in the package README), or `bin/cross package` in omatel | three aarch64 packages | build fails | none | none |
+| P2 install | `tools/repo-push`, then on the phone `pacman -S omatel-agent omaphone omamessages` | installed; no service started | pacman conflict | `pacman -R omaphone omamessages omatel-agent` | low (user-space only) |
+| P3 agent | as the user: `systemctl --user enable --now omatel-agent`; `journalctl --user -t omatel-agent -b` | "serving org.omamobile.Phone1 ..."; modem state `no-sim` with the bridge running, `no-modem` without it; no warnings except the notification server's | a crash loop; any number in the log | `systemctl --user disable --now omatel-agent` | low |
+| P4 apps | open Phone and Messages; the Contacts tab; import a `.vcf` from the owner's old phone (stays on the phone, private) | no "service isn't running" banner; the emergency banner on Keypad; Recents and Messages empty; contacts listed | a crash: `journalctl --user -t omaphone -t omamessages` | close the apps | low |
+| P5 emergency UI and measurements | type 911 on Keypad and press call; then `systemd-run --user --pipe --wait /usr/bin/time -v omaphone --script "shot /tmp/p.png; quit"` | the full-screen "can't call emergency services yet" page; no `Dial` in the agent log; **no dial in sitd's state or log**; record the first-frame time and RSS, and the agent's RSS (`systemctl --user status omatel-agent`) | anything reaching sitd | none | none (the agent refuses emergency numbers; the app never sends them) |
+| P6 settings | in Messages' Settings, turn "Sender and text on the lock screen" on and off | `~/.config/omatel/settings.toml` follows; the agent reads it at the next message (no restart) | none | delete the file | none |
+
+**After T2 (a SIM, M4.2-M4.5 passed; the radio transmits: announce it):**
+
+- **C1:** an incoming call from the owner's other phone. Answer, then hang up. Check: the answer page shows within about 1 s of the ring (T6's exit criterion), Recents shows the call, and nothing is in the logs.
+- **C2:** an outgoing call to the other phone. Check the timer and hang-up. Add touch tones to a test IVR only if the owner has one.
+- **C3:** SMS both ways. Reply once from the notification, if the shell supports inline reply by then. Check: Messages shows the message, `mmcli -m 0 --messaging-list-sms` is empty after storage, and there is no duplicate after `systemctl --user restart omatel-agent`.
+- **C4:** block the other phone's number, call in, and check it is hung up and logged as blocked.
+- **C5:** kill the agent mid-receive (`systemctl --user kill omatel-agent` while texts arrive). Check that nothing is lost or duplicated (T7's exit criterion).
+- **Never:** an emergency number. That is §3.3, and the owner's.
 
 ### 10.2 Questions for the owner
 

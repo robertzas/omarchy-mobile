@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+#
+# omatel: Omarchy Mobile's Phone (omaphone) and Messages (omamessages) apps
+# and omatel-agent, the background service both need
+# (docs/TELEPHONY-APPS-PLAN.md T6/T7). Rust, GTK 4 and libadwaita, from
+# one repository (github.com/derekross/omatel, GPL-3.0-or-later); its own
+# pkgbuild/PKGBUILD builds a checkout, this one a pinned release.
+#
+# One build, three packages: both apps depend on the agent, and either app
+# can be installed without the other. Not in omamobile-apps' defaults yet.
+#
+# Source: the release tag's tarball, pinned by its sha256. Until the
+# repository is published, put `git archive --prefix=omatel-$pkgver/` of
+# the release commit here as omatel-$pkgver.tar.gz (makepkg uses a local
+# file of that name instead of downloading); its sha256 is the one below,
+# and publishing the tag means replacing it with GitHub's (README.md).
+#
+# Build: cargo fetches the crates (Cargo.lock pinned) in prepare() and
+# builds offline. A developer iterating on omatel cross-compiles instead
+# (omatel's bin/cross).
+pkgbase=omatel
+pkgname=(omatel-agent omaphone omamessages)
+pkgver=0.1.0
+pkgrel=1
+arch=(aarch64)
+url="https://github.com/derekross/omatel"
+license=('GPL-3.0-or-later' 'MIT')
+makedepends=(cargo pkgconf gtk4 libadwaita sqlite)
+checkdepends=(dbus)
+options=('!debug' '!lto')
+source=("omatel-$pkgver.tar.gz::https://github.com/derekross/omatel/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('0043c465c5cb06d01161c762d5c9a63d761e57a783e733cfd39a3e800be0924f')
+
+prepare() {
+  cd "omatel-$pkgver"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "omatel-$pkgver"
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release -p omaphone -p omamessages -p omatel-agent
+}
+
+check() {
+  cd "omatel-$pkgver"
+  export CARGO_TARGET_DIR=target
+  # The logic without D-Bus or a display: contacts, numbers, the stores,
+  # the API types (the D-Bus tests run on the laptop, scripts/check.sh).
+  cargo test --frozen -p omatel-contacts -p omatel-store -p omatel-api --lib
+}
+
+_common() {
+  cd "$srcdir/omatel-$pkgver"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+}
+
+package_omatel-agent() {
+  pkgdesc="Phone and Messages background service: rings, call log, SMS storage, notifications"
+  depends=(gcc-libs glibc sqlite dbus systemd)
+  optdepends=('omamobile-mmd: the modem (ModemManager API) on Omarchy Mobile phones'
+              'feedbackd: ring and vibrate for incoming calls'
+              'callaudiod: call audio routing (speaker, mute), with call audio (T4)')
+  install=omatel-agent.install
+  _common
+  install -Dm755 target/release/omatel-agent "$pkgdir/usr/bin/omatel-agent"
+  install -Dm644 data/omatel-agent.service "$pkgdir/usr/lib/systemd/user/omatel-agent.service"
+  install -Dm644 data/org.omamobile.Phone1.service "$pkgdir/usr/share/dbus-1/services/org.omamobile.Phone1.service"
+  install -Dm644 data/org.omamobile.Messages1.service "$pkgdir/usr/share/dbus-1/services/org.omamobile.Messages1.service"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/omatel/README.md"
+  install -Dm644 docs/export-format.md "$pkgdir/usr/share/doc/omatel/export-format.md"
+}
+
+package_omaphone() {
+  pkgdesc="Phone: dialpad with smart dial, call log, favourites, contacts and the in-call screen"
+  depends=(omatel-agent gcc-libs glib2 glibc 'gtk4>=4.14' 'libadwaita>=1.5' sqlite hicolor-icon-theme)
+  install=omatel-apps.install
+  _common
+  install -Dm755 target/release/omaphone "$pkgdir/usr/bin/omaphone"
+  local d=apps/omaphone/data f
+  for f in org.omamobile.Phone org.omamobile.Contacts; do
+    install -Dm644 $d/$f.desktop "$pkgdir/usr/share/applications/$f.desktop"
+    install -Dm644 $d/$f.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/$f.svg"
+  done
+}
+
+package_omamessages() {
+  pkgdesc="Messages: SMS conversations with search, drafts, delivery reports and blocking"
+  depends=(omatel-agent gcc-libs glib2 glibc 'gtk4>=4.14' 'libadwaita>=1.5' sqlite hicolor-icon-theme)
+  install=omatel-apps.install
+  _common
+  install -Dm755 target/release/omamessages "$pkgdir/usr/bin/omamessages"
+  local d=apps/omamessages/data
+  install -Dm644 $d/org.omamobile.Messages.desktop "$pkgdir/usr/share/applications/org.omamobile.Messages.desktop"
+  install -Dm644 $d/org.omamobile.Messages.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/org.omamobile.Messages.svg"
+}
