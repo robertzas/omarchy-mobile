@@ -278,4 +278,31 @@ test("Grid splits its width into equal columns", () => {
   eq(box.children.map((k) => [Math.round(k.x * 10) / 10, Math.round(k.w * 10) / 10]).slice(0, 4), [[0, 30.7], [34.7, 30.7], [69.3, 30.7], [0, 30.7]])
 })
 
+// ---------------------------------------------------------------- home screen
+test("an OWL widget runs only when it compiles, can run here and is approved", () => {
+  const K = load("catalog.js")
+  const UW = require("../plugins/omamobile.home/UserWidgets.js")
+  const text = 'widget "quakes" {\n  size: 6x3\n  source q = cmd("curl -s https://example.org/q")\n  Text { text: q }\n}\n'
+  const grid = { columns: 4, rows: 6 }
+  const info = K.describe("me.quakes", text, grid, 908 / 6, P.dpFor(480))
+  eq([info.ok, info.spec.size, info.spec.capabilities], [true, [4, 2], ["commands", "network"]])
+  eq(K.summary(info.caps), "runs 1 command, uses the internet (example.org)")
+  const record = { id: "me.quakes", status: "ok", errors: [], hash: "h1", kind: "owl", owl: { text } }
+  eq(K.cardState(false, true, record, info, null, "").state, "off")
+  eq(K.cardState(true, true, record, info, null, "").state, "approve")
+  eq(K.cardState(true, true, record, info, { commands: info.program.commands, network: false }, "").state, "ok")
+  eq(K.cardState(true, true, record, info, { commands: ["something else"] }, "").message.indexOf("It changed what it runs"), 0)
+  eq(K.cardState(true, true, record, info, { commands: info.program.commands }, "h1").state, "error")
+  const bad = K.describe("me.bad", 'widget "w" {\n  Txt { }\n}', grid, 150, 1.16)
+  eq([bad.ok, K.cardState(true, true, record, bad, null, "").state], [false, "error"])
+  assert.match(bad.error, /^2:3: unknown node 'Txt'/)
+  const sudo = K.describe("me.sudo", 'widget "w" {\n  source a = cmd("sudo id")\n  Text { text: a }\n}', grid, 150, 1.16)
+  assert.match(K.cardState(true, true, record, sudo, null, "").message, /Can't run on this phone: runs a root tool/)
+  // The scan's OWL records keep their text, and the catalog sizes them from the compiler.
+  const scan = UW.parseScan(JSON.stringify({ dir: "/w", widgets: [{ id: "me.quakes", status: "ok", hash: "h1", kind: "owl", owl: { text } }] }))
+  eq([scan.widgets[0].kind, scan.widgets[0].status, scan.widgets[0].owl.text === text], ["owl", "ok", true])
+  eq(UW.catalog(scan, { "me.quakes": info.spec })["me.quakes"].size, [4, 2])
+  eq(Object.keys(UW.catalog(scan, null)), [])
+})
+
 if (failed) { console.log(failed + " failed"); process.exit(1) }

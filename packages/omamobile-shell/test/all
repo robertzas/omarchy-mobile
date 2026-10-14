@@ -25,7 +25,7 @@ pass "palette references are qualified"
 # without needing the shell's own imports to resolve.
 qmlformat=$(command -v qmlformat || command -v /usr/lib/qt6/bin/qmlformat || true)
 if [[ -n $qmlformat ]]; then
-  for qml in plugins/*/*.qml; do
+  for qml in plugins/*/*.qml plugins/omamobile.home/owl/*.qml; do
     "$qmlformat" "$qml" >/dev/null 2>&1 || fail "$qml parses"
   done
   pass "plugin QML parses"

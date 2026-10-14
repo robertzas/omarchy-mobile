@@ -431,13 +431,19 @@ Instance.prototype = {
     var self = this
     var out = []
     var count = { n: 0 }
+    // Whether this frame read `time`: then the Canvas animates.
+    var frame = { time: false }
+    this.timeFrames.push(frame)
     try {
       this.drawBudget.run(function() {
         self.drawList(list, new C.Env(self.drawCtx, env, [width, height]), out, count)
       })
     } catch (e) {
       this.host.report("Canvas: " + C.messageOf(e))
+    } finally {
+      this.timeFrames.pop()
     }
+    out.readsTime = frame.time
     return out
   },
 

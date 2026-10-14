@@ -273,6 +273,24 @@ def scan_hash_follows_content():
 
 
 @test
+def owl_widgets_are_listed_with_their_text():
+    with Sandbox() as s:
+        f = os.path.join(s.widgets, "t.owl")
+        os.makedirs(f)
+        open(os.path.join(f, "widget.owl"), "w").write('widget "w" {\n  Text { text: "hi" }\n}\n')
+        r = s.mod.inspect(f, s.widgets, "user", lint=False)
+        assert r["kind"] == "owl" and r["status"] == "ok" and r["hash"], r
+        assert r["owl"]["text"].startswith('widget "w"') and r["manifest"] is None
+        h1 = r["hash"]
+        open(os.path.join(f, "widget.owl"), "a").write("// changed\n")
+        assert s.mod.inspect(f, s.widgets, "user", lint=False)["hash"] != h1
+        open(os.path.join(f, "widget.owl"), "w").write("x" * ((256 << 10) + 1))
+        assert any("larger than" in e for e in s.mod.inspect(f, s.widgets, "user", lint=False)["errors"])
+        # A QML widget is still a QML widget.
+        assert s.mod.inspect(s.widget("t.qml"), s.widgets, "user", lint=False)["kind"] == "qml"
+
+
+@test
 def too_big_widgets_are_refused():
     with Sandbox() as s:
         f = s.widget("t.big")

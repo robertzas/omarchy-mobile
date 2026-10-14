@@ -24,7 +24,7 @@
         "spot": { "text": "{\"data\":{\"amount\":\"64250.12\",\"base\":\"BTC\",\"currency\":\"USD\"}}" },
         "candles": { "value": [[1791890100,64100,64300,64150,64250,10],[1791889200,63950,64180,64000,64150,12],[1791888300,63800,64050,63850,64000,9],[1791887400,63700,63900,63750,63850,11],[1791886500,63650,63800,63700,63750,8],[1791885600,63500,63720,63600,63700,13],[1791884700,63400,63650,63450,63600,7],[1791883800,63300,63500,63350,63450,10]] } } },
     { "id": "simonschubert/xkcd", "covers": "Image from a file, if, three text styles", "sources": {
-        "comic": { "text": "{\"num\":4242,\"title\":\"Sample comic (fixture)\",\"alt\":\"A stand-in picture drawn for the tests, not a real comic.\",\"path\":\"/fixtures/sample-comic.png\"}" } } },
+        "comic": { "text": "{\"num\":4242,\"title\":\"Sample comic (fixture)\",\"alt\":\"A stand-in picture drawn for the tests, not a real comic.\",\"path\":\"/tmp/owl-fixtures/sample-comic.png\"}" } } },
     { "id": "lucassynnott/year-left", "covers": "Canvas with 365 rects, range and sortBy (step budget)", "sources": { "now": { "value": 1791890820 } } },
     { "id": "simonschubert/todo", "covers": "run() action with a value, lines and split", "sources": {
         "todo": { "text": "3:water the plants\n4:reply to the landlord\n6:book the bike service\n7:back up the phone\n" } } },

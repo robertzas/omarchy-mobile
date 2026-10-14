@@ -1,0 +1,26 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Inside the conformance container: L4 (layout) and L5 (pixels) of our
+# renderer against the reference's, offscreen at the phone's scale, and the
+# review screenshots. tools/owl-conformance --render runs it.
+set -euo pipefail
+out=/tmp/owl-render
+while (( $# )); do case $1 in --out) out=$2; shift 2 ;; *) shift ;; esac; done
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+src=$(cd -- "$here/../../.." && pwd)
+mkdir -p "$out" /tmp/xdg /tmp/owl-fixtures
+export XDG_RUNTIME_DIR=/tmp/xdg QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software TZ=Europe/Berlin
+
+# A stand-in picture for the xkcd fixture: drawn here, not a comic.
+magick -size 600x360 xc:white -stroke black -strokewidth 4 -fill none \
+  -draw "rectangle 20,20 580,340" -draw "circle 160,180 160,120" -draw "line 300,100 520,260" \
+  -draw "line 300,260 520,100" /tmp/owl-fixtures/sample-comic.png
+
+h=/tmp/owl-harness
+rm -rf "$h"; mkdir -p "$h"
+ln -s "$src/packages/omamobile-shell/plugins/omamobile.home/owl" "$h/ours"
+ln -s /ref/omarchy-widgets/runtimes/quickshell "$h/ref"
+cp "$here"/*.qml "$h/"
+node "$here/jobs.js" "$out" /ref/omarchy-widgets/widgets > "$h/job.json"
+QT_SCALE_FACTOR=3 OWL_JOB="$h/job.json" timeout 600 quickshell -p "$h/tiles.qml" 2>&1 | grep -E "rendered|ERROR|rror|report:" | grep -v "^.*DEBUG.*rendered" | head -40 || true
+node "$here/compare.js" "$out"

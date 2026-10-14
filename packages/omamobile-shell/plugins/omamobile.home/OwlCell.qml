@@ -1,0 +1,171 @@
+// SPDX-License-Identifier: MIT
+import QtQuick
+import qs.Commons
+import qs.Commons as Commons
+import "UserWidgets.js" as UserWidgets
+import "owl/phone.js" as Phone
+import "owl" as Owl
+
+// One placed OWL widget (docs/WIDGET-INTEROP-PLAN.md §2.7, §3). It runs
+// only when its file compiles here and its exact list of commands, URLs and
+// files is approved; anything else is a card that says why, in this cell
+// only. Its first seconds are covered by the same crash guard as QML
+// widgets: if the shell dies while it starts, it stays off at the next start
+// until its file changes.
+Item {
+  id: owlCell
+
+  // Set by Home.qml's cell, like every widget.
+  property var home: null
+  property var entry: null
+  property bool editing: false
+
+  readonly property string widgetId: owlCell.entry ? UserWidgets.idOf(owlCell.entry.type) : ""
+  readonly property var card: owlCell.home && owlCell.widgetId ? owlCell.home.owlCard(owlCell.widgetId)
+    : ({ state: "waiting", message: "", record: null, info: null, approval: null })
+  readonly property bool running: owlCell.card.state === "ok"
+  readonly property real dp: owlCell.home ? owlCell.home.owlDp : 1
+
+  Owl.OwlWidget {
+    id: owl
+    text: owlCell.running && owlCell.card.record && owlCell.card.record.owl ? owlCell.card.record.owl.text : ""
+    // Persisted state is per placement: the same widget placed twice keeps two states.
+    stateKey: owlCell.entry ? owlCell.widgetId + "@" + owlCell.entry.id : ""
+    host: owlCell.home ? owlCell.home.owlHost : null
+    themeColors: owlCell.home ? owlCell.home.owlPalette : ({})
+    approval: owlCell.card.approval
+    active: owlCell.running && !!owlCell.home && !!owlCell.entry && owlCell.home.owlActive(owlCell.entry.id)
+    tileVars: Phone.tileVars(owlCell.width, owlCell.height, owlCell.dp,
+                             owlCell.home ? owlCell.home.owlScreenWidth : owlCell.width,
+                             owlCell.home ? owlCell.home.owlScreenHeight : owlCell.height, Style.cornerRadius)
+  }
+
+  // The tile's own onTap, under the nodes (a node that handles taps wins).
+  TapHandler {
+    enabled: owlCell.running && !owlCell.editing && !!owl.tree && !!owl.tree.onTap
+    gesturePolicy: TapHandler.ReleaseWithinBounds
+    onTapped: function(point) { owl.runHandler(owl.tree.onTap, [point.position.x / owlCell.dp, point.position.y / owlCell.dp]) }
+  }
+
+  Owl.OwlView {
+    id: view
+    anchors.fill: parent
+    anchors.margins: (owl.program ? owl.program.padding : 12) * owlCell.dp
+    visible: owlCell.running && owl.error === ""
+    tree: owl.tree
+    colors: owlCell.home ? owlCell.home.owlInk : ({})
+    dp: owlCell.dp
+    corners: Phone.cornersFor(Style.cornerRadius)
+    monoFamily: Style.font.family
+    iconFamily: Style.font.family
+    homeDir: owlCell.home ? owlCell.home.homeDir : ""
+    interactive: !owlCell.editing
+    onHandlerRun: function(handler, args) { owl.runHandler(handler, args) }
+  }
+
+  // ---------- the scheduler and the crash guard
+
+  readonly property var client: ({
+    key: owlCell.widgetId + "@" + (owlCell.entry ? owlCell.entry.id : ""),
+    tick: function(now) { owl.tick(now) },
+    frame: function(t) { owl.frame(t); view.frame++ },
+    get active() { return owl.active }
+  })
+  readonly property bool animates: owl.active && view.animating
+  onAnimatesChanged: if (owlCell.home) owlCell.home.owlScheduler.setAnimating(owlCell.client, owlCell.animates)
+
+  property bool guarding: false
+  onRunningChanged: owlCell.startGuard()
+  Component.onCompleted: {
+    if (owlCell.home) owlCell.home.owlScheduler.add(owlCell.client)
+    owlCell.startGuard()
+  }
+  Component.onDestruction: {
+    if (owlCell.home) {
+      owlCell.home.owlScheduler.remove(owlCell.client)
+      if (owlCell.guarding) owlCell.home.guardEnd(owlCell.widgetId)
+    }
+  }
+  function startGuard() {
+    if (!owlCell.running || !owlCell.home || owlCell.guarding) return
+    owlCell.guarding = true
+    owlCell.home.guardBegin(owlCell.widgetId, owlCell.card.record ? owlCell.card.record.hash : "")
+    settled.restart()
+  }
+  Timer {
+    id: settled
+    interval: 3000
+    onTriggered: if (owlCell.home) { owlCell.home.guardEnd(owlCell.widgetId, true); owlCell.guarding = false }
+  }
+
+  // ---------- a card instead of the widget
+
+  readonly property bool showsCard: !owlCell.running || owl.error !== ""
+  readonly property string cardState: owl.error !== "" ? "error" : owlCell.card.state
+  readonly property string cardMessage: owl.error !== "" ? owl.error : owlCell.card.message
+
+  Column {
+    visible: owlCell.showsCard
+    anchors.fill: parent
+    anchors.margins: Style.spacing.xl
+    spacing: Style.spacing.xs
+
+    Row {
+      width: parent.width
+      spacing: Style.spacing.md
+      Text {
+        id: glyph
+        textFormat: Text.PlainText
+        text: owlCell.cardState === "approve" ? "󰒃" : owlCell.cardState === "waiting" || owlCell.cardState === "off" ? "󰕰" : "󰀦"
+        color: owlCell.cardState === "error" || owlCell.cardState === "missing" ? Commons.Color.urgent : Commons.Color.accent
+        font.family: Style.font.family
+        font.pixelSize: Style.font.iconLarge
+      }
+      Text {
+        width: parent.width - glyph.width - parent.spacing
+        anchors.verticalCenter: glyph.verticalCenter
+        textFormat: Text.PlainText
+        text: owlCell.card.info && owlCell.card.info.name ? owlCell.card.info.name : owlCell.widgetId
+        color: owlCell.home ? owlCell.home.foreground : Commons.Color.menu.text
+        font.family: Style.font.family
+        font.pixelSize: Style.font.subtitle
+        font.bold: true
+        elide: Text.ElideRight
+      }
+    }
+    Text {
+      width: parent.width
+      height: Math.max(0, parent.height - glyph.height - hint.height - parent.spacing * 2)
+      visible: height >= Style.font.caption
+      textFormat: Text.PlainText
+      text: owlCell.cardMessage
+      color: owlCell.home ? owlCell.home.dimForeground : Commons.Color.menu.text
+      font.family: Style.font.family
+      font.pixelSize: Style.font.caption
+      wrapMode: owlCell.cardState === "error" ? Text.WrapAnywhere : Text.Wrap
+      elide: Text.ElideRight
+    }
+    Text {
+      id: hint
+      width: parent.width
+      visible: owlCell.cardState === "approve" || owlCell.cardState === "error"
+      textFormat: Text.PlainText
+      text: owlCell.cardState === "approve" ? "Tap to review" : "Tap to fix with AI"
+      color: Commons.Color.accent
+      font.family: Style.font.family
+      font.pixelSize: Style.font.caption
+      elide: Text.ElideRight
+    }
+  }
+
+  MouseArea {
+    anchors.fill: parent
+    visible: owlCell.showsCard
+    enabled: !owlCell.editing
+    onClicked: {
+      if (!owlCell.home) return
+      if (owlCell.cardState === "approve") owlCell.home.openOwlApproval(owlCell.widgetId)
+      else if (owlCell.cardState === "error") owlCell.home.openCreate("edit", owlCell.widgetId)
+    }
+  }
+}

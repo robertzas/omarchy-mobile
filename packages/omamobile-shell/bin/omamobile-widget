@@ -51,6 +51,8 @@ FIELD_TYPES = ("string", "path", "integer", "number", "boolean", "enum")
 # The largest grid the home screen allows (HomeModel.LIMITS).
 MAX_COLUMNS, MAX_ROWS = 6, 8
 MAX_FILES, MAX_BYTES, MAX_MANIFEST = 64, 1 << 20, 64 << 10
+# OWL widgets (docs/WIDGET-INTEROP-PLAN.md): one widget.owl per folder.
+OWL_FILE, MAX_OWL = "widget.owl", 256 << 10
 
 # ---------------------------------------------------------------- manifest
 
@@ -370,7 +372,7 @@ def inspect(folder, base, source, lint=True):
     """Everything the home screen needs to know about one widget folder."""
     dir_name = os.path.basename(folder.rstrip("/"))
     out = {"id": dir_name, "source": source, "dir": folder, "status": "error", "errors": [], "warnings": [],
-           "hash": "", "manifest": None, "detected": [], "undeclared": [], "lint": None}
+           "hash": "", "manifest": None, "detected": [], "undeclared": [], "lint": None, "kind": "qml"}
     errors, warnings = out["errors"], out["warnings"]
     if not inside(folder, base):
         errors.append("the folder is a link to somewhere outside %s" % base)
@@ -402,6 +404,9 @@ def inspect(folder, base, source, lint=True):
     out["hash"] = digest.hexdigest()[:16]
 
     manifest_path = os.path.join(folder, "manifest.json")
+    owl_path = os.path.join(folder, OWL_FILE)
+    if not os.path.isfile(manifest_path) and os.path.isfile(owl_path):
+        return inspect_owl(out, owl_path)
     if not os.path.isfile(manifest_path):
         errors.append("no manifest.json")
         return out
@@ -445,6 +450,25 @@ def inspect(folder, base, source, lint=True):
         warnings.extend(out["lint"]["warnings"])
     if not errors:
         out["status"] = "ok"
+    return out
+
+
+def inspect_owl(out, path):
+    """An OWL widget (a folder with widget.owl and no manifest.json). The
+    home screen compiles it with its own OWL runtime and derives what it may
+    do from the compiler's list of commands, URLs and files; here only its
+    size and encoding are checked, and its text handed over."""
+    out["kind"] = "owl"
+    if os.path.getsize(path) > MAX_OWL:
+        out["errors"].append("%s is larger than %d KiB" % (OWL_FILE, MAX_OWL >> 10))
+        return out
+    try:
+        with open(path, encoding="utf-8") as f:
+            out["owl"] = {"file": OWL_FILE, "text": f.read()}
+    except UnicodeDecodeError:
+        out["errors"].append("%s isn't UTF-8 text" % OWL_FILE)
+        return out
+    out["status"] = "ok"
     return out
 
 

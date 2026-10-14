@@ -52,13 +52,16 @@ function cleanRecord(r) {
     id: r.id,
     source: r.source === "example" ? "example" : "user",
     dir: String(r.dir || ""),
-    status: r.status === "ok" && m ? "ok" : "error",
+    status: r.status === "ok" && (m || (r.kind === "owl" && r.owl)) ? "ok" : "error",
     errors: strings(r.errors),
     warnings: strings(r.warnings),
     hash: String(r.hash || ""),
     manifest: m,
     detected: strings(r.detected),
-    undeclared: strings(r.undeclared)
+    undeclared: strings(r.undeclared),
+    // An OWL widget (widget.owl, no manifest): the home screen compiles it.
+    kind: r.kind === "owl" ? "owl" : "qml",
+    owl: r.kind === "owl" && r.owl && typeof r.owl.text === "string" ? { text: r.owl.text } : null
   }
 }
 
@@ -81,9 +84,15 @@ function findExample(scan, id) {
 // Specs in HomeModel.REGISTRY's shape, keyed by widget id: what sizes and
 // settings a placed user widget gets. A widget with errors but a readable
 // manifest keeps its sizes, so a broken edit doesn't reshape the page.
-function catalog(scan) {
+// OWL widgets take their spec from `owlSpecs` (id -> spec), which the home
+// screen builds by compiling them (owl/catalog.js).
+function catalog(scan, owlSpecs) {
   var out = {}
   ;(scan && scan.widgets ? scan.widgets : []).forEach(function(r) {
+    if (r.kind === "owl") {
+      if (owlSpecs && owlSpecs[r.id]) out[r.id] = owlSpecs[r.id]
+      return
+    }
     var m = r.manifest
     if (!m) return
     out[r.id] = {

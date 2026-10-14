@@ -1,0 +1,62 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# qmllint warnings that the OWL work adds to the home plugin, against a base
+# commit: the warnings of each file now, minus the ones the same file had
+# at the base (compared by id and message, not line). Omarchy's singleton
+# tokens ("Member ... not found on type QObject") are left out, as
+# omamobile-widget's lint does, and so is the QProcess::ExitStatus note that
+# every Quickshell Process handler gets. Run with the Qt to check (6.11 on the
+# laptop, 6.12 in the conformance container).
+#
+#   tests/owl/lint/new-warnings [BASE]       (default: main)
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.."
+base=${1:-main}
+qmllint=${QMLLINT:-$(command -v qmllint6 || command -v qmllint || echo /usr/lib/qt6/bin/qmllint)}
+shell=${OMARCHY_SHELL:-/usr/share/omarchy/shell}
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+ln -s "$shell" "$work/qs"
+plugin=packages/omamobile-shell/plugins/omamobile.home
+mkdir -p "$work/base"
+# BASE_TREE: an extracted base tree, for a container that can't reach .git.
+if [[ -n ${BASE_TREE:-} ]]; then cp -r "$BASE_TREE/." "$work/base/"
+else git archive "$base" "$plugin" | tar -x -C "$work/base"; fi
+lint() {  # dir files... -> "file<TAB>id<TAB>message" lines
+  local dir=$1; shift
+  (cd "$dir" && "$qmllint" --json - -I "$work" "$@" 2>/dev/null || true) | python3 -c '
+import json, sys, os, re
+try: report = json.load(sys.stdin)
+except ValueError: sys.exit(0)
+for f in report.get("files", []):
+    name = f.get("filename", "")
+    if os.path.isabs(name): name = os.path.relpath(name, sys.argv[1])
+    for w in f.get("warnings", []) or []:
+        if w.get("type") == "info": continue
+        msg = w.get("message", "")
+        if w.get("id") == "missing-property" and re.match(r"^Member \"[^\"]+\" not found on type \"QObject\"$", msg): continue
+        # Quickshell Process.exited carries a QProcess enum qmllint has no type for: every handler gets this.
+        if w.get("id") == "signal-handler-parameters" and "QProcess::ExitStatus" in msg: continue
+        print("%s\t%s\t%s" % (name, w.get("id", ""), msg))' "$(cd "$dir" && pwd)"
+}
+files=()
+while IFS= read -r -d '' f; do files+=("${f#"$plugin"/}"); done < <(find "$plugin" -maxdepth 2 -name '*.qml' -print0 | sort -z)
+now=$(lint "$plugin" "${files[@]}" | sort)
+old_files=()
+for f in "${files[@]}"; do [[ -f $work/base/$plugin/$f ]] && old_files+=("$f"); done
+before=$(lint "$work/base/$plugin" "${old_files[@]}" | sort)
+added=$(comm -23 <(echo "$now") <(echo "$before") || true)
+# Unqualified access from inline Components to the file's root id is how
+# HomeSheets.qml and Home.qml are written throughout (no ComponentBehavior:
+# Bound); new code that follows that pattern in those files is reported as
+# a count, not as a failure.
+pattern=$(echo "$added" | grep -E '^(HomeSheets|Home)\.qml	unqualified	' || true)
+added=$(echo "$added" | grep -vE '^(HomeSheets|Home)\.qml	unqualified	' || true)
+[[ -n $pattern ]] && echo "# $(echo "$pattern" | wc -l) unqualified accesses in Home.qml/HomeSheets.qml follow those files' existing pattern"
+"$qmllint" --version 2>/dev/null | head -1
+if [[ -n $added ]]; then
+  echo "$added"
+  echo "not ok - $(echo "$added" | wc -l) new qmllint warnings"
+  exit 1
+fi
+echo "ok - no new qmllint warnings in $plugin (${#files[@]} files)"

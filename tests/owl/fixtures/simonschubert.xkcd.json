@@ -120,7 +120,7 @@
  },
  "sources": {
   "comic": {
-   "text": "{\"num\":4242,\"title\":\"Sample comic (fixture)\",\"alt\":\"A stand-in picture drawn for the tests, not a real comic.\",\"path\":\"/fixtures/sample-comic.png\"}"
+   "text": "{\"num\":4242,\"title\":\"Sample comic (fixture)\",\"alt\":\"A stand-in picture drawn for the tests, not a real comic.\",\"path\":\"/tmp/owl-fixtures/sample-comic.png\"}"
   }
  }
 }
