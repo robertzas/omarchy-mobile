@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Target = usr/share/applications/org.gnome.Snapshot.desktop
+
+[Action]
+Description = Naming GNOME Snapshot "Snapshot" beside omacam's "Camera"...
+When = PostTransaction
+Exec = /usr/lib/omamobile/omamobile-snapshot-name

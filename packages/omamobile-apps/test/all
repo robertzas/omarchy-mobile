@@ -1,0 +1,40 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-snapshot-name against a scratch root: Snapshot's "Camera"
+# becomes "Snapshot" (translations dropped, the rest kept), and the
+# override goes when Snapshot does.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "$0")/.." && pwd)
+root=$(mktemp -d)
+trap 'rm -rf "$root"' EXIT
+n=0
+ok() { n=$((n + 1)); echo "ok $n - $1"; }
+fail() { echo "not ok - $1" >&2; exit 1; }
+
+mkdir -p "$root/usr/share/applications"
+cat >"$root/usr/share/applications/org.gnome.Snapshot.desktop" <<'DESKTOP'
+[Desktop Entry]
+Name[de]=Kamera
+Name=Camera
+GenericName[de]=Webcam
+GenericName=Camera
+Exec=snapshot
+Icon=org.gnome.Snapshot
+DBusActivatable=true
+DESKTOP
+out=$root/usr/local/share/applications/org.gnome.Snapshot.desktop
+OMAMOBILE_ROOT=$root "$here/omamobile-snapshot-name"
+[[ -f $out ]] || fail "override written"
+ok "override written"
+grep -qx 'Name=Snapshot' "$out" || fail "named Snapshot"
+ok "named Snapshot"
+! grep -q '^Name\[' "$out" || fail "translated names dropped"
+ok "translated names dropped"
+grep -qx 'Exec=snapshot' "$out" && grep -qx 'DBusActivatable=true' "$out" || fail "the rest kept"
+ok "the rest kept"
+rm "$root/usr/share/applications/org.gnome.Snapshot.desktop"
+OMAMOBILE_ROOT=$root "$here/omamobile-snapshot-name"
+[[ ! -e $out ]] || fail "override removed with Snapshot"
+ok "override removed with Snapshot"
+bash -n "$here/PKGBUILD" && ok "PKGBUILD parses"
+grep -q 'omacam' "$here/PKGBUILD" && ok "omacam is a dependency"

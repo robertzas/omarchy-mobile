@@ -16,10 +16,19 @@ depends=(
   gnome-maps   # location through GeoClue (omamobile-gnss feeds it the GPS)
   geoclue
   neard        # NFC tags; omamobile-shell's omamobile-nfc-open opens their web links
-  snapshot     # camera: the four cameras through libcamera and PipeWire (CAMERA-PLAN CAM5.4)
-  pipewire-libcamera
+  omacam       # "Camera": all four cameras on libcamera, zoom across lenses (docs/CAMERA-APP-PLAN.md)
+  pipewire-libcamera  # the cameras for browsers and video calls, through the camera portal
 )
 optdepends=(
+  'snapshot: a second camera app (GNOME Snapshot, shown as "Snapshot"), with video, until omacam records video'
   'gnome-calls: phone calls (waits for the modem, MODEM-PLAN M4, and a client for its RIL)'
   'chatty: SMS (waits for the modem, as gnome-calls)'
 )
+install=omamobile-apps.install
+source=(omamobile-snapshot-name omamobile-snapshot-name.hook)
+sha256sums=(SKIP SKIP)
+
+package() {
+  install -Dm755 omamobile-snapshot-name "$pkgdir/usr/lib/omamobile/omamobile-snapshot-name"
+  install -Dm644 omamobile-snapshot-name.hook "$pkgdir/usr/share/libalpm/hooks/omamobile-snapshot-name.hook"
+}

@@ -1,0 +1,26 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# GNOME Snapshot's launcher is named "Camera", as omacam's is. While
+# Snapshot is installed, an override in /usr/local/share/applications
+# (searched before /usr/share) names it "Snapshot", with every translated
+# name dropped, so the app grid shows one "Camera" (omacam) and
+# "Snapshot". Run by a pacman hook when Snapshot's desktop file changes,
+# and when omamobile-apps is installed.
+set -eu
+# OMAMOBILE_ROOT: a root to work in, for test/all.
+root=${OMAMOBILE_ROOT:-}
+src=$root/usr/share/applications/org.gnome.Snapshot.desktop
+dst=$root/usr/local/share/applications/org.gnome.Snapshot.desktop
+if [ -f "$src" ]; then
+  mkdir -p "${dst%/*}"
+  sed -e '/^Name\[/d' -e 's/^Name=.*/Name=Snapshot/' \
+      -e '/^GenericName\[/d' -e 's/^GenericName=.*/GenericName=Video calls and webcam/' \
+      "$src" >"$dst.new"
+  mv -f "$dst.new" "$dst"
+else
+  rm -f "$dst"
+fi
+if [ -z "$root" ] && [ -d /usr/local/share/applications ] &&
+   command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database -q /usr/local/share/applications 2>/dev/null || true
+fi
