@@ -119,7 +119,16 @@
 #  - 0032-ipa-simple-awb-Use-the-grey-candidates-and-smooth-th.patch: the
 #    grey world over grey candidates, and smoothed gains: no colour cast
 #    from grass or sky.
-#  - pkgrel 4.12, so it sorts above Arch Linux ARM's 0.7.2-4.
+#  - 0033-ipa-simple-agc-Protect-the-highlights.patch: the AGC keeps clipped
+#    highlights to about 2% of the picture (10% backlit).
+#  - 0034-software_isp-debayer_egl-Clip-highlights-to-neutral.patch: clipped
+#    highlights fade to neutral instead of cyan.
+#  - 0035-ipa-simple-af-Scan-less.patch: faster autofocus: early stop,
+#    narrower fine scan, local rescans in continuous mode.
+#  - 0036-ipa-simple-agc-Aim-the-mean-luminance-at-20.patch: the AGC aims
+#    the mean linear luminance at 20% of full scale instead of the middle of
+#    a coarse histogram (stills were 1.5 stops bright).
+#  - pkgrel 4.13, so it sorts above Arch Linux ARM's 0.7.2-4.
 #
 # Maintainers of the original: David Runge, Carl Smedstad.
 
@@ -132,7 +141,7 @@ pkgname=(
   python-libcamera
 )
 pkgver=0.7.2
-pkgrel=4.12
+pkgrel=4.13
 pkgdesc="A complex camera support library for Linux, Android, and ChromeOS (Omarchy Mobile: gs201 CSIS)"
 arch=(aarch64)
 url="https://libcamera.org/"
@@ -196,6 +205,10 @@ source=(
   0030-ipa-simple-Add-noise-reduction-and-sharpening.patch
   0031-software_isp-Gather-grey-candidates-for-white-balanc.patch
   0032-ipa-simple-awb-Use-the-grey-candidates-and-smooth-th.patch
+  0033-ipa-simple-agc-Protect-the-highlights.patch
+  0034-software_isp-debayer_egl-Clip-highlights-to-neutral.patch
+  0035-ipa-simple-af-Scan-less.patch
+  0036-ipa-simple-agc-Aim-the-mean-luminance-at-20.patch
 )
 sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd8847f7bec755c753c72f6b065df76de53c15f9af2e5901e83e7a144a2ddcd'
             '8b54cbdf6ed767ae8d52a14480a4653f4f3a1c2187c4ccf7ceb65eaa60c819cce514122591d6e0c2dfc39d7482739f8fdd4090dbaf63701445510eefc88fb19f'
@@ -230,7 +243,11 @@ sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd
             'e7259a847b1e68555ab6b322e4a22510ac6971bc676b5e9272ebceca9e278a3294d786aeb343b8aa7acb0afc373fb35b012a569ecfc7d4c0c930c4b19decc153'
             '84ebedf8af440e51c145f7b76fba1b9569930f359f42209f1de3913c5fe6fa255d4039e5ad9dd4fd09f265a8f3a444e6889dd3d4fb2dc2ff67d628c6443b0559'
             '215d91d287aa0ba729acc3e990097a1cf0ae0988c785306bd2c1e9e4c5c31f165f1fd4da367e0daded894b4d22c53558b429f4e2fdb9a3d53430dbc8f6c13995'
-            '52286ffa96632d0e48a26ee35b7c34ce2286abcb076d9f52cc3e98444ce2e5d26c63d1c565a3bad911515190f45483ad3c1d85850aee62b20a2daf3128a44c4d')
+            '52286ffa96632d0e48a26ee35b7c34ce2286abcb076d9f52cc3e98444ce2e5d26c63d1c565a3bad911515190f45483ad3c1d85850aee62b20a2daf3128a44c4d'
+            '6b38b6bfc6190932be2c987ae52ce45b5ad1611cdde0bd2da53b6038ec6b3bc1234a150cff5215b4ac9d31307062341527ab13784d841198069a618b9c7a3f25'
+            'cba81016c36fb925e5ce59fb4a70e9461e250d079ab34468a206825d4bddbc2464311a4c2babcf86a983352eff4e8198a5a0e9b82409e0a72a3972faddf51899'
+            'ba96c860e334315150a2eb9805724958f1bc18b12f21cb9debb95ebcc0f3cb7a04f2db0f4b3cdce08c05cc6c9227b7be4d26d238d251f787476c2e93e1773351'
+            'ba6b7c29902f061b2d8521b226e17c115a10ff1ef698a657230ce3f117687ec0bcb048231f3239f25074716faa04feb8afe8275bfb043d8ffd4135512b453f2f')
 b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc58494400e69feeec99a77894252d582f0d8f183508e5d1b8220e70f3d5'
         '4a0e24feed22d32b83b0ec49c9a7616b77deb26cae82c17a38b54a81a0468e982852147bc2d5e3b611ba014ddbd7647acfe2e68591542420da73945ba1c0d6c2'
         'cba8b638543a16bf80c2ae7dc0737f3874476fd1ff694639b459184725848e193518778d0336eef3d55ba4329d9bc63981d0aa8d8d9b5507c9ade4f17f7f407d'
@@ -264,7 +281,11 @@ b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc5
         '2a76f3cc17b399ac99ac9c3cf20e2455c32ac27d835ddd4b254ca8f4a94b2703264771a8de2bd99cb93fe331e115ce161ad9f4423dd2fa7a5ac93c75d213f62f'
         '1e2edda1ee12cc9eae3e6c7cc4b88e72f9d017eedf12dffb56cb17468605d68dd116c1e1e47214b560caadfd9dc7459a8d79fc89f16f803ab18d2dc9c0aefc8e'
         'dabec63ff77f3a831ce25c2337f0681163bcc540f4882046853491db441537ef676be3f96330c723998d1c53b6ce82d1d017faaeafd25f0f7dd3cdf4a30cbad2'
-        'fdd38af760b43cfd622d574bd75fd21fcc726434e09bfc196fc3a538a919751192c58d1d7b80b09b166671a290370317afd01d213b6a900185c715c7e62f1451')
+        'fdd38af760b43cfd622d574bd75fd21fcc726434e09bfc196fc3a538a919751192c58d1d7b80b09b166671a290370317afd01d213b6a900185c715c7e62f1451'
+        '53239461ed9401446e4edff8246acd08815ed8a41dc80b91be285a9c46c04a7bc7dbe0200bf18ac8a6c2ee151cf67f675b6a4c818fa048721fe8b89975e87ae6'
+        'e4eeb6bfea8bf783efe1fa5bfd7070779642571c77e3fe9ca3219c5c672346cb7b6e3bd48813ac19d5c17b5ba804ce03c6d934a53667ab62c9346ab5921b9f8d'
+        'c62f58914295fb1bebc7ef25b0d2ea9108a8e30157193304718ab5e6390d44968575dda673a0c7b019b301aad5f4dcf563934d4ff162102ce5b0965e8dab0d1d'
+        'cc3324cea808b4db4302e59dd7715dac26931935c2a7d1e1f9e4912e0c6daed9903cf8d096db1d30edfbd834b9e180a0b27389d7676af9cd657edcdec85ecab0')
 
 _pick() {
   local p="$1" f d; shift
@@ -311,6 +332,10 @@ prepare() {
   patch -Np1 < ../0030-ipa-simple-Add-noise-reduction-and-sharpening.patch
   patch -Np1 < ../0031-software_isp-Gather-grey-candidates-for-white-balanc.patch
   patch -Np1 < ../0032-ipa-simple-awb-Use-the-grey-candidates-and-smooth-th.patch
+  patch -Np1 < ../0033-ipa-simple-agc-Protect-the-highlights.patch
+  patch -Np1 < ../0034-software_isp-debayer_egl-Clip-highlights-to-neutral.patch
+  patch -Np1 < ../0035-ipa-simple-af-Scan-less.patch
+  patch -Np1 < ../0036-ipa-simple-agc-Aim-the-mean-luminance-at-20.patch
 
   # add version, so that utils/gen-version.sh may rely on it
   printf "%s\n" "$pkgver" > .tarball-version

@@ -1,0 +1,263 @@
+From 79b10278fb00d81256886f931b17fe8df90e1a6b Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Thu, 15 Oct 2026 14:00:11 -0400
+Subject: [PATCH 35/35] ipa: simple: af: Scan less
+
+A full contrast scan takes about a hundred frames on the main camera
+of the Google Pixel 7 Pro (nine coarse and nine fine samples, each
+four frames apart for the lens and the requests in flight): over
+three seconds at 30 fps, and continuous focus ran one whenever the
+picture softened.
+
+- Stop the coarse scan once two samples past the best have fallen
+  below 70% of it: the peak is behind. The lens starts at infinity,
+  where most scenes are, so that ends most scans after three samples.
+- Centre the fine scan on the parabola through the coarse samples'
+  peak and cover half a coarse step either side of it, not a whole
+  step (five samples instead of nine).
+- Continuous focus that lost sharpness first scans a coarse step
+  either side of the lens, and scans the whole range only if the best
+  sample is at the edge of that.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/af.cpp | 130 +++++++++++++++++++++++--------
+ src/ipa/simple/algorithms/af.h   |  18 ++++-
+ 2 files changed, 114 insertions(+), 34 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/af.cpp b/src/ipa/simple/algorithms/af.cpp
+index 20b127ad3..c71690c7e 100644
+--- a/src/ipa/simple/algorithms/af.cpp
++++ b/src/ipa/simple/algorithms/af.cpp
+@@ -48,6 +48,15 @@ static constexpr unsigned int kRescanSamples = 15;
+  * travel, longest for the jump to the start of a scan.
+  */
+ static constexpr unsigned int kLensStepSettleSamples = 4;
++
++/*
++ * The coarse scan stops once kPeakDropSamples samples past its best have
++ * fallen below kPeakDropPercent of it: the peak is behind, and the rest
++ * of the range only costs time (the lens starts at infinity, where most
++ * scenes are).
++ */
++static constexpr unsigned int kPeakDropSamples = 2;
++static constexpr uint64_t kPeakDropPercent = 70;
+ static constexpr unsigned int kLensJumpSettleSamples = 6;
+ 
+ int Af::init(IPAContext &context, const ValueNode &tuningData)
+@@ -135,6 +144,28 @@ void Af::startScan(IPAContext &context)
+ 		return;
+ 
+ 	auto &af = context.activeState.af;
++
++	/*
++	 * Continuous focus that lost its subject looks around where the lens
++	 * is first (a subject that moved a little), and scans the whole
++	 * range only if the sharpest sample is at the edge of that.
++	 */
++	if (localNext_) {
++		localNext_ = false;
++		localScan_ = true;
++		af.pendingScan = false;
++		af.pendingSamples = 0;
++		af.scanning = true;
++		af.state = controls::AfStateScanning;
++		af.lowSharpnessSamples = 0;
++		startFineScan(context, af.position, context.configuration.focus.coarseStep);
++		LOG(IPASoftAf, Debug) << "Starting a local autofocus scan";
++		return;
++	}
++	localScan_ = false;
++	coarseSamples_.clear();
++	dropSamples_ = 0;
++
+ 	af.pendingScan = false;
+ 	af.pendingSamples = 0;
+ 	af.scanning = true;
+@@ -248,9 +279,47 @@ void Af::queueRequest([[maybe_unused]] typename Module::Context &context,
+ 	}
+ }
+ 
++void Af::startFineScan(IPAContext &context, int32_t centre, int32_t radius)
++{
++	auto &af = context.activeState.af;
++	const auto &focus = context.configuration.focus;
++
++	af.fineScan = true;
++	af.scanStart = std::max(focus.min, centre - radius);
++	af.scanEnd = std::min(focus.max, centre + radius);
++	af.scanStep = focus.fineStep;
++	af.position = af.scanStart;
++	af.bestPosition = af.position;
++	af.bestSharpness = 0;
++	af.settleSamples = kLensJumpSettleSamples;
++	fineSamples_.clear();
++}
++
++void Af::finishScan(IPAContext &context)
++{
++	auto &af = context.activeState.af;
++
++	af.scanning = false;
++	localScan_ = false;
++	af.position = peakPosition(context, fineSamples_, af.bestPosition,
++				   context.configuration.focus.fineStep);
++	af.bestPosition = af.position;
++	af.lockedSharpness = af.bestSharpness;
++	af.state = af.bestSharpness ? controls::AfStateFocused
++				    : controls::AfStateFailed;
++	af.settleSamples = kContinuousMonitorDelaySamples;
++	af.smoothedSharpness = 0;
++	af.lowSharpnessSamples = 0;
++
++	LOG(IPASoftAf, Info)
++		<< "Autofocus completed at " << af.position
++		<< " (sharpness " << af.bestSharpness << ")";
++}
++
+ void Af::processScan(IPAContext &context, uint64_t sharpness)
+ {
+ 	auto &af = context.activeState.af;
++	const auto &focus = context.configuration.focus;
+ 
+ 	if (af.settleSamples) {
+ 		--af.settleSamples;
+@@ -265,44 +334,42 @@ void Af::processScan(IPAContext &context, uint64_t sharpness)
+ 	if (sharpness > af.bestSharpness) {
+ 		af.bestSharpness = sharpness;
+ 		af.bestPosition = af.position;
++		dropSamples_ = 0;
++	} else if (!af.fineScan &&
++		   sharpness * 100 < af.bestSharpness * kPeakDropPercent) {
++		dropSamples_++;
+ 	}
+-	if (af.fineScan)
+-		fineSamples_.emplace_back(af.position, sharpness);
++	(af.fineScan ? fineSamples_ : coarseSamples_).emplace_back(af.position, sharpness);
+ 
+-	if (af.position + af.scanStep <= af.scanEnd) {
++	const bool peakPassed = !af.fineScan && dropSamples_ >= kPeakDropSamples;
++	if (!peakPassed && af.position + af.scanStep <= af.scanEnd) {
+ 		af.position += af.scanStep;
+ 		af.settleSamples = kLensStepSettleSamples;
+ 		return;
+ 	}
+ 
+ 	if (!af.fineScan) {
+-		const int32_t radius = context.configuration.focus.coarseStep;
+-		af.fineScan = true;
+-		af.scanStart = std::max(context.configuration.focus.min,
+-					af.bestPosition - radius);
+-		af.scanEnd = std::min(context.configuration.focus.max,
+-				      af.bestPosition + radius);
+-		af.scanStep = context.configuration.focus.fineStep;
+-		af.position = af.scanStart;
+-		af.bestSharpness = 0;
+-		af.settleSamples = kLensJumpSettleSamples;
+-		fineSamples_.clear();
++		/*
++		 * The fine scan covers half a coarse step either side of the
++		 * peak a parabola through the coarse samples puts.
++		 */
++		const int32_t centre = peakPosition(context, coarseSamples_,
++						    af.bestPosition, focus.coarseStep);
++		startFineScan(context, centre, std::max(focus.coarseStep / 2, focus.fineStep));
+ 		return;
+ 	}
+ 
+-	af.scanning = false;
+-	af.position = peakPosition(context, af.bestPosition);
+-	af.bestPosition = af.position;
+-	af.lockedSharpness = af.bestSharpness;
+-	af.state = af.bestSharpness ? controls::AfStateFocused
+-				    : controls::AfStateFailed;
+-	af.settleSamples = kContinuousMonitorDelaySamples;
+-	af.smoothedSharpness = 0;
+-	af.lowSharpnessSamples = 0;
++	/* A local scan whose best is at its edge: the subject went further. */
++	if (localScan_ &&
++	    ((af.bestPosition == af.scanStart && af.scanStart > focus.min) ||
++	     (af.bestPosition == af.scanEnd && af.scanEnd < focus.max))) {
++		LOG(IPASoftAf, Debug) << "Local scan peaked at its edge, scanning the range";
++		localScan_ = false;
++		startScan(context);
++		return;
++	}
+ 
+-	LOG(IPASoftAf, Info)
+-		<< "Autofocus completed at " << af.position
+-		<< " (sharpness " << af.bestSharpness << ")";
++	finishScan(context);
+ }
+ 
+ /*
+@@ -310,12 +377,13 @@ void Af::processScan(IPAContext &context, uint64_t sharpness)
+  * enough to leave a visibly soft result. Fit a parabola through the best
+  * sample and its neighbours and move to its vertex.
+  */
+-int32_t Af::peakPosition(const IPAContext &context, int32_t best) const
++int32_t Af::peakPosition(const IPAContext &context, const Samples &samples,
++			 int32_t best, int32_t step) const
+ {
+-	const auto it = std::find_if(fineSamples_.begin(), fineSamples_.end(),
++	const auto it = std::find_if(samples.begin(), samples.end(),
+ 				     [best](const auto &sample) { return sample.first == best; });
+-	if (it == fineSamples_.end() || it == fineSamples_.begin() ||
+-	    std::next(it) == fineSamples_.end())
++	if (it == samples.end() || it == samples.begin() ||
++	    std::next(it) == samples.end())
+ 		return best;
+ 
+ 	const double left = static_cast<double>(std::prev(it)->second);
+@@ -325,7 +393,6 @@ int32_t Af::peakPosition(const IPAContext &context, int32_t best) const
+ 	if (curvature >= 0.0)
+ 		return best;
+ 
+-	const int32_t step = context.configuration.focus.fineStep;
+ 	const double offset = std::clamp(0.5 * (left - right) / curvature, -0.5, 0.5);
+ 	return std::clamp(best + static_cast<int32_t>(std::lround(offset * step)),
+ 			  context.configuration.focus.min,
+@@ -400,6 +467,7 @@ void Af::process(IPAContext &context,
+ 				   af.lockedSharpness * kRescanPercent) {
+ 				if (++af.lowSharpnessSamples >= kRescanSamples) {
+ 					af.pendingScan = true;
++					localNext_ = true;
+ 					af.state = controls::AfStateScanning;
+ 					af.lowSharpnessSamples = 0;
+ 				}
+diff --git a/src/ipa/simple/algorithms/af.h b/src/ipa/simple/algorithms/af.h
+index 59845d586..b96e98570 100644
+--- a/src/ipa/simple/algorithms/af.h
++++ b/src/ipa/simple/algorithms/af.h
+@@ -31,13 +31,25 @@ public:
+ 		     ControlList &metadata) override;
+ 
+ private:
++	using Samples = std::vector<std::pair<int32_t, uint64_t>>;
++
+ 	void startScan(IPAContext &context);
++	void startFineScan(IPAContext &context, int32_t centre, int32_t radius);
++	void finishScan(IPAContext &context);
+ 	void processScan(IPAContext &context, uint64_t sharpness);
+ 	float normalizedPosition(const IPAContext &context) const;
+-	int32_t peakPosition(const IPAContext &context, int32_t best) const;
++	int32_t peakPosition(const IPAContext &context, const Samples &samples,
++			     int32_t best, int32_t step) const;
+ 
+-	/* Fine-scan samples as (position, sharpness), for the peak fit. */
+-	std::vector<std::pair<int32_t, uint64_t>> fineSamples_;
++	/* Scan samples as (position, sharpness), for the peak fits. */
++	Samples coarseSamples_;
++	Samples fineSamples_;
++	/* Coarse samples since the best one that fell well below it */
++	unsigned int dropSamples_ = 0;
++	/* The next scan looks around the lens position first */
++	bool localNext_ = false;
++	/* The scan under way is such a local one */
++	bool localScan_ = false;
+ 
+ 	/* The focus window's generation the sharpness was last measured in */
+ 	unsigned int windowGeneration_ = 0;
+-- 
+2.55.0
+

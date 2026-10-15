@@ -1,0 +1,153 @@
+From d86706f63c6f0eaf844cf33ef3b5fa6751a05164 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Thu, 15 Oct 2026 13:58:35 -0400
+Subject: [PATCH 33/35] ipa: simple: agc: Protect the highlights
+
+The AGC aims the mean of a linear histogram at its middle, which in a
+sunlit scene leaves the sky and bright surfaces clipped: daylight stills
+on the Google Pixel 7 Pro had 15-32% of their pixels at the top.
+
+Count the samples that come out clipped (in the top two of the
+histogram's bins after the digital gain). With more than 2% of the
+picture clipped (by half again), cut the exposure towards it whatever
+the mean says, by up to half a step at a time; near the limit, don't
+let the mean raise the exposure further. A subject against the light,
+with at least half of the picture in the darkest 15% of the range, may
+clip 10% instead, and positive exposure compensation scales the limit.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/agc.cpp | 56 ++++++++++++++++++++++++++++---
+ src/ipa/simple/algorithms/agc.h   |  2 +-
+ 2 files changed, 53 insertions(+), 5 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index 8ea3f9919..16bb45c41 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -94,6 +94,18 @@ static constexpr double kExpPinnedDown = 1.0 / 16.0;
+  */
+ static constexpr unsigned int kExpSettleFrames = 1;
+ 
++/*
++ * Highlight protection: the share of the picture that may clip (in the top
++ * kHighlightBins of the histogram), and a more lenient one when at least
++ * kBacklitDarkShare of the picture is in its darkest kDarkShare, a subject
++ * against the light.
++ */
++static constexpr double kHighlightMax = 0.02;
++static constexpr double kHighlightMaxBacklit = 0.10;
++static constexpr unsigned int kHighlightBins = 2;
++static constexpr double kDarkShare = 0.15;
++static constexpr double kBacklitDarkShare = 0.5;
++
+ /*
+  * A request that hasn't shown after this many frames (the sensor clamped
+  * it, or rounded the gain to a code further off than the tolerance) is
+@@ -241,7 +253,7 @@ void Agc::queueRequest(typename Module::Context &context,
+ }
+ 
+ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+-			 double exposureMSV)
++			 double exposureMSV, double highlights, bool backlit)
+ {
+ 	int32_t &exposure = frameContext.sensor.exposure;
+ 	double &again = frameContext.sensor.gain;
+@@ -280,7 +292,20 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	}
+ 
+ 	double error = kExposureOptimal - exposureMSV;
+-	if (std::abs(error) <= kExposureSatisfactory) {
++
++	/*
++	 * Highlight protection: no more than kHighlightMax of the picture
++	 * clipped, or kHighlightMaxBacklit when most of it is dark (a subject
++	 * against a bright sky keeps its exposure, the sky blows). Too many
++	 * clipped samples cut the exposure whatever the mean says; close to
++	 * the limit, the mean may no longer raise it.
++	 */
++	const double allowed = (backlit ? kHighlightMaxBacklit : kHighlightMax) *
++			       std::exp2(std::max(0.0f, agc.exposureValue));
++	const bool tooBright = highlights > allowed * 1.5;
++	const bool atLimit = highlights > allowed * 0.75;
++	if (!tooBright && (std::abs(error) <= kExposureSatisfactory ||
++			   (atLimit && error > 0))) {
+ 		agc.state = controls::AeStateConverged;
+ 		return false;
+ 	}
+@@ -301,6 +326,9 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 		factor = 1.0 + std::clamp(static_cast<float>(error) * gain * 2,
+ 					  -kExpMaxStep * 2, kExpMaxStep * 2);
+ 	}
++	if (tooBright && exposureMSV < kExposurePinnedBright)
++		factor = std::min(factor, std::clamp(std::sqrt(allowed / highlights),
++						     0.5, 0.9));
+ 
+ 	/*
+ 	 * Distribute it: exposure time first (up to its limit), then the
+@@ -328,6 +356,7 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 
+ 	LOG(IPASoftExposure, Debug)
+ 		<< "exposureMSV " << exposureMSV
++		<< " highlights " << highlights << (backlit ? " (backlit)" : "")
+ 		<< " error " << error << " factor " << factor
+ 		<< " exp " << exposure << " again " << again
+ 		<< " dgain " << dgain;
+@@ -446,12 +475,30 @@ void Agc::process(IPAContext &context,
+ 	 */
+ 	const double scale = context.activeState.agc.digitalGain *
+ 			     std::exp2(-context.activeState.agc.exposureValue);
++	/*
++	 * Highlights: the samples that come out clipped (within
++	 * kHighlightBins of the top after the digital gain), and the dark
++	 * ones (the bottom kDarkShare of the range), which tell a backlit
++	 * subject.
++	 */
++	const double dgainNow = context.activeState.agc.digitalGain;
++	uint64_t clipped = 0, dark = 0, all = 0;
+ 	for (unsigned int i = 0; i < histogramSize; i++) {
+ 		const unsigned int gained = std::min<unsigned int>(
+ 			histogramSize - 1, static_cast<unsigned int>(std::lround(i * scale)));
+ 		unsigned int idx = (gained - (gained / yHistValsPerBinMod)) / yHistValsPerBin;
+-		exposureBins[idx] += histogram[blackLevelHistIdx + i];
++		const uint32_t n = histogram[blackLevelHistIdx + i];
++		exposureBins[idx] += n;
++
++		const double out = i * dgainNow;
++		if (out >= histogramSize - kHighlightBins)
++			clipped += n;
++		if (out < histogramSize * kDarkShare)
++			dark += n;
++		all += n;
+ 	}
++	const double highlights = all ? static_cast<double>(clipped) / all : 0.0;
++	const bool backlit = all && static_cast<double>(dark) / all >= kBacklitDarkShare;
+ 
+ 	for (unsigned int i = 0; i < kExposureBinsCount; i++) {
+ 		LOG(IPASoftExposure, Debug) << i << ": " << exposureBins[i];
+@@ -460,7 +507,8 @@ void Agc::process(IPAContext &context,
+ 	}
+ 
+ 	float exposureMSV = (denom == 0 ? 0 : static_cast<float>(num) / denom);
+-	const bool adjusted = updateExposure(context, frameContext, exposureMSV);
++	const bool adjusted = updateExposure(context, frameContext, exposureMSV,
++					     highlights, backlit);
+ 	if (adjusted)
+ 		context.activeState.agc.stableSamples = 0;
+ 	else
+diff --git a/src/ipa/simple/algorithms/agc.h b/src/ipa/simple/algorithms/agc.h
+index 040acda44..f79bf8842 100644
+--- a/src/ipa/simple/algorithms/agc.h
++++ b/src/ipa/simple/algorithms/agc.h
+@@ -32,7 +32,7 @@ public:
+ 
+ private:
+ 	bool updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+-			    double exposureMSV);
++			    double exposureMSV, double highlights, bool backlit);
+ };
+ 
+ } /* namespace ipa::soft::algorithms */
+-- 
+2.55.0
+

@@ -1,0 +1,88 @@
+From 70d0e5d013b5649bb7181ee800bd1868d6a2ada3 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Thu, 15 Oct 2026 13:59:04 -0400
+Subject: [PATCH 34/35] software_isp: debayer_egl: Clip highlights to neutral
+
+The GPU debayer applies the white balance gains and clamps each colour
+on its own. Where the sensor's green clips first, or one gain pushes a
+colour past full scale, the clipped areas take a tint: daylight skies
+on the Google Pixel 7 Pro came out cyan.
+
+Fade towards neutral (each colour to the largest) as the brightest raw
+colour nears the sensor's full scale, from 85%, or as a colour goes past
+full scale after the gains, from 95% to 125%. Saturated colours that
+don't clip keep their colour.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/libcamera/shaders/bayer_1x_packed.frag | 14 +++++++++++++-
+ src/libcamera/shaders/bayer_unpacked.frag  | 14 +++++++++++++-
+ 2 files changed, 26 insertions(+), 2 deletions(-)
+
+diff --git a/src/libcamera/shaders/bayer_1x_packed.frag b/src/libcamera/shaders/bayer_1x_packed.frag
+index 4a800dc85..fde90c710 100644
+--- a/src/libcamera/shaders/bayer_1x_packed.frag
++++ b/src/libcamera/shaders/bayer_1x_packed.frag
+@@ -236,6 +236,7 @@ void main(void)
+ 	 * reworked into a single multiplication.
+ 	 */
+ 	rgb = (rgb - blacklevel) / (1.0 - blacklevel);
++	vec3 sensor = rgb;
+ 
+ 	/* Lens shading: a radial gain from the centre of the sensor */
+ 	vec2 lsc_p = (center_pixel + 0.5) / tex_size - 0.5;
+@@ -243,7 +244,18 @@ void main(void)
+ 	rgb *= 1.0 + lsc_r2 * (lsc_k1 + lsc_r2 * lsc_k2);
+ 
+ 	/* Apply AWB gains, and saturate each channel at sensor range */
+-	rgb = clamp(rgb * awb, vec3(0.0), vec3(1.0));
++	rgb *= awb;
++
++	/*
++	 * Highlights: as any colour nears clipping, at the sensor or after
++	 * the gains, fade towards neutral, so that a clipped channel doesn't
++	 * tint the brightest parts (cyan skies, green-white clouds).
++	 */
++	float hl_in = max(max(sensor.r, sensor.g), sensor.b);
++	float hl_out = max(max(rgb.r, rgb.g), rgb.b);
++	float hl = max(smoothstep(0.85, 1.0, hl_in), smoothstep(0.95, 1.25, hl_out));
++	rgb = clamp(rgb, vec3(0.0), vec3(1.0));
++	rgb = mix(rgb, vec3(max(max(rgb.r, rgb.g), rgb.b)), hl);
+ 
+ 	/* Colour Correction Matrix */
+ 	rgb = ccm * rgb;
+diff --git a/src/libcamera/shaders/bayer_unpacked.frag b/src/libcamera/shaders/bayer_unpacked.frag
+index cc3d47dd3..bf7282215 100644
+--- a/src/libcamera/shaders/bayer_unpacked.frag
++++ b/src/libcamera/shaders/bayer_unpacked.frag
+@@ -140,6 +140,7 @@ void main(void) {
+      * reworked into a single multiplication.
+      */
+     rgb = (rgb - blacklevel) / (1.0 - blacklevel);
++    vec3 sensor = rgb;
+ 
+     /* Lens shading: a radial gain from the centre of the sensor */
+     vec2 lsc_p = (center.zw - tex_bayer_first_red + 0.5) / tex_size - 0.5;
+@@ -147,7 +148,18 @@ void main(void) {
+     rgb *= 1.0 + lsc_r2 * (lsc_k1 + lsc_r2 * lsc_k2);
+ 
+     /* Apply AWB gains, and saturate each channel at sensor range */
+-    rgb = clamp(rgb * awb, vec3(0.0), vec3(1.0));
++    rgb *= awb;
++
++    /*
++     * Highlights: as any colour nears clipping, at the sensor or after
++     * the gains, fade towards neutral, so that a clipped channel doesn't
++     * tint the brightest parts (cyan skies, green-white clouds).
++     */
++    float hl_in = max(max(sensor.r, sensor.g), sensor.b);
++    float hl_out = max(max(rgb.r, rgb.g), rgb.b);
++    float hl = max(smoothstep(0.85, 1.0, hl_in), smoothstep(0.95, 1.25, hl_out));
++    rgb = clamp(rgb, vec3(0.0), vec3(1.0));
++    rgb = mix(rgb, vec3(max(max(rgb.r, rgb.g), rgb.b)), hl);
+ 
+     /* Colour Correction Matrix */
+     rgb = ccm * rgb;
+-- 
+2.55.0
+

@@ -1,0 +1,226 @@
+From 63752a6c805437fdd1de54aa3386d25857e163b9 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Thu, 15 Oct 2026 14:12:36 -0400
+Subject: [PATCH] ipa: simple: agc: Aim the mean luminance at 20%
+
+The AGC aims the mean bin of a five-bin linear histogram at its middle,
+which puts the mean luminance near 45% of full scale, sRGB 160-185
+after the gamma. On the Google Pixel 7 Pro, daylight stills of grass
+and pavers came out about 1.5 stops bright; the owner's -2 EV shots
+looked right. The 30 fps video looked right only because its frames
+often held the sky, or ran out of exposure time.
+
+Meter the mean linear luminance instead, from the 64-bin histogram
+above the black level and after the digital gain, and aim it at 20%
+of full scale (a mid-grey at about sRGB 120). Correct three quarters of
+the error in stops each time, at most a stop: the loop judges only
+frames taken with its last request, so that converges without
+overshoot. The coarse histogram still tells a picture pinned bright; a
+mean three stops under the target counts as pinned dark.
+
+In a model of the loop with lognormal scenes and the sensor applying
+exposure two or three frames late, a 50x change of light converges in
+8-12 frames without a reversal.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/agc.cpp | 87 +++++++++++++------------------
+ src/ipa/simple/algorithms/agc.h   |  3 +-
+ 2 files changed, 37 insertions(+), 53 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index 16bb45c41..056355690 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -26,61 +26,40 @@ LOG_DEFINE_CATEGORY(IPASoftExposure)
+ namespace ipa::soft::algorithms {
+ 
+ /*
+- * The number of bins to use for the optimal exposure calculations.
++ * The bins of the coarse histogram whose mean bin (MSV) tells a picture
++ * pinned at one end of the range.
+  */
+ static constexpr unsigned int kExposureBinsCount = 5;
+ 
+ /*
+- * The exposure is optimal when the mean sample value of the histogram is
+- * in the middle of the range.
++ * The exposure aims the mean linear luminance (above the black level, after
++ * the digital gain) at kTargetLuminance of full scale: a mid-grey scene at
++ * about sRGB 120 after the gamma. Aiming the mean bin of a five-bin linear
++ * histogram at its middle, as before, put the mean near 45% of full scale
++ * (sRGB 160-185): sunlit stills came out about 1.5 stops bright.
+  */
+-static constexpr float kExposureOptimal = kExposureBinsCount / 2.0;
++static constexpr double kTargetLuminance = 0.20;
+ 
+ /*
+- * This implements the hysteresis for the exposure adjustment.
+- * It is small enough to have the exposure close to the optimal, and is big
+- * enough to prevent the exposure from wobbling around the optimal value.
++ * Hysteresis, in stops: small enough to keep the exposure close to the
++ * target, big enough to stop it wobbling around it.
+  */
+-static constexpr float kExposureSatisfactory = 0.2;
++static constexpr double kSatisfactoryStops = 0.15;
+ 
+ /*
+- * Proportional gain for exposure/gain adjustment. Maps the MSV error to a
+- * multiplicative correction factor:
+- *
+- *   factor = 1.0 + kExpProportionalGain * error
+- *
+- * With kExpProportionalGain = 0.04:
+- *   - max error ~2.5 -> factor 1.10 (~10% step, same as before)
+- *   - error 1.0      -> factor 1.04 (~4% step)
+- *   - error 0.3      -> factor 1.012 (~1.2% step)
+- *
+- * This replaces the fixed 10% bang-bang step with a proportional correction
+- * that converges smoothly and avoids overshooting near the target.
++ * Each step corrects this share of the error in stops, at most
++ * kMaxStepStops: as the loop judges only frames taken with its last
++ * request, a step below one cannot overshoot.
+  */
+-static constexpr float kExpProportionalGain = 0.04;
++static constexpr double kStepGain = 0.75;
++static constexpr double kMaxStepStops = 1.0;
+ 
+ /*
+- * Far from the target (an error above kExpFarError, e.g. a dark first
+- * frame indoors), use a larger proportional gain so the loop reaches the
+- * right exposure in about a second rather than several: with the sensor's
+- * two-frame control delay each step only shows two frames later.
+- */
+-static constexpr float kExpFarError = 1.0;
+-static constexpr float kExpProportionalGainFar = 0.1;
+-
+-/*
+- * Maximum multiplicative step per frame, to bound the correction when the
+- * scene changes dramatically.
+- */
+-static constexpr float kExpMaxStep = 0.15;
+-
+-/*
+- * A histogram pinned at one end (nearly everything in the darkest or the
+- * brightest bin) says only "much too dark" or "much too bright", not by how
+- * much. Change the total exposure by these factors then, in one step, and
++ * A picture pinned at one end (a mean more than three stops under the
++ * target, or nearly everything in the brightest of the coarse bins) says
++ * only "much too dark" or "much too bright", not by how much. Change the total exposure by these factors then, in one step, and
+  * only judge again once the change has shown (see updateExposure()).
+  */
+-static constexpr double kExposurePinnedDark = 1.05;
+ static constexpr double kExposurePinnedBright = kExposureBinsCount - 0.05;
+ static constexpr double kExpPinnedUp = 8.0;
+ static constexpr double kExpPinnedDown = 1.0 / 16.0;
+@@ -253,7 +232,8 @@ void Agc::queueRequest(typename Module::Context &context,
+ }
+ 
+ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+-			 double exposureMSV, double highlights, bool backlit)
++			 double exposureMSV, double meanLuminance,
++			 double highlights, bool backlit)
+ {
+ 	int32_t &exposure = frameContext.sensor.exposure;
+ 	double &again = frameContext.sensor.gain;
+@@ -291,7 +271,9 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 		return false;
+ 	}
+ 
+-	double error = kExposureOptimal - exposureMSV;
++	/* The error in stops: positive when too dark. */
++	const double error = meanLuminance > 0.0
++		? std::log2(kTargetLuminance / meanLuminance) : kMaxStepStops * 3;
+ 
+ 	/*
+ 	 * Highlight protection: no more than kHighlightMax of the picture
+@@ -304,7 +286,7 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 			       std::exp2(std::max(0.0f, agc.exposureValue));
+ 	const bool tooBright = highlights > allowed * 1.5;
+ 	const bool atLimit = highlights > allowed * 0.75;
+-	if (!tooBright && (std::abs(error) <= kExposureSatisfactory ||
++	if (!tooBright && (std::abs(error) <= kSatisfactoryStops ||
+ 			   (atLimit && error > 0))) {
+ 		agc.state = controls::AeStateConverged;
+ 		return false;
+@@ -316,16 +298,13 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	 * from it, and a decisive one while the histogram is pinned at an end.
+ 	 */
+ 	double factor;
+-	if (exposureMSV <= kExposurePinnedDark)
++	if (meanLuminance < kTargetLuminance / kExpPinnedUp)
+ 		factor = kExpPinnedUp;
+ 	else if (exposureMSV >= kExposurePinnedBright)
+ 		factor = kExpPinnedDown;
+-	else {
+-		float gain = std::abs(error) > kExpFarError ? kExpProportionalGainFar
+-							    : kExpProportionalGain;
+-		factor = 1.0 + std::clamp(static_cast<float>(error) * gain * 2,
+-					  -kExpMaxStep * 2, kExpMaxStep * 2);
+-	}
++	else
++		factor = std::exp2(std::clamp(error * kStepGain,
++					      -kMaxStepStops, kMaxStepStops));
+ 	if (tooBright && exposureMSV < kExposurePinnedBright)
+ 		factor = std::min(factor, std::clamp(std::sqrt(allowed / highlights),
+ 						     0.5, 0.9));
+@@ -355,7 +334,7 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	agc.again = again;
+ 
+ 	LOG(IPASoftExposure, Debug)
+-		<< "exposureMSV " << exposureMSV
++		<< "exposureMSV " << exposureMSV << " mean " << meanLuminance
+ 		<< " highlights " << highlights << (backlit ? " (backlit)" : "")
+ 		<< " error " << error << " factor " << factor
+ 		<< " exp " << exposure << " again " << again
+@@ -483,6 +462,7 @@ void Agc::process(IPAContext &context,
+ 	 */
+ 	const double dgainNow = context.activeState.agc.digitalGain;
+ 	uint64_t clipped = 0, dark = 0, all = 0;
++	double luminance = 0.0;
+ 	for (unsigned int i = 0; i < histogramSize; i++) {
+ 		const unsigned int gained = std::min<unsigned int>(
+ 			histogramSize - 1, static_cast<unsigned int>(std::lround(i * scale)));
+@@ -490,6 +470,8 @@ void Agc::process(IPAContext &context,
+ 		const uint32_t n = histogram[blackLevelHistIdx + i];
+ 		exposureBins[idx] += n;
+ 
++		luminance += n * std::min(1.0, (i + 0.5) * scale / histogramSize);
++
+ 		const double out = i * dgainNow;
+ 		if (out >= histogramSize - kHighlightBins)
+ 			clipped += n;
+@@ -498,6 +480,7 @@ void Agc::process(IPAContext &context,
+ 		all += n;
+ 	}
+ 	const double highlights = all ? static_cast<double>(clipped) / all : 0.0;
++	const double meanLuminance = all ? luminance / all : 0.0;
+ 	const bool backlit = all && static_cast<double>(dark) / all >= kBacklitDarkShare;
+ 
+ 	for (unsigned int i = 0; i < kExposureBinsCount; i++) {
+@@ -508,7 +491,7 @@ void Agc::process(IPAContext &context,
+ 
+ 	float exposureMSV = (denom == 0 ? 0 : static_cast<float>(num) / denom);
+ 	const bool adjusted = updateExposure(context, frameContext, exposureMSV,
+-					     highlights, backlit);
++					     meanLuminance, highlights, backlit);
+ 	if (adjusted)
+ 		context.activeState.agc.stableSamples = 0;
+ 	else
+diff --git a/src/ipa/simple/algorithms/agc.h b/src/ipa/simple/algorithms/agc.h
+index f79bf8842..c2a71cbd8 100644
+--- a/src/ipa/simple/algorithms/agc.h
++++ b/src/ipa/simple/algorithms/agc.h
+@@ -32,7 +32,8 @@ public:
+ 
+ private:
+ 	bool updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+-			    double exposureMSV, double highlights, bool backlit);
++			    double exposureMSV, double meanLuminance,
++			    double highlights, bool backlit);
+ };
+ 
+ } /* namespace ipa::soft::algorithms */
+-- 
+2.55.0
+

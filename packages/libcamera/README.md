@@ -47,6 +47,10 @@ in the table. See `device/cheetah/CAMERA-PLAN.md`, section 5.2.
 | `0030-ipa-simple-Add-noise-reduction-and-sharpening.patch` | The `Detail` algorithm drives that pass from the gain; the Sharpness control |
 | `0031-software_isp-Gather-grey-candidates-for-white-balanc.patch` | Statistics: sums of samples that may be grey at the current white point |
 | `0032-ipa-simple-awb-Use-the-grey-candidates-and-smooth-th.patch` | Grey world over the grey candidates, and gains smoothed over frames |
+| `0033-ipa-simple-agc-Protect-the-highlights.patch` | The AGC keeps clipped highlights to about 2% of the picture (10% backlit) |
+| `0034-software_isp-debayer_egl-Clip-highlights-to-neutral.patch` | Highlights near clipping fade to neutral: no cyan skies |
+| `0035-ipa-simple-af-Scan-less.patch` | Autofocus stops the coarse scan past the peak, narrows the fine scan, and rescans locally in continuous mode |
+| `0036-ipa-simple-agc-Aim-the-mean-luminance-at-20.patch` | The AGC aims the mean linear luminance at 20% of full scale |
 | `libcamera-fix-python3.14-macro-redefinition.patch` | Arch's patch, unchanged (sha512 `8b54cbdf…`) |
 | `.SRCINFO` | `makepkg --printsrcinfo` output |
 
@@ -159,6 +163,10 @@ Pictures stay noisier and softer at the corners than with Google's ISP.
 ## Status
 
 0.7.2-4.4 (0001-0003) runs on the phone: the ultrawide captures end to end.
+0.7.2-4.13 adds 0033-0036 (2026-10-15): daylight stills were about 1.5
+stops bright because the AGC aimed the mean of a coarse linear histogram at
+its middle (45% of full scale); it now aims the mean luminance at 20%,
+caps clipped highlights and clips them to neutral; autofocus scans less.
 0.7.2-4.12 adds 0027-0032 (2026-10-14): 60 fps through FrameDurationLimits
 (measured: ultrawide 59.5, front 59.9 fps at 1920x1080 with the second pass,
 the cam process at 19% of one core), lens shading (not tuned yet), noise

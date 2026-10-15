@@ -3563,6 +3563,38 @@ copy in /tmp, not installed):**
     384 MiB default CMA holds for several buffers;
   - a check of the GPU's largest texture against the 10200-byte stride.
 
+**CAM5.4, 2026-10-15 (00556 = `7.3.0-rc6-omamobile-push1-00556-gb98aa37cd585`, libcamera 4.12 → 4.13):**
+- **Daylight stills about 1.5-2 stops bright** (owner, main camera, omacam
+  0.3.0). The EV 0 JPEGs averaged sRGB 160-184 with 15-32% clipped; the
+  EV −2 ones (exactly 4x shorter) looked right.
+  - It is not a mode bug. On the same scene with the same exposure product
+    (1577 and 1641 ms·gain), the 1080p and 4080x3072 modes gave the same
+    output (mean 80 and 84).
+  - The still mode's 107 ms frame lets the AGC reach its target, and that
+    target was the bright part: the mean of a five-bin linear histogram at
+    its middle, about 45% linear, sRGB 170.
+  - The video looked right because its frames held the sky or ran out of
+    exposure time.
+- **libcamera 4.13 (`0033`-`0036`):**
+  - `0036`: the AGC aims the mean linear luminance at 20% (about 1.2 stops
+    lower), correcting three quarters of the error in stops each time;
+  - `0033`: at most 2% of the picture clipped (10% when backlit);
+  - `0034`: highlights near clipping fade to neutral instead of cyan;
+  - `0035`: autofocus stops the coarse scan past the peak, fine-scans 5
+    samples around a fitted centre, and rescans locally in continuous
+    mode. Estimated scan at infinity: about 45 frames instead of about 100.
+
+  In a model of the loop (lognormal scenes, sensor delay 2 or 3), a 50x
+  change of light converges in 8-12 frames without a reversal.
+- **Smoke test, unpacked 4.13 under `cam` (indoor, dim):**
+  - main 1080p: mean 0.18 at the exposure limits, AeState converged, AF
+    completed;
+  - main still: mean 0.45 → 0.26 → target within 3 s at 9.4 fps;
+  - front: at its limits.
+
+  The shaders compile on the GPU and no errors were logged. The daylight
+  check is the owner's, after the install.
+
 ### CAM5.5: 60 fps on the main and telephoto cameras. Risk: medium (DMA)
 
 Kernel: omamobile-camera `9e5c1a218` ("media: i2c: s5kgn1: let VBLANK shorten
