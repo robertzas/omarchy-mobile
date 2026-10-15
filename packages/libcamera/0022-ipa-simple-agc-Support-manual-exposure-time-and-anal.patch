@@ -1,0 +1,263 @@
+From d22ce7949e56aed26b4aa1d46ab8b254336846eb Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Wed, 14 Oct 2026 17:37:35 -0400
+Subject: [PATCH 22/26] ipa: simple: agc: Support manual exposure time and
+ analogue gain
+
+Camera applications offer manual shutter speed and ISO, and an
+exposure lock. Support ExposureTimeMode and AnalogueGainMode with
+ExposureTime and AnalogueGain, and AeEnable, which sets both modes:
+
+- the exposure time or gain set to manual stays at the application's
+  value, clamped to the configured mode's limits, and the loop goes on
+  with the other one (and digital gain);
+- a mode switched to manual without a value holds the loop's last
+  value, so AeEnable false locks the exposure;
+- with both manual the loop is idle; a lock keeps the digital gain, so
+  the picture holds, and the application's own values come without it.
+
+ExposureTime and AnalogueGain are advertised with the range of the
+mode the sensor is in when the camera is created; the simple pipeline
+doesn't change the frame length, so the longest exposure is the
+configured mode's frame time. Report both modes in metadata.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/agc.cpp | 104 ++++++++++++++++++++++++++++--
+ src/ipa/simple/ipa_context.h      |   5 ++
+ src/ipa/simple/soft_simple.cpp    |  32 ++++++++-
+ 3 files changed, 134 insertions(+), 7 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index 80729c4..1d8a964 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -17,6 +17,8 @@
+ 
+ namespace libcamera {
+ 
++using namespace std::literals::chrono_literals;
++
+ LOG_DEFINE_CATEGORY(IPASoftExposure)
+ 
+ namespace ipa::soft::algorithms {
+@@ -122,6 +124,14 @@ int Agc::init(IPAContext &context, [[maybe_unused]] const ValueNode &tuningData)
+ {
+ 	context.ctrlMap[&controls::ExposureValue] =
+ 		ControlInfo(kExposureValueMin, kExposureValueMax, 0.0f);
++	context.ctrlMap[&controls::AeEnable] = ControlInfo(false, true, true);
++	context.ctrlMap[&controls::ExposureTimeMode] =
++		ControlInfo(controls::ExposureTimeModeValues,
++			    ControlValue(controls::ExposureTimeModeAuto));
++	context.ctrlMap[&controls::AnalogueGainMode] =
++		ControlInfo(controls::AnalogueGainModeValues,
++			    ControlValue(controls::AnalogueGainModeAuto));
++	/* ExposureTime and AnalogueGain come from the sensor's limits. */
+ 
+ 	return 0;
+ }
+@@ -134,6 +144,8 @@ int Agc::configure(IPAContext &context,
+ 	context.activeState.agc.pendingFrames = 0;
+ 	context.activeState.agc.state = controls::AeStateSearching;
+ 	context.activeState.agc.exposureValue = 0.0f;
++	context.activeState.agc.exposureTimeAuto = true;
++	context.activeState.agc.gainAuto = true;
+ 
+ 	return 0;
+ }
+@@ -145,6 +157,61 @@ void Agc::queueRequest(typename Module::Context &context,
+ {
+ 	auto &agc = context.activeState.agc;
+ 
++	/*
++	 * AeEnable sets both modes; ExposureTimeMode and AnalogueGainMode in
++	 * the same request take precedence. A mode switched to manual without
++	 * a value holds the last one the loop chose (an exposure lock).
++	 */
++	const auto aeEnable = controls.get(controls::AeEnable);
++	const auto timeMode = controls.get(controls::ExposureTimeMode);
++	const auto gainMode = controls.get(controls::AnalogueGainMode);
++	bool timeAuto = agc.exposureTimeAuto;
++	bool gainAuto = agc.gainAuto;
++	if (aeEnable)
++		timeAuto = gainAuto = *aeEnable;
++	if (timeMode)
++		timeAuto = *timeMode == controls::ExposureTimeModeAuto;
++	if (gainMode)
++		gainAuto = *gainMode == controls::AnalogueGainModeAuto;
++
++	/* Before the first frame, process() takes the sensor's values. */
++	if (agc.exposureTimeAuto && !timeAuto)
++		agc.manualExposureTime = agc.valid
++			? context.configuration.agc.lineDuration * agc.exposure
++			: utils::Duration(0);
++	if (agc.gainAuto && !gainAuto)
++		agc.manualGain = agc.valid ? agc.again : 0.0;
++	if (timeAuto != agc.exposureTimeAuto || gainAuto != agc.gainAuto) {
++		agc.exposureTimeAuto = timeAuto;
++		agc.gainAuto = gainAuto;
++		agc.stableSamples = 0;
++		LOG(IPASoftExposure, Debug)
++			<< "Exposure time " << (timeAuto ? "auto" : "manual")
++			<< ", gain " << (gainAuto ? "auto" : "manual");
++	}
++
++	bool manualValue = false;
++	if (!agc.exposureTimeAuto) {
++		if (const auto time = controls.get(controls::ExposureTime)) {
++			agc.manualExposureTime = std::max(*time, 1) * 1.0us;
++			manualValue = true;
++		}
++	}
++	if (!agc.gainAuto) {
++		if (const auto gain = controls.get(controls::AnalogueGain)) {
++			agc.manualGain = std::max(*gain, 1.0f);
++			manualValue = true;
++		}
++	}
++
++	/*
++	 * A lock (both manual, no values) keeps the digital gain, so the
++	 * picture doesn't change; the application's own exposure time and
++	 * gain come without it.
++	 */
++	if (!agc.exposureTimeAuto && !agc.gainAuto && manualValue)
++		agc.digitalGain = 1.0;
++
+ 	if (const auto ev = controls.get(controls::ExposureValue)) {
+ 		const float value = std::clamp(*ev, kExposureValueMin, kExposureValueMax);
+ 		if (value != agc.exposureValue) {
+@@ -190,6 +257,11 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 		return false;
+ 	}
+ 
++	if (!agc.exposureTimeAuto && !agc.gainAuto) {
++		agc.state = controls::AeStateIdle;
++		return false;
++	}
++
+ 	double error = kExposureOptimal - exposureMSV;
+ 	if (std::abs(error) <= kExposureSatisfactory) {
+ 		agc.state = controls::AeStateConverged;
+@@ -216,17 +288,21 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	/*
+ 	 * Distribute it: exposure time first (up to its limit), then the
+ 	 * sensor's analogue gain, then digital gain. Going down, that takes
+-	 * the gains off before shortening the exposure.
++	 * the gains off before shortening the exposure. Whichever of the
++	 * exposure time and the analogue gain the application set stays.
+ 	 */
+ 	const double total = static_cast<double>(exposure) * again * dgain * factor;
+ 	const int32_t oldExposure = exposure;
+ 	const double oldAgain = again;
+ 	const double oldDgain = dgain;
+ 
+-	exposure = std::clamp(static_cast<int32_t>(std::lround(total / cfg.again10)),
+-			      cfg.exposureMin, cfg.exposureMax);
++	if (agc.exposureTimeAuto)
++		exposure = std::clamp(static_cast<int32_t>(std::lround(
++					      total / (agc.gainAuto ? cfg.again10 : again))),
++				      cfg.exposureMin, cfg.exposureMax);
+ 	double rest = total / exposure;
+-	again = std::clamp(rest, cfg.againMin, cfg.againMax);
++	if (agc.gainAuto)
++		again = std::clamp(rest, cfg.againMin, cfg.againMax);
+ 	rest /= again;
+ 	dgain = std::clamp(rest, 1.0, kMaxDigitalGain);
+ 
+@@ -278,6 +354,26 @@ void Agc::process(IPAContext &context,
+ 		context.activeState.agc.valid = true;
+ 	}
+ 
++	/* The application's exposure time and gain, within the mode's limits. */
++	auto &agc = context.activeState.agc;
++	const auto &cfg = context.configuration.agc;
++	metadata.set(controls::ExposureTimeMode,
++		     agc.exposureTimeAuto ? controls::ExposureTimeModeAuto
++					  : controls::ExposureTimeModeManual);
++	metadata.set(controls::AnalogueGainMode,
++		     agc.gainAuto ? controls::AnalogueGainModeAuto
++				  : controls::AnalogueGainModeManual);
++	if (!agc.exposureTimeAuto && agc.manualExposureTime.get<std::nano>() <= 0)
++		agc.manualExposureTime = cfg.lineDuration * frameContext.sensor.exposure;
++	if (!agc.gainAuto && !agc.manualGain)
++		agc.manualGain = frameContext.sensor.gain;
++	if (!agc.exposureTimeAuto && cfg.lineDuration.get<std::nano>() > 0)
++		agc.exposure = std::clamp(static_cast<int32_t>(std::lround(
++						  agc.manualExposureTime / cfg.lineDuration)),
++					  cfg.exposureMin, cfg.exposureMax);
++	if (!agc.gainAuto)
++		agc.again = std::clamp(agc.manualGain, cfg.againMin, cfg.againMax);
++
+ 	if (!stats->valid) {
+ 		/*
+ 		 * Use the new exposure and gain values calculated the last time
+diff --git a/src/ipa/simple/ipa_context.h b/src/ipa/simple/ipa_context.h
+index f0b1981..bf8e0f7 100644
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -57,6 +57,11 @@ struct IPAActiveState {
+ 		int32_t state;
+ 		/* Exposure compensation in stops (controls::ExposureValue) */
+ 		float exposureValue;
++		/* Exposure time and analogue gain from the AE or the application */
++		bool exposureTimeAuto;
++		bool gainAuto;
++		utils::Duration manualExposureTime;
++		double manualGain;
+ 		bool valid;
+ 	} agc;
+ 
+diff --git a/src/ipa/simple/soft_simple.cpp b/src/ipa/simple/soft_simple.cpp
+index e0f9303..d900a83 100644
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -181,9 +181,6 @@ int IPASoftSimple::init(const IPASettings &settings,
+ 		stats_ = static_cast<SwIspStats *>(mem);
+ 	}
+ 
+-	ControlInfoMap::Map ctrlMap = context_.ctrlMap;
+-	*ipaControls = ControlInfoMap(std::move(ctrlMap), controls::controls);
+-
+ 	/*
+ 	 * Check if the sensor driver supports the controls required by the
+ 	 * Soft IPA.
+@@ -200,6 +197,35 @@ int IPASoftSimple::init(const IPASettings &settings,
+ 		return -EINVAL;
+ 	}
+ 
++	/*
++	 * Manual exposure time and analogue gain, within the limits of the
++	 * mode the sensor is in now. Another mode may allow a different
++	 * range: values outside the configured mode's are clamped to it.
++	 */
++	const ControlInfo &exposureInfo = sensorControls.find(V4L2_CID_EXPOSURE)->second;
++	const ControlInfo &gainInfo = sensorControls.find(V4L2_CID_ANALOGUE_GAIN)->second;
++	if (sensorInfo.pixelRate && sensorInfo.minLineLength) {
++		const utils::Duration line =
++			sensorInfo.minLineLength * 1.0s / sensorInfo.pixelRate;
++		const auto micros = [&](const ControlValue &v) {
++			return static_cast<int32_t>(std::max<double>(
++				1.0, utils::Duration(line * std::max(v.get<int32_t>(), 1)).get<std::micro>()));
++		};
++		context_.ctrlMap[&controls::ExposureTime] =
++			ControlInfo(micros(exposureInfo.min()), micros(exposureInfo.max()),
++				    micros(exposureInfo.def()));
++	}
++	const auto gain = [&](const ControlValue &v) {
++		const int32_t code = v.get<int32_t>();
++		return static_cast<float>(std::max(1.0, camHelper_ ? camHelper_->gain(code)
++								   : static_cast<double>(code)));
++	};
++	context_.ctrlMap[&controls::AnalogueGain] =
++		ControlInfo(gain(gainInfo.min()), gain(gainInfo.max()), gain(gainInfo.def()));
++
++	ControlInfoMap::Map ctrlMap = context_.ctrlMap;
++	*ipaControls = ControlInfoMap(std::move(ctrlMap), controls::controls);
++
+ 	return 0;
+ }
+ 
+-- 
+2.55.0
+

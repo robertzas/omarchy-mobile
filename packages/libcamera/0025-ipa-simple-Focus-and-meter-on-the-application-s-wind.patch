@@ -1,0 +1,366 @@
+From bd336234e578d55243d9a9e4b9fd1cb7898fb33b Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Wed, 14 Oct 2026 17:42:17 -0400
+Subject: [PATCH 25/26] ipa: simple: Focus and meter on the application's
+ window
+
+Tap to focus needs the focus window to follow the tap, and the
+exposure to follow it too.
+
+Support AfMetering and AfWindows: with AfMetering set to Windows, the
+first window sets the focus window in the debayer parameters, in the
+coordinates of the sensor's active area, which stand for the whole
+picture (the simple pipeline has no ScalerCrop, and the statistics
+cover what the output shows). A window is at least a tenth of the
+picture a side. Continuous autofocus scans a new window; in auto mode
+the application triggers the scan.
+
+Support AeMeteringMode on the window's histogram: matrix (the whole
+picture, as before and the default), spot (the window) and
+centre-weighted (the whole picture with the window counted three
+times).
+
+Value-initialise the IPA context: configure() copies the previous
+state before the first configuration.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/af.cpp  | 14 +++++
+ src/ipa/simple/algorithms/af.h    |  3 +
+ src/ipa/simple/algorithms/agc.cpp | 34 +++++++++++-
+ src/ipa/simple/ipa_context.h      | 15 ++++-
+ src/ipa/simple/soft_simple.cpp    | 92 +++++++++++++++++++++++++++++++
+ 5 files changed, 155 insertions(+), 3 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/af.cpp b/src/ipa/simple/algorithms/af.cpp
+index f731d74..1fb518d 100644
+--- a/src/ipa/simple/algorithms/af.cpp
++++ b/src/ipa/simple/algorithms/af.cpp
+@@ -323,6 +323,20 @@ void Af::process(IPAContext &context,
+ 	if (!context.configuration.focus.available)
+ 		return;
+ 
++	/*
++	 * A new focus window (AfWindows) makes the sharpness measured so far
++	 * meaningless. Continuous focus scans the new window; in auto mode
++	 * the application triggers a scan when it wants one.
++	 */
++	if (context.activeState.window.generation != windowGeneration_) {
++		windowGeneration_ = context.activeState.window.generation;
++		if (af.mode == controls::AfModeContinuous && !af.scanning) {
++			af.pendingScan = true;
++			af.pendingSamples = 0;
++			af.state = controls::AfStateScanning;
++		}
++	}
++
+ 	if (stats->valid) {
+ 		if (af.pendingScan &&
+ 		    (context.activeState.agc.stableSamples >= kAeStableSamples ||
+diff --git a/src/ipa/simple/algorithms/af.h b/src/ipa/simple/algorithms/af.h
+index 6ea7a6b..59845d5 100644
+--- a/src/ipa/simple/algorithms/af.h
++++ b/src/ipa/simple/algorithms/af.h
+@@ -39,6 +39,9 @@ private:
+ 	/* Fine-scan samples as (position, sharpness), for the peak fit. */
+ 	std::vector<std::pair<int32_t, uint64_t>> fineSamples_;
+ 
++	/* The focus window's generation the sharpness was last measured in */
++	unsigned int windowGeneration_ = 0;
++
+ 	unsigned int coarseSteps_ = 8;
+ 	unsigned int fineSteps_ = 32;
+ 	std::optional<std::pair<int32_t, int32_t>> range_;
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index 1d8a964..a8709e7 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -8,7 +8,9 @@
+ #include "agc.h"
+ 
+ #include <algorithm>
++#include <array>
+ #include <cmath>
++#include <numeric>
+ #include <stdint.h>
+ 
+ #include <libcamera/base/log.h>
+@@ -125,6 +127,13 @@ int Agc::init(IPAContext &context, [[maybe_unused]] const ValueNode &tuningData)
+ 	context.ctrlMap[&controls::ExposureValue] =
+ 		ControlInfo(kExposureValueMin, kExposureValueMax, 0.0f);
+ 	context.ctrlMap[&controls::AeEnable] = ControlInfo(false, true, true);
++	static const std::array<ControlValue, 3> meteringModes = {
++		ControlValue(controls::MeteringCentreWeighted),
++		ControlValue(controls::MeteringSpot),
++		ControlValue(controls::MeteringMatrix),
++	};
++	context.ctrlMap[&controls::AeMeteringMode] =
++		ControlInfo(meteringModes, ControlValue(controls::MeteringMatrix));
+ 	context.ctrlMap[&controls::ExposureTimeMode] =
+ 		ControlInfo(controls::ExposureTimeModeValues,
+ 			    ControlValue(controls::ExposureTimeModeAuto));
+@@ -146,6 +155,7 @@ int Agc::configure(IPAContext &context,
+ 	context.activeState.agc.exposureValue = 0.0f;
+ 	context.activeState.agc.exposureTimeAuto = true;
+ 	context.activeState.agc.gainAuto = true;
++	context.activeState.agc.meteringMode = controls::MeteringMatrix;
+ 
+ 	return 0;
+ }
+@@ -212,6 +222,13 @@ void Agc::queueRequest(typename Module::Context &context,
+ 	if (!agc.exposureTimeAuto && !agc.gainAuto && manualValue)
+ 		agc.digitalGain = 1.0;
+ 
++	if (const auto mode = controls.get(controls::AeMeteringMode)) {
++		if (*mode == controls::MeteringCentreWeighted ||
++		    *mode == controls::MeteringSpot ||
++		    *mode == controls::MeteringMatrix)
++			agc.meteringMode = *mode;
++	}
++
+ 	if (const auto ev = controls.get(controls::ExposureValue)) {
+ 		const float value = std::clamp(*ev, kExposureValueMin, kExposureValueMax);
+ 		if (value != agc.exposureValue) {
+@@ -342,6 +359,7 @@ void Agc::process(IPAContext &context,
+ 		     static_cast<float>(context.activeState.agc.digitalGain));
+ 	metadata.set(controls::AeState, context.activeState.agc.state);
+ 	metadata.set(controls::ExposureValue, context.activeState.agc.exposureValue);
++	metadata.set(controls::AeMeteringMode, context.activeState.agc.meteringMode);
+ 
+ 	if (!context.activeState.agc.valid) {
+ 		/*
+@@ -384,11 +402,25 @@ void Agc::process(IPAContext &context,
+ 		return;
+ 	}
+ 
++	/*
++	 * Metering: the whole picture (matrix), the focus window (spot, the
++	 * centre half unless the application sets AfWindows), or the whole
++	 * picture with the window counted three times (centre-weighted).
++	 */
++	SwIspStats::Histogram histogram = stats->yHistogram;
++	const auto &window = stats->windowHistogram;
++	const uint64_t windowCount =
++		std::accumulate(window.begin(), window.end(), uint64_t(0));
++	if (windowCount && agc.meteringMode == controls::MeteringSpot)
++		histogram = window;
++	else if (windowCount && agc.meteringMode == controls::MeteringCentreWeighted)
++		for (unsigned int i = 0; i < histogram.size(); i++)
++			histogram[i] += 2 * window[i];
++
+ 	/*
+ 	 * Calculate Mean Sample Value (MSV) according to formula from:
+ 	 * https://www.araa.asn.au/acra/acra2007/papers/paper84final.pdf
+ 	 */
+-	const auto &histogram = stats->yHistogram;
+ 	const unsigned int blackLevelHistIdx =
+ 		context.activeState.blc.level / (256 / SwIspStats::kYHistogramSize);
+ 	const unsigned int histogramSize =
+diff --git a/src/ipa/simple/ipa_context.h b/src/ipa/simple/ipa_context.h
+index 03508bc..924f0c0 100644
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -55,6 +55,8 @@ struct IPAActiveState {
+ 		unsigned int pendingFrames;
+ 		/* controls::AeState */
+ 		int32_t state;
++		/* controls::AeMeteringMode */
++		int32_t meteringMode;
+ 		/* Exposure compensation in stops (controls::ExposureValue) */
+ 		float exposureValue;
+ 		/* Exposure time and analogue gain from the AE or the application */
+@@ -80,6 +82,15 @@ struct IPAActiveState {
+ 
+ 	Matrix<float, 3, 3> combinedMatrix;
+ 
++	struct {
++		/* x, y, width, height in fractions of the picture */
++		std::array<float, 4> rect;
++		/* controls::AfMetering */
++		int32_t afMetering;
++		/* Counts the changes of the window, for algorithms to notice */
++		unsigned int generation;
++	} window;
++
+ 	struct {
+ 		float gamma;
+ 		/* 0..2 range, 1.0 = normal */
+@@ -133,8 +144,8 @@ struct IPAContext {
+ 	}
+ 
+ 	IPACameraSensorInfo sensorInfo;
+-	IPASessionConfiguration configuration;
+-	IPAActiveState activeState;
++	IPASessionConfiguration configuration{};
++	IPAActiveState activeState{};
+ 	FCQueue<IPAFrameContext> frameContexts;
+ 	ControlInfoMap::Map ctrlMap;
+ 	bool ccmEnabled = false;
+diff --git a/src/ipa/simple/soft_simple.cpp b/src/ipa/simple/soft_simple.cpp
+index d900a83..233fa2c 100644
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -5,6 +5,8 @@
+  * Simple Software Image Processing Algorithm module
+  */
+ 
++#include <algorithm>
++#include <array>
+ #include <chrono>
+ #include <optional>
+ #include <stdint.h>
+@@ -42,6 +44,15 @@ namespace ipa::soft {
+ /* Maximum number of frame contexts to be held */
+ static constexpr uint32_t kMaxFrameContexts = 16;
+ 
++/*
++ * The autofocus and spot metering window, as x, y, width and height in
++ * fractions of the picture: the centre half by default, and no smaller than
++ * kMinWindow a side around the centre of an application's window, which
++ * would leave too few samples for a steady sharpness or histogram.
++ */
++static constexpr std::array<float, 4> kDefaultWindow = { 0.25f, 0.25f, 0.5f, 0.5f };
++static constexpr float kMinWindow = 0.1f;
++
+ class IPASoftSimple : public ipa::soft::IPASoftInterface, public Module
+ {
+ public:
+@@ -74,6 +85,7 @@ protected:
+ 
+ private:
+ 	void updateExposure(double exposureMSV);
++	void updateWindow(const ControlList &controls);
+ 
+ 	DebayerParams *params_;
+ 	SwIspStats *stats_;
+@@ -167,6 +179,7 @@ int IPASoftSimple::init(const IPASettings &settings,
+ 		params_->gamma = 1.0 / algorithms::kDefaultGamma;
+ 		params_->contrastExp = 1.0;
+ 		params_->gains = { { 1.0, 1.0, 1.0 } };
++		params_->focusWindow = kDefaultWindow;
+ 		/* combinedMatrix is reset for each frame. */
+ 	}
+ 
+@@ -223,12 +236,82 @@ int IPASoftSimple::init(const IPASettings &settings,
+ 	context_.ctrlMap[&controls::AnalogueGain] =
+ 		ControlInfo(gain(gainInfo.min()), gain(gainInfo.max()), gain(gainInfo.def()));
+ 
++	/*
++	 * AfWindows are in the coordinates of the sensor's active area, which
++	 * stand for the whole picture the application gets: the simple
++	 * pipeline has no ScalerCrop, and the statistics cover what the
++	 * output shows.
++	 */
++	const Size &area = sensorInfo.activeAreaSize;
++	if (!area.isNull()) {
++		context_.ctrlMap[&controls::AfMetering] =
++			ControlInfo(controls::AfMeteringValues,
++				    ControlValue(controls::AfMeteringAuto));
++		context_.ctrlMap[&controls::AfWindows] =
++			ControlInfo(Rectangle(0, 0, 1, 1), Rectangle(area),
++				    Rectangle(area.width / 4, area.height / 4,
++					      area.width / 2, area.height / 2));
++	}
++
+ 	ControlInfoMap::Map ctrlMap = context_.ctrlMap;
+ 	*ipaControls = ControlInfoMap(std::move(ctrlMap), controls::controls);
+ 
+ 	return 0;
+ }
+ 
++void IPASoftSimple::updateWindow(const ControlList &controls)
++{
++	auto &window = context_.activeState.window;
++	const Size &area = context_.sensorInfo.activeAreaSize;
++
++	if (const auto metering = controls.get(controls::AfMetering))
++		window.afMetering = *metering;
++	/*
++	 * AfWindows is an array, but take a single rectangle too (cam's
++	 * capture scripts send one so): getting it as an array would assert.
++	 */
++	std::optional<Rectangle> first;
++	if (controls.contains(controls::AfWindows.id())) {
++		const ControlValue &value = controls.get(controls::AfWindows.id());
++		if (value.type() == ControlTypeRectangle) {
++			if (value.isArray()) {
++				const auto windows = value.get<Span<const Rectangle>>();
++				if (!windows.empty())
++					first = windows[0];
++			} else {
++				first = value.get<Rectangle>();
++			}
++		}
++	}
++
++	std::array<float, 4> rect = kDefaultWindow;
++	if (window.afMetering == controls::AfMeteringWindows && !area.isNull()) {
++		/* Keep the last window until the application sends another. */
++		if (!first || first->isNull())
++			return;
++
++		/* One window: the first. */
++		const Rectangle &r = *first;
++		float cx = (r.x + r.width / 2.0f) / area.width;
++		float cy = (r.y + r.height / 2.0f) / area.height;
++		const float w = std::clamp(static_cast<float>(r.width) / area.width,
++					   kMinWindow, 1.0f);
++		const float h = std::clamp(static_cast<float>(r.height) / area.height,
++					   kMinWindow, 1.0f);
++		cx = std::clamp(cx, w / 2, 1.0f - w / 2);
++		cy = std::clamp(cy, h / 2, 1.0f - h / 2);
++		rect = { cx - w / 2, cy - h / 2, w, h };
++	}
++
++	if (rect != window.rect) {
++		window.rect = rect;
++		window.generation++;
++		LOG(IPASoft, Debug)
++			<< "Focus and metering window " << rect[0] << "," << rect[1]
++			<< " " << rect[2] << "x" << rect[3];
++	}
++}
++
+ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
+ {
+ 	sensorInfoMap_ = configInfo.sensorControls;
+@@ -247,6 +330,7 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
+ 	const auto previousAgc = context_.activeState.agc;
+ 	const auto previousAwb = context_.activeState.awb;
+ 	const auto previousAf = context_.activeState.af;
++	const auto previousWindow = context_.activeState.window;
+ 	const auto previousFocus = context_.configuration.focus;
+ 	const auto previousLineDuration = context_.configuration.agc.lineDuration;
+ 	const auto previousExposureMin = context_.configuration.agc.exposureMin;
+@@ -348,6 +432,11 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
+ 			<< " lines, gain " << agc.again << ", digital gain " << agc.digitalGain;
+ 	}
+ 
++	/* The application's window stays, or starts as the default. */
++	context_.activeState.window = previousWindow;
++	if (!context_.activeState.window.rect[2])
++		context_.activeState.window.rect = kDefaultWindow;
++
+ 	/*
+ 	 * Keep the focus too while the lens is the same, so a still starts where
+ 	 * the preview focused instead of at the lens default with a new scan.
+@@ -383,6 +472,8 @@ void IPASoftSimple::queueRequest(const uint32_t frame, const ControlList &contro
+ {
+ 	IPAFrameContext &frameContext = context_.frameContexts.alloc(frame);
+ 
++	updateWindow(controls);
++
+ 	for (const auto &algo : algorithms())
+ 		algo->queueRequest(context_, frame, frameContext, controls);
+ }
+@@ -395,6 +486,7 @@ void IPASoftSimple::computeParams(const uint32_t frame)
+ 	for (const auto &algo : algorithms())
+ 		algo->prepare(context_, frame, frameContext, params_);
+ 	params_->combinedMatrix = context_.activeState.combinedMatrix;
++	params_->focusWindow = context_.activeState.window.rect;
+ 
+ 	setIspParams.emit();
+ }
+-- 
+2.55.0
+

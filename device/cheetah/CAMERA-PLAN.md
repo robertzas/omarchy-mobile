@@ -3463,6 +3463,110 @@ omamobile-apps 0.1.1): GNOME Snapshot works with all four cameras.**
   against about 145. The cast is in omacam's still path, not the sensor or
   libcamera.
 
+**CAM5.4, evening of 2026-10-14 (00554 = `7.3.0-rc6-omamobile-push1-00554-g63c0abe9c290`, libcamera 4.9-4.11):**
+- **Outdoor strobe and blown-out stills** (owner, overcast daylight, omacam
+  0.1.9 on 4.8: the viewfinder flashed white, stills at 1/19 s ISO 978 with
+  mean luma 247-251). Two causes:
+  - The AGC acted on frames taken before its last request had reached the
+    sensor. In an offline model of the loop, a sensor one frame slower than
+    the pipeline's delay model made the old code (0003+0011+0015) toggle
+    between pinned-dark and pinned-bright steps 51-68 times.
+    libcamera 4.9 `0017` judges only frames taken with the last request,
+    plus one settle frame, and re-requests the values until a frame shows
+    them (at most 8 frames). It corrects the total exposure (time x
+    analogue x digital gain) and steps a pinned histogram x8 or 1/16.
+    Modelled convergence, no oscillation:
+    - delay 2: dark→bright 31, steady bright 32, bright→dark 32 frames;
+    - delay 3: 32, 53 and 84 frames.
+  - A still switches sensor mode, and the driver starts the new mode at its
+    longest exposure. `0018` carries the converged exposure, in time and
+    gain, and the white balance across a mode change. `0021` gives the IPA
+    each mode's own line length, which it used to take once at camera
+    creation.
+  - On the phone, headless `cam`, 4.9 (the back cameras faced a surface
+    and saw black):
+    - main 450, telephoto 150 and ultrawide 90 frames held steady at
+      their limits, with no oscillation;
+    - the front camera in a dim room brightened monotonically, MSV
+      1.29 → 2.18 over 21 steps of x1.24 falling to x1.03, and stopped at
+      the digital-gain limit with no overshoot.
+
+    The bright-scene check waits for daylight.
+- **Camera-app controls, libcamera 4.11 (`0019`-`0026`).** Each was tested
+  with a `cam` capture script on the front, main and telephoto cameras
+  (front: EV, AE and AWB only, no lens), and each was read back in metadata:
+  - `AeState`;
+  - `ExposureValue` ±1: the digital gain moved 2.86 ↔ 4.0 on the front
+    camera, then converged;
+  - `AeEnable` false (idle, exposure, gain and digital gain held);
+  - manual `ExposureTime`/`AnalogueGain` 4000 µs at 2.0 (main 3995,
+    telephoto 4004 µs), applied within 10 frames, with AE resuming from
+    them;
+  - `AwbEnable` false with `ColourGains` [1.5, 1.2];
+  - `AeMeteringMode` Spot with `AfMetering` Windows and `AfWindows`, and an
+    `AfTrigger` scan over the window;
+  - manual `LensPosition` 0.2;
+  - `AfPause` Immediate (paused, lens held).
+
+  Two bugs this found were fixed before 4.11:
+  - a single `AfWindows` rectangle, as `cam` scripts send it, asserted
+    inside libcamera and aborted the application;
+  - an AE lock dropped the digital gain to 1.
+  The table of controls is in `packages/libcamera/README.md`.
+- **60 fps** (for omacam). The simple pipeline had no FrameDurationLimits,
+  and the drivers default VBLANK to 30 fps. With VBLANK set to its minimum
+  by hand under `cam` at 1920x1080:
+  - ultrawide (2016x1136): 59.6 fps through the software ISP, with `cam` at
+    3.0 s user + 0.8 s system over 11.8 s, about a third of one core;
+  - front (1920x1116): 60.0 fps.
+
+  From the sensors' mode tables (lines at the receiver's 330-360 MB/s):
+  - the ultrawide 2016x1136/2016x1508 and front 1920x1116/1920x1368 modes
+    reach 60 fps within the line limit;
+  - the main and telephoto 2016x1136 modes are stretched to the limit, and
+    their shortest frame stayed the table's, which tops them out at about
+    39 and 26 fps. omamobile-camera `38fb35993` lets VBLANK shorten those
+    frames in proportion; it is not pushed yet (runbook CAM5.5 below).
+
+  A libcamera patch for FrameDurationLimits (VBLANK through the delayed
+  controls, per-mode limits after `configure()`) is next, in 4.12.
+
+### CAM5.5: 60 fps on the main and telephoto cameras. Risk: medium (DMA)
+
+Kernel: omamobile-camera `38fb35993` ("media: i2c: s5kgn1: let VBLANK shorten
+frames of stretched lines"), merged into omamobile-int. W=1 and checkpatch
+are clean. The default frame lengths (30 fps) don't change; only the VBLANK
+minimum of modes whose lines are stretched goes down. Expected minimum frame
+times:
+
+| Camera | Mode | Shortest frame now | Shortest frame after | Fastest after |
+| --- | --- | --- | --- | --- |
+| Main | 2016x1136 | ~39 fps | 1190 lines | ~120 fps |
+| Main | 4080x3072 | 9.4 fps | 3104 lines | ~22.7 fps |
+| Telephoto | 2016x1136 | ~26 fps | ~2381 lines | 60 fps |
+
+Each mode still sends lines no faster than its `max-line-throughput`.
+
+1. **Push** (the human's go, batched). Health check afterwards.
+   - Pass: `systemctl --failed` is empty; each sensor's `vertical_blanking`
+     minimum (`v4l2-ctl -d /dev/v4l-subdevN -l`) is lower than before for
+     main and telephoto and unchanged for front and ultrawide.
+   - Stop: a camera fails to probe.
+   - Rollback: the previous images (slot B).
+2. **Main at 60 fps, read-only.** Run `cam -c 2 -C600 -s
+   role=video,width=1920,height=1080`, and set `vertical_blanking` to
+   `1307443200 / (line_length * 60) - 1136` by hand after 3 s.
+   - Pass: about 60 fps, WDMA error counters still 0, no ufshcd or CSIS
+     errors in dmesg.
+   - Stop: dropped lines, WDMA errors, or a frame-sync timeout: go back to
+     the default VBLANK and stop.
+3. **Telephoto the same** (`-c 4`, 911770000 / (line_length * 60) - 1136).
+4. **Main full resolution at its new minimum** (about 22 fps): 21 frames of
+   4080x3072 with the CSIS throughput counters read before and after.
+   - Pass: no WDMA errors.
+   - Stop: any error. In that case raise `S5KGN1_VBLANK_MIN` to the old
+     frame length for that mode only.
+
 ### CAM7: the front camera (Samsung S5K3J1, D-PHY on link 0). Risk: medium
 
 **Facts.** [V] from the user's own HAL (section 4.5) unless marked: chip ID

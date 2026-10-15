@@ -1,0 +1,135 @@
+From 13a6bcf3bebf160ce4e53713d7de169be5c6b53a Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Wed, 14 Oct 2026 17:34:51 -0400
+Subject: [PATCH 20/26] ipa: simple: agc: Add exposure compensation
+
+Camera applications offer an exposure compensation slider: brighter or
+darker than the automatic exposure while it keeps following the scene.
+Support ExposureValue, from -2 to +2 stops, by judging the histogram as
+if the picture were 2^-EV as bright, the way the digital gain is
+already accounted for: the loop then settles with 2^EV times the
+exposure it would otherwise choose. Report the value in metadata.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/agc.cpp | 44 ++++++++++++++++++++++++++++---
+ src/ipa/simple/algorithms/agc.h   |  5 ++++
+ src/ipa/simple/ipa_context.h      |  2 ++
+ 3 files changed, 48 insertions(+), 3 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index 2369dfd..80729c4 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -110,6 +110,22 @@ Agc::Agc()
+ {
+ }
+ 
++/*
++ * Exposure compensation, in stops. The loop judges the histogram as if the
++ * picture were 2^-EV as bright, so it settles with the picture 2^EV times
++ * the exposure it would otherwise choose.
++ */
++static constexpr float kExposureValueMin = -2.0f;
++static constexpr float kExposureValueMax = 2.0f;
++
++int Agc::init(IPAContext &context, [[maybe_unused]] const ValueNode &tuningData)
++{
++	context.ctrlMap[&controls::ExposureValue] =
++		ControlInfo(kExposureValueMin, kExposureValueMax, 0.0f);
++
++	return 0;
++}
++
+ int Agc::configure(IPAContext &context,
+ 		   [[maybe_unused]] const IPAConfigInfo &configInfo)
+ {
+@@ -117,10 +133,29 @@ int Agc::configure(IPAContext &context,
+ 	context.activeState.agc.settleFrames = 0;
+ 	context.activeState.agc.pendingFrames = 0;
+ 	context.activeState.agc.state = controls::AeStateSearching;
++	context.activeState.agc.exposureValue = 0.0f;
+ 
+ 	return 0;
+ }
+ 
++void Agc::queueRequest(typename Module::Context &context,
++		       [[maybe_unused]] const uint32_t frame,
++		       [[maybe_unused]] typename Module::FrameContext &frameContext,
++		       const ControlList &controls)
++{
++	auto &agc = context.activeState.agc;
++
++	if (const auto ev = controls.get(controls::ExposureValue)) {
++		const float value = std::clamp(*ev, kExposureValueMin, kExposureValueMax);
++		if (value != agc.exposureValue) {
++			agc.exposureValue = value;
++			/* Judge the next frame without waiting to settle. */
++			agc.stableSamples = 0;
++			LOG(IPASoftExposure, Debug) << "Exposure value " << value;
++		}
++	}
++}
++
+ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 			 double exposureMSV)
+ {
+@@ -230,6 +265,7 @@ void Agc::process(IPAContext &context,
+ 	metadata.set(controls::DigitalGain,
+ 		     static_cast<float>(context.activeState.agc.digitalGain));
+ 	metadata.set(controls::AeState, context.activeState.agc.state);
++	metadata.set(controls::ExposureValue, context.activeState.agc.exposureValue);
+ 
+ 	if (!context.activeState.agc.valid) {
+ 		/*
+@@ -276,12 +312,14 @@ void Agc::process(IPAContext &context,
+ 
+ 	/*
+ 	 * Judge the exposure as the image will show it, after the digital
+-	 * gain, which takes effect without the sensor's delay.
++	 * gain, which takes effect without the sensor's delay, and scaled by
++	 * the exposure compensation.
+ 	 */
+-	const double dgain = context.activeState.agc.digitalGain;
++	const double scale = context.activeState.agc.digitalGain *
++			     std::exp2(-context.activeState.agc.exposureValue);
+ 	for (unsigned int i = 0; i < histogramSize; i++) {
+ 		const unsigned int gained = std::min<unsigned int>(
+-			histogramSize - 1, static_cast<unsigned int>(std::lround(i * dgain)));
++			histogramSize - 1, static_cast<unsigned int>(std::lround(i * scale)));
+ 		unsigned int idx = (gained - (gained / yHistValsPerBinMod)) / yHistValsPerBin;
+ 		exposureBins[idx] += histogram[blackLevelHistIdx + i];
+ 	}
+diff --git a/src/ipa/simple/algorithms/agc.h b/src/ipa/simple/algorithms/agc.h
+index ed3ea9d..040acda 100644
+--- a/src/ipa/simple/algorithms/agc.h
++++ b/src/ipa/simple/algorithms/agc.h
+@@ -19,7 +19,12 @@ public:
+ 	Agc();
+ 	~Agc() = default;
+ 
++	int init(IPAContext &context, const ValueNode &tuningData) override;
+ 	int configure(IPAContext &context, const IPAConfigInfo &configInfo) override;
++	void queueRequest(typename Module::Context &context,
++			  const uint32_t frame,
++			  typename Module::FrameContext &frameContext,
++			  const ControlList &controls) override;
+ 	void process(IPAContext &context, const uint32_t frame,
+ 		     IPAFrameContext &frameContext,
+ 		     const SwIspStats *stats,
+diff --git a/src/ipa/simple/ipa_context.h b/src/ipa/simple/ipa_context.h
+index 0203fd2..f0b1981 100644
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -55,6 +55,8 @@ struct IPAActiveState {
+ 		unsigned int pendingFrames;
+ 		/* controls::AeState */
+ 		int32_t state;
++		/* Exposure compensation in stops (controls::ExposureValue) */
++		float exposureValue;
+ 		bool valid;
+ 	} agc;
+ 
+-- 
+2.55.0
+

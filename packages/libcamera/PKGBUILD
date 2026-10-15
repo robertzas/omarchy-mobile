@@ -75,7 +75,36 @@
 #    GPU debayer's EGL context is destroyed at stop; abandoned contexts kept
 #    the last buffers imported, and a camera app leaked 290 MiB of
 #    contiguous memory until starts failed to allocate.
-#  - pkgrel 4.8, so it sorts above Arch Linux ARM's 0.7.2-4.
+#  - 0017-ipa-simple-agc-Judge-only-frames-taken-with-the-last.patch: the
+#    AGC judges only frames taken with its last request (and one more), so
+#    a sensor slower than modelled no longer makes it oscillate between a
+#    white and a black picture outdoors; pinned steps x8 and 1/16.
+#  - 0018-ipa-simple-Carry-the-exposure-over-to-another-mode-o.patch: a
+#    switch to another mode of the same sensor (a full-resolution still
+#    from a binned preview) keeps the converged exposure in time and gain
+#    and the white balance, instead of starting at the mode's longest.
+#  - 0019-ipa-simple-agc-Report-the-AE-state.patch: AeState (searching,
+#    converged), so an application can wait for the exposure to settle
+#    before keeping a still.
+#  - 0020-ipa-simple-agc-Add-exposure-compensation.patch: ExposureValue, -2
+#    to +2 stops.
+#  - 0021-ipa-simple-Take-the-sensor-mode-s-timings-at-configu.patch: the
+#    IPA takes the configured sensor mode's line length and pixel rate, so
+#    exposure times are right in every mode.
+#  - 0022-ipa-simple-agc-Support-manual-exposure-time-and-anal.patch:
+#    ExposureTimeMode, AnalogueGainMode, ExposureTime, AnalogueGain and
+#    AeEnable: manual shutter and ISO, and an exposure lock.
+#  - 0023-ipa-simple-awb-Support-manual-white-balance.patch: AwbEnable,
+#    ColourGains and, where the tuning file has a ctCurve (the IMX386),
+#    ColourTemperature.
+#  - 0024-software_isp-Gather-focus-statistics-over-a-window-t.patch: the
+#    focus statistics window moves, with a luminance histogram over it.
+#  - 0025-ipa-simple-Focus-and-meter-on-the-application-s-wind.patch:
+#    AfMetering and AfWindows (tap to focus), and AeMeteringMode (matrix,
+#    spot, centre-weighted) on that window.
+#  - 0026-ipa-simple-af-Support-pausing-continuous-autofocus.patch: AfPause
+#    in continuous autofocus (a focus lock).
+#  - pkgrel 4.11, so it sorts above Arch Linux ARM's 0.7.2-4.
 #
 # Maintainers of the original: David Runge, Carl Smedstad.
 
@@ -88,7 +117,7 @@ pkgname=(
   python-libcamera
 )
 pkgver=0.7.2
-pkgrel=4.8
+pkgrel=4.11
 pkgdesc="A complex camera support library for Linux, Android, and ChromeOS (Omarchy Mobile: gs201 CSIS)"
 arch=(aarch64)
 url="https://libcamera.org/"
@@ -136,6 +165,16 @@ source=(
   0014-pipeline-simple-Accept-a-sensor-configuration-within.patch
   0015-ipa-simple-agc-Step-out-of-a-pinned-histogram-quickl.patch
   0016-software_isp-debayer_egl-Destroy-the-EGL-context-whe.patch
+  0017-ipa-simple-agc-Judge-only-frames-taken-with-the-last.patch
+  0018-ipa-simple-Carry-the-exposure-over-to-another-mode-o.patch
+  0019-ipa-simple-agc-Report-the-AE-state.patch
+  0020-ipa-simple-agc-Add-exposure-compensation.patch
+  0021-ipa-simple-Take-the-sensor-mode-s-timings-at-configu.patch
+  0022-ipa-simple-agc-Support-manual-exposure-time-and-anal.patch
+  0023-ipa-simple-awb-Support-manual-white-balance.patch
+  0024-software_isp-Gather-focus-statistics-over-a-window-t.patch
+  0025-ipa-simple-Focus-and-meter-on-the-application-s-wind.patch
+  0026-ipa-simple-af-Support-pausing-continuous-autofocus.patch
 )
 sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd8847f7bec755c753c72f6b065df76de53c15f9af2e5901e83e7a144a2ddcd'
             '8b54cbdf6ed767ae8d52a14480a4653f4f3a1c2187c4ccf7ceb65eaa60c819cce514122591d6e0c2dfc39d7482739f8fdd4090dbaf63701445510eefc88fb19f'
@@ -154,7 +193,17 @@ sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd
             'db8f04170d22fa3b60a581e73e3fbc2a4878e6dcf57b038c1fd7b93c1d98bb4652bbc7a36990fcd1f0dd5c1fff43494566bd7e6e2179c4719944affd6b782ae5'
             '8eea0945915d8780fa87cd75184830c0068f5d1b66e2a26d3e60cb38911e66bebdb86e50a3b57e0ed3ed3824f009a7dca75bba169432af32be1339f84f17f942'
             '1a77dcd0f93ab3de154160ff94ca9911ab3daafcda1cf154f5501961587e93f7c5b751679461935ba01fc8e8d959dd12362f0875513d33c8fc6d44a2a441c565'
-            '1a2b403e1c15aeef8b3333eab62f5e1eedd50cbe6310198b6809e8338ed3f6c77fa4a95d32b12e917fbb8323d8fae875495187e47c36f9965a2e68dea78851c4')
+            '1a2b403e1c15aeef8b3333eab62f5e1eedd50cbe6310198b6809e8338ed3f6c77fa4a95d32b12e917fbb8323d8fae875495187e47c36f9965a2e68dea78851c4'
+            '278e68de17602fa536c58beca1e32a90c9041adf6eccae6ad34ad8f540ff0c39dadb34236cb5b114c4f90d007bdb724a7412be9b54c9b26e22b44f6fcd1daee9'
+            'a3973e9f650532d1bccfaa50a42c57896cf9622f97167de799580d655475dc7fe3a03200721828ced7fe303312aaac1afe7ea64bb2b9bec9b0c75a0ba4c2a534'
+            '1f55b066c37465194e144ed6aef9a6879a273733174f398a5ee692b8f50ce47b96de8706869bd891637496a435d4366e48c0617400de4ac25d2f6d9c8959ff7a'
+            '3658294098268ca16fa5378aa48c4541f82665edaf986fd8665f99d685e16fdf7b9fd711de4dbdb4aacc28f4a297c771330e39135b5295649e3d3245ce4afd62'
+            '2de08b4cb5bcf34ad950f6bf1c4346a3f2b2ca0197d74583c56063f903f8ca17ced01de05dc08015135c2dc28cde3a9ab385b5ccd372a632ff7b5fd58c96c196'
+            'e227a6b8de36bc1161b55f7dbee7682d932b3e1452b74b22a2d818da8dfd7582d74d6b843b0ee556bd06517df8002bf9d48946d6fbcd8a0752b1a29d7a88c4cd'
+            '92276003b4921ddf9155b78e74c5a1f431a5098d37e9a2b843d9f7570adb5c36ad40efa3541c4df7ecb3696c7c44fe50424e50a573dce4b5720b1910aaa101c6'
+            'd426f103663c205680fd66ed4b461cc4cdeb5b2bb7a8daaa73e1ae8932ba0882754c700d1ce098bc69667b236418f1efbf8a166967111b94f79f24795ce2c110'
+            'fc313494db00494352482cc4dcae10069e17433ec59ba7940b61011120406acb4aa1a7d18719c08711b4014eb25b11fedb22c850834486cb5fe512e73652300d'
+            'b5ff30efa3c4530a122b9ba95e759b2aacabf7d23ea5d8c767051e20b04f4e7a939f22f9409d4c67dd46b3b55f8e5eedcb816ed876c56d1a6e103fa9e8f57f9f')
 b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc58494400e69feeec99a77894252d582f0d8f183508e5d1b8220e70f3d5'
         '4a0e24feed22d32b83b0ec49c9a7616b77deb26cae82c17a38b54a81a0468e982852147bc2d5e3b611ba014ddbd7647acfe2e68591542420da73945ba1c0d6c2'
         'cba8b638543a16bf80c2ae7dc0737f3874476fd1ff694639b459184725848e193518778d0336eef3d55ba4329d9bc63981d0aa8d8d9b5507c9ade4f17f7f407d'
@@ -172,7 +221,17 @@ b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc5
         'a2a54a97ca9bd5526908986a19e51ea234db94b5f0104f2bab6adfcc8faf6ed2c9e399ed751ca06e8d7580fd413e1e0ced5c2bd9c90bce1d21805f03ead93020'
         'd158f3c03ef80ea16fb4d34220859fefaebd377ed83bfe37439b10a2b42a631b2863d16d2e2d4404cd45a21a183242c38e2375fc1efbdd28c288be112fd94de5'
         '81fe90074e5fcf9fda22be47bb1d61c669726144ede638179ac62c17b2525cd2c51bfab2e29c7e4a26436b8abb9979eda70c32a0809190e0db0d9823da202068'
-        'aa729f6fd9c7924581faf8fde6755e42814494aa6f98c4481c31988f6c615bcf891c1aca80846d8b112ce7d19dcc23ff2031ad25619c32693128b3398b88b5c0')
+        'aa729f6fd9c7924581faf8fde6755e42814494aa6f98c4481c31988f6c615bcf891c1aca80846d8b112ce7d19dcc23ff2031ad25619c32693128b3398b88b5c0'
+        '1931f4fc7a5aa1a93a8db860f7e29353f731fdec128030376a5fba0cd6d4edded05409e0553858c9178e5f0ab7f7e80801b15ca2ff768a45f7515d6b7b6f1659'
+        'b0cffd89cc82f01d4c94687a136275a3fd23a36c3ca0448b3fb905f0abc83e2924fce76577b0f8c396c7741dc4a6ece68c7d80f4192dbd3bdc3f3c644adc74ab'
+        'd67f15d30bcf284f80b561bec3231e1ab6702590c527b78db1af3aa5c4ca2f294c1c2154ba3878bab1fec247fe6b9bc628658c7ab16d66c0a0f5889e07cc285b'
+        '9346404c363ba9a4db5dd80a01f8cef439684a80441c03c267a9afc7334cf0b8bccb094dad7f016c0ea0c17f6f27eb3eed6f22b49c0f9cf5420f9a4eb0980879'
+        'ea5e8db977f9a8382a967f4b118f803bf3e219aea8b873dabe6a34298e10cf50db6f6cc197f669a754365871b0baeaad08d26a8982b5854400efe7470836f2ab'
+        '136ae032fda94b58e47e3cf0a98c313dfc280b9b923f693870d94ea707895147a7569990275314e030fdf14c7e05c7fcfafca4661a0be2adb74ccf2756c9a140'
+        '08ed601e6f24683559b16936a7cd4026a36803b46c6fb3ee58cf8cd85eae9963812618fdc3233e9bcd11bc1b5c205c03d316ac323d4372a76d5fc30c9a531bd2'
+        '0ac682b2309802846c816c00405abca7e4f7c5ff123320026db7d164f867cbb2d58e4991d8a09fda7bbfd3bea36784c68378b5ea43375d0058e06c0209effccd'
+        'cbf867153c8767742bd053d00105c62e083abfab8c54491eba1f9ad845aa2272a9d196402144ac3176b03a77f7aacd91a1a28892cc2dc2f2f64e473353938825'
+        '58d34c3fb401164fb5cc5a139f31d6a941b00cb0ddacbedd220eb38f00c90e7a4fc5269f7c18046dce8ca0eaebb9fd4099faf798e32170274f5a99b5aece66b8')
 
 _pick() {
   local p="$1" f d; shift
@@ -203,6 +262,16 @@ prepare() {
   patch -Np1 < ../0014-pipeline-simple-Accept-a-sensor-configuration-within.patch
   patch -Np1 < ../0015-ipa-simple-agc-Step-out-of-a-pinned-histogram-quickl.patch
   patch -Np1 < ../0016-software_isp-debayer_egl-Destroy-the-EGL-context-whe.patch
+  patch -Np1 < ../0017-ipa-simple-agc-Judge-only-frames-taken-with-the-last.patch
+  patch -Np1 < ../0018-ipa-simple-Carry-the-exposure-over-to-another-mode-o.patch
+  patch -Np1 < ../0019-ipa-simple-agc-Report-the-AE-state.patch
+  patch -Np1 < ../0020-ipa-simple-agc-Add-exposure-compensation.patch
+  patch -Np1 < ../0021-ipa-simple-Take-the-sensor-mode-s-timings-at-configu.patch
+  patch -Np1 < ../0022-ipa-simple-agc-Support-manual-exposure-time-and-anal.patch
+  patch -Np1 < ../0023-ipa-simple-awb-Support-manual-white-balance.patch
+  patch -Np1 < ../0024-software_isp-Gather-focus-statistics-over-a-window-t.patch
+  patch -Np1 < ../0025-ipa-simple-Focus-and-meter-on-the-application-s-wind.patch
+  patch -Np1 < ../0026-ipa-simple-af-Support-pausing-continuous-autofocus.patch
 
   # add version, so that utils/gen-version.sh may rely on it
   printf "%s\n" "$pkgver" > .tarball-version

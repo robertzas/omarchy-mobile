@@ -29,8 +29,18 @@ in the table. See `device/cheetah/CAMERA-PLAN.md`, section 5.2.
 | `0012-ipa-simple-Tune-the-Pixel-7-Pro-s-ultrawide-and-main.patch` | Af on both cameras, a stand-in colour matrix for the IMX386, contrast and saturation defaults |
 | `0013-libcamera-Add-the-Samsung-S5K3J1-and-S5KGM5-sensors.patch` | The front and telephoto sensors: helpers (black level 64, gain code / 32), properties, tuning files (identity matrix, Af on the telephoto) |
 | `0014-pipeline-simple-Accept-a-sensor-configuration-within.patch` | A sensor mode within 1% of the stream qualifies: the front camera's 1080p runs its binned mode |
-| `0016-software_isp-debayer_egl-Destroy-the-EGL-context-whe.patch` | The GPU debayer destroys its EGL context at stop: abandoned contexts kept their last buffers imported, and a long-running camera app leaked contiguous memory until starts failed |
 | `0015-ipa-simple-agc-Step-out-of-a-pinned-histogram-quickl.patch` | While nearly every pixel is in the darkest or brightest bin, the AGC doubles or halves the exposure each step instead of 15% |
+| `0016-software_isp-debayer_egl-Destroy-the-EGL-context-whe.patch` | The GPU debayer destroys its EGL context at stop: abandoned contexts kept their last buffers imported, and a long-running camera app leaked contiguous memory until starts failed |
+| `0017-ipa-simple-agc-Judge-only-frames-taken-with-the-last.patch` | The AGC judges only frames taken with its last request (plus one frame), corrects the total exposure in one step, and moves a pinned histogram by x8 or 1/16: no white/black strobing outdoors |
+| `0018-ipa-simple-Carry-the-exposure-over-to-another-mode-o.patch` | A switch to another mode of the same sensor (a still from a binned preview) keeps the converged exposure and white balance instead of starting at the new mode's longest exposure |
+| `0019-ipa-simple-agc-Report-the-AE-state.patch` | AeState: searching, or converged (also once every limit is reached) |
+| `0020-ipa-simple-agc-Add-exposure-compensation.patch` | ExposureValue, -2 to +2 stops |
+| `0021-ipa-simple-Take-the-sensor-mode-s-timings-at-configu.patch` | The IPA takes each configured mode's line length and pixel rate, not the one from camera creation |
+| `0022-ipa-simple-agc-Support-manual-exposure-time-and-anal.patch` | ExposureTimeMode, AnalogueGainMode, ExposureTime, AnalogueGain, AeEnable |
+| `0023-ipa-simple-awb-Support-manual-white-balance.patch` | AwbEnable, ColourGains, and ColourTemperature where the tuning file has a `ctCurve` |
+| `0024-software_isp-Gather-focus-statistics-over-a-window-t.patch` | A movable focus window in the debayer parameters, and a luminance histogram over it |
+| `0025-ipa-simple-Focus-and-meter-on-the-application-s-wind.patch` | AfMetering and AfWindows (tap to focus), AeMeteringMode on the window |
+| `0026-ipa-simple-af-Support-pausing-continuous-autofocus.patch` | AfPause in continuous autofocus |
 | `libcamera-fix-python3.14-macro-redefinition.patch` | Arch's patch, unchanged (sha512 `8b54cbdf…`) |
 | `.SRCINFO` | `makepkg --printsrcinfo` output |
 
@@ -121,9 +131,28 @@ What the software ISP still lacks: denoising, lens shading correction,
 sharpening and a calibrated colour pipeline. White balance is grey-world.
 Pictures stay noisier and softer at the corners than with Google's ISP.
 
+## Camera-app controls (0019-0026)
+
+| Feature | Controls | Range | Notes |
+| --- | --- | --- | --- |
+| AE state | `AeState` (out) | Idle, Searching, Converged | Converged also when every limit is reached; wait for it before keeping a still |
+| Exposure compensation | `ExposureValue` | -2.0 to +2.0 | Applies while either exposure time or gain is auto |
+| Manual shutter | `ExposureTimeMode`, `ExposureTime` (µs) | From the sensor at camera creation | Clamped to the configured mode's frame time: no exposure longer than a frame |
+| Manual ISO | `AnalogueGainMode`, `AnalogueGain` | 1.0 to the sensor's maximum | With one manual, AE drives the other and digital gain |
+| AE lock | `AeEnable` false | | Holds exposure, gain and digital gain; the mode controls in the same request win |
+| White balance | `AwbEnable`, `ColourGains` [r, b] | 0.25 to 4.0 | `AwbEnable` false without gains holds the current ones |
+| White balance presets | `ColourTemperature` | The tuning file's `ctCurve` range | Only the IMX386 has a curve (a stand-in); other cameras don't advertise it |
+| Tap to focus and meter | `AfMetering` Windows, `AfWindows` | The sensor's active area stands for the whole picture | At least a tenth of the picture a side; the first rectangle counts |
+| Metering | `AeMeteringMode` | Matrix (default), Spot, CentreWeighted | Spot meters the `AfWindows` rectangle, or the centre half |
+| Focus lock | `AfPause` | Immediate, Deferred, Resume | Continuous mode; `AfPauseState` reported |
+| Manual focus | `AfMode` Manual, `LensPosition` | 0.0 to 1.0 | Normalised lens travel, not dioptres |
+
 ## Status
 
 0.7.2-4.4 (0001-0003) runs on the phone: the ultrawide captures end to end.
+0.7.2-4.11 adds 0019-0026 (2026-10-14): the camera-app controls below.
+0.7.2-4.9 adds 0017 and 0018 (2026-10-14): the AGC no longer oscillates
+outdoors, and a still taken from the preview starts at the preview's exposure.
 0.7.2-4.8 adds 0016 (2026-10-14): no DMA-BUF leak across stop/start.
 0.7.2-4.7 adds 0015 (2026-10-14): the AGC leaves a pinned histogram quickly.
 0.7.2-4.6 adds 0013-0014 (2026-10-13, off the phone): all 14 patches

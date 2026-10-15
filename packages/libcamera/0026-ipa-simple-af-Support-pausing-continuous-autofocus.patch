@@ -1,0 +1,130 @@
+From 18c1d8dba3993ba882800f1e0bcd15e956b42704 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Wed, 14 Oct 2026 17:42:58 -0400
+Subject: [PATCH 26/26] ipa: simple: af: Support pausing continuous autofocus
+
+A focus lock in a camera application keeps continuous autofocus from
+moving the lens while the user frames or records. Support AfPause:
+immediate stops a scan underway and holds the lens, deferred lets a
+scan underway finish first, and resume watches the scene again, with a
+new scan if the pause cut one short. Report AfPauseState in continuous
+mode.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/af.cpp | 42 +++++++++++++++++++++++++++++++-
+ src/ipa/simple/ipa_context.h     |  2 ++
+ 2 files changed, 43 insertions(+), 1 deletion(-)
+
+diff --git a/src/ipa/simple/algorithms/af.cpp b/src/ipa/simple/algorithms/af.cpp
+index 1fb518d..20b127a 100644
+--- a/src/ipa/simple/algorithms/af.cpp
++++ b/src/ipa/simple/algorithms/af.cpp
+@@ -69,6 +69,8 @@ int Af::init(IPAContext &context, const ValueNode &tuningData)
+ 		ControlInfo(controls::AfModeValues, controls::AfModeContinuous);
+ 	context.ctrlMap[&controls::AfTrigger] =
+ 		ControlInfo(controls::AfTriggerValues);
++	context.ctrlMap[&controls::AfPause] =
++		ControlInfo(controls::AfPauseValues);
+ 	/*
+ 	 * The actuator has no calibrated DAC-to-dioptre curve yet. Expose a
+ 	 * normalized manual range until that calibration is available.
+@@ -110,6 +112,7 @@ int Af::configure(IPAContext &context, const IPAConfigInfo &configInfo)
+ 	auto &af = context.activeState.af;
+ 	af.mode = controls::AfModeContinuous;
+ 	af.state = controls::AfStateScanning;
++	af.pauseState = controls::AfPauseStateRunning;
+ 	af.position = std::clamp(lens->second.def().get<int32_t>(),
+ 				 context.configuration.focus.min,
+ 				 context.configuration.focus.max);
+@@ -162,6 +165,7 @@ void Af::queueRequest([[maybe_unused]] typename Module::Context &context,
+ 	if (const auto mode = requestControls.get(controls::AfMode)) {
+ 		if (*mode != af.mode) {
+ 			af.mode = *mode;
++			af.pauseState = controls::AfPauseStateRunning;
+ 			if (af.mode == controls::AfModeContinuous &&
+ 			    af.lockedSharpness && af.position == af.bestPosition) {
+ 				/*
+@@ -199,6 +203,34 @@ void Af::queueRequest([[maybe_unused]] typename Module::Context &context,
+ 		return;
+ 	}
+ 
++	/*
++	 * Pausing continuous autofocus locks the focus where it is: at once,
++	 * or once a scan underway has finished.
++	 */
++	if (af.mode == controls::AfModeContinuous) {
++		const auto pause = requestControls.get(controls::AfPause);
++		if (pause && *pause == controls::AfPauseImmediate) {
++			if (af.scanning || af.pendingScan) {
++				af.scanning = false;
++				af.pendingScan = false;
++				af.state = controls::AfStateIdle;
++			}
++			af.pauseState = controls::AfPauseStatePaused;
++		} else if (pause && *pause == controls::AfPauseDeferred) {
++			af.pauseState = af.scanning || af.pendingScan
++				? controls::AfPauseStatePausing
++				: controls::AfPauseStatePaused;
++		} else if (pause && *pause == controls::AfPauseResume &&
++			   af.pauseState != controls::AfPauseStateRunning) {
++			af.pauseState = controls::AfPauseStateRunning;
++			if (af.state == controls::AfStateIdle) {
++				af.pendingScan = true;
++				af.state = controls::AfStateScanning;
++			}
++		}
++		return;
++	}
++
+ 	if (af.mode != controls::AfModeAuto)
+ 		return;
+ 
+@@ -330,7 +362,8 @@ void Af::process(IPAContext &context,
+ 	 */
+ 	if (context.activeState.window.generation != windowGeneration_) {
+ 		windowGeneration_ = context.activeState.window.generation;
+-		if (af.mode == controls::AfModeContinuous && !af.scanning) {
++		if (af.mode == controls::AfModeContinuous && !af.scanning &&
++		    af.pauseState == controls::AfPauseStateRunning) {
+ 			af.pendingScan = true;
+ 			af.pendingSamples = 0;
+ 			af.state = controls::AfStateScanning;
+@@ -348,6 +381,7 @@ void Af::process(IPAContext &context,
+ 		if (af.scanning) {
+ 			processScan(context, sharpness);
+ 		} else if (af.mode == controls::AfModeContinuous &&
++			   af.pauseState == controls::AfPauseStateRunning &&
+ 			   af.state == controls::AfStateFocused &&
+ 			   af.lockedSharpness) {
+ 			af.smoothedSharpness = af.smoothedSharpness
+@@ -379,7 +413,13 @@ void Af::process(IPAContext &context,
+ 		}
+ 	}
+ 
++	if (af.pauseState == controls::AfPauseStatePausing && !af.scanning &&
++	    !af.pendingScan)
++		af.pauseState = controls::AfPauseStatePaused;
++
+ 	frameContext.lens.position = af.position;
++	if (af.mode == controls::AfModeContinuous)
++		metadata.set(controls::AfPauseState, af.pauseState);
+ 	metadata.set(controls::AfMode, af.mode);
+ 	metadata.set(controls::AfState, af.state);
+ 	metadata.set(controls::LensPosition, normalizedPosition(context));
+diff --git a/src/ipa/simple/ipa_context.h b/src/ipa/simple/ipa_context.h
+index 924f0c0..f524c63 100644
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -101,6 +101,8 @@ struct IPAActiveState {
+ 	struct {
+ 		int32_t mode;
+ 		int32_t state;
++		/* controls::AfPauseState, for continuous autofocus */
++		int32_t pauseState;
+ 		int32_t position;
+ 		int32_t scanStart;
+ 		int32_t scanEnd;
+-- 
+2.55.0
+

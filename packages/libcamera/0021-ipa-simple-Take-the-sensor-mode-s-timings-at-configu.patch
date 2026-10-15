@@ -1,0 +1,71 @@
+From d3437fe2f01dde75dc1b31c3d54ac50460ebced1 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Wed, 14 Oct 2026 17:36:12 -0400
+Subject: [PATCH 21/26] ipa: simple: Take the sensor mode's timings at
+ configure
+
+The soft IPA gets the sensor's line length and pixel rate once, at
+init, from whatever mode the sensor is in when the camera is created,
+and computes its line duration from them for every later
+configuration. Sensors whose modes have different line lengths then
+report exposure times off by their ratio, and an exposure carried from
+one mode to another is converted with the wrong line duration.
+
+Pass the configured mode's IPACameraSensorInfo in IPAConfigInfo and
+use it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ include/libcamera/ipa/soft.mojom         | 1 +
+ src/ipa/simple/soft_simple.cpp           | 8 ++++++++
+ src/libcamera/pipeline/simple/simple.cpp | 3 +++
+ 3 files changed, 12 insertions(+)
+
+diff --git a/include/libcamera/ipa/soft.mojom b/include/libcamera/ipa/soft.mojom
+index a6e3ed5..b8ffc6f 100644
+--- a/include/libcamera/ipa/soft.mojom
++++ b/include/libcamera/ipa/soft.mojom
+@@ -9,6 +9,7 @@ module ipa.soft;
+ import "include/libcamera/ipa/core.mojom";
+ 
+ struct IPAConfigInfo {
++	libcamera.IPACameraSensorInfo sensorInfo;
+ 	libcamera.ControlInfoMap sensorControls;
+ 	libcamera.ControlInfoMap lensControls;
+ };
+diff --git a/src/ipa/simple/soft_simple.cpp b/src/ipa/simple/soft_simple.cpp
+index 68cde24..e0f9303 100644
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -231,6 +231,14 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
+ 	context_.activeState = {};
+ 	context_.frameContexts.clear();
+ 
++	/*
++	 * The line length and pixel rate belong to the sensor mode: take the
++	 * configured mode's, not those of the mode the sensor was in when the
++	 * camera was created, or exposure times are off by their ratio.
++	 */
++	if (configInfo.sensorInfo.pixelRate && configInfo.sensorInfo.minLineLength)
++		context_.sensorInfo = configInfo.sensorInfo;
++
+ 	context_.configuration.agc.lineDuration =
+ 		context_.sensorInfo.minLineLength * 1.0s / context_.sensorInfo.pixelRate;
+ 	context_.configuration.agc.exposureMin = exposureInfo.min().get<int32_t>();
+diff --git a/src/libcamera/pipeline/simple/simple.cpp b/src/libcamera/pipeline/simple/simple.cpp
+index 6a5b399..04a3b32 100644
+--- a/src/libcamera/pipeline/simple/simple.cpp
++++ b/src/libcamera/pipeline/simple/simple.cpp
+@@ -1629,6 +1629,9 @@ int SimplePipelineHandler::configure(Camera *camera, CameraConfiguration *c)
+ 		return data->converter_->configure(inputCfg, outputCfgs);
+ 	} else {
+ 		ipa::soft::IPAConfigInfo configInfo;
++		ret = data->sensor_->sensorInfo(&configInfo.sensorInfo);
++		if (ret)
++			return ret;
+ 		configInfo.sensorControls = data->sensor_->controls();
+ 		CameraLens *focusLens = data->sensor_->focusLens();
+ 		if (focusLens)
+-- 
+2.55.0
+

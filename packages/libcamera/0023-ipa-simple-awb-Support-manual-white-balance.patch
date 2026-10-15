@@ -1,0 +1,241 @@
+From 9a6e89485146758038898e31b3484f1e4cfe580b Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Wed, 14 Oct 2026 17:39:27 -0400
+Subject: [PATCH 23/26] ipa: simple: awb: Support manual white balance
+
+Camera applications offer a white balance lock and presets. Support
+AwbEnable: disabled, the gains stay where the grey world left them,
+or follow ColourGains (red and blue, 0.25 to 4) and, where the tuning
+file gives the sensor's colour temperature curve, ColourTemperature.
+
+The curve uses the Raspberry Pi tuning files' format, ctCurve: a list
+of (temperature, R/G, B/G) triples for a grey under black-body light,
+interpolated linearly. Give the IMX386 the IMX519's curve, from the
+same file as its stand-in colour matrices; sensors without a curve
+don't advertise ColourTemperature.
+
+Report AwbEnable, and the colour temperature while it is disabled.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/awb.cpp | 96 +++++++++++++++++++++++++++++++
+ src/ipa/simple/algorithms/awb.h   | 14 +++++
+ src/ipa/simple/data/imx386.yaml   | 11 +++-
+ src/ipa/simple/ipa_context.h      |  2 +
+ 4 files changed, 121 insertions(+), 2 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/awb.cpp b/src/ipa/simple/algorithms/awb.cpp
+index de740c8..df36ada 100644
+--- a/src/ipa/simple/algorithms/awb.cpp
++++ b/src/ipa/simple/algorithms/awb.cpp
+@@ -7,6 +7,8 @@
+ 
+ #include "awb.h"
+ 
++#include <algorithm>
++#include <cmath>
+ #include <numeric>
+ #include <stdint.h>
+ 
+@@ -23,15 +25,102 @@ LOG_DEFINE_CATEGORY(IPASoftAwb)
+ 
+ namespace ipa::soft::algorithms {
+ 
++/* The gains the image processor's lookup takes, as the grey world clamps them. */
++static constexpr float kGainMin = 0.25f;
++static constexpr float kGainMax = 4.0f;
++
++int Awb::init(IPAContext &context, const ValueNode &tuningData)
++{
++	/*
++	 * An optional "ctCurve: [ ct, r/g, b/g, ... ]", as in the Raspberry Pi
++	 * tuning files: the colour of a grey under black-body light of each
++	 * temperature. Only with one can a temperature be set.
++	 */
++	const auto curve = tuningData["ctCurve"].get<std::vector<double>>();
++	if (curve && curve->size() >= 6 && curve->size() % 3 == 0) {
++		for (size_t i = 0; i < curve->size(); i += 3) {
++			if ((*curve)[i + 1] <= 0 || (*curve)[i + 2] <= 0 ||
++			    (i && (*curve)[i] <= (*curve)[i - 3])) {
++				LOG(IPASoftAwb, Error) << "Invalid ctCurve";
++				return -EINVAL;
++			}
++			ctCurve_.emplace_back((*curve)[i], (*curve)[i + 1], (*curve)[i + 2]);
++		}
++	}
++
++	context.ctrlMap[&controls::AwbEnable] = ControlInfo(false, true, true);
++	context.ctrlMap[&controls::ColourGains] = ControlInfo(kGainMin, kGainMax, 1.0f);
++	if (!ctCurve_.empty())
++		context.ctrlMap[&controls::ColourTemperature] =
++			ControlInfo(static_cast<int32_t>(std::get<0>(ctCurve_.front())),
++				    static_cast<int32_t>(std::get<0>(ctCurve_.back())),
++				    static_cast<int32_t>(5000));
++
++	return 0;
++}
++
+ int Awb::configure(IPAContext &context,
+ 		   [[maybe_unused]] const IPAConfigInfo &configInfo)
+ {
+ 	auto &gains = context.activeState.awb.gains;
+ 	gains = { { 1.0, 1.0, 1.0 } };
++	context.activeState.awb.enabled = true;
+ 
+ 	return 0;
+ }
+ 
++RGB<float> Awb::gainsForTemperature(unsigned int temperatureK) const
++{
++	const double ct = std::clamp<double>(temperatureK, std::get<0>(ctCurve_.front()),
++					     std::get<0>(ctCurve_.back()));
++	auto upper = std::find_if(ctCurve_.begin(), ctCurve_.end(),
++				  [ct](const auto &p) { return std::get<0>(p) >= ct; });
++	if (upper == ctCurve_.begin())
++		upper++;
++	const auto &[ct1, r1, b1] = *std::prev(upper);
++	const auto &[ct2, r2, b2] = *upper;
++	const double t = (ct - ct1) / (ct2 - ct1);
++	const double r = r1 + (r2 - r1) * t;
++	const double b = b1 + (b2 - b1) * t;
++
++	return { { std::clamp(static_cast<float>(1.0 / r), kGainMin, kGainMax),
++		   1.0f,
++		   std::clamp(static_cast<float>(1.0 / b), kGainMin, kGainMax) } };
++}
++
++void Awb::queueRequest(typename Module::Context &context,
++		       [[maybe_unused]] const uint32_t frame,
++		       [[maybe_unused]] typename Module::FrameContext &frameContext,
++		       const ControlList &controls)
++{
++	auto &awb = context.activeState.awb;
++
++	/* Disabled without gains or a temperature, the gains stay: a lock. */
++	if (const auto enable = controls.get(controls::AwbEnable)) {
++		if (*enable != awb.enabled)
++			LOG(IPASoftAwb, Debug)
++				<< "White balance " << (*enable ? "auto" : "manual");
++		awb.enabled = *enable;
++	}
++	if (awb.enabled)
++		return;
++
++	if (const auto gains = controls.get(controls::ColourGains)) {
++		awb.gains = { { std::clamp((*gains)[0], kGainMin, kGainMax),
++				1.0f,
++				std::clamp((*gains)[1], kGainMin, kGainMax) } };
++		RGB<double> rgb{ { 1.0 / awb.gains.r(), 1.0, 1.0 / awb.gains.b() } };
++		awb.temperatureK = estimateCCT(rgb);
++	} else if (const auto ct = controls.get(controls::ColourTemperature)) {
++		if (!ctCurve_.empty()) {
++			awb.gains = gainsForTemperature(std::max(*ct, 1));
++			awb.temperatureK = std::clamp<int32_t>(
++				*ct, std::get<0>(ctCurve_.front()),
++				std::get<0>(ctCurve_.back()));
++		}
++	}
++}
++
+ void Awb::prepare(IPAContext &context,
+ 		  [[maybe_unused]] const uint32_t frame,
+ 		  IPAFrameContext &frameContext,
+@@ -60,6 +149,13 @@ void Awb::process(IPAContext &context,
+ 
+ 	metadata.set(controls::ColourGains, { frameContext.gains.r(),
+ 					      frameContext.gains.b() });
++	metadata.set(controls::AwbEnable, context.activeState.awb.enabled);
++
++	if (!context.activeState.awb.enabled) {
++		metadata.set(controls::ColourTemperature,
++			     context.activeState.awb.temperatureK);
++		return;
++	}
+ 
+ 	if (!stats->valid)
+ 		return;
+diff --git a/src/ipa/simple/algorithms/awb.h b/src/ipa/simple/algorithms/awb.h
+index ad993f3..92bd971 100644
+--- a/src/ipa/simple/algorithms/awb.h
++++ b/src/ipa/simple/algorithms/awb.h
+@@ -7,6 +7,9 @@
+ 
+ #pragma once
+ 
++#include <tuple>
++#include <vector>
++
+ #include "algorithm.h"
+ 
+ namespace libcamera {
+@@ -19,7 +22,12 @@ public:
+ 	Awb() = default;
+ 	~Awb() = default;
+ 
++	int init(IPAContext &context, const ValueNode &tuningData) override;
+ 	int configure(IPAContext &context, const IPAConfigInfo &configInfo) override;
++	void queueRequest(typename Module::Context &context,
++			  const uint32_t frame,
++			  typename Module::FrameContext &frameContext,
++			  const ControlList &controls) override;
+ 	void prepare(IPAContext &context,
+ 		     const uint32_t frame,
+ 		     IPAFrameContext &frameContext,
+@@ -29,6 +37,12 @@ public:
+ 		     IPAFrameContext &frameContext,
+ 		     const SwIspStats *stats,
+ 		     ControlList &metadata) override;
++
++private:
++	RGB<float> gainsForTemperature(unsigned int temperatureK) const;
++
++	/* (colour temperature, R/G, B/G) of a grey under that light */
++	std::vector<std::tuple<double, double, double>> ctCurve_;
+ };
+ 
+ } /* namespace ipa::soft::algorithms */
+diff --git a/src/ipa/simple/data/imx386.yaml b/src/ipa/simple/data/imx386.yaml
+index 768e63d..7a9d1d9 100644
+--- a/src/ipa/simple/data/imx386.yaml
++++ b/src/ipa/simple/data/imx386.yaml
+@@ -3,8 +3,9 @@
+ # Sony IMX386 (the Pixel 7 Pro's ultrawide), not calibrated yet. The black
+ # level comes from the sensor's helper.
+ #
+-# The colour matrices are a stand-in: the IMX519 matrices from libcamera's
+-# src/ipa/rpi/vc4/data/imx519.json (rpi.ccm), Copyright 2019-2020
++# The colour matrices and the white balance's colour temperature curve are
++# a stand-in: the IMX519 matrices and curve from libcamera's
++# src/ipa/rpi/vc4/data/imx519.json (rpi.ccm, rpi.awb), Copyright 2019-2020
+ # Raspberry Pi Ltd, BSD-2-Clause (see REUSE.toml and
+ # LICENSES/BSD-2-Clause.txt). The IMX519 is another Sony mobile-class
+ # Bayer sensor with a similar pixel (1.22 um against 1.25 um), and any
+@@ -21,6 +22,12 @@ version: 1
+ algorithms:
+   - BlackLevel:
+   - Awb:
++      # (colour temperature, R/G, B/G) for ColourTemperature
++      ctCurve: [ 2890.0, 0.7328, 0.3734,
++                 3550.0, 0.6228, 0.4763,
++                 4500.0, 0.5208, 0.5825,
++                 5700.0, 0.4467, 0.6671,
++                 7900.0, 0.3858, 0.7411 ]
+   - Ccm:
+       ccms:
+         - ct: 2890
+diff --git a/src/ipa/simple/ipa_context.h b/src/ipa/simple/ipa_context.h
+index bf8e0f7..03508bc 100644
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -74,6 +74,8 @@ struct IPAActiveState {
+ 	struct {
+ 		RGB<float> gains;
+ 		unsigned int temperatureK;
++		/* False: the gains stay, or follow ColourGains/ColourTemperature */
++		bool enabled;
+ 	} awb;
+ 
+ 	Matrix<float, 3, 3> combinedMatrix;
+-- 
+2.55.0
+

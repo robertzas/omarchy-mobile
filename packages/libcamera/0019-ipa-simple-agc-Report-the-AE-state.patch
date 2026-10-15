@@ -1,0 +1,115 @@
+From e81e9031242c85767b1431d1f0ca8c4dc838e725 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Wed, 14 Oct 2026 17:34:02 -0400
+Subject: [PATCH 19/26] ipa: simple: agc: Report the AE state
+
+Applications need to know when the exposure has settled, for instance
+to take a still only once the loop has caught up with a change of
+scene. Report AeState: searching while a request is waiting to show in
+the sensor's values or the loop is still stepping, converged once the
+histogram is within the target's hysteresis, or when every exposure
+and gain limit has been reached so that nothing is left to change.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/agc.cpp | 21 +++++++++++++++++++--
+ src/ipa/simple/ipa_context.h      |  2 ++
+ src/ipa/simple/soft_simple.cpp    |  1 +
+ 3 files changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index 82d8c46..2369dfd 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -116,6 +116,7 @@ int Agc::configure(IPAContext &context,
+ 	context.activeState.agc.digitalGain = 1.0;
+ 	context.activeState.agc.settleFrames = 0;
+ 	context.activeState.agc.pendingFrames = 0;
++	context.activeState.agc.state = controls::AeStateSearching;
+ 
+ 	return 0;
+ }
+@@ -145,6 +146,7 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 		exposure = agc.exposure;
+ 		again = agc.again;
+ 		agc.settleFrames = kExpSettleFrames;
++		agc.state = controls::AeStateSearching;
+ 		return false;
+ 	}
+ 	agc.pendingFrames = 0;
+@@ -154,8 +156,10 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	}
+ 
+ 	double error = kExposureOptimal - exposureMSV;
+-	if (std::abs(error) <= kExposureSatisfactory)
++	if (std::abs(error) <= kExposureSatisfactory) {
++		agc.state = controls::AeStateConverged;
+ 		return false;
++	}
+ 
+ 	/*
+ 	 * The correction applies to the total exposure (time x analogue gain
+@@ -200,7 +204,17 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 		<< " exp " << exposure << " again " << again
+ 		<< " dgain " << dgain;
+ 
+-	return exposure != oldExposure || again != oldAgain || dgain != oldDgain;
++	const bool changed = exposure != oldExposure || again != oldAgain ||
++			     dgain != oldDgain;
++	/*
++	 * Nothing left to change (every limit reached) counts as converged,
++	 * so that an application waiting for the exposure to settle doesn't
++	 * wait forever in a very dark or very bright scene.
++	 */
++	agc.state = changed ? controls::AeStateSearching
++			    : controls::AeStateConverged;
++
++	return changed;
+ }
+ 
+ void Agc::process(IPAContext &context,
+@@ -215,6 +229,7 @@ void Agc::process(IPAContext &context,
+ 	metadata.set(controls::AnalogueGain, frameContext.sensor.gain);
+ 	metadata.set(controls::DigitalGain,
+ 		     static_cast<float>(context.activeState.agc.digitalGain));
++	metadata.set(controls::AeState, context.activeState.agc.state);
+ 
+ 	if (!context.activeState.agc.valid) {
+ 		/*
+@@ -288,6 +303,8 @@ void Agc::process(IPAContext &context,
+ 	LOG(IPASoftExposure, Debug)
+ 		<< "AE stable samples " << context.activeState.agc.stableSamples
+ 		<< " (adjusted " << adjusted << ")";
++
++	metadata.set(controls::AeState, context.activeState.agc.state);
+ }
+ 
+ REGISTER_IPA_ALGORITHM(Agc, "Agc")
+diff --git a/src/ipa/simple/ipa_context.h b/src/ipa/simple/ipa_context.h
+index d490848..0203fd2 100644
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -53,6 +53,8 @@ struct IPAActiveState {
+ 		unsigned int settleFrames;
+ 		/* Frames the last request has been waiting to show. */
+ 		unsigned int pendingFrames;
++		/* controls::AeState */
++		int32_t state;
+ 		bool valid;
+ 	} agc;
+ 
+diff --git a/src/ipa/simple/soft_simple.cpp b/src/ipa/simple/soft_simple.cpp
+index fdee9d3..68cde24 100644
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -307,6 +307,7 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
+ 		agc.digitalGain = std::clamp(rest, 1.0, 4.0);
+ 		agc.settleFrames = 0;
+ 		agc.pendingFrames = 0;
++		agc.state = controls::AeStateSearching;
+ 		context_.activeState.awb = previousAwb;
+ 		LOG(IPASoft, Debug)
+ 			<< "Carrying exposure over to the new mode: " << agc.exposure
+-- 
+2.55.0
+

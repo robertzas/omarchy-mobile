@@ -1,0 +1,231 @@
+From ba67aaa6a4018a9e2b1fb38ccd3fa13bb173a2e9 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Wed, 14 Oct 2026 17:05:40 -0400
+Subject: [PATCH] ipa: simple: agc: Judge only frames taken with the last
+ request
+
+Outdoors the Google Pixel 7 Pro's camera preview strobed between white
+and black, and photos came out blown out. The AGC judged every frame,
+including the frames taken before its last exposure and gain request had
+taken effect, and it based each new request on the values the pipeline
+reports for the frame. When the sensor applies its controls a frame
+later than the pipeline models (or the request changes in large steps
+while the histogram is pinned at an end), the loop corrected the same
+error several times over and oscillated between a white and a black
+picture. A simulation of the loop with the sensor a frame slower than
+modelled reproduces it: in a scene 150 times brighter than a room the
+mean sample value swings between 1.0 and 5.0 for good.
+
+Now the AGC keeps requesting the same values until a frame shows them,
+waits one frame more, and only then judges the exposure again; a request
+that never shows (the sensor clamped or rounded it) is taken as applied
+after eight frames. The correction applies to the total exposure (time,
+analogue gain, digital gain) and is distributed exposure first, so going
+down the gains come off before the exposure shortens, in one step
+rather than one stage per frame. A pinned histogram moves it by x8 or
+1/16 in one decisive step. In the simulation, with the sensor's delay as
+modelled or a frame longer, a change from a room to a 150 times brighter
+scene settles in about 13 frames, and steady bright and bright-to-dark
+scenes settle without oscillating.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/agc.cpp | 133 +++++++++++++++++-------------
+ src/ipa/simple/ipa_context.h      |   4 +
+ 2 files changed, 78 insertions(+), 59 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index 512888b..82d8c46 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -73,17 +73,29 @@ static constexpr float kExpMaxStep = 0.15;
+ /*
+  * A histogram pinned at one end (nearly everything in the darkest or the
+  * brightest bin) says only "much too dark" or "much too bright", not by how
+- * much, and the bounded steps above then take seconds to get out: from a
+- * camera's starting exposure in a dim room, the front camera of a phone
+- * took several seconds to brighten. Step by these factors until the
+- * histogram moves off the end. The sensor's control delay limits the
+- * overshoot to about one more step, which the proportional loop then
+- * takes back.
++ * much. Change the total exposure by these factors then, in one step, and
++ * only judge again once the change has shown (see updateExposure()).
+  */
+ static constexpr double kExposurePinnedDark = 1.05;
+ static constexpr double kExposurePinnedBright = kExposureBinsCount - 0.05;
+-static constexpr float kExpPinnedUp = 2.0;
+-static constexpr float kExpPinnedDown = 0.5;
++static constexpr double kExpPinnedUp = 8.0;
++static constexpr double kExpPinnedDown = 1.0 / 16.0;
++
++/*
++ * Frames to wait after the sensor reports the last request as applied
++ * before judging the exposure again: the reported values come from the
++ * pipeline's model of the sensor's control delay, and a sensor that takes
++ * a frame longer otherwise makes the loop act on stale pictures and
++ * oscillate.
++ */
++static constexpr unsigned int kExpSettleFrames = 1;
++
++/*
++ * A request that hasn't shown after this many frames (the sensor clamped
++ * it, or rounded the gain to a code further off than the tolerance) is
++ * taken as applied with the values the sensor reports.
++ */
++static constexpr unsigned int kExpPendingMaxFrames = 8;
+ 
+ /*
+  * Low light. Once the exposure and the sensor's analogue gain are both at
+@@ -102,6 +114,8 @@ int Agc::configure(IPAContext &context,
+ 		   [[maybe_unused]] const IPAConfigInfo &configInfo)
+ {
+ 	context.activeState.agc.digitalGain = 1.0;
++	context.activeState.agc.settleFrames = 0;
++	context.activeState.agc.pendingFrames = 0;
+ 
+ 	return 0;
+ }
+@@ -111,73 +125,74 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ {
+ 	int32_t &exposure = frameContext.sensor.exposure;
+ 	double &again = frameContext.sensor.gain;
++	auto &agc = context.activeState.agc;
++	const auto &cfg = context.configuration.agc;
++	double &dgain = agc.digitalGain;
++
+ 	/*
+-	 * Compare consecutive requested values, not the delayed sensor values in
+-	 * this frame context. At a control limit the latter can trail the active
+-	 * request and would keep resetting AE stability indefinitely.
++	 * Judge a frame only once it was taken with the last request: the
++	 * sensor applies a new exposure and gain some frames after they are
++	 * written. Until then keep requesting the same values (the controls
++	 * written for this frame are frameContext.sensor's), and wait one
++	 * frame more in case the sensor is slower than the pipeline assumes.
++	 * Acting on the frames in between made the loop overshoot and, with
++	 * large steps, oscillate between a black and a white picture.
+ 	 */
+-	const int32_t oldExposure = context.activeState.agc.exposure;
+-	const double oldAgain = context.activeState.agc.again;
+-	double &dgain = context.activeState.agc.digitalGain;
+-	const double oldDgain = dgain;
++	const bool pending = exposure != agc.exposure ||
++			     std::abs(again - agc.again) > 0.05 * agc.again;
++	if (pending && agc.pendingFrames < kExpPendingMaxFrames) {
++		agc.pendingFrames++;
++		exposure = agc.exposure;
++		again = agc.again;
++		agc.settleFrames = kExpSettleFrames;
++		return false;
++	}
++	agc.pendingFrames = 0;
++	if (agc.settleFrames) {
++		agc.settleFrames--;
++		return false;
++	}
+ 
+ 	double error = kExposureOptimal - exposureMSV;
+-
+ 	if (std::abs(error) <= kExposureSatisfactory)
+ 		return false;
+ 
+ 	/*
+-	 * Compute a proportional correction factor. The sign of the error
+-	 * determines the direction: positive error means too dark (increase),
+-	 * negative means too bright (decrease).
++	 * The correction applies to the total exposure (time x analogue gain
++	 * x digital gain): a proportional step near the target, larger far
++	 * from it, and a decisive one while the histogram is pinned at an end.
+ 	 */
+-	float gain = std::abs(error) > kExpFarError ? kExpProportionalGainFar
+-						    : kExpProportionalGain;
+-	float step = std::clamp(static_cast<float>(error) * gain,
+-				-kExpMaxStep, kExpMaxStep);
+-	float factor = 1.0f + step;
++	double factor;
+ 	if (exposureMSV <= kExposurePinnedDark)
+ 		factor = kExpPinnedUp;
+ 	else if (exposureMSV >= kExposurePinnedBright)
+ 		factor = kExpPinnedDown;
+-
+-	if (factor > 1.0f) {
+-		/* Scene too dark: increase exposure first, then gain. */
+-		if (exposure < context.configuration.agc.exposureMax) {
+-			int32_t next = static_cast<int32_t>(exposure * factor);
+-			exposure = std::max(next, exposure + 1);
+-		} else if (again < context.configuration.agc.againMax) {
+-			double next = again * factor;
+-			if (next - again < context.configuration.agc.againMinStep)
+-				again += context.configuration.agc.againMinStep;
+-			else
+-				again = next;
+-		} else {
+-			dgain = std::min(dgain * factor, kMaxDigitalGain);
+-		}
+-	} else {
+-		/* Scene too bright: decrease gain first, then exposure. */
+-		if (dgain > 1.0) {
+-			dgain = std::max(dgain * factor, 1.0);
+-		} else if (again > context.configuration.agc.again10) {
+-			double next = again * factor;
+-			if (again - next < context.configuration.agc.againMinStep)
+-				again -= context.configuration.agc.againMinStep;
+-			else
+-				again = next;
+-		} else {
+-			int32_t next = static_cast<int32_t>(exposure * factor);
+-			exposure = std::min(next, exposure - 1);
+-		}
++	else {
++		float gain = std::abs(error) > kExpFarError ? kExpProportionalGainFar
++							    : kExpProportionalGain;
++		factor = 1.0 + std::clamp(static_cast<float>(error) * gain * 2,
++					  -kExpMaxStep * 2, kExpMaxStep * 2);
+ 	}
+ 
+-	exposure = std::clamp(exposure, context.configuration.agc.exposureMin,
+-			      context.configuration.agc.exposureMax);
+-	again = std::clamp(again, context.configuration.agc.againMin,
+-			   context.configuration.agc.againMax);
++	/*
++	 * Distribute it: exposure time first (up to its limit), then the
++	 * sensor's analogue gain, then digital gain. Going down, that takes
++	 * the gains off before shortening the exposure.
++	 */
++	const double total = static_cast<double>(exposure) * again * dgain * factor;
++	const int32_t oldExposure = exposure;
++	const double oldAgain = again;
++	const double oldDgain = dgain;
+ 
+-	context.activeState.agc.exposure = exposure;
+-	context.activeState.agc.again = again;
++	exposure = std::clamp(static_cast<int32_t>(std::lround(total / cfg.again10)),
++			      cfg.exposureMin, cfg.exposureMax);
++	double rest = total / exposure;
++	again = std::clamp(rest, cfg.againMin, cfg.againMax);
++	rest /= again;
++	dgain = std::clamp(rest, 1.0, kMaxDigitalGain);
++
++	agc.exposure = exposure;
++	agc.again = again;
+ 
+ 	LOG(IPASoftExposure, Debug)
+ 		<< "exposureMSV " << exposureMSV
+diff --git a/src/ipa/simple/ipa_context.h b/src/ipa/simple/ipa_context.h
+index b60c994..d490848 100644
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -49,6 +49,10 @@ struct IPAActiveState {
+ 		/* Applied by the image processor, past the sensor's limits. */
+ 		double digitalGain;
+ 		unsigned int stableSamples;
++		/* Frames to wait once the last request shows in the sensor values. */
++		unsigned int settleFrames;
++		/* Frames the last request has been waiting to show. */
++		unsigned int pendingFrames;
+ 		bool valid;
+ 	} agc;
+ 
+-- 
+2.55.0
+

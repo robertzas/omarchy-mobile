@@ -1,0 +1,65 @@
+From a0429ac3ad69ca1fbe9410d3a5644a7076abab7b Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Wed, 14 Oct 2026 17:06:38 -0400
+Subject: [PATCH] ipa: simple: Carry the exposure over to another mode of the
+ same sensor
+
+A new configuration keeps the AGC and AWB state only when the line
+duration and exposure limits are unchanged. A camera app that takes its
+full-resolution still from a binned preview switches sensor mode, so the
+still started over from the sensor's values: on the Google Pixel 7 Pro
+the sensor driver resets the exposure to the new mode's longest, and
+outdoor stills came out at 1/19 s and blown out.
+
+When the mode differs, keep the converged exposure in time and gain
+rather than in lines: convert it to the new line duration, put the rest
+into analogue and then digital gain, and keep the white balance.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/soft_simple.cpp | 29 +++++++++++++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/src/ipa/simple/soft_simple.cpp b/src/ipa/simple/soft_simple.cpp
+index fabb7bc..fdee9d3 100644
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -282,6 +282,35 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
+ 		context_.activeState.agc = previousAgc;
+ 		context_.activeState.awb = previousAwb;
+ 		LOG(IPASoft, Debug) << "Keeping exposure and white balance";
++	} else if (previousAgc.valid && previousLineDuration.get<std::nano>() > 0 &&
++		   context_.configuration.agc.lineDuration.get<std::nano>() > 0) {
++		/*
++		 * Another sensor mode of the same camera, such as a full-resolution
++		 * still taken from a binned preview: keep the converged exposure
++		 * in time and gain rather than in lines, and the white balance.
++		 * Starting over from the sensor's values exposed the first still
++		 * frames for as long as the new mode allows, which blew them out
++		 * outdoors.
++		 */
++		auto &agc = context_.activeState.agc;
++		const auto &cfg = context_.configuration.agc;
++		const double time = previousAgc.exposure * previousLineDuration.get<std::nano>();
++		const double total = time * previousAgc.again * previousAgc.digitalGain;
++		const double line = cfg.lineDuration.get<std::nano>();
++
++		agc = previousAgc;
++		agc.exposure = std::clamp(static_cast<int32_t>(std::lround(time / line)),
++					  cfg.exposureMin, cfg.exposureMax);
++		double rest = total / (agc.exposure * line);
++		agc.again = std::clamp(rest, cfg.againMin, cfg.againMax);
++		rest /= agc.again;
++		agc.digitalGain = std::clamp(rest, 1.0, 4.0);
++		agc.settleFrames = 0;
++		agc.pendingFrames = 0;
++		context_.activeState.awb = previousAwb;
++		LOG(IPASoft, Debug)
++			<< "Carrying exposure over to the new mode: " << agc.exposure
++			<< " lines, gain " << agc.again << ", digital gain " << agc.digitalGain;
+ 	}
+ 
+ 	/*
+-- 
+2.55.0
+
