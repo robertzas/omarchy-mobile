@@ -3610,6 +3610,23 @@ Each mode still sends lines no faster than its `max-line-throughput`.
    - Stop: any error. In that case raise `S5KGN1_VBLANK_MIN` to the old
      frame length for that mode only.
 
+**CAM5.5 results, 2026-10-15 (7.3.0-rc6-omamobile-push1-00556-gb98aa37cd585,
+libcamera 0.7.2-4.12, indoors):** passed.
+- All four cameras probe; `systemctl --failed` is empty. `vertical_blanking`
+  minimum: main 32 and telephoto 32, front 32 and ultrawide 82 as before.
+- **Defaults:** main 1920x1440 (the 2032x1536 mode) 30.05 fps, telephoto
+  1920x1080 30.01 fps, main 1920x1080 30.00 fps. WDMA errors 0, dropped 0.
+- **60 fps** through `FrameDurationLimits` [16667, 16667] (a `cam --script`),
+  300 frames each: main 1080p 60.03 fps, telephoto 1080p 60.01 fps. WDMA
+  errors 0, dropped 0, missed frame ends 0. Link errors (last 0x8, the phase
+  packets) about 240 a frame on main and 260 on the telephoto, the same
+  harmless kind as before.
+- **Main 4080x3072:** 22.08 fps with a fixed 10 ms exposure, as the table
+  predicts; WDMA errors 0. Under auto-exposure in a dim room it ran at 5 fps
+  because AGC chose a 200 ms exposure, so the exposure set the frame length.
+- No `ufshcd_err_handler`. The AK7375 `vcm_resume I2C failure: -6` lines at
+  load are the known ones.
+
 ### CAM7: the front camera (Samsung S5K3J1, D-PHY on link 0). Risk: medium
 
 **Facts.** [V] from the user's own HAL (section 4.5) unless marked: chip ID
