@@ -10,18 +10,15 @@
 # One build, three packages: both apps depend on the agent, and either app
 # can be installed without the other. Not in omamobile-apps' defaults yet.
 #
-# Source: the release tag's tarball, pinned by its sha256. Until the
-# repository is published, put `git archive --prefix=omatel-$pkgver/` of
-# the release commit here as omatel-$pkgver.tar.gz (makepkg uses a local
-# file of that name instead of downloading); its sha256 is the one below,
-# and publishing the tag means replacing it with GitHub's (README.md).
+# Source: the release tag's tarball from GitHub, pinned by its sha256. The
+# sha256 below is a placeholder until the v$pkgver tag exists (README.md).
 #
 # Build: cargo fetches the crates (Cargo.lock pinned) in prepare() and
 # builds offline. A developer iterating on omatel cross-compiles instead
 # (omatel's bin/cross).
 pkgbase=omatel
 pkgname=(omatel-agent omaphone omamessages)
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 arch=(aarch64)
 url="https://github.com/derekross/omatel"
@@ -30,7 +27,7 @@ makedepends=(cargo pkgconf gtk4 libadwaita sqlite)
 checkdepends=(dbus)
 options=('!debug' '!lto')
 source=("omatel-$pkgver.tar.gz::https://github.com/derekross/omatel/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('0043c465c5cb06d01161c762d5c9a63d761e57a783e733cfd39a3e800be0924f')
+sha256sums=('618cc225fc4419c30987ec1fb8825c3f7a16e144dfa294533d239299c6a00343')
 
 prepare() {
   cd "omatel-$pkgver"

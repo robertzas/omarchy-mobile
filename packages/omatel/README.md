@@ -26,22 +26,15 @@ emergency numbers, until the plan's §3.3 tests pass.
 
 ## Releases
 
-**Until the repository is published,** the source is a local tarball:
-
-1. Run `git -C ~/Projects/omatel archive --format=tar --prefix=omatel-$pkgver/ <commit> | gzip -n > packages/omatel/omatel-$pkgver.tar.gz`.
-   The file is gitignored. makepkg uses a local file of the source's name
-   instead of downloading it.
-2. Put its sha256 in `sha256sums`.
-
-0.1.0 is omatel commit `dd03594`.
-
-**Once it is published:**
-
-1. Tag the release `vX.Y.Z` in omatel and set `pkgver` here.
-2. Replace `sha256sums` with the sha256 of GitHub's tarball:
+1. Tag the release `vX.Y.Z` in omatel and push the tag.
+2. Set `pkgver` here.
+3. Put the sha256 of GitHub's tarball in `sha256sums`:
    `curl -sL https://github.com/derekross/omatel/archive/refs/tags/vX.Y.Z.tar.gz | sha256sum`.
-   It differs from the local archive's.
-3. Run `tools/build-packages packages/omatel`.
+4. Run `tools/build-packages packages/omatel`.
+
+0.1.1 (US English, the `favorites` table renamed by a migration) waits for
+step 3: its `sha256sums` is a placeholder until the repository and the tag
+exist.
 
 ## Build
 

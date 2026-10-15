@@ -539,12 +539,20 @@ The bridge (T0-T1) starts now, in parallel with the camera app.
 
 Everything here was built and tested on the laptop, offline, against a scripted ModemManager and the real bridge in a container. **Nothing has run on the phone and nothing on the phone changed.** The code is in a local repository, `~/Projects/omatel`, at version 0.1.0 (Rust, GTK 4 and libadwaita, GPL-3.0-or-later). It is not published: the owner decides that.
 
+**0.1.1** is the release prepared for publishing:
+- US English throughout, with `scripts/spelling.sh` in `check.sh` to keep it.
+- `calls.db` schema 2 renames 0.1.0's `favourites` table to `favorites` (`ALTER TABLE ... RENAME`), so a 0.1.0 database keeps its order; a test opens a schema-1 database.
+- NOTICE credits omacam and ModemManager's interface.
+- The history audit found no private data.
+
+`packages/omatel` now points at the GitHub tag's tarball. Its `sha256sums` is a placeholder until the repository and the `v0.1.1` tag exist.
+
 **What is built:**
 
 | Part | What it does |
 | --- | --- |
 | `omatel-agent` (one per user, a systemd user unit, D-Bus activatable) | Follows the modem through MM's API, through `omamobile-mmd` or the real ModemManager, as it comes and goes. Serves `org.omamobile.Phone1` and `org.omamobile.Messages1` (§9.1, with the interface moved from the dialer into the agent). Incoming calls: the IncomingCall signal, a critical notification with Answer and Decline, the feedbackd ringtone, and Phone's answer page. Blocked callers are hung up at once and logged. The call log is written from Call state changes, with a missed-call notification offering Call back and Message. Outgoing calls carry post-dial tones (`,`). SMS: committed to disk, then `Messaging.Delete`, with duplicates filtered; WAP push is left for mmsd-tng. One notification per conversation with an inline reply. Sends run in the background, with delivery reports and retry |
-| Phone (`omaphone`) | Tabs Favourites, Recents, Contacts and Keypad (a bottom view switcher). A large dialpad with T9 smart dial and a persistent emergency banner. Call details. A contact page and editor, `.vcf` import and export, blocking. In-call: timer, mute, speaker, a touch-tone keypad, hang up. Answer page with "Reply with message". `tel:` and `callto:` links, and a Contacts launcher entry |
+| Phone (`omaphone`) | Tabs Favorites, Recents, Contacts and Keypad (a bottom view switcher). A large dialpad with T9 smart dial and a persistent emergency banner. Call details. A contact page and editor, `.vcf` import and export, blocking. In-call: timer, mute, speaker, a touch-tone keypad, hang up. Answer page with "Reply with message". `tel:` and `callto:` links, and a Contacts launcher entry |
 | Messages (`omamessages`) | The conversation list: pinned, archived, muted, unread, drafts, FTS5 search, and a long-press action sheet. Threads with bubbles, day separators, delivery states, and tap-to-retry. Compose to a contact or a number; blocked numbers; settings; JSON export and import (§9.4); `sms:`, `smsto:`, `mms:` and `mmsto:` links with `?body=`. MMS: the schema and a disabled attach button only |
 | Shared crates | `omatel-mm` (zbus 5 proxies for MM 1.24), `omatel-store` (SQLite, WAL, `synchronous=FULL`, migrations, FTS5, a `transport` column), `omatel-contacts` (a vdir vCard folder; vCard 2.1-4.0 in, 3.0 out, keeping unknown lines; E.164 through the `phonenumber` crate, Apache-2.0, GPL-3-compatible), `omatel-notify` (inline reply through `NotificationReplied`), `omatel-theme` (Omarchy `colors.toml`, as omacam), `omatel-api` |
 
