@@ -194,7 +194,7 @@ function createPrompt(description, dir, contract) {
     + "First read " + (contract || CONTRACT) + ", the widget contract, and follow it exactly.\n"
     + "The folder already holds a working starter: edit manifest.json (keep its id) and Widget.qml.\n"
     + "Rules: work only inside this folder; don't create, change or delete anything outside it; never use sudo or any other root tool; "
-    + "don't install packages. Take colours, fonts and spacing only from Omarchy's theme (qs.Commons). "
+    + "don't install packages. Take colors, fonts and spacing only from Omarchy's theme (qs.Commons). "
     + "Declare every capability the widget uses in manifest.json. When done, run `" + TOOL + " check .` and fix every error it reports.\n"
     + "The user asked for: " + String(description || "").trim()
 }
