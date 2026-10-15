@@ -23,7 +23,7 @@ Kernel: `omamobile-aoc` @ `829fd316a` (`wt-aoc`, `out-aoc`) and
 `omamobile-audio-amp` @ `9fcc941b3` (hibernate, word length, RX6 knob;
 `wt-audio-amp`), both merged into `omamobile-int`. Packages:
 omamobile-device-cheetah 0.1.25 (`omamobile-aoc.service`, start script,
-sensor-rail cycle), omamobile-sensors 0.1.3, omamobile-audio 0.4.1 (not yet
+sensor-rail cycle), omamobile-sensors 0.2.0 (gyroscope stream, C6f), omamobile-audio 0.4.1 (not yet
 installed: 0.3.5 runs; 0.4.0 was never installed),
 omamobile-speaker-tuning 0.1.2 (off by default). The "Checkpoint" section
 below is the running log of C5-C9: its first lists are the state before C5,
@@ -295,6 +295,33 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    come back on (no microphones or sensors; reboot), or accel still
    missing (send the `gs201-aoc-rails` lines). Rollback: device-cheetah
    0.1.21's start script (no `cycle`).
+
+   **C6f gyroscope stream** (omamobile-sensors 0.2.0, for the camera's
+   video stabilisation; API in `packages/omamobile-sensors/README.md`):
+   `org.omamobile.SensorProxy.Gyro1` hands each client a SOCK_SEQPACKET
+   socket of 24-byte records (CLOCK_MONOTONIC ns, x/y/z rad/s, seq). The
+   gyroscope (LSM6DSV, `type 2`, `/dev/lsm6dsv/0/gyro`, 15-480 Hz) samples
+   only while a claim is held, unbatched (`max_latency` 0, non-wakeup
+   channel). Sample times are on the AoC's clock (USF slot 11 = 0); the proxy
+   maps them with `aoc_clock_and_kernel_boottime` (the kernel reads the AoC
+   counter and CLOCK_BOOTTIME together), re-read every second.
+   **Result (2026-10-14, 7.3.0-rc6-omamobile-push1-00554-g63c0abe9c290,
+   a test copy of the proxy on a private bus beside the service):** requests
+   of 100, 200 and 400 Hz ran at 121.3, 242.7 and 485.4 Hz by the sample
+   times (the LSM6DSV's ODRs, its clock about 1 % fast); interval SD 7-8 µs;
+   latency from the sample time to the client's read 0.7-1.9 ms (median
+   1.3-1.5 ms), never negative, which also confirms the clock mapping
+   (GetTime and the sysfs pairing agree on the AoC − boottime offset,
+   +3.604 s on that boot); one record per packet, no drops in 10 s at
+   480 Hz; the proxy used about 10 % of one core at 480 Hz.
+   **Installed (0.2.0, same day, proxy restarted):** the journal lists
+   "gyro (handle 31, 15-480 Hz)"; an unprivileged session user's
+   `omamobile-gyro` got 240 Hz over the system bus with no drops. Axes, by
+   integrating the stream while the owner turned the phone: counter-clockwise
+   in the screen plane +87° on z (back -90°), top towards the viewer +86° on
+   x (back -103°), lying flat and lifting the left edge positive on y with x
+   and z within 5° (the rolls went past 90°, so this confirms the sign only).
+   That is Android's device frame, as the README states.
 
    **Don't `rmmod` the AoC modules.** Removing `aoc_alsa_dev`,
    `aoc_alsa_dev_util`, `aoc_core`, `gs201_aoc_sysmmu` and `gsa` while

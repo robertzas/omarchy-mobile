@@ -946,7 +946,9 @@ class FakeAoc:
                              'max_range': 78.4532, 'resolution': 0.0023928226, 'min_period_ns': 2404000,
                              'max_period_ns': 1000000000, 'fifo_reserved': 3000, 'fifo_max': 3000,
                              'index': 0, 'registry_path': '/dev/lsm6dsv/0/accel'},
-                        11: {'name': 'LSM6DSV Gyroscope', 'type': 2, 'vendor': 'STMicro', 'index': 0}}
+                        11: {'name': 'LSM6DSV Gyroscope', 'type': 2, 'vendor': 'STMicro',
+                             'max_range': 34.9066, 'resolution': 0.00122173, 'min_period_ns': 2083333,
+                             'max_period_ns': 66666666, 'index': 0, 'registry_path': '/dev/lsm6dsv/0/gyro'}}
         self.active = {}
         self.next_sampling = 100
         self.t0 = time.monotonic()

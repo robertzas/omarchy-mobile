@@ -11,7 +11,12 @@ then probes its physical sensors, which needs their supplies on
 (gs201_aoc_rails, loaded by omamobile-aoc-start before the firmware).
 
 A claim starts sampling on the AoC; the last release stops it.
+
+Streams (the gyroscope) differ from the UI sensors: every sample goes to the
+proxy, with its timestamp moved from the AoC's clock to CLOCK_MONOTONIC
+(AocClock), so that a camera can line the samples up with its frames.
 """
+import glob
 import os
 import subprocess
 import sys
@@ -43,7 +48,15 @@ KINDS = {
     'proximity': (usf.SENSOR_PROX, 200_000_000, usf.RPT_ON_CHANGE, True),
     'compass': (SENSOR_ORIENTATION, 200_000_000, usf.RPT_CONTINUOUS, False),  # 5 Hz
 }
+# kind -> USF sensor type, for the sample streams (all physical sensors).
+STREAMS = {'gyro': usf.SENSOR_GYRO}
 CLIENT_ID = 0x4F4D5350   # "OMSP"
+# The AoC's clock and the kernel's boottime, read together by the kernel
+# (aoc.c: arch_timer_read_counter(), then ktime_get_boottime()).
+AOC_CLOCK_GLOB = '/sys/bus/platform/devices/*.aoc/aoc_clock_and_kernel_boottime'
+# Re-read the pairing this often while a stream runs: CLOCK_MONOTONIC is
+# slewed by time synchronisation and stops in suspend; the AoC's clock is not.
+AOC_CLOCK_RESYNC_S = 1.0
 # The TMD3719 under the panel times its conversions to the display: without
 # the display state Android's HAL sends (usf.display_info) it never converts,
 # for light or proximity. Read from the panel's DRM connector and backlight
@@ -132,16 +145,86 @@ def factory_calibration(target):
                 f.write(data)
 
 
+def aoc_ticks_to_ns(ticks):
+    """The AoC firmware's own conversion of its 24.576 MHz ticks to ns
+    (aoc_ticks_to_nanoseconds, USF-PROTOCOL.md section 1c)."""
+    return (ticks * 2666667 + 0x8000) >> 16
+
+
+def clock_ns(clock):
+    return time.clock_gettime_ns(clock)
+
+
+class AocClock:
+    """Maps the AoC's sensor-core time (ns, the sample timestamps) to
+    CLOCK_MONOTONIC ns.
+
+    The kernel pairs the AoC's tick counter with CLOCK_BOOTTIME in one sysfs
+    read; CLOCK_BOOTTIME minus CLOCK_MONOTONIC (the time spent suspended) is
+    measured here around a CLOCK_MONOTONIC read. Both the AoC counter and the
+    kernel's clocks run from the SoC's arch timer, so the offset only moves by
+    time-sync slewing and suspend; sync() is cheap and is repeated while a
+    stream runs. Without the sysfs file, fall back to the USF time server
+    (the midpoint of the request, which costs the round trip's error)."""
+
+    def __init__(self, path=None, read=read_text, now=clock_ns, get_time=None):
+        if path is None:
+            path = next(iter(sorted(glob.glob(AOC_CLOCK_GLOB))), None)
+        self.path = path
+        self.read = read
+        self.now = now
+        self.get_time = get_time    # () -> AoC ns, for the fallback
+        self.offset = None          # monotonic ns minus AoC ns
+        self.synced = None          # CLOCK_MONOTONIC s of the last sync
+
+    def _boot_minus_mono(self):
+        b0 = self.now(time.CLOCK_BOOTTIME)
+        m = self.now(time.CLOCK_MONOTONIC)
+        b1 = self.now(time.CLOCK_BOOTTIME)
+        return (b0 + b1) // 2 - m
+
+    def sync(self):
+        boot_minus_mono = self._boot_minus_mono()
+        pair = self.read(self.path, '').split() if self.path else []
+        if len(pair) == 2 and pair[0] != '0':
+            aoc_ns = aoc_ticks_to_ns(int(pair[0]))
+            self.offset = int(pair[1]) - boot_minus_mono - aoc_ns
+        elif self.get_time is not None:
+            m0 = self.now(time.CLOCK_MONOTONIC)
+            aoc_ns = self.get_time()
+            m1 = self.now(time.CLOCK_MONOTONIC)
+            self.offset = (m0 + m1) // 2 - aoc_ns
+        else:
+            raise usf.UsfError('no AoC clock: neither aoc_clock_and_kernel_boottime nor a time server')
+        self.synced = self.now(time.CLOCK_MONOTONIC) / 1e9
+        return self.offset
+
+    def to_monotonic(self, aoc_ns):
+        if self.offset is None or self.now(time.CLOCK_MONOTONIC) / 1e9 - self.synced >= AOC_CLOCK_RESYNC_S:
+            self.sync()
+        return aoc_ns + self.offset
+
+
+def stream_samples(batch, clock):
+    """A compact gyroscope batch as [(monotonic ns, x, y, z)]."""
+    return [(clock.to_monotonic(ts), vals[0], vals[1], vals[2])
+            for ts, _acc, vals in batch['samples'] if len(vals) >= 3]
+
+
 class UsfBackend:
-    def __init__(self, device, report):
+    def __init__(self, device, report, clock=None, transport=None):
         self.report = report
-        self.tr = usf.ChannelTransport(device, device + usf.NWU_SUFFIX)
+        self.tr = transport or usf.ChannelTransport(device, device + usf.NWU_SUFFIX)
         self.client = usf.UsfClient(self.tr)
         self.mgr = self.client.get_server(usf.UUID_SENSOR_MGR)
         self.max_range = {}
         self._ensure_registry()
         self.handles = self._find_sensors()
+        self.stream_info = {}  # stream kind -> (handle, min Hz, max Hz)
+        self._find_streams()
         self.has = {kind: kind in self.handles for kind in KINDS}
+        self.has.update({kind: kind in self.stream_info for kind in STREAMS})
+        self.clock = clock or AocClock(get_time=self._aoc_time)
         self.sampling = {}     # kind -> sampling id
         self.kind_of = {}      # sampling id -> kind
         self.display = None    # last display state sent
@@ -154,7 +237,52 @@ class UsfBackend:
         self._send_display()
         for fd in self.tr.fds:
             GLib.io_add_watch(fd, GLib.IO_IN, self._readable)
-        log('sensors: ' + ', '.join(f'{k} (handle {h})' for k, h in self.handles.items()))
+        log('sensors: ' + ', '.join(f'{k} (handle {h})' for k, h in self.handles.items()) +
+            ''.join(f', {k} (handle {h}, {lo:g}-{hi:g} Hz)' for k, (h, lo, hi) in self.stream_info.items()))
+
+    def _aoc_time(self):
+        th = self.client.get_server(usf.UUID_TIME)
+        return self.client.get_time(th)
+
+    def _find_streams(self):
+        """The stream sensors, from the sensor list _find_sensors() waited for."""
+        for h, info in sorted(self.infos.items()):
+            for kind, stype in STREAMS.items():
+                if info['type'] != stype or not info['registry_path'] or info['index'] != 0:
+                    continue
+                lo = 1e9 / info['max_period_ns'] if info.get('max_period_ns') else 1.0
+                hi = 1e9 / info['min_period_ns'] if info.get('min_period_ns') else 1000.0
+                self.stream_info[kind] = (h, lo, hi)
+
+    def stream_range(self, kind):
+        """(lowest, highest) rate in Hz the sensor takes."""
+        _h, lo, hi = self.stream_info[kind]
+        return lo, hi
+
+    def start_stream(self, kind, period_ns):
+        """Sample a stream sensor at period_ns (restarting it if it runs), with
+        no batching: each sample is sent as soon as the AoC has it."""
+        self.stop_stream(kind)
+        handle = self.stream_info[kind][0]
+        self.clock.sync()
+        sid = self.client.start_sampling(handle, int(period_ns), 0, rpt_mode=usf.RPT_CONTINUOUS,
+                                         client_id=CLIENT_ID, non_wakeup=True)
+        self.sampling[kind] = sid
+        self.kind_of[sid] = kind
+        self._drain(self.client.events)
+        self.client.events = []
+
+    def stop_stream(self, kind):
+        sid = self.sampling.pop(kind, None)
+        if sid is None:
+            return
+        self.kind_of.pop(sid, None)
+        try:
+            self.client.stop_sampling(self.stream_info[kind][0], sid)
+        except usf.UsfError as e:
+            log(f'stop {kind}: {e}')
+        self._drain(self.client.events)
+        self.client.events = []
 
     def _ensure_registry(self):
         reg = self.client.get_server(usf.UUID_REGISTRY)
@@ -187,6 +315,7 @@ class UsfBackend:
                     handles[kind] = cands[0][1]
                     self.max_range[kind] = infos[cands[0][1]]['max_range']
             if len(handles) == len(KINDS) or time.monotonic() > deadline:
+                self.infos = infos
                 return handles
             time.sleep(0.5)
 
@@ -249,6 +378,9 @@ class UsfBackend:
             batch = item[1]
             kind = self.kind_of.get(batch['sampling_id'])
             if not kind or not batch['samples']:
+                continue
+            if kind in STREAMS:
+                self.report(kind, stream_samples(batch, self.clock))
                 continue
             _ts, _acc, vals = batch['samples'][-1]
             if kind == 'accel':

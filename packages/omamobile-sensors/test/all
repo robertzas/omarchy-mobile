@@ -42,6 +42,65 @@ assert b.aoc_settle(m, 15, now=lambda: 1100.0, sleep=slept.append) == 0.0
 PY
 pass "AoC settle wait"
 
+# gyroscope stream: rates, record packing, AoC clock, USF backend on the fake AoC
+PYTHONPATH=lib python3 - <<'PY' || fail "gyroscope stream (offline)"
+import importlib.util, struct, time
+spec = importlib.util.spec_from_file_location('sp', 'lib/sensor_proxy.py')
+sp = importlib.util.module_from_spec(spec); spec.loader.exec_module(sp)
+import usf, usf_backend as b
+# rates: 15 Hz times a power of two, at or above the request, within the sensor's range
+assert [sp.gyro_rate(r, 15.0, 480.0) for r in (0, 1, 15, 16, 100, 200, 240, 241, 400, 1000)] == \
+    [240, 15, 15, 30, 120, 240, 240, 480, 480, 480]
+# records: 24 bytes, little-endian, whole records per packet, numbered across packets
+assert sp.GYRO_RECORD.size == 24
+recs = [(10**12 + i, 0.5, -1.0, 2.0) for i in range(sp.GYRO_MAX_RECORDS + 3)]
+pkts = sp.gyro_packets(recs, 7)
+assert [len(p) // 24 for p in pkts] == [sp.GYRO_MAX_RECORDS, 3]
+n = sp.GYRO_MAX_RECORDS + 1
+assert struct.unpack('<QfffI', pkts[1][24:48]) == (10**12 + n, 0.5, -1.0, 2.0, 7 + n)
+# AoC clock: 24.576 MHz ticks to ns as the firmware does
+assert b.aoc_ticks_to_ns(24_576_000) == 1_000_000_125   # the firmware's rounding, 0.125 ppm
+# the boottime pair, moved to monotonic (here 1000 s were spent suspended)
+clocks = {time.CLOCK_BOOTTIME: 5_000 * 10**9, time.CLOCK_MONOTONIC: 4_000 * 10**9}
+c = b.AocClock(path='pair', read=lambda p, d: '24576000000 3000000000000', now=lambda k: clocks[k])
+aoc = b.aoc_ticks_to_ns(24576000000)
+assert c.to_monotonic(aoc) == 2_000 * 10**9 and c.to_monotonic(aoc + 5) == 2_000 * 10**9 + 5
+# without the sysfs pair: the time server against the monotonic midpoint
+c = b.AocClock(path='', now=lambda k: clocks[k], get_time=lambda: 123)
+assert c.to_monotonic(123) == clocks[time.CLOCK_MONOTONIC]
+# a compact batch as monotonic records
+fixed = type('C', (), {'to_monotonic': lambda self, t: t + 1000, 'sync': lambda self: 1000})()
+batch = {'samples': [(100, 0, [1.0, 2.0, 3.0]), (200, 0, [4.0, 5.0, 6.0])]}
+assert b.stream_samples(batch, fixed) == [(1100, 1.0, 2.0, 3.0), (1200, 4.0, 5.0, 6.0)]
+
+# the USF backend on the fake AoC: finds the gyroscope, samples it unbatched,
+# reports every sample with its time moved by the clock, stops it
+class Tr(usf.DryRunTransport):
+    fds = []
+tr = Tr(simulate=True, quiet=True)
+got = []
+be = b.UsfBackend('/nonexistent', lambda k, v: got.append((k, v)), clock=fixed, transport=tr)
+assert be.has['gyro'] and be.has['accel'], be.has
+assert be.stream_range('gyro') == (1e9 / 66666666, 1e9 / 2083333)
+be.start_stream('gyro', 4_166_666)
+def sent(mid):
+    envs = [usf.decode_envelope(usf.decode_msg(m)[1]) for m in tr.sent]
+    return [e for e in envs if e['id'] == mid]
+req = usf.decode_start_sampling_req(sent(usf.REQ_START_SAMPLING)[-1]['payload'])
+assert req['period_ns'] == 4_166_666 and req['max_latency_ns'] == 0 and req['non_wakeup'], req
+end = time.monotonic() + 0.1
+while time.monotonic() < end:
+    be._drain(be.client.poll(0.01))
+gyro = [s for k, v in got if k == 'gyro' for s in v]
+assert len(gyro) >= 10, len(gyro)
+assert all(t2 - t1 == 4_166_666 for (t1, *_), (t2, *_) in zip(gyro, gyro[1:]))
+assert [round(v, 4) for v in gyro[0][1:]] == [0.01, -0.02, 9.81]
+be.stop_stream('gyro')
+assert not tr.sim.active and 'gyro' not in be.sampling
+assert len(sent(usf.REQ_STOP_SAMPLING)) == 1
+PY
+pass "gyroscope rates, records, AoC clock and USF backend"
+
 # D-Bus round trip on a private session bus: test backend -> autorotate (dry run)
 if command -v dbus-run-session >/dev/null; then
   # A private state directory: the user's own rotation lock must not apply
@@ -55,9 +114,37 @@ if command -v dbus-run-session >/dev/null; then
   pass "proxy and autorotate over D-Bus"
 fi
 
+# gyroscope over D-Bus: an fd stream, the fastest claim sets the rate, and
+# closing the socket, dying and ReleaseGyroscope all end a claim
+if command -v dbus-run-session >/dev/null; then
+  GIO_USE_VFS=local dbus-run-session -- bash -c '
+    PYTHONPATH=lib python3 lib/sensor_proxy.py --backend test --session 2> "$1/gyro-proxy.log" & p=$!
+    sleep 1
+    python3 lib/gyro.py --session --rate 200 --duration 1.5 --stats > "$1/gyro-stats.txt" 2>&1
+    python3 lib/gyro.py --session --rate 100 --duration 3 > "$1/gyro-slow.txt" 2>/dev/null & s=$!
+    sleep 1
+    python3 lib/gyro.py --session --rate 400 --duration 0.7 > /dev/null 2>&1
+    wait $s
+    python3 lib/gyro.py --session --duration 30 > /dev/null 2>&1 & k=$!
+    sleep 1; kill -9 $k; wait $k 2>/dev/null
+    python3 test/gyro_release.py > "$1/gyro-release.txt" 2>&1 || echo FAILED >> "$1/gyro-release.txt"
+    sleep 0.5; kill $p' _ "$tmp" || true
+  grep -q "240.0 Hz" "$tmp/gyro-stats.txt" || { cat "$tmp/gyro-stats.txt" >&2; fail "gyroscope stream at 240 Hz"; }
+  grep -q "dropped (seq gaps)  0" "$tmp/gyro-stats.txt" || fail "gyroscope stream drops nothing"
+  grep -c FAILED "$tmp/gyro-release.txt" >/dev/null && { cat "$tmp/gyro-release.txt" >&2; fail "ReleaseGyroscope ends the stream"; }
+  # the 100 Hz client got the 400 Hz client's rate while both held claims
+  awk 'NR > 1 && $1 - t < 3000000 { fast++ } { t = $1 } END { exit !(fast > 50) }' "$tmp/gyro-slow.txt" ||
+    fail "the fastest claim sets the rate"
+  sed -n 's/^test backend: //p' "$tmp/gyro-proxy.log" > "$tmp/gyro-events"
+  printf '%s\n' 'gyro at 240 Hz' 'gyro stopped' 'gyro at 120 Hz' 'gyro stopped' 'gyro at 480 Hz' \
+    'gyro stopped' 'gyro at 120 Hz' 'gyro stopped' 'gyro at 240 Hz' 'gyro stopped' 'gyro at 60 Hz' \
+    'gyro stopped' | diff -u - "$tmp/gyro-events" || fail "the gyroscope follows the claims and stops with the last"
+  pass "gyroscope stream over D-Bus"
+fi
+
 ./install "$tmp/root"
-for f in usr/bin/omamobile-sensor-proxy usr/bin/omamobile-autorotate usr/bin/omamobile-usf \
-         usr/lib/omamobile-sensors/usf.py usr/lib/omamobile-sensors/usf_backend.py \
+for f in usr/bin/omamobile-sensor-proxy usr/bin/omamobile-autorotate usr/bin/omamobile-usf usr/bin/omamobile-gyro \
+         usr/lib/omamobile-sensors/usf.py usr/lib/omamobile-sensors/usf_backend.py usr/lib/omamobile-sensors/gyro.py \
          usr/lib/omamobile-sensors/sensor_proxy.py usr/lib/omamobile-sensors/autorotate.py \
          usr/lib/systemd/system/omamobile-sensor-proxy.service usr/lib/systemd/user/omamobile-autorotate.service \
          usr/share/dbus-1/system.d/net.hadess.SensorProxy.conf; do
