@@ -1,0 +1,176 @@
+From 4c0c89354fe0e21beea4638280569ae5b3223339 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Thu, 15 Oct 2026 17:00:00 -0400
+Subject: [PATCH 42/45] ipa: simple: Start a new configuration at the carried
+ exposure
+
+The sensor drivers start a mode at its longest exposure, and the IPA's
+exposure carried over from the previous configuration reached the
+sensor only through the first frames' requests, some frames into the
+stream. A camera application that takes its still once the AE says it
+has converged, or after a fixed number of frames, could keep one of
+those first frames: on the Google Pixel 7 Pro, main camera stills at
+1/10 s (the full mode's longest) with the sky blown, and telephoto
+stills at ISO 50 and a mean of sRGB 24-32.
+
+Return the starting sensor controls from configure() (exposure,
+analogue gain and frame length) when the IPA has a valid exposure, and
+have the simple pipeline set them on the sensor before streaming
+starts, where the drivers apply them at stream on and the delayed
+controls start from them.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../internal/software_isp/software_isp.h      |  3 +-
+ include/libcamera/ipa/soft.mojom              |  3 +-
+ src/ipa/simple/soft_simple.cpp                | 29 +++++++++++++++++--
+ src/libcamera/pipeline/simple/simple.cpp      | 19 +++++++++++-
+ src/libcamera/software_isp/software_isp.cpp   | 10 +++++--
+ 5 files changed, 57 insertions(+), 7 deletions(-)
+
+diff --git a/include/libcamera/internal/software_isp/software_isp.h b/include/libcamera/internal/software_isp/software_isp.h
+index f391e5ec5..a92dff8bb 100644
+--- a/include/libcamera/internal/software_isp/software_isp.h
++++ b/include/libcamera/internal/software_isp/software_isp.h
+@@ -66,7 +66,8 @@ public:
+ 
+ 	int configure(const StreamConfiguration &inputCfg,
+ 		      const std::vector<std::reference_wrapper<const StreamConfiguration>> &outputCfgs,
+-		      const ipa::soft::IPAConfigInfo &configInfo);
++		      const ipa::soft::IPAConfigInfo &configInfo,
++		      ControlList *sensorControls = nullptr);
+ 
+ 	int exportBuffers(const Stream *stream, unsigned int count,
+ 			  std::vector<std::unique_ptr<FrameBuffer>> *buffers);
+diff --git a/include/libcamera/ipa/soft.mojom b/include/libcamera/ipa/soft.mojom
+index 6a58bd016..b5003e610 100644
+--- a/include/libcamera/ipa/soft.mojom
++++ b/include/libcamera/ipa/soft.mojom
+@@ -24,7 +24,8 @@ interface IPASoftInterface {
+ 	start() => (int32 ret);
+ 	stop();
+ 	configure(IPAConfigInfo configInfo)
+-		=> (int32 ret, libcamera.ControlInfoMap ipaControls);
++		=> (int32 ret, libcamera.ControlInfoMap ipaControls,
++		    libcamera.ControlList sensorControls);
+ 
+ 	[async] queueRequest(uint32 frame, libcamera.ControlList sensorControls);
+ 	[async] computeParams(uint32 frame);
+diff --git a/src/ipa/simple/soft_simple.cpp b/src/ipa/simple/soft_simple.cpp
+index f32c04758..0b5376d64 100644
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -71,7 +71,8 @@ public:
+ 		 ControlInfoMap *ipaControls,
+ 		 bool *ccmEnabled) override;
+ 	int configure(const IPAConfigInfo &configInfo,
+-		      ControlInfoMap *ipaControls) override;
++		      ControlInfoMap *ipaControls,
++		      ControlList *sensorControls) override;
+ 
+ 	int start() override;
+ 	void stop() override;
+@@ -332,7 +333,8 @@ void IPASoftSimple::updateWindow(const ControlList &controls)
+ }
+ 
+ int IPASoftSimple::configure(const IPAConfigInfo &configInfo,
+-			     ControlInfoMap *ipaControls)
++			     ControlInfoMap *ipaControls,
++			     ControlList *sensorControls)
+ {
+ 	sensorInfoMap_ = configInfo.sensorControls;
+ 	lensInfoMap_ = configInfo.lensControls;
+@@ -522,6 +524,29 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo,
+ 	ControlInfoMap::Map ctrlMap = context_.ctrlMap;
+ 	*ipaControls = ControlInfoMap(std::move(ctrlMap), controls::controls);
+ 
++	/*
++	 * Start the sensor at the exposure carried over or kept from the last
++	 * configuration: the sensor drivers start a mode at its longest
++	 * exposure, and the first frames of a still taken from a preview came
++	 * out at it.
++	 */
++	const auto &agc = context_.activeState.agc;
++	if (agc.valid) {
++		ControlList ctrls(sensorInfoMap_);
++		ctrls.set(V4L2_CID_EXPOSURE, agc.exposure);
++		ctrls.set(V4L2_CID_ANALOGUE_GAIN,
++			  static_cast<int32_t>(camHelper_ ? camHelper_->gainCode(agc.again)
++							  : agc.again));
++		if (frame.height && sensorInfoMap_.count(V4L2_CID_VBLANK)) {
++			const int32_t lines = std::clamp(agc.exposure + frame.exposureMargin,
++							 frame.minLines, frame.maxLines);
++			ctrls.set(V4L2_CID_VBLANK, lines - frame.height);
++		}
++		*sensorControls = std::move(ctrls);
++		LOG(IPASoft, Debug)
++			<< "Starting at exposure " << agc.exposure << ", gain " << agc.again;
++	}
++
+ 	return 0;
+ }
+ 
+diff --git a/src/libcamera/pipeline/simple/simple.cpp b/src/libcamera/pipeline/simple/simple.cpp
+index 907e0d4b5..b24a70453 100644
+--- a/src/libcamera/pipeline/simple/simple.cpp
++++ b/src/libcamera/pipeline/simple/simple.cpp
+@@ -1642,7 +1642,24 @@ int SimplePipelineHandler::configure(Camera *camera, CameraConfiguration *c)
+ 		CameraLens *focusLens = data->sensor_->focusLens();
+ 		if (focusLens)
+ 			configInfo.lensControls = focusLens->controls();
+-		return data->swIsp_->configure(inputCfg, outputCfgs, configInfo);
++		ControlList sensorControls;
++		ret = data->swIsp_->configure(inputCfg, outputCfgs, configInfo,
++					      &sensorControls);
++		if (ret)
++			return ret;
++
++		/*
++		 * The IPA's starting exposure (one carried over from another
++		 * mode): applied now, the first frames already use it, and the
++		 * delayed controls start from it when streaming starts.
++		 */
++		if (!sensorControls.empty()) {
++			ret = data->sensor_->setControls(&sensorControls);
++			if (ret)
++				LOG(SimplePipeline, Warning)
++					<< "Failed to set the starting sensor controls";
++		}
++		return 0;
+ 	}
+ }
+ 
+diff --git a/src/libcamera/software_isp/software_isp.cpp b/src/libcamera/software_isp/software_isp.cpp
+index c8ac8d519..2041dacdd 100644
+--- a/src/libcamera/software_isp/software_isp.cpp
++++ b/src/libcamera/software_isp/software_isp.cpp
+@@ -284,18 +284,24 @@ uint32_t SoftwareIsp::preferredInputStride(const PixelFormat &inputFormat, const
+  * \param[in] outputCfgs The output configurations
+  * \param[in] configInfo The IPA configuration data, received from the pipeline
+  * handler
++ * \param[out] sensorControls Sensor controls to apply before streaming starts,
++ * such as an exposure carried over from another mode
+  * \return 0 on success, a negative errno on failure
+  */
+ int SoftwareIsp::configure(const StreamConfiguration &inputCfg,
+ 			   const std::vector<std::reference_wrapper<const StreamConfiguration>> &outputCfgs,
+-			   const ipa::soft::IPAConfigInfo &configInfo)
++			   const ipa::soft::IPAConfigInfo &configInfo,
++			   ControlList *sensorControls)
+ {
+ 	ASSERT(ipa_ && debayer_);
+ 
+ 	ControlInfoMap ipaControls;
+-	int ret = ipa_->configure(configInfo, &ipaControls);
++	ControlList initialControls;
++	int ret = ipa_->configure(configInfo, &ipaControls, &initialControls);
+ 	if (ret < 0)
+ 		return ret;
++	if (sensorControls)
++		*sensorControls = std::move(initialControls);
+ 	/* Limits such as the frame durations belong to the configured mode. */
+ 	if (ipaControls_ && !ipaControls.empty())
+ 		*ipaControls_ = std::move(ipaControls);
+-- 
+2.55.0
+

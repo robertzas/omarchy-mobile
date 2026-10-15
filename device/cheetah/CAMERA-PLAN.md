@@ -3647,6 +3647,30 @@ copy in /tmp, not installed):**
      camera). The printed `LensShading` entry goes into the sensor's
      tuning file.
 
+**CAM5.4, evening review of 4.15 (00556, 2026-10-15) and libcamera 4.16:**
+- **Dark or blown stills that started at the mode's longest exposure.**
+  Main 165249 has 1/10 s in its EXIF, the full mode's longest (107 ms),
+  with 28.5% clipped. Telephoto 165332 came out at mean sRGB 24, 1/23 s,
+  ISO 50. The drivers start each mode at its longest exposure, and the
+  carried exposure reached the sensor only through the first frames'
+  requests. A still kept early (omacam keeps one after MAX_DISCARD frames)
+  showed the start exposure. `0042` returns the starting controls from the
+  IPA's configure() and the pipeline sets them before streaming.
+  - A test that the telephoto's analogue gain takes effect in the full
+    mode (raw means at gain 1, 4 and 8) still waits for the phone.
+- **Colour:** the hand-tuned matrix made a red bush neon; `0045` softens it
+  by 30%. `0043` keeps hues of out-of-range colours (gamut mapping towards
+  the luminance) and fades to neutral only what the sensor clipped (from
+  93%), so bright green leaves no longer wash out.
+- **Overcast sky:** `0043` adds a highlight shoulder after the colour
+  matrix (identity to 0.6, full scale at 2.0, applied to the three colours
+  together), and `0044` counts clipping through it. Real high-dynamic-range
+  scenes (a tree against the sky) would need multi-frame HDR: a later
+  project.
+- **White balance:** neutral on grey pavers (165413: 126/125/128), not
+  drifting blue; the dark grass is the evening light.
+- **The shaders pass glslang.** The smoke test on the phone is pending.
+
 ### CAM5.5: 60 fps on the main and telephoto cameras. Risk: medium (DMA)
 
 Kernel: omamobile-camera `9e5c1a218` ("media: i2c: s5kgn1: let VBLANK shorten

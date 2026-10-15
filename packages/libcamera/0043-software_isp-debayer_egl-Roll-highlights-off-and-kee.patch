@@ -1,0 +1,176 @@
+From e4793fc624ca5aa3d23533cb9dae2c39a77837f9 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Thu, 15 Oct 2026 17:02:11 -0400
+Subject: [PATCH 43/45] software_isp: debayer_egl: Roll highlights off and keep
+ hues in gamut
+
+The GPU debayer clamps each colour after the white balance gains and
+again after the colour matrix. On the Google Pixel 7 Pro, overcast
+skies, which the gains take past full scale, clipped to flat white;
+saturated reds the matrix took out of range turned neon and changed
+hue; and the neutral fade near clipping, which started at 85% of the
+sensor's range, washed out bright green leaves.
+
+- Fade towards neutral only what the sensor itself clipped, from 93%
+  of its range.
+- Keep colours past full scale through the colour matrix and roll the
+  brightest channel off with a shoulder (identity to 0.6, reaching
+  full scale at 2.0), scaling the three together so the hue stays.
+- Bring colours still outside the range towards their luminance
+  rather than clipping each channel.
+
+Validated with glslang for both shaders.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/libcamera/shaders/bayer_1x_packed.frag | 48 ++++++++++++++++++----
+ src/libcamera/shaders/bayer_unpacked.frag  | 48 ++++++++++++++++++----
+ 2 files changed, 82 insertions(+), 14 deletions(-)
+
+diff --git a/src/libcamera/shaders/bayer_1x_packed.frag b/src/libcamera/shaders/bayer_1x_packed.frag
+index fde90c710..be240dbc7 100644
+--- a/src/libcamera/shaders/bayer_1x_packed.frag
++++ b/src/libcamera/shaders/bayer_1x_packed.frag
+@@ -85,6 +85,22 @@ float apply_contrast(float value)
+ 		return 1.0 - 0.5 * pow((1.0 - value) / 0.5, contrastExp);
+ }
+ 
++/*
++ * The shoulder: identity up to SHOULDER_KNEE, then an exponential roll-off
++ * that reaches full scale at SHOULDER_MAX. The simple IPA's AGC inverts it
++ * to tell what comes out clipped (agc.cpp, kShoulderKnee and kShoulderMax).
++ */
++#define SHOULDER_KNEE 0.6
++#define SHOULDER_MAX 2.0
++#define SHOULDER_SHAPE 3.0
++
++float shoulder(float x)
++{
++	float t = clamp((x - SHOULDER_KNEE) / (SHOULDER_MAX - SHOULDER_KNEE), 0.0, 1.0);
++	return SHOULDER_KNEE + (1.0 - SHOULDER_KNEE) *
++	       (1.0 - exp(-SHOULDER_SHAPE * t)) / (1.0 - exp(-SHOULDER_SHAPE));
++}
++
+ void main(void)
+ {
+ 	vec3 rgb;
+@@ -247,19 +263,37 @@ void main(void)
+ 	rgb *= awb;
+ 
+ 	/*
+-	 * Highlights: as any colour nears clipping, at the sensor or after
+-	 * the gains, fade towards neutral, so that a clipped channel doesn't
+-	 * tint the brightest parts (cyan skies, green-white clouds).
++	 * Highlights the sensor clipped have lost their colour: fade them
++	 * towards neutral (a clipped green made skies cyan).
+ 	 */
+-	float hl_in = max(max(sensor.r, sensor.g), sensor.b);
+-	float hl_out = max(max(rgb.r, rgb.g), rgb.b);
+-	float hl = max(smoothstep(0.85, 1.0, hl_in), smoothstep(0.95, 1.25, hl_out));
+-	rgb = clamp(rgb, vec3(0.0), vec3(1.0));
++	float hl = smoothstep(0.93, 1.0, max(max(sensor.r, sensor.g), sensor.b));
+ 	rgb = mix(rgb, vec3(max(max(rgb.r, rgb.g), rgb.b)), hl);
+ 
+ 	/* Colour Correction Matrix */
+ 	rgb = ccm * rgb;
+ 
++	/*
++	 * Shoulder: colours the gains took past full scale roll off instead of
++	 * clipping, scaled together so they keep their hue: an overcast sky
++	 * keeps some gradation.
++	 */
++	float peak = max(max(rgb.r, rgb.g), rgb.b);
++	if (peak > SHOULDER_KNEE)
++		rgb *= shoulder(peak) / peak;
++
++	/*
++	 * Gamut: a colour outside the range moves towards its luminance, not
++	 * channel by channel, so saturated colours don't change hue (neon red
++	 * leaves) where the matrix takes them out of range.
++	 */
++	float luma = clamp(dot(rgb, vec3(0.299, 0.587, 0.114)), 0.0, 1.0);
++	vec3 chroma = rgb - vec3(luma);
++	float k = 1.0;
++	k = chroma.r > 1e-5 ? min(k, (1.0 - luma) / chroma.r) : chroma.r < -1e-5 ? min(k, luma / -chroma.r) : k;
++	k = chroma.g > 1e-5 ? min(k, (1.0 - luma) / chroma.g) : chroma.g < -1e-5 ? min(k, luma / -chroma.g) : k;
++	k = chroma.b > 1e-5 ? min(k, (1.0 - luma) / chroma.b) : chroma.b < -1e-5 ? min(k, luma / -chroma.b) : k;
++	rgb = vec3(luma) + chroma * k;
++
+ 	/*
+ 	 * Contrast
+ 	 * contrastExp 0..2 contrast to 0..infinity; avoid actual infinity at tan(pi/2)
+diff --git a/src/libcamera/shaders/bayer_unpacked.frag b/src/libcamera/shaders/bayer_unpacked.frag
+index bf7282215..d338928f0 100644
+--- a/src/libcamera/shaders/bayer_unpacked.frag
++++ b/src/libcamera/shaders/bayer_unpacked.frag
+@@ -45,6 +45,22 @@ float apply_contrast(float value)
+         return 1.0 - 0.5 * pow((1.0 - value) / 0.5, contrastExp);
+ }
+ 
++/*
++ * The shoulder: identity up to SHOULDER_KNEE, then an exponential roll-off
++ * that reaches full scale at SHOULDER_MAX. The simple IPA's AGC inverts it
++ * to tell what comes out clipped (agc.cpp, kShoulderKnee and kShoulderMax).
++ */
++#define SHOULDER_KNEE 0.6
++#define SHOULDER_MAX 2.0
++#define SHOULDER_SHAPE 3.0
++
++float shoulder(float x)
++{
++	float t = clamp((x - SHOULDER_KNEE) / (SHOULDER_MAX - SHOULDER_KNEE), 0.0, 1.0);
++	return SHOULDER_KNEE + (1.0 - SHOULDER_KNEE) *
++	       (1.0 - exp(-SHOULDER_SHAPE * t)) / (1.0 - exp(-SHOULDER_SHAPE));
++}
++
+ void main(void) {
+     vec3 rgb;
+ 
+@@ -151,19 +167,37 @@ void main(void) {
+     rgb *= awb;
+ 
+     /*
+-     * Highlights: as any colour nears clipping, at the sensor or after
+-     * the gains, fade towards neutral, so that a clipped channel doesn't
+-     * tint the brightest parts (cyan skies, green-white clouds).
++     * Highlights the sensor clipped have lost their colour: fade them
++     * towards neutral (a clipped green made skies cyan).
+      */
+-    float hl_in = max(max(sensor.r, sensor.g), sensor.b);
+-    float hl_out = max(max(rgb.r, rgb.g), rgb.b);
+-    float hl = max(smoothstep(0.85, 1.0, hl_in), smoothstep(0.95, 1.25, hl_out));
+-    rgb = clamp(rgb, vec3(0.0), vec3(1.0));
++    float hl = smoothstep(0.93, 1.0, max(max(sensor.r, sensor.g), sensor.b));
+     rgb = mix(rgb, vec3(max(max(rgb.r, rgb.g), rgb.b)), hl);
+ 
+     /* Colour Correction Matrix */
+     rgb = ccm * rgb;
+ 
++    /*
++     * Shoulder: colours the gains took past full scale roll off instead of
++     * clipping, scaled together so they keep their hue: an overcast sky
++     * keeps some gradation.
++     */
++    float peak = max(max(rgb.r, rgb.g), rgb.b);
++    if (peak > SHOULDER_KNEE)
++    	rgb *= shoulder(peak) / peak;
++
++    /*
++     * Gamut: a colour outside the range moves towards its luminance, not
++     * channel by channel, so saturated colours don't change hue (neon red
++     * leaves) where the matrix takes them out of range.
++     */
++    float luma = clamp(dot(rgb, vec3(0.299, 0.587, 0.114)), 0.0, 1.0);
++    vec3 chroma = rgb - vec3(luma);
++    float k = 1.0;
++    k = chroma.r > 1e-5 ? min(k, (1.0 - luma) / chroma.r) : chroma.r < -1e-5 ? min(k, luma / -chroma.r) : k;
++    k = chroma.g > 1e-5 ? min(k, (1.0 - luma) / chroma.g) : chroma.g < -1e-5 ? min(k, luma / -chroma.g) : k;
++    k = chroma.b > 1e-5 ? min(k, (1.0 - luma) / chroma.b) : chroma.b < -1e-5 ? min(k, luma / -chroma.b) : k;
++    rgb = vec3(luma) + chroma * k;
++
+     /*
+      * Contrast
+      */
+-- 
+2.55.0
+

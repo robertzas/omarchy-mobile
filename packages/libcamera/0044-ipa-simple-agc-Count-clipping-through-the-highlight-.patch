@@ -1,0 +1,73 @@
+From 7e1a099fa8f995852e4fc80d2da49271181f767f Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Thu, 15 Oct 2026 17:02:11 -0400
+Subject: [PATCH 44/45] ipa: simple: agc: Count clipping through the highlight
+ shoulder
+
+The GPU debayer now rolls highlights off with a shoulder before the
+contrast curve and the gamma, so a surface comes out at sRGB 250 at
+about 1.24 times full scale after the gains rather than at 0.92.
+Invert the shoulder too when computing the raw level that clips, and
+never above 95% of the sensor's range, where the sensor itself clips.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/agc.cpp | 26 ++++++++++++++++++++++----
+ 1 file changed, 22 insertions(+), 4 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index a5f25d53f..10d669959 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -104,6 +104,14 @@ static constexpr double kClipRelax = 1.02;
+ /* The output level counted as clipped, before the gamma (sRGB 250) */
+ static constexpr double kClippedOutput = 0.98;
+ 
++/* The GPU debayer's highlight shoulder (bayer_*.frag, SHOULDER_*) */
++static constexpr double kShoulderKnee = 0.6;
++static constexpr double kShoulderMax = 2.0;
++static constexpr double kShoulderShape = 3.0;
++
++/* Where the sensor itself clips, in fractions of the range above black */
++static constexpr double kSensorClip = 0.95;
++
+ /*
+  * A request that hasn't shown after this many frames (the sensor clamped
+  * it, or rounded the gain to a code further off than the tolerance) is
+@@ -422,19 +430,29 @@ double Agc::clipLevel(const IPAContext &context) const
+ 	const double contrast = knobs.contrast.value_or(1.0f);
+ 	const double exponent = std::tan(std::clamp(contrast * M_PI_4, 0.01, M_PI_2 - 0.00001));
+ 
+-	/* Undo the gamma, then the upper half of the contrast S-curve. */
++	/*
++	 * Undo the gamma, then the upper half of the contrast S-curve, then
++	 * the debayer's highlight shoulder.
++	 */
+ 	const double y = std::pow(kClippedOutput, gamma);
+-	const double x = 1.0 - 0.5 * std::pow((1.0 - y) / 0.5, 1.0 / exponent);
++	double x = 1.0 - 0.5 * std::pow((1.0 - y) / 0.5, 1.0 / exponent);
++	if (x > kShoulderKnee) {
++		const double u = std::min((x - kShoulderKnee) / (1.0 - kShoulderKnee), 0.999);
++		const double t = -std::log(1.0 - u * (1.0 - std::exp(-kShoulderShape))) /
++				 kShoulderShape;
++		x = kShoulderKnee + t * (kShoulderMax - kShoulderKnee);
++	}
+ 
+ 	const auto &gains = context.activeState.awb.gains;
+ 	const double dgain = std::max(context.activeState.agc.digitalGain, 1.0);
+ 	if (gains.r() <= 0.0f || gains.g() <= 0.0f || gains.b() <= 0.0f)
+-		return x / dgain;
++		return std::min(x / dgain, kSensorClip);
+ 
+ 	/* Raw luminance of a neutral surface that the gains bring to x. */
+ 	const double neutral = (0.299 / gains.r() + 0.587 / gains.g() +
+ 				0.114 / gains.b()) * x / dgain;
+-	return std::clamp(neutral, 0.05, 1.0);
++	/* The sensor clips too: the shoulder can't bring that back. */
++	return std::clamp(neutral, 0.05, kSensorClip);
+ }
+ 
+ void Agc::process(IPAContext &context,
+-- 
+2.55.0
+

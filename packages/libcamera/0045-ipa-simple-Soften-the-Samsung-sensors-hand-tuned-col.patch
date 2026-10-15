@@ -1,0 +1,121 @@
+From 86d2dd29bd97042a8e935d5ed7aabcb192cb88c7 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Thu, 15 Oct 2026 17:02:29 -0400
+Subject: [PATCH 45/45] ipa: simple: Soften the Samsung sensors' hand-tuned
+ colours
+
+The first trial of the hand-tuned colour matrix made a red bush neon
+and a little too saturated overall. Move it 30% of the way towards the
+white balance correction alone (diag 1.03, 1, 1.04), which keeps the
+correction of the green cast on neutral surfaces and the turn of greens
+towards yellow, with less saturation.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/data/s5k3j1.yaml | 15 ++++++++-------
+ src/ipa/simple/data/s5kgm5.yaml | 15 ++++++++-------
+ src/ipa/simple/data/s5kgn1.yaml | 15 ++++++++-------
+ 3 files changed, 24 insertions(+), 21 deletions(-)
+
+diff --git a/src/ipa/simple/data/s5k3j1.yaml b/src/ipa/simple/data/s5k3j1.yaml
+index 6aae8e1be..c59b6043f 100644
+--- a/src/ipa/simple/data/s5k3j1.yaml
++++ b/src/ipa/simple/data/s5k3j1.yaml
+@@ -5,10 +5,11 @@
+ #
+ # The colour matrix is hand-tuned, not calibrated: fitted by eye on our own
+ # overcast-daylight shots (grass, grey pavers, white siding, skin) and an
+-# indoor white wall, with no colour chart. Its rows don't sum to one: it
+-# also takes off the green cast that the grey-world white balance left on
+-# neutral surfaces (about 4% on green). Replace it with a chart
+-# calibration.
++# indoor white wall, with no colour chart (softened by 30% towards the white
++# balance correction alone after its first trial made reds neon). Its rows
++# don't sum to one: it also takes off the green cast that the grey-world
++# white balance left on neutral surfaces (about 4% on green). Replace it
++# with a chart calibration.
+ %YAML 1.1
+ ---
+ version: 1
+@@ -18,9 +19,9 @@ algorithms:
+   - Ccm:
+       ccms:
+         - ct: 5000
+-          ccm: [  1.4420, -0.2500, -0.1560,
+-                 -0.2060,  1.4000, -0.2080,
+-                 -0.1545, -0.5500,  1.7680 ]
++          ccm: [ 1.3184, -0.1750, -0.1092,
++                 -0.1442,  1.2800, -0.1456,
++                 -0.1081, -0.3850,  1.5496 ]
+   # Defaults for applications that do not set the controls.
+   - Adjust:
+       contrast: 1.2
+diff --git a/src/ipa/simple/data/s5kgm5.yaml b/src/ipa/simple/data/s5kgm5.yaml
+index a52aa3fac..3ceb7f183 100644
+--- a/src/ipa/simple/data/s5kgm5.yaml
++++ b/src/ipa/simple/data/s5kgm5.yaml
+@@ -5,10 +5,11 @@
+ #
+ # The colour matrix is hand-tuned, not calibrated: fitted by eye on our own
+ # overcast-daylight shots (grass, grey pavers, white siding, skin) and an
+-# indoor white wall, with no colour chart. Its rows don't sum to one: it
+-# also takes off the green cast that the grey-world white balance left on
+-# neutral surfaces (about 4% on green). Replace it with a chart
+-# calibration.
++# indoor white wall, with no colour chart (softened by 30% towards the white
++# balance correction alone after its first trial made reds neon). Its rows
++# don't sum to one: it also takes off the green cast that the grey-world
++# white balance left on neutral surfaces (about 4% on green). Replace it
++# with a chart calibration.
+ #
+ # Autofocus scans the SEM1215SA lens's range (the module's calibrated span,
+ # set by the kernel driver) in 8 coarse steps, then around the sharpest one
+@@ -23,9 +24,9 @@ algorithms:
+   - Ccm:
+       ccms:
+         - ct: 5000
+-          ccm: [  1.4420, -0.2500, -0.1560,
+-                 -0.2060,  1.4000, -0.2080,
+-                 -0.1545, -0.5500,  1.7680 ]
++          ccm: [ 1.3184, -0.1750, -0.1092,
++                 -0.1442,  1.2800, -0.1456,
++                 -0.1081, -0.3850,  1.5496 ]
+   # Defaults for applications that do not set the controls.
+   - Adjust:
+       contrast: 1.2
+diff --git a/src/ipa/simple/data/s5kgn1.yaml b/src/ipa/simple/data/s5kgn1.yaml
+index 7e5a820df..07d0a704d 100644
+--- a/src/ipa/simple/data/s5kgn1.yaml
++++ b/src/ipa/simple/data/s5kgn1.yaml
+@@ -5,10 +5,11 @@
+ #
+ # The colour matrix is hand-tuned, not calibrated: fitted by eye on our own
+ # overcast-daylight shots (grass, grey pavers, white siding, skin) and an
+-# indoor white wall, with no colour chart. Its rows don't sum to one: it
+-# also takes off the green cast that the grey-world white balance left on
+-# neutral surfaces (about 4% on green). Replace it with a chart
+-# calibration.
++# indoor white wall, with no colour chart (softened by 30% towards the white
++# balance correction alone after its first trial made reds neon). Its rows
++# don't sum to one: it also takes off the green cast that the grey-world
++# white balance left on neutral surfaces (about 4% on green). Replace it
++# with a chart calibration.
+ #
+ # Autofocus scans the AK7375 lens's range in 8 coarse steps, then around
+ # the sharpest one in steps of 1/32 of the range: the main camera's large
+@@ -22,9 +23,9 @@ algorithms:
+   - Ccm:
+       ccms:
+         - ct: 5000
+-          ccm: [  1.4420, -0.2500, -0.1560,
+-                 -0.2060,  1.4000, -0.2080,
+-                 -0.1545, -0.5500,  1.7680 ]
++          ccm: [ 1.3184, -0.1750, -0.1092,
++                 -0.1442,  1.2800, -0.1456,
++                 -0.1081, -0.3850,  1.5496 ]
+   # Defaults for applications that do not set the controls.
+   - Adjust:
+       contrast: 1.2
+-- 
+2.55.0
+

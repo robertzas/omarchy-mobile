@@ -56,6 +56,10 @@ in the table. See `device/cheetah/CAMERA-PLAN.md`, section 5.2.
 | `0039-ipa-simple-Hand-tune-the-Pixel-7-Pro-s-Samsung-senso.patch` | A hand-tuned colour matrix for the main, telephoto and front cameras (no chart) |
 | `0040-ipa-simple-af-Settle-less-for-fine-steps.patch` | Fine autofocus steps settle three frames, the jump to them four |
 | `0041-ipa-simple-agc-Don-t-climb-back-into-the-clipping.patch` | After a highlight cut, the exposure stays under 85% of the one that clipped |
+| `0042-ipa-simple-Start-a-new-configuration-at-the-carried-.patch` | A new configuration sets the carried exposure on the sensor before streaming |
+| `0043-software_isp-debayer_egl-Roll-highlights-off-and-kee.patch` | A highlight shoulder, and hue-preserving gamut mapping instead of per-channel clipping |
+| `0044-ipa-simple-agc-Count-clipping-through-the-highlight-.patch` | The highlight cap counts clipping through the shoulder |
+| `0045-ipa-simple-Soften-the-Samsung-sensors-hand-tuned-col.patch` | The hand-tuned Samsung matrix softened by 30% |
 | `libcamera-fix-python3.14-macro-redefinition.patch` | Arch's patch, unchanged (sha512 `8b54cbdf…`) |
 | `.SRCINFO` | `makepkg --printsrcinfo` output |
 
@@ -168,6 +172,9 @@ Pictures stay noisier and softer at the corners than with Google's ISP.
 ## Status
 
 0.7.2-4.4 (0001-0003) runs on the phone: the ultrawide captures end to end.
+0.7.2-4.16 adds 0042-0045 (2026-10-15): stills no longer start at the
+mode's longest exposure, overcast skies keep gradation through a shoulder,
+saturated colours keep their hue, and softer hand-tuned colours.
 0.7.2-4.15 adds 0037-0041 (2026-10-15; 4.14 was the same without 0041):
 overcast skies no longer clip (the cap counted the raw top 3%, not what the
 gains and tone curve clip), a gentler first step after a mode change,
