@@ -1,28 +1,27 @@
 # omatel
 
-Omarchy Mobile's Phone (`omaphone`) and Messages (`omamessages`) apps and
-`omatel-agent`, the background service both need. They are modelled on
-AOSP's Dialer and Messaging; Rust, GTK 4 and libadwaita
+`omatel-agent`, the background service behind Omarchy Mobile's Phone
+([packages/omaphone](../omaphone)) and Messages
+([packages/omamessages](../omamessages)) apps
 ([TELEPHONY-APPS-PLAN](../../docs/TELEPHONY-APPS-PLAN.md) T6/T7, §10.1b).
-The code lives in its own repository, `omatel` (GPL-3.0-or-later). This
+It rings for calls, writes the call log, stores incoming SMS and raises
+notifications, and serves `org.omamobile.Phone1` and
+`org.omamobile.Messages1`. It comes from the
+[omatel](https://github.com/derekross/omatel) repository
+(GPL-3.0-or-later), which also holds the crates the apps share. This
 package builds a pinned release from it.
 
-**One build, three packages:**
+- **Up to 0.1.1** this one PKGBUILD built all three packages. **Since 0.2.0**
+  the apps have repositories and PKGBUILDs of their own. The package names
+  stay the same, so a plain upgrade replaces the 0.1.1 packages.
+- `omamobile-apps` doesn't pull these packages in yet; that waits for the
+  phone tests in the plan's runbook.
+- The agent's user unit ships disabled. Enable it per user with
+  `systemctl --user enable --now omatel-agent`; D-Bus activation also starts
+  it when an app needs it.
 
-- `omatel-agent`: rings for calls, writes the call log, stores incoming
-  SMS and raises notifications. It serves `org.omamobile.Phone1` and
-  `org.omamobile.Messages1`.
-- `omaphone`: the Phone app.
-- `omamessages`: the Messages app.
-
-Both apps depend on the agent, so either can be installed alone.
-`omamobile-apps` doesn't pull them in yet; that waits for the phone tests
-in the plan's runbook. The agent's user unit ships disabled. Enable it per
-user with `systemctl --user enable --now omatel-agent`; D-Bus activation
-also starts it when an app needs it.
-
-**Emergency calls are not supported.** Phone says so and the agent refuses
-emergency numbers, until the plan's §3.3 tests pass.
+**Emergency calls are not supported.** The agent refuses emergency numbers
+until the plan's §3.3 tests pass.
 
 ## Releases
 
@@ -32,17 +31,15 @@ emergency numbers, until the plan's §3.3 tests pass.
    `curl -sL https://github.com/derekross/omatel/archive/refs/tags/vX.Y.Z.tar.gz | sha256sum`.
 4. Run `tools/build-packages packages/omatel`.
 
-0.1.1 (US English, the `favorites` table renamed by a migration) waits for
-step 3: its `sha256sums` is a placeholder until the repository and the tag
-exist.
+The apps pin omatel's crates to a tag in their `Cargo.lock`, so a release
+that changes a crate's API is tagged here first, then picked up by the
+apps.
 
 ## Build
 
-- `tools/build-packages packages/omatel` builds under qemu-user: 34
-  minutes for 0.1.0 on the laptop (2026-10-14), with `check()`.
-- While developing omatel, cross-compile with its `bin/cross package`
-  instead: about four minutes cold, seconds after that. It makes the same
-  three packages.
-- `check()` runs the D-Bus-free unit tests: contacts, numbers, the stores
-  and the API types. The D-Bus, agent and chain tests run on the laptop
-  with omatel's `scripts/check.sh` and `scripts/chain-test.sh`.
+- `tools/build-packages packages/omatel` builds under qemu-user (0.1.0,
+  with both apps, took 34 minutes; the agent alone takes less).
+- While developing, cross-compile with omatel's `bin/cross package`.
+- `check()` runs the D-Bus-free unit tests. The D-Bus, agent and chain
+  tests run on the laptop with omatel's `scripts/check.sh` and
+  `scripts/chain-test.sh`.

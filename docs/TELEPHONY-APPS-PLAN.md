@@ -8,7 +8,7 @@
 - a chain test in a container: agent, then `omamobile-mmd`, `omamobile-sitd` and `tools/sit-sim`;
 - screenshots in a headless Weston.
 
-The package is `packages/omatel`: one build, three packages, not in `omamobile-apps`' defaults. Nothing has run on the phone. Results, deviations from §9, what is stubbed, and the runbook for the first phone test are in [§10.1b](#101b-t6-and-t7-the-first-version-2026-10-14). Shell work (T5), call audio (T4) and MMS (T3) are not part of this.
+Since 0.2.0 there are three repositories: `omatel` (the shared crates and the agent), `omaphone` and `omamessages`, each with its own package (`packages/omatel` builds `omatel-agent`; `packages/omaphone`, `packages/omamessages`), none in `omamobile-apps`' defaults. Nothing has run on the phone. Results, deviations from §9, what is stubbed, and the runbook for the first phone test are in [§10.1b](#101b-t6-and-t7-the-first-version-2026-10-14). Shell work (T5), call audio (T4) and MMS (T3) are not part of this.
 
 The rest of this status line is the design snapshot: design only. Nothing is built and nothing on the phone has changed. The only phone queries were read-only: package versions, unit states, and the RTC's name and wake flag. Kernel on the phone: `7.3.0-rc6-omamobile-push1-00543-g1f83c16c0aba`. Installed: `omamobile-modem` 0.1.4 and `omamobile-modem-sit` 0.2.0, both units disabled, no SIM; `libmm-glib` 1.24.2 (pulled in by NetworkManager and GeoClue), `squeekboard` 1.43.1, `quickshell` 0.3.2, `omarchy` 4.0.4. Not installed: ModemManager, oFono, GNOME Calls, Chatty, mmsd-tng, evolution-data-server.
 
@@ -413,6 +413,8 @@ The owner's guess holds: **camera, phone and messages are the only apps to write
 
 ### 9.1 One repository, two apps, shared crates
 
+**Superseded (0.2.0, the owner's request):** one repository per app. `omatel` keeps the shared crates and `omatel-agent`; [omaphone](https://github.com/derekross/omaphone) and [omamessages](https://github.com/derekross/omamessages) were split out of it with their history and use omatel's crates as git dependencies pinned to an omatel release tag (in their `Cargo.lock`). The layout below is the original design.
+
 Working names as the owner gave them, shown as **"Phone"** and **"Messages"**. One repository, because the two apps share most of their non-UI code and are released together (Q1):
 
 ```
@@ -519,7 +521,7 @@ T4 and T5 can run in parallel with T6 and T7 if a second person helps.
 
 | # | Decision |
 | --- | --- |
-| 1 | Apps named "Phone" (`omaphone`) and "Messages" (`omamessages`), in one repository |
+| 1 | Apps named "Phone" (`omaphone`) and "Messages" (`omamessages`), in one repository; since 0.2.0, one repository per app plus `omatel` for the shared crates and the agent |
 | 2 | GPL-3.0-or-later |
 | 3 | The ModemManager-compatible bridge (`omamobile-mmd`) in Python, like `omamobile-sitd` |
 | 4 | Contacts as a vCard folder, synced over CardDAV |
@@ -546,6 +548,19 @@ Everything here was built and tested on the laptop, offline, against a scripted 
 - The history audit found no private data.
 
 `packages/omatel` now points at the GitHub tag's tarball. Its `sha256sums` is a placeholder until the repository and the `v0.1.1` tag exist.
+
+**0.2.0 splits the repositories** (the owner's request): one per app, plus `omatel` for the shared core.
+
+| Repository | Holds | Package | Depends on |
+| --- | --- | --- | --- |
+| `omatel` (v0.2.0) | the crates (`omatel-mm`, `-store`, `-contacts`, `-notify`, `-theme`, `-api`, `-mock`), `omatel-agent` with its user unit and D-Bus activation files, the agent and chain tests, the live screenshot run | `packages/omatel` → `omatel-agent` | - |
+| `omaphone` (v0.2.0) | Phone, with its history from omatel (`git subtree split`), desktop files and icons, `scripts/ui-shots.sh` | `packages/omaphone` → `omaphone` | `omatel-agent>=0.2.0`; omatel's crates at v0.2.0 (git, `Cargo.lock`) |
+| `omamessages` (v0.2.0) | Messages, likewise | `packages/omamessages` → `omamessages` | the same |
+
+- The package names are unchanged and 0.2.0 sorts above 0.1.1, so a plain upgrade replaces the 0.1.1 split packages.
+- The apps' `Cargo.lock` pins omatel's v0.2.0 commit. `cargo fetch --locked` in `prepare()` therefore needs the omatel tag pushed before an app's package can build.
+- Results: `scripts/check.sh` passes in all three: omatel 73 tests, omaphone 7, omamessages 14. The chain test passes, and so do the screenshot runs: each app's own run, and omatel's live run with both apps.
+- `bin/cross package` makes the three aarch64 packages.
 
 **What is built:**
 

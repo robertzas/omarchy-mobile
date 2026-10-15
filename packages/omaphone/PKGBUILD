@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+#
+# omaphone: Omarchy Mobile's Phone app (docs/TELEPHONY-APPS-PLAN.md
+# T6/T7). Rust, GTK 4 and libadwaita, from its own repository
+# (github.com/derekross/omaphone, GPL-3.0-or-later). It talks to the modem
+# through omatel-agent (packages/omatel) and uses omatel's crates, which
+# its Cargo.lock pins to an omatel release tag. Up to 0.1.1 this package
+# was built from omatel; the name is unchanged, so a plain upgrade
+# replaces it. Not in omamobile-apps' defaults yet.
+#
+# Source: the release tag's tarball from GitHub, pinned by its sha256
+# (README.md). Build: cargo fetches the crates, omatel's from git at the
+# pinned tag, in prepare(), and builds offline.
+pkgname=omaphone
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="Phone: dialpad with smart dial, call log, favorites, contacts and the in-call screen"
+arch=(aarch64)
+url="https://github.com/derekross/omaphone"
+license=('GPL-3.0-or-later' 'MIT')
+depends=('omatel-agent>=0.2.0' gcc-libs glib2 glibc 'gtk4>=4.14' 'libadwaita>=1.5' sqlite hicolor-icon-theme)
+makedepends=(cargo git pkgconf gtk4 libadwaita sqlite)
+install=omaphone.install
+options=('!debug' '!lto')
+source=("omaphone-$pkgver.tar.gz::https://github.com/derekross/omaphone/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('b06edfe3dd22379c9a6f66e52e47745eb21df7567d41fc6c4711c0ef4152deb5')
+
+prepare() {
+  cd "omaphone-$pkgver"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "omaphone-$pkgver"
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release --bin omaphone
+}
+
+check() {
+  cd "omaphone-$pkgver"
+  export CARGO_TARGET_DIR=target
+  cargo test --frozen --bin omaphone
+}
+
+package() {
+  cd "omaphone-$pkgver"
+  install -Dm755 target/release/omaphone "$pkgdir/usr/bin/omaphone"
+  install -Dm644 data/org.omamobile.Phone.desktop "$pkgdir/usr/share/applications/org.omamobile.Phone.desktop"
+  install -Dm644 data/org.omamobile.Phone.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/org.omamobile.Phone.svg"
+  install -Dm644 data/org.omamobile.Contacts.desktop "$pkgdir/usr/share/applications/org.omamobile.Contacts.desktop"
+  install -Dm644 data/org.omamobile.Contacts.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/org.omamobile.Contacts.svg"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+}

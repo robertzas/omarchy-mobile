@@ -1,33 +1,38 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Derek Ross <derekross@gmail.com>
 #
-# omatel: Omarchy Mobile's Phone (omaphone) and Messages (omamessages) apps
-# and omatel-agent, the background service both need
-# (docs/TELEPHONY-APPS-PLAN.md T6/T7). Rust, GTK 4 and libadwaita, from
-# one repository (github.com/derekross/omatel, GPL-3.0-or-later); its own
-# pkgbuild/PKGBUILD builds a checkout, this one a pinned release.
+# omatel-agent: the background service behind Omarchy Mobile's Phone
+# (packages/omaphone) and Messages (packages/omamessages) apps
+# (docs/TELEPHONY-APPS-PLAN.md T6/T7). It rings for calls, writes the call
+# log, stores incoming SMS and raises notifications, and serves
+# org.omamobile.Phone1 and org.omamobile.Messages1. From the omatel
+# repository (github.com/derekross/omatel, GPL-3.0-or-later), which also
+# holds the crates the apps share; the apps have repositories of their own
+# since 0.2.0. Not in omamobile-apps' defaults yet.
 #
-# One build, three packages: both apps depend on the agent, and either app
-# can be installed without the other. Not in omamobile-apps' defaults yet.
-#
-# Source: the release tag's tarball from GitHub, pinned by its sha256. The
-# sha256 below is a placeholder until the v$pkgver tag exists (README.md).
-#
-# Build: cargo fetches the crates (Cargo.lock pinned) in prepare() and
-# builds offline. A developer iterating on omatel cross-compiles instead
-# (omatel's bin/cross).
-pkgbase=omatel
-pkgname=(omatel-agent omaphone omamessages)
-pkgver=0.1.1
+# Source: the release tag's tarball from GitHub, pinned by its sha256
+# (README.md). Build: cargo fetches the crates (Cargo.lock pinned) in
+# prepare() and builds offline. A developer iterating on omatel
+# cross-compiles instead (omatel's bin/cross).
+pkgname=omatel-agent
+pkgver=0.2.0
 pkgrel=1
+pkgdesc="Phone and Messages background service: rings, call log, SMS storage, notifications"
 arch=(aarch64)
 url="https://github.com/derekross/omatel"
 license=('GPL-3.0-or-later' 'MIT')
-makedepends=(cargo pkgconf gtk4 libadwaita sqlite)
+depends=(gcc-libs glibc sqlite dbus systemd)
+optdepends=('omaphone: the Phone app'
+            'omamessages: the Messages app'
+            'omamobile-mmd: the modem (ModemManager API) on Omarchy Mobile phones'
+            'feedbackd: ring and vibrate for incoming calls'
+            'callaudiod: call audio routing (speaker, mute), with call audio (T4)')
+makedepends=(cargo pkgconf sqlite)
 checkdepends=(dbus)
+install=omatel-agent.install
 options=('!debug' '!lto')
 source=("omatel-$pkgver.tar.gz::https://github.com/derekross/omatel/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('618cc225fc4419c30987ec1fb8825c3f7a16e144dfa294533d239299c6a00343')
+sha256sums=('f8ffe3cf9ed725558705d82c2c3eeb09addec1884a9e440dd3feb9ccf3d499e6')
 
 prepare() {
   cd "omatel-$pkgver"
@@ -37,59 +42,26 @@ prepare() {
 build() {
   cd "omatel-$pkgver"
   export CARGO_TARGET_DIR=target
-  cargo build --frozen --release -p omaphone -p omamessages -p omatel-agent
+  cargo build --frozen --release -p omatel-agent
 }
 
 check() {
   cd "omatel-$pkgver"
   export CARGO_TARGET_DIR=target
   # The logic without D-Bus or a display: contacts, numbers, the stores,
-  # the API types (the D-Bus tests run on the laptop, scripts/check.sh).
+  # the API types (the D-Bus and chain tests run on the laptop:
+  # scripts/check.sh, scripts/chain-test.sh).
   cargo test --frozen -p omatel-contacts -p omatel-store -p omatel-api --lib
 }
 
-_common() {
-  cd "$srcdir/omatel-$pkgver"
-  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-  install -Dm644 NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
-}
-
-package_omatel-agent() {
-  pkgdesc="Phone and Messages background service: rings, call log, SMS storage, notifications"
-  depends=(gcc-libs glibc sqlite dbus systemd)
-  optdepends=('omamobile-mmd: the modem (ModemManager API) on Omarchy Mobile phones'
-              'feedbackd: ring and vibrate for incoming calls'
-              'callaudiod: call audio routing (speaker, mute), with call audio (T4)')
-  install=omatel-agent.install
-  _common
+package() {
+  cd "omatel-$pkgver"
   install -Dm755 target/release/omatel-agent "$pkgdir/usr/bin/omatel-agent"
   install -Dm644 data/omatel-agent.service "$pkgdir/usr/lib/systemd/user/omatel-agent.service"
   install -Dm644 data/org.omamobile.Phone1.service "$pkgdir/usr/share/dbus-1/services/org.omamobile.Phone1.service"
   install -Dm644 data/org.omamobile.Messages1.service "$pkgdir/usr/share/dbus-1/services/org.omamobile.Messages1.service"
   install -Dm644 README.md "$pkgdir/usr/share/doc/omatel/README.md"
   install -Dm644 docs/export-format.md "$pkgdir/usr/share/doc/omatel/export-format.md"
-}
-
-package_omaphone() {
-  pkgdesc="Phone: dialpad with smart dial, call log, favourites, contacts and the in-call screen"
-  depends=(omatel-agent gcc-libs glib2 glibc 'gtk4>=4.14' 'libadwaita>=1.5' sqlite hicolor-icon-theme)
-  install=omatel-apps.install
-  _common
-  install -Dm755 target/release/omaphone "$pkgdir/usr/bin/omaphone"
-  local d=apps/omaphone/data f
-  for f in org.omamobile.Phone org.omamobile.Contacts; do
-    install -Dm644 $d/$f.desktop "$pkgdir/usr/share/applications/$f.desktop"
-    install -Dm644 $d/$f.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/$f.svg"
-  done
-}
-
-package_omamessages() {
-  pkgdesc="Messages: SMS conversations with search, drafts, delivery reports and blocking"
-  depends=(omatel-agent gcc-libs glib2 glibc 'gtk4>=4.14' 'libadwaita>=1.5' sqlite hicolor-icon-theme)
-  install=omatel-apps.install
-  _common
-  install -Dm755 target/release/omamessages "$pkgdir/usr/bin/omamessages"
-  local d=apps/omamessages/data
-  install -Dm644 $d/org.omamobile.Messages.desktop "$pkgdir/usr/share/applications/org.omamobile.Messages.desktop"
-  install -Dm644 $d/org.omamobile.Messages.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/org.omamobile.Messages.svg"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
 }

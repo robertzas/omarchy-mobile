@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+#
+# omamessages: Omarchy Mobile's Messages app (docs/TELEPHONY-APPS-PLAN.md
+# T6/T7). Rust, GTK 4 and libadwaita, from its own repository
+# (github.com/derekross/omamessages, GPL-3.0-or-later). It talks to the modem
+# through omatel-agent (packages/omatel) and uses omatel's crates, which
+# its Cargo.lock pins to an omatel release tag. Up to 0.1.1 this package
+# was built from omatel; the name is unchanged, so a plain upgrade
+# replaces it. Not in omamobile-apps' defaults yet.
+#
+# Source: the release tag's tarball from GitHub, pinned by its sha256
+# (README.md). Build: cargo fetches the crates, omatel's from git at the
+# pinned tag, in prepare(), and builds offline.
+pkgname=omamessages
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="Messages: SMS conversations with search, drafts, delivery reports and blocking"
+arch=(aarch64)
+url="https://github.com/derekross/omamessages"
+license=('GPL-3.0-or-later' 'MIT')
+depends=('omatel-agent>=0.2.0' gcc-libs glib2 glibc 'gtk4>=4.14' 'libadwaita>=1.5' sqlite hicolor-icon-theme)
+makedepends=(cargo git pkgconf gtk4 libadwaita sqlite)
+install=omamessages.install
+options=('!debug' '!lto')
+source=("omamessages-$pkgver.tar.gz::https://github.com/derekross/omamessages/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('5f21720e70f45535f26536aea144c3bf787c0ea85a1a473e9d81a2f0ec379125')
+
+prepare() {
+  cd "omamessages-$pkgver"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "omamessages-$pkgver"
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release --bin omamessages
+}
+
+check() {
+  cd "omamessages-$pkgver"
+  export CARGO_TARGET_DIR=target
+  cargo test --frozen --bin omamessages
+}
+
+package() {
+  cd "omamessages-$pkgver"
+  install -Dm755 target/release/omamessages "$pkgdir/usr/bin/omamessages"
+  install -Dm644 data/org.omamobile.Messages.desktop "$pkgdir/usr/share/applications/org.omamobile.Messages.desktop"
+  install -Dm644 data/org.omamobile.Messages.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/org.omamobile.Messages.svg"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+}
