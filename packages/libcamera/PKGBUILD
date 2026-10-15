@@ -128,7 +128,21 @@
 #  - 0036-ipa-simple-agc-Aim-the-mean-luminance-at-20.patch: the AGC aims
 #    the mean linear luminance at 20% of full scale instead of the middle of
 #    a coarse histogram (stills were 1.5 stops bright).
-#  - pkgrel 4.13, so it sorts above Arch Linux ARM's 0.7.2-4.
+#  - 0037-ipa-simple-agc-Count-highlights-as-they-come-out.patch: the
+#    highlight cap counts what comes out clipped after the gains and the
+#    tone curve, not the raw top; backlit only with 60% of the picture dark.
+#  - 0038-ipa-simple-agc-Take-a-mode-change-gently.patch: after a mode
+#    change, wait two frames more and move at most a stop on the first
+#    judgement.
+#  - 0039-ipa-simple-Hand-tune-the-Pixel-7-Pro-s-Samsung-senso.patch: a
+#    hand-tuned colour matrix for the Samsung sensors (no chart):
+#    saturation, greens, and the green cast off neutrals.
+#  - 0040-ipa-simple-af-Settle-less-for-fine-steps.patch: fewer settle
+#    frames for fine autofocus steps.
+#  - 0041-ipa-simple-agc-Don-t-climb-back-into-the-clipping.patch: after a
+#    highlight cut the exposure stays under 85% of the one that clipped,
+#    loosening slowly: no bouncing on small bright lights.
+#  - pkgrel 4.15, so it sorts above Arch Linux ARM's 0.7.2-4.
 #
 # Maintainers of the original: David Runge, Carl Smedstad.
 
@@ -141,7 +155,7 @@ pkgname=(
   python-libcamera
 )
 pkgver=0.7.2
-pkgrel=4.13
+pkgrel=4.15
 pkgdesc="A complex camera support library for Linux, Android, and ChromeOS (Omarchy Mobile: gs201 CSIS)"
 arch=(aarch64)
 url="https://libcamera.org/"
@@ -209,6 +223,11 @@ source=(
   0034-software_isp-debayer_egl-Clip-highlights-to-neutral.patch
   0035-ipa-simple-af-Scan-less.patch
   0036-ipa-simple-agc-Aim-the-mean-luminance-at-20.patch
+  0037-ipa-simple-agc-Count-highlights-as-they-come-out.patch
+  0038-ipa-simple-agc-Take-a-mode-change-gently.patch
+  0039-ipa-simple-Hand-tune-the-Pixel-7-Pro-s-Samsung-senso.patch
+  0040-ipa-simple-af-Settle-less-for-fine-steps.patch
+  0041-ipa-simple-agc-Don-t-climb-back-into-the-clipping.patch
 )
 sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd8847f7bec755c753c72f6b065df76de53c15f9af2e5901e83e7a144a2ddcd'
             '8b54cbdf6ed767ae8d52a14480a4653f4f3a1c2187c4ccf7ceb65eaa60c819cce514122591d6e0c2dfc39d7482739f8fdd4090dbaf63701445510eefc88fb19f'
@@ -247,7 +266,12 @@ sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd
             '6b38b6bfc6190932be2c987ae52ce45b5ad1611cdde0bd2da53b6038ec6b3bc1234a150cff5215b4ac9d31307062341527ab13784d841198069a618b9c7a3f25'
             'cba81016c36fb925e5ce59fb4a70e9461e250d079ab34468a206825d4bddbc2464311a4c2babcf86a983352eff4e8198a5a0e9b82409e0a72a3972faddf51899'
             'ba96c860e334315150a2eb9805724958f1bc18b12f21cb9debb95ebcc0f3cb7a04f2db0f4b3cdce08c05cc6c9227b7be4d26d238d251f787476c2e93e1773351'
-            'ba6b7c29902f061b2d8521b226e17c115a10ff1ef698a657230ce3f117687ec0bcb048231f3239f25074716faa04feb8afe8275bfb043d8ffd4135512b453f2f')
+            'ba6b7c29902f061b2d8521b226e17c115a10ff1ef698a657230ce3f117687ec0bcb048231f3239f25074716faa04feb8afe8275bfb043d8ffd4135512b453f2f'
+            'f42d04abaf090daf90cd973db35f3adf7fcde32dabd40ac05a73d47c698fa2ee5f2ad1b8858db533fb45875923e82bb2f0943c0fd2e1440f017fbd50142d6b8b'
+            'efccf3364101c59e99b472dfe616e519ac34ccafdb71dc5b85f0e3c485c5ef2b3ccbd25fcdedc36ce5666ae4c4662bf0196a53d2a61a0353515df29cae8d1c77'
+            'cab339a4f53c9834ef3a54b29c88147c66729d825e0007531e643f855ef6b49ba668480a5f9430599c50770f76de4e3bfc3f0ea1b0f56c8a56aedcd74c187b8a'
+            'e588bf091033eaada613c94cd7d90920f3c7dcf0c1d06385f4f0a97985c8d6841580884d446d31bd908ce1db7a012709cf81299c8e2d49f855fa6ef7da901fef'
+            '57dd066ad28ee3c9a5eae5cecd523df75d878676fabf7214f2001d7c3cd3b3dfddac491f9dfd5fd76ff108cc26ffe3227ae87e15e189248b8f598b628f2955b9')
 b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc58494400e69feeec99a77894252d582f0d8f183508e5d1b8220e70f3d5'
         '4a0e24feed22d32b83b0ec49c9a7616b77deb26cae82c17a38b54a81a0468e982852147bc2d5e3b611ba014ddbd7647acfe2e68591542420da73945ba1c0d6c2'
         'cba8b638543a16bf80c2ae7dc0737f3874476fd1ff694639b459184725848e193518778d0336eef3d55ba4329d9bc63981d0aa8d8d9b5507c9ade4f17f7f407d'
@@ -285,7 +309,12 @@ b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc5
         '53239461ed9401446e4edff8246acd08815ed8a41dc80b91be285a9c46c04a7bc7dbe0200bf18ac8a6c2ee151cf67f675b6a4c818fa048721fe8b89975e87ae6'
         'e4eeb6bfea8bf783efe1fa5bfd7070779642571c77e3fe9ca3219c5c672346cb7b6e3bd48813ac19d5c17b5ba804ce03c6d934a53667ab62c9346ab5921b9f8d'
         'c62f58914295fb1bebc7ef25b0d2ea9108a8e30157193304718ab5e6390d44968575dda673a0c7b019b301aad5f4dcf563934d4ff162102ce5b0965e8dab0d1d'
-        'cc3324cea808b4db4302e59dd7715dac26931935c2a7d1e1f9e4912e0c6daed9903cf8d096db1d30edfbd834b9e180a0b27389d7676af9cd657edcdec85ecab0')
+        'cc3324cea808b4db4302e59dd7715dac26931935c2a7d1e1f9e4912e0c6daed9903cf8d096db1d30edfbd834b9e180a0b27389d7676af9cd657edcdec85ecab0'
+        '92961bb6d203f789b4d797725f91edc8bf8d5be8d2bb6e6e3ade29f08e5d874b9b3f3b7d8ae26e93abe8e749c2479b3718d5f34f83c5da6421d45d4f822f80b2'
+        'ec14c971829acc0818d141d9540cfac175721c9e2953cf532f72710f0ac74f0f964473983ed0311709da20834bf668f520fb7be116320dc1c878f2ea495ab807'
+        'ffb12999bc5b153b509b6a26fd14d9834ac8452b335df75b1e9ef24922f67430d21f842aa04e35ef7b59ae8b335792ee748d6ff20ba26e5e08586b679dd41576'
+        'f423af18a23c8dfcb3dbcc9c08e8b857b73d62f0f38c5639fe6ad82002cef9adf35399b10bd727b7c232147e73b4949fd9738540433e328585bb379ad0544549'
+        'fb9ac06188b1ab0c4bb32426adaed388b3aa4aab1ce8548a43b8ae27368391634aa7f9eefac66b31e342d108e6ff8933e3c74f4c574cbdb0d3fca412b3ed19df')
 
 _pick() {
   local p="$1" f d; shift
@@ -336,6 +365,11 @@ prepare() {
   patch -Np1 < ../0034-software_isp-debayer_egl-Clip-highlights-to-neutral.patch
   patch -Np1 < ../0035-ipa-simple-af-Scan-less.patch
   patch -Np1 < ../0036-ipa-simple-agc-Aim-the-mean-luminance-at-20.patch
+  patch -Np1 < ../0037-ipa-simple-agc-Count-highlights-as-they-come-out.patch
+  patch -Np1 < ../0038-ipa-simple-agc-Take-a-mode-change-gently.patch
+  patch -Np1 < ../0039-ipa-simple-Hand-tune-the-Pixel-7-Pro-s-Samsung-senso.patch
+  patch -Np1 < ../0040-ipa-simple-af-Settle-less-for-fine-steps.patch
+  patch -Np1 < ../0041-ipa-simple-agc-Don-t-climb-back-into-the-clipping.patch
 
   # add version, so that utils/gen-version.sh may rely on it
   printf "%s\n" "$pkgver" > .tarball-version

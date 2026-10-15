@@ -1,0 +1,150 @@
+From 2d1c3d918261173af201327d8308a03f8e29b589 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Thu, 15 Oct 2026 15:04:12 -0400
+Subject: [PATCH 37/40] ipa: simple: agc: Count highlights as they come out
+
+The highlight protection counted the samples in the top 3% of the raw
+range, but the white balance gains, the contrast curve and the gamma
+take a surface to full scale well before the sensor clips: overcast
+skies on the Google Pixel 7 Pro came out 25-44% clipped while the AGC
+counted next to nothing. Most of a ground scene metered at a 20% mean
+also counted as dark, so the lenient backlit limit applied nearly
+always.
+
+Count as clipped the samples above the raw luminance at which a
+neutral surface reaches sRGB 250: the inverse of the gamma and the
+contrast curve, over the white balance and digital gains. Count as
+backlit only a picture with at least 60% under a quarter of the
+target. Let the protection take the mean at most a stop under the
+target, so that a picture with a big sky keeps its ground.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/agc.cpp | 64 +++++++++++++++++++++++--------
+ src/ipa/simple/algorithms/agc.h   |  1 +
+ 2 files changed, 50 insertions(+), 15 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index 056355690..4227522e9 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -74,16 +74,20 @@ static constexpr double kExpPinnedDown = 1.0 / 16.0;
+ static constexpr unsigned int kExpSettleFrames = 1;
+ 
+ /*
+- * Highlight protection: the share of the picture that may clip (in the top
+- * kHighlightBins of the histogram), and a more lenient one when at least
+- * kBacklitDarkShare of the picture is in its darkest kDarkShare, a subject
+- * against the light.
++ * Highlight protection: the share of the picture that may come out clipped,
++ * and a more lenient one when at least kBacklitDarkShare of the picture is
++ * darker than kDarkShare of the target, a subject against the light. The
++ * protection never takes the mean more than kHighlightMaxCut under the
++ * target: a picture with a big overcast sky keeps some ground.
+  */
+ static constexpr double kHighlightMax = 0.02;
+ static constexpr double kHighlightMaxBacklit = 0.10;
+-static constexpr unsigned int kHighlightBins = 2;
+-static constexpr double kDarkShare = 0.15;
+-static constexpr double kBacklitDarkShare = 0.5;
++static constexpr double kDarkShare = 0.25;
++static constexpr double kBacklitDarkShare = 0.6;
++static constexpr double kHighlightMaxCut = 0.5;
++
++/* The output level counted as clipped, before the gamma (sRGB 250) */
++static constexpr double kClippedOutput = 0.98;
+ 
+ /*
+  * A request that hasn't shown after this many frames (the sensor clamped
+@@ -284,7 +288,8 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	 */
+ 	const double allowed = (backlit ? kHighlightMaxBacklit : kHighlightMax) *
+ 			       std::exp2(std::max(0.0f, agc.exposureValue));
+-	const bool tooBright = highlights > allowed * 1.5;
++	const bool tooBright = highlights > allowed * 1.5 &&
++			       meanLuminance > kTargetLuminance * kHighlightMaxCut;
+ 	const bool atLimit = highlights > allowed * 0.75;
+ 	if (!tooBright && (std::abs(error) <= kSatisfactoryStops ||
+ 			   (atLimit && error > 0))) {
+@@ -353,6 +358,35 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	return changed;
+ }
+ 
++/*
++ * The raw luminance, in fractions of the range above the black level, at
++ * which a neutral surface comes out clipped: the inverse of the output's
++ * gamma and contrast curve at kClippedOutput, over the white balance and
++ * digital gains. Statistics see the raw picture, and the gains push it
++ * past full scale well before the sensor clips.
++ */
++double Agc::clipLevel(const IPAContext &context) const
++{
++	const auto &knobs = context.activeState.knobs;
++	const double gamma = knobs.gamma > 0.0f ? knobs.gamma : 2.2;
++	const double contrast = knobs.contrast.value_or(1.0f);
++	const double exponent = std::tan(std::clamp(contrast * M_PI_4, 0.01, M_PI_2 - 0.00001));
++
++	/* Undo the gamma, then the upper half of the contrast S-curve. */
++	const double y = std::pow(kClippedOutput, gamma);
++	const double x = 1.0 - 0.5 * std::pow((1.0 - y) / 0.5, 1.0 / exponent);
++
++	const auto &gains = context.activeState.awb.gains;
++	const double dgain = std::max(context.activeState.agc.digitalGain, 1.0);
++	if (gains.r() <= 0.0f || gains.g() <= 0.0f || gains.b() <= 0.0f)
++		return x / dgain;
++
++	/* Raw luminance of a neutral surface that the gains bring to x. */
++	const double neutral = (0.299 / gains.r() + 0.587 / gains.g() +
++				0.114 / gains.b()) * x / dgain;
++	return std::clamp(neutral, 0.05, 1.0);
++}
++
+ void Agc::process(IPAContext &context,
+ 		  [[maybe_unused]] const uint32_t frame,
+ 		  IPAFrameContext &frameContext,
+@@ -455,12 +489,13 @@ void Agc::process(IPAContext &context,
+ 	const double scale = context.activeState.agc.digitalGain *
+ 			     std::exp2(-context.activeState.agc.exposureValue);
+ 	/*
+-	 * Highlights: the samples that come out clipped (within
+-	 * kHighlightBins of the top after the digital gain), and the dark
+-	 * ones (the bottom kDarkShare of the range), which tell a backlit
+-	 * subject.
++	 * Highlights: the samples that come out clipped (see clipLevel()),
++	 * and the dark ones (under kDarkShare of the target after the digital
++	 * gain), which tell a backlit subject.
+ 	 */
+ 	const double dgainNow = context.activeState.agc.digitalGain;
++	const double clip = clipLevel(context) * histogramSize;
++	const double darkLevel = kTargetLuminance * kDarkShare * histogramSize;
+ 	uint64_t clipped = 0, dark = 0, all = 0;
+ 	double luminance = 0.0;
+ 	for (unsigned int i = 0; i < histogramSize; i++) {
+@@ -472,10 +507,9 @@ void Agc::process(IPAContext &context,
+ 
+ 		luminance += n * std::min(1.0, (i + 0.5) * scale / histogramSize);
+ 
+-		const double out = i * dgainNow;
+-		if (out >= histogramSize - kHighlightBins)
++		if (i + 0.5 >= clip)
+ 			clipped += n;
+-		if (out < histogramSize * kDarkShare)
++		if ((i + 0.5) * dgainNow < darkLevel)
+ 			dark += n;
+ 		all += n;
+ 	}
+diff --git a/src/ipa/simple/algorithms/agc.h b/src/ipa/simple/algorithms/agc.h
+index c2a71cbd8..cb14766a1 100644
+--- a/src/ipa/simple/algorithms/agc.h
++++ b/src/ipa/simple/algorithms/agc.h
+@@ -31,6 +31,7 @@ public:
+ 		     ControlList &metadata) override;
+ 
+ private:
++	double clipLevel(const IPAContext &context) const;
+ 	bool updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 			    double exposureMSV, double meanLuminance,
+ 			    double highlights, bool backlit);
+-- 
+2.55.0
+

@@ -3595,6 +3595,58 @@ copy in /tmp, not installed):**
   The shaders compile on the GPU and no errors were logged. The daylight
   check is the owner's, after the install.
 
+**CAM5.4, overcast retest of 4.13 (00556, 2026-10-15) and libcamera 4.15:**
+- **Ground scenes are right now** (main camera mean sRGB 79-132). But
+  overcast skies clipped 25-44% on the main camera with shutter time to
+  spare, and a telephoto still in shade came out at mean 32 (1/145 s
+  ISO 50).
+- **The highlight cap counted the wrong thing.** It counted raw samples in
+  the top 3%, while the white balance gains and the contrast and gamma
+  curves clip a neutral surface at about 78% raw. And "backlit" fired on
+  almost any ground scene metered at a 20% mean, so the lenient limit
+  applied. 4.15 (4.14 is the same without `0041`):
+  - `0037`: counts what comes out clipped (the inverse tone curve over the
+    gains); backlit needs 60% of the picture under a quarter of the target;
+    the cap never takes the mean more than a stop under the target;
+  - `0041`: after a cut, the exposure stays under 85% of the one that
+    clipped.
+- **Telephoto:** `0038` takes the first judgement after a mode change
+  gently (two more settle frames, at most a stop). The dark still fits a
+  frame from before the carried exposure being judged as pinned bright,
+  but the frames weren't logged. omacam's MAX_DISCARD (10 frames, about
+  1 s at 9-13 fps) should become time-based.
+- **Colour:** `0039`, a hand-tuned matrix (no chart) for the main,
+  telephoto and front cameras: saturation, greens, and +3% red and +4%
+  blue against the 4% green cast measured on pavers (112/117/113) and an
+  indoor white wall (114/121/108).
+- **Autofocus:** `0040`, fine steps settle 3 frames and the jump to them 4.
+  Estimated main-camera scan at infinity: 4.12 ~102 frames, 4.13 ~44,
+  4.14 ~38.
+- **Smoke tests (unpacked copies under `cam`, dim room with a ceiling
+  light):**
+  - 4.14: main 1080p and front reached their limits and converged; the
+    main still mode cut 7% clipped to 0.1%, then climbed back (`0041` stops
+    that);
+  - 4.15: the main still mode went from mean 0.50 and 23% clipped through
+    0.29/5.5% and 0.19/3.2% to 0.15/3.2%, converged without a bounce; main
+    1080p held at 0.11/3.2%, converged, AF completed.
+- **Lens shading needs raw flat fields.** The JPEGs can't seed
+  `tools/camera-lsc-fit`: they are tone-mapped and colour-corrected, and the
+  sky and the wall carry real light gradients. For each camera:
+  1. Hold a sheet of white printer paper flat against the lens, aim it at
+     an evenly overcast sky or a bright window with no direct sun, and keep
+     it still.
+  2. Run `cam -c N -C3 -s role=raw,width=W,height=H -F/tmp/flat-#.raw`
+     with the camera's full mode (main 4080x3072, telephoto 4032x3024,
+     ultrawide 4032x3016, front 3840x2736) and check that the AGC isn't
+     clipping (`--metadata`).
+  3. Fit: `tools/camera-lsc-fit FILE --width W --height H --stride S
+     --order O --black 64`, with the Bayer order main GRBG, front GRBG,
+     telephoto BGGR and ultrawide RGGB (as the sensors report them). The
+     stride is in the log's "Input ... stride" line (5120 for the main
+     camera). The printed `LensShading` entry goes into the sensor's
+     tuning file.
+
 ### CAM5.5: 60 fps on the main and telephoto cameras. Risk: medium (DMA)
 
 Kernel: omamobile-camera `9e5c1a218` ("media: i2c: s5kgn1: let VBLANK shorten

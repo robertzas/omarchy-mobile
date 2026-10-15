@@ -1,0 +1,111 @@
+From 69007238fc46f629d43ad2894a5402fb9126ebb8 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Thu, 15 Oct 2026 15:05:03 -0400
+Subject: [PATCH 38/40] ipa: simple: agc: Take a mode change gently
+
+The sensor drivers start a new mode at its longest exposure, and the
+carried exposure only shows some frames later. A sensor slower than
+modelled in its full-resolution mode can let the AGC judge a frame
+from before that: pinned bright, it cuts the exposure to a sixteenth,
+and a still taken while the loop climbs back comes out dark. That
+fits a telephoto still on the Google Pixel 7 Pro at 1/145 s ISO 50
+with a mean of sRGB 32 in shade, though the frames weren't logged.
+
+After a mode change, wait two frames more once the carried exposure
+shows, and move at most a stop on that first judgement.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/agc.cpp | 21 ++++++++++++++++++++-
+ src/ipa/simple/ipa_context.h      |  2 ++
+ src/ipa/simple/soft_simple.cpp    |  1 +
+ 3 files changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index 4227522e9..7435bb4c9 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -73,6 +73,13 @@ static constexpr double kExpPinnedDown = 1.0 / 16.0;
+  */
+ static constexpr unsigned int kExpSettleFrames = 1;
+ 
++/*
++ * After a mode change, frames more to wait once the carried exposure shows:
++ * a sensor in a slow full-resolution mode applied it later than modelled
++ * (a telephoto still came out at a sixteenth of the exposure).
++ */
++static constexpr unsigned int kExpCarriedSettleFrames = 2;
++
+ /*
+  * Highlight protection: the share of the picture that may come out clipped,
+  * and a more lenient one when at least kBacklitDarkShare of the picture is
+@@ -146,6 +153,7 @@ int Agc::configure(IPAContext &context,
+ 	context.activeState.agc.digitalGain = 1.0;
+ 	context.activeState.agc.settleFrames = 0;
+ 	context.activeState.agc.pendingFrames = 0;
++	context.activeState.agc.carried = false;
+ 	context.activeState.agc.state = controls::AeStateSearching;
+ 	context.activeState.agc.exposureValue = 0.0f;
+ 	context.activeState.agc.exposureTimeAuto = true;
+@@ -260,7 +268,8 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 		agc.pendingFrames++;
+ 		exposure = agc.exposure;
+ 		again = agc.again;
+-		agc.settleFrames = kExpSettleFrames;
++		agc.settleFrames = kExpSettleFrames +
++				   (agc.carried ? kExpCarriedSettleFrames : 0);
+ 		agc.state = controls::AeStateSearching;
+ 		return false;
+ 	}
+@@ -269,6 +278,8 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 		agc.settleFrames--;
+ 		return false;
+ 	}
++	const bool carried = agc.carried;
++	agc.carried = false;
+ 
+ 	if (!agc.exposureTimeAuto && !agc.gainAuto) {
+ 		agc.state = controls::AeStateIdle;
+@@ -310,6 +321,14 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	else
+ 		factor = std::exp2(std::clamp(error * kStepGain,
+ 					      -kMaxStepStops, kMaxStepStops));
++	/*
++	 * The first judgement after a mode change: the sensor starts a new
++	 * mode at its longest exposure, and a frame from before the carried
++	 * exposure showed would look pinned. Move a stop at most.
++	 */
++	if (carried)
++		factor = std::clamp(factor, 0.5, 2.0);
++
+ 	if (tooBright && exposureMSV < kExposurePinnedBright)
+ 		factor = std::min(factor, std::clamp(std::sqrt(allowed / highlights),
+ 						     0.5, 0.9));
+diff --git a/src/ipa/simple/ipa_context.h b/src/ipa/simple/ipa_context.h
+index 9d315ed4b..cc11ab02d 100644
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -66,6 +66,8 @@ struct IPAActiveState {
+ 		unsigned int settleFrames;
+ 		/* Frames the last request has been waiting to show. */
+ 		unsigned int pendingFrames;
++		/* The exposure was carried over from another sensor mode */
++		bool carried;
+ 		/* controls::AeState */
+ 		int32_t state;
+ 		/* controls::AeMeteringMode */
+diff --git a/src/ipa/simple/soft_simple.cpp b/src/ipa/simple/soft_simple.cpp
+index 991346e16..f32c04758 100644
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -466,6 +466,7 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo,
+ 		agc.digitalGain = std::clamp(rest, 1.0, 4.0);
+ 		agc.settleFrames = 0;
+ 		agc.pendingFrames = 0;
++		agc.carried = true;
+ 		agc.state = controls::AeStateSearching;
+ 		context_.activeState.awb = previousAwb;
+ 		LOG(IPASoft, Debug)
+-- 
+2.55.0
+

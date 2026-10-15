@@ -51,6 +51,11 @@ in the table. See `device/cheetah/CAMERA-PLAN.md`, section 5.2.
 | `0034-software_isp-debayer_egl-Clip-highlights-to-neutral.patch` | Highlights near clipping fade to neutral: no cyan skies |
 | `0035-ipa-simple-af-Scan-less.patch` | Autofocus stops the coarse scan past the peak, narrows the fine scan, and rescans locally in continuous mode |
 | `0036-ipa-simple-agc-Aim-the-mean-luminance-at-20.patch` | The AGC aims the mean linear luminance at 20% of full scale |
+| `0037-ipa-simple-agc-Count-highlights-as-they-come-out.patch` | The highlight cap counts what comes out clipped after the gains and tone curve |
+| `0038-ipa-simple-agc-Take-a-mode-change-gently.patch` | After a mode change the AGC waits two frames more and moves a stop at most at first |
+| `0039-ipa-simple-Hand-tune-the-Pixel-7-Pro-s-Samsung-senso.patch` | A hand-tuned colour matrix for the main, telephoto and front cameras (no chart) |
+| `0040-ipa-simple-af-Settle-less-for-fine-steps.patch` | Fine autofocus steps settle three frames, the jump to them four |
+| `0041-ipa-simple-agc-Don-t-climb-back-into-the-clipping.patch` | After a highlight cut, the exposure stays under 85% of the one that clipped |
 | `libcamera-fix-python3.14-macro-redefinition.patch` | Arch's patch, unchanged (sha512 `8b54cbdf…`) |
 | `.SRCINFO` | `makepkg --printsrcinfo` output |
 
@@ -163,6 +168,10 @@ Pictures stay noisier and softer at the corners than with Google's ISP.
 ## Status
 
 0.7.2-4.4 (0001-0003) runs on the phone: the ultrawide captures end to end.
+0.7.2-4.15 adds 0037-0041 (2026-10-15; 4.14 was the same without 0041):
+overcast skies no longer clip (the cap counted the raw top 3%, not what the
+gains and tone curve clip), a gentler first step after a mode change,
+hand-tuned colours for the Samsung sensors, and shorter autofocus settling.
 0.7.2-4.13 adds 0033-0036 (2026-10-15): daylight stills were about 1.5
 stops bright because the AGC aimed the mean of a coarse linear histogram at
 its middle (45% of full scale); it now aims the mean luminance at 20%,

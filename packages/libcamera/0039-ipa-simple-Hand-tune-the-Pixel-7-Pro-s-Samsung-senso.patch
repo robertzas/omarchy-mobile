@@ -1,0 +1,126 @@
+From 35544a5c43aac8bf983a0c5743c52be625fc72ca Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Thu, 15 Oct 2026 15:05:41 -0400
+Subject: [PATCH 39/40] ipa: simple: Hand-tune the Pixel 7 Pro's Samsung
+ sensors' colours
+
+The main, telephoto and front cameras ran with an identity colour
+matrix: pictures came out desaturated, grass olive, skin flat, and
+neutral surfaces (white siding, grey pavers, a white wall) about 4%
+green after the grey-world white balance.
+
+With no colour chart, fit one matrix by eye on our own overcast
+daylight shots and an indoor white wall, applied to the shots in
+linear light: more saturation, greens turned towards yellow, reds out
+of magenta, and red and blue raised by 3% and 4% against green to take
+the green cast off neutrals (so its rows don't sum to one). Use it on
+all three Samsung sensors until a chart calibration replaces it; the
+ultrawide keeps its stand-in matrices.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/data/s5k3j1.yaml | 14 +++++++++-----
+ src/ipa/simple/data/s5kgm5.yaml | 14 +++++++++-----
+ src/ipa/simple/data/s5kgn1.yaml | 15 +++++++++------
+ 3 files changed, 27 insertions(+), 16 deletions(-)
+
+diff --git a/src/ipa/simple/data/s5k3j1.yaml b/src/ipa/simple/data/s5k3j1.yaml
+index 9bc628940..6aae8e1be 100644
+--- a/src/ipa/simple/data/s5k3j1.yaml
++++ b/src/ipa/simple/data/s5k3j1.yaml
+@@ -3,8 +3,12 @@
+ # Samsung S5K3J1 (the Pixel 7 Pro's front camera), not calibrated yet. The
+ # black level comes from the sensor's helper. Fixed focus: no Af.
+ #
+-# The colour matrix is the identity until a calibration, so the saturation
+-# default applies.
++# The colour matrix is hand-tuned, not calibrated: fitted by eye on our own
++# overcast-daylight shots (grass, grey pavers, white siding, skin) and an
++# indoor white wall, with no colour chart. Its rows don't sum to one: it
++# also takes off the green cast that the grey-world white balance left on
++# neutral surfaces (about 4% on green). Replace it with a chart
++# calibration.
+ %YAML 1.1
+ ---
+ version: 1
+@@ -14,9 +18,9 @@ algorithms:
+   - Ccm:
+       ccms:
+         - ct: 5000
+-          ccm: [ 1, 0, 0,
+-                 0, 1, 0,
+-                 0, 0, 1 ]
++          ccm: [  1.4420, -0.2500, -0.1560,
++                 -0.2060,  1.4000, -0.2080,
++                 -0.1545, -0.5500,  1.7680 ]
+   # Defaults for applications that do not set the controls.
+   - Adjust:
+       contrast: 1.2
+diff --git a/src/ipa/simple/data/s5kgm5.yaml b/src/ipa/simple/data/s5kgm5.yaml
+index 961f6b2a0..a52aa3fac 100644
+--- a/src/ipa/simple/data/s5kgm5.yaml
++++ b/src/ipa/simple/data/s5kgm5.yaml
+@@ -3,8 +3,12 @@
+ # Samsung S5KGM5 (the Pixel 7 Pro's 5x telephoto), not calibrated yet. The
+ # black level comes from the sensor's helper.
+ #
+-# The colour matrix is the identity until a calibration, so the saturation
+-# default applies.
++# The colour matrix is hand-tuned, not calibrated: fitted by eye on our own
++# overcast-daylight shots (grass, grey pavers, white siding, skin) and an
++# indoor white wall, with no colour chart. Its rows don't sum to one: it
++# also takes off the green cast that the grey-world white balance left on
++# neutral surfaces (about 4% on green). Replace it with a chart
++# calibration.
+ #
+ # Autofocus scans the SEM1215SA lens's range (the module's calibrated span,
+ # set by the kernel driver) in 8 coarse steps, then around the sharpest one
+@@ -19,9 +23,9 @@ algorithms:
+   - Ccm:
+       ccms:
+         - ct: 5000
+-          ccm: [ 1, 0, 0,
+-                 0, 1, 0,
+-                 0, 0, 1 ]
++          ccm: [  1.4420, -0.2500, -0.1560,
++                 -0.2060,  1.4000, -0.2080,
++                 -0.1545, -0.5500,  1.7680 ]
+   # Defaults for applications that do not set the controls.
+   - Adjust:
+       contrast: 1.2
+diff --git a/src/ipa/simple/data/s5kgn1.yaml b/src/ipa/simple/data/s5kgn1.yaml
+index 0c27ee4aa..7e5a820df 100644
+--- a/src/ipa/simple/data/s5kgn1.yaml
++++ b/src/ipa/simple/data/s5kgn1.yaml
+@@ -3,9 +3,12 @@
+ # Samsung S5KGN1 (the Pixel 7 Pro's main camera), not calibrated yet. The
+ # black level comes from the sensor's helper.
+ #
+-# The colour matrix is the identity until a calibration: a matrix from
+-# another manufacturer's sensor would be a guess. Having one lets the
+-# saturation default apply.
++# The colour matrix is hand-tuned, not calibrated: fitted by eye on our own
++# overcast-daylight shots (grass, grey pavers, white siding, skin) and an
++# indoor white wall, with no colour chart. Its rows don't sum to one: it
++# also takes off the green cast that the grey-world white balance left on
++# neutral surfaces (about 4% on green). Replace it with a chart
++# calibration.
+ #
+ # Autofocus scans the AK7375 lens's range in 8 coarse steps, then around
+ # the sharpest one in steps of 1/32 of the range: the main camera's large
+@@ -19,9 +22,9 @@ algorithms:
+   - Ccm:
+       ccms:
+         - ct: 5000
+-          ccm: [ 1, 0, 0,
+-                 0, 1, 0,
+-                 0, 0, 1 ]
++          ccm: [  1.4420, -0.2500, -0.1560,
++                 -0.2060,  1.4000, -0.2080,
++                 -0.1545, -0.5500,  1.7680 ]
+   # Defaults for applications that do not set the controls.
+   - Adjust:
+       contrast: 1.2
+-- 
+2.55.0
+

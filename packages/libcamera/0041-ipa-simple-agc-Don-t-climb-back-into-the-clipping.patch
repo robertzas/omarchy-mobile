@@ -1,0 +1,106 @@
+From 10c75d07c124cbed95eed34ede909f1dfb071972 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Thu, 15 Oct 2026 15:35:34 -0400
+Subject: [PATCH] ipa: simple: agc: Don't climb back into the clipping
+
+A small bright light clips all or nothing. In the smoke test of the
+highlight count on the Google Pixel 7 Pro (a ceiling light in a dim
+room, main camera's still mode) the protection cut the exposure by
+half at a mean on target and 7% clipped, the mean then asked for 1.6x
+at 0.1% clipped, and the loop was still searching when the run ended.
+
+Remember the total exposure (lines times gains) at which a cut was
+needed, and don't raise the exposure past 85% of it. The limit
+loosens by 2% each time the picture is judged, so the AGC probes
+again within seconds if the light changed, and goes when the picture
+gets much darker.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/agc.cpp | 33 ++++++++++++++++++++++++++++++-
+ src/ipa/simple/ipa_context.h      |  2 ++
+ 2 files changed, 34 insertions(+), 1 deletion(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index 7435bb4c9..a5f25d53f 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -93,6 +93,14 @@ static constexpr double kDarkShare = 0.25;
+ static constexpr double kBacklitDarkShare = 0.6;
+ static constexpr double kHighlightMaxCut = 0.5;
+ 
++/*
++ * After a cut, the exposure stays under kClipMargin of the one that clipped,
++ * and that limit loosens by kClipRelax a judgement (about a stop in a few
++ * seconds) in case the light changed.
++ */
++static constexpr double kClipMargin = 0.85;
++static constexpr double kClipRelax = 1.02;
++
+ /* The output level counted as clipped, before the gamma (sRGB 250) */
+ static constexpr double kClippedOutput = 0.98;
+ 
+@@ -154,6 +162,7 @@ int Agc::configure(IPAContext &context,
+ 	context.activeState.agc.settleFrames = 0;
+ 	context.activeState.agc.pendingFrames = 0;
+ 	context.activeState.agc.carried = false;
++	context.activeState.agc.clipTotal = 0.0;
+ 	context.activeState.agc.state = controls::AeStateSearching;
+ 	context.activeState.agc.exposureValue = 0.0f;
+ 	context.activeState.agc.exposureTimeAuto = true;
+@@ -281,6 +290,13 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	const bool carried = agc.carried;
+ 	agc.carried = false;
+ 
++	/* The clipping point found by a cut loosens slowly, to probe again. */
++	if (agc.clipTotal > 0.0)
++		agc.clipTotal *= kClipRelax;
++	/* Forget it when the picture went much darker (another scene). */
++	if (meanLuminance < kTargetLuminance / 4)
++		agc.clipTotal = 0.0;
++
+ 	if (!agc.exposureTimeAuto && !agc.gainAuto) {
+ 		agc.state = controls::AeStateIdle;
+ 		return false;
+@@ -329,9 +345,24 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	if (carried)
+ 		factor = std::clamp(factor, 0.5, 2.0);
+ 
+-	if (tooBright && exposureMSV < kExposurePinnedBright)
++	const double current = static_cast<double>(exposure) * again * dgain;
++	if (tooBright && exposureMSV < kExposurePinnedBright) {
+ 		factor = std::min(factor, std::clamp(std::sqrt(allowed / highlights),
+ 						     0.5, 0.9));
++		agc.clipTotal = current;
++	}
++
++	/*
++	 * Don't climb back into the clipping a cut just left: a small bright
++	 * light clips all or nothing, and the mean alone would take the
++	 * exposure straight back.
++	 */
++	if (factor > 1.0 && agc.clipTotal > 0.0)
++		factor = std::max(1.0, std::min(factor, agc.clipTotal * kClipMargin / current));
++	if (factor == 1.0) {
++		agc.state = controls::AeStateConverged;
++		return false;
++	}
+ 
+ 	/*
+ 	 * Distribute it: exposure time first (up to its limit), then the
+diff --git a/src/ipa/simple/ipa_context.h b/src/ipa/simple/ipa_context.h
+index cc11ab02d..435ff1459 100644
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -68,6 +68,8 @@ struct IPAActiveState {
+ 		unsigned int pendingFrames;
+ 		/* The exposure was carried over from another sensor mode */
+ 		bool carried;
++		/* Total exposure (lines x gains) that clipped too much; 0: none */
++		double clipTotal;
+ 		/* controls::AeState */
+ 		int32_t state;
+ 		/* controls::AeMeteringMode */
+-- 
+2.55.0
+
