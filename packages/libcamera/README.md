@@ -41,6 +41,12 @@ in the table. See `device/cheetah/CAMERA-PLAN.md`, section 5.2.
 | `0024-software_isp-Gather-focus-statistics-over-a-window-t.patch` | A movable focus window in the debayer parameters, and a luminance histogram over it |
 | `0025-ipa-simple-Focus-and-meter-on-the-application-s-wind.patch` | AfMetering and AfWindows (tap to focus), AeMeteringMode on the window |
 | `0026-ipa-simple-af-Support-pausing-continuous-autofocus.patch` | AfPause in continuous autofocus |
+| `0027-ipa-simple-Support-FrameDurationLimits.patch` | FrameDurationLimits per configured mode through VBLANK, FrameDuration in metadata; the camera's controls follow the configured mode |
+| `0028-software_isp-Correct-lens-shading-with-a-radial-mode.patch` | Radial lens shading correction in the GPU debayer, coefficients from the tuning file's `LensShading` |
+| `0029-software_isp-debayer_egl-Add-a-noise-reduction-and-s.patch` | A second GPU pass: bilateral luma noise reduction and an unsharp mask with coring |
+| `0030-ipa-simple-Add-noise-reduction-and-sharpening.patch` | The `Detail` algorithm drives that pass from the gain; the Sharpness control |
+| `0031-software_isp-Gather-grey-candidates-for-white-balanc.patch` | Statistics: sums of samples that may be grey at the current white point |
+| `0032-ipa-simple-awb-Use-the-grey-candidates-and-smooth-th.patch` | Grey world over the grey candidates, and gains smoothed over frames |
 | `libcamera-fix-python3.14-macro-redefinition.patch` | Arch's patch, unchanged (sha512 `8b54cbdf…`) |
 | `.SRCINFO` | `makepkg --printsrcinfo` output |
 
@@ -146,10 +152,18 @@ Pictures stay noisier and softer at the corners than with Google's ISP.
 | Metering | `AeMeteringMode` | Matrix (default), Spot, CentreWeighted | Spot meters the `AfWindows` rectangle, or the centre half |
 | Focus lock | `AfPause` | Immediate, Deferred, Resume | Continuous mode; `AfPauseState` reported |
 | Manual focus | `AfMode` Manual, `LensPosition` | 0.0 to 1.0 | Normalised lens travel, not dioptres |
+| Frame rate | `FrameDurationLimits` [min, max] µs | Per configured mode, in `camera->controls()` after `configure()` | `FrameDuration` reported; without limits the driver's default (30 fps) |
+| Sharpening | `Sharpness` | 0.0 to 4.0, default 1.0 | Scales the tuning file's amount; smaller at high gain |
+| Lens shading | `LensShadingCorrectionEnable` | bool | Only where the tuning file has `LensShading` |
 
 ## Status
 
 0.7.2-4.4 (0001-0003) runs on the phone: the ultrawide captures end to end.
+0.7.2-4.12 adds 0027-0032 (2026-10-14): 60 fps through FrameDurationLimits
+(measured: ultrawide 59.5, front 59.9 fps at 1920x1080 with the second pass,
+the cam process at 19% of one core), lens shading (not tuned yet), noise
+reduction and sharpening, and a white balance that ignores colourful
+surfaces. The picture quality of 0028-0032 is still to be judged in daylight.
 0.7.2-4.11 adds 0019-0026 (2026-10-14): the camera-app controls below.
 0.7.2-4.9 adds 0017 and 0018 (2026-10-14): the AGC no longer oscillates
 outdoors, and a still taken from the preview starts at the preview's exposure.

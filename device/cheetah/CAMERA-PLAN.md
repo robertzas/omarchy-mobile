@@ -3531,23 +3531,66 @@ omamobile-apps 0.1.1): GNOME Snapshot works with all four cameras.**
   A libcamera patch for FrameDurationLimits (VBLANK through the delayed
   controls, per-mode limits after `configure()`) is next, in 4.12.
 
+**CAM5.4, night of 2026-10-14 (00554, libcamera 4.12 run from an unpacked
+copy in /tmp, not installed):**
+- **FrameDurationLimits [16667, 16667] at 1920x1080 (`0027`):**
+  - ultrawide 59.5 fps, FrameDuration 16676 µs;
+  - front 59.9 fps, FrameDuration 16673 µs;
+  - main 39.3 fps and telephoto 26.2 fps: their shortest frame (25429 and
+    38201 µs) is the table's until the CAM5.5 kernel change.
+
+  The second GPU pass (`0029`/`0030`) was on in all of these. The `cam`
+  process at ultrawide 1080p60 took 19% of one core, with the GPU at
+  351 MHz. The front camera's 10 MP output ran at 27.5 fps with or without
+  the pass, so the sensor is the limit there.
+- **Not judged yet:** lens shading (`0028`, no coefficients until a flat
+  field is captured with `tools/camera-lsc-fit`), noise reduction and
+  sharpening, and the grey-candidate white balance (`0031`/`0032`). The
+  room was dark and the back cameras faced a surface.
+- **Main camera 4:3 preview (2032x1536 binned).** `cam` at 1920x1440 picks
+  it: 61 of 61 frames, WDMA errors 0, but 19.5 fps, because the stretched
+  line keeps the table's 60 fps frame length. `9e5c1a218` (CAM5.5) makes it
+  30 fps by default.
+- **50 MP on the main camera.** The HAL builds an 8160x6144 unbinned
+  mode list (0x0900 = 0x11, 418 registers, 8608 clocks a line, 6304 lines,
+  24 fps at 1.31 Gpixel/s) in one of its static initialisers, but the mode
+  vector we extract never includes it. Taking it needs:
+  - `tools/extract-camera-data` taught to add that list;
+  - lines stretched to 360 MB/s, about 37040 clocks, so about 5.6 fps;
+  - at least 251 MiB of camera pool for four 62.7 MB RAW10 buffers (the
+    pool is 128 MiB), or two buffers;
+  - 200 MB per XRGB8888 output frame from the software ISP, more than the
+    384 MiB default CMA holds for several buffers;
+  - a check of the GPU's largest texture against the 10200-byte stride.
+
 ### CAM5.5: 60 fps on the main and telephoto cameras. Risk: medium (DMA)
 
-Kernel: omamobile-camera `38fb35993` ("media: i2c: s5kgn1: let VBLANK shorten
+Kernel: omamobile-camera `9e5c1a218` ("media: i2c: s5kgn1: let VBLANK shorten
 frames of stretched lines"), merged into omamobile-int. W=1 and checkpatch
-are clean. The default frame lengths (30 fps) don't change; only the VBLANK
-minimum of modes whose lines are stretched goes down. Expected minimum frame
-times:
+are clean. The VBLANK minimum of modes whose lines are stretched goes down,
+and the 30 fps default may use it:
+
+- the main camera's 2032x1536 4:3 preview mode goes from 19.5 to 30 fps by
+  default. It was measured on 00554 at 19.5 fps, 61/61 frames, WDMA errors
+  0 and phase-packet link errors (b3) at about 265 a frame, like the 16:9
+  mode's 185. The CAM-M.5b doubt about this mode came from the line rate,
+  fixed since;
+- the telephoto's 2016x1136 mode goes from about 26 to 30 fps.
+
+Expected shortest frames:
 
 | Camera | Mode | Shortest frame now | Shortest frame after | Fastest after |
 | --- | --- | --- | --- | --- |
 | Main | 2016x1136 | ~39 fps | 1190 lines | ~120 fps |
+| Main | 2032x1536 | 19.5 fps | 2363 lines | 60 fps |
 | Main | 4080x3072 | 9.4 fps | 3104 lines | ~22.7 fps |
 | Telephoto | 2016x1136 | ~26 fps | ~2381 lines | 60 fps |
 
 Each mode still sends lines no faster than its `max-line-throughput`.
 
-1. **Push** (the human's go, batched). Health check afterwards.
+1. **Push** (the human's go, batched). Health check afterwards, then
+   `cam -c 2 -C60 -s role=viewfinder,width=1920,height=1440`.
+   - Pass: 30 fps with WDMA errors 0.
    - Pass: `systemctl --failed` is empty; each sensor's `vertical_blanking`
      minimum (`v4l2-ctl -d /dev/v4l-subdevN -l`) is lower than before for
      main and telephoto and unchanged for front and ultrawide.

@@ -1,0 +1,252 @@
+From 7d8e182cb6e4fdd7fba19977161e7d1ecac864ae Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Wed, 14 Oct 2026 20:51:40 -0400
+Subject: [PATCH 30/32] ipa: simple: Add noise reduction and sharpening
+
+Drive the GPU debayer's noise reduction and sharpening pass from a new
+Detail algorithm: the bilateral range sigma grows with the square root
+of the total gain (analogue times digital), up to 0.15 of full scale,
+and the unsharp mask amount falls as 1 / (1 + log2(gain) / 3), so a
+dim scene is smoothed rather than sharpened. The tuning file gives the
+base strengths; without a Detail entry the picture is untouched.
+Support the Sharpness control as a factor on the amount, from 0 to 4.
+
+Enable it on the Pixel 7 Pro's cameras with an amount of 0.6 and a
+sigma of 0.015 at unity gain.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/detail.cpp  | 96 +++++++++++++++++++++++++++
+ src/ipa/simple/algorithms/detail.h    | 42 ++++++++++++
+ src/ipa/simple/algorithms/meson.build |  1 +
+ src/ipa/simple/data/imx386.yaml       |  4 ++
+ src/ipa/simple/data/s5k3j1.yaml       |  4 ++
+ src/ipa/simple/data/s5kgm5.yaml       |  4 ++
+ src/ipa/simple/data/s5kgn1.yaml       |  4 ++
+ 7 files changed, 155 insertions(+)
+ create mode 100644 src/ipa/simple/algorithms/detail.cpp
+ create mode 100644 src/ipa/simple/algorithms/detail.h
+
+diff --git a/src/ipa/simple/algorithms/detail.cpp b/src/ipa/simple/algorithms/detail.cpp
+new file mode 100644
+index 0000000..ab5184d
+--- /dev/null
++++ b/src/ipa/simple/algorithms/detail.cpp
+@@ -0,0 +1,96 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/*
++ * Noise reduction and sharpening for the simple software ISP
++ */
++
++#include "detail.h"
++
++#include <algorithm>
++#include <cmath>
++
++#include <libcamera/base/log.h>
++
++#include <libcamera/control_ids.h>
++
++#include "libcamera/internal/software_isp/debayer_params.h"
++
++#include "simple/ipa_context.h"
++
++namespace libcamera {
++
++LOG_DEFINE_CATEGORY(IPASoftDetail)
++
++namespace ipa::soft::algorithms {
++
++/**
++ * \class Detail
++ * \brief Luma noise reduction and sharpening, scaled with the gain
++ *
++ * The GPU debayer's second pass smooths the luma with an edge-preserving
++ * (bilateral) 3x3 filter and sharpens it with an unsharp mask, cored by the
++ * noise level. Noise grows with the gain, so the smoothing grows with it and
++ * the sharpening falls:
++ *
++ *   denoise = denoise_base * sqrt(gain), at most kDenoiseMax
++ *   sharpen = sharpen_base * Sharpness / (1 + log2(gain) / 3)
++ *
++ * where gain is the analogue gain times the digital gain. The tuning file
++ * gives the bases, and its absence leaves the picture untouched:
++ *
++ *   - Detail:
++ *       sharpen: 0.6
++ *       denoise: 0.015
++ */
++
++static constexpr float kDenoiseMax = 0.15f;
++static constexpr float kSharpnessMax = 4.0f;
++
++int Detail::init(IPAContext &context, const ValueNode &tuningData)
++{
++	sharpen_ = std::clamp(tuningData["sharpen"].get<float>().value_or(0.6f), 0.0f, 4.0f);
++	denoise_ = std::clamp(tuningData["denoise"].get<float>().value_or(0.015f), 0.0f,
++			      kDenoiseMax);
++
++	context.ctrlMap[&controls::Sharpness] = ControlInfo(0.0f, kSharpnessMax, 1.0f);
++
++	return 0;
++}
++
++void Detail::queueRequest([[maybe_unused]] typename Module::Context &context,
++			  [[maybe_unused]] const uint32_t frame,
++			  [[maybe_unused]] typename Module::FrameContext &frameContext,
++			  const ControlList &controls)
++{
++	if (const auto sharpness = controls.get(controls::Sharpness))
++		sharpness_ = std::clamp(*sharpness, 0.0f, kSharpnessMax);
++}
++
++void Detail::prepare(IPAContext &context,
++		     [[maybe_unused]] const uint32_t frame,
++		     [[maybe_unused]] IPAFrameContext &frameContext,
++		     DebayerParams *params)
++{
++	const auto &agc = context.activeState.agc;
++	const double gain = std::max(1.0, (agc.again > 0.0 ? agc.again : 1.0) *
++						  std::max(agc.digitalGain, 1.0));
++
++	params->denoise = std::min(static_cast<float>(denoise_ * std::sqrt(gain)),
++				   kDenoiseMax);
++	params->sharpen = static_cast<float>(sharpen_ * sharpness_ /
++					     (1.0 + std::log2(gain) / 3.0));
++}
++
++void Detail::process([[maybe_unused]] IPAContext &context,
++		     [[maybe_unused]] const uint32_t frame,
++		     [[maybe_unused]] IPAFrameContext &frameContext,
++		     [[maybe_unused]] const SwIspStats *stats,
++		     ControlList &metadata)
++{
++	metadata.set(controls::Sharpness, sharpness_);
++}
++
++REGISTER_IPA_ALGORITHM(Detail, "Detail")
++
++} /* namespace ipa::soft::algorithms */
++
++} /* namespace libcamera */
+diff --git a/src/ipa/simple/algorithms/detail.h b/src/ipa/simple/algorithms/detail.h
+new file mode 100644
+index 0000000..0b2517e
+--- /dev/null
++++ b/src/ipa/simple/algorithms/detail.h
+@@ -0,0 +1,42 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/*
++ * Noise reduction and sharpening for the simple software ISP
++ */
++
++#pragma once
++
++#include "algorithm.h"
++
++namespace libcamera {
++
++namespace ipa::soft::algorithms {
++
++class Detail : public Algorithm
++{
++public:
++	Detail() = default;
++	~Detail() = default;
++
++	int init(IPAContext &context, const ValueNode &tuningData) override;
++	void queueRequest(typename Module::Context &context,
++			  const uint32_t frame,
++			  typename Module::FrameContext &frameContext,
++			  const ControlList &controls) override;
++	void prepare(IPAContext &context,
++		     const uint32_t frame,
++		     IPAFrameContext &frameContext,
++		     DebayerParams *params) override;
++	void process(IPAContext &context, const uint32_t frame,
++		     IPAFrameContext &frameContext,
++		     const SwIspStats *stats,
++		     ControlList &metadata) override;
++
++private:
++	float sharpness_ = 1.0f;
++	float sharpen_ = 0.0f;
++	float denoise_ = 0.0f;
++};
++
++} /* namespace ipa::soft::algorithms */
++
++} /* namespace libcamera */
+diff --git a/src/ipa/simple/algorithms/meson.build b/src/ipa/simple/algorithms/meson.build
+index d9d5409..fd99eb7 100644
+--- a/src/ipa/simple/algorithms/meson.build
++++ b/src/ipa/simple/algorithms/meson.build
+@@ -7,5 +7,6 @@ soft_simple_ipa_algorithms = files([
+     'agc.cpp',
+     'blc.cpp',
+     'ccm.cpp',
++    'detail.cpp',
+     'lsc.cpp',
+ ])
+diff --git a/src/ipa/simple/data/imx386.yaml b/src/ipa/simple/data/imx386.yaml
+index 7a9d1d9..d1c8653 100644
+--- a/src/ipa/simple/data/imx386.yaml
++++ b/src/ipa/simple/data/imx386.yaml
+@@ -57,6 +57,10 @@ algorithms:
+   # Defaults for applications that do not set the controls.
+   - Adjust:
+       contrast: 1.2
++  # Luma noise reduction and sharpening, scaled with the gain
++  - Detail:
++      sharpen: 0.6
++      denoise: 0.015
+   - Agc:
+   - Af:
+       coarseSteps: 4
+diff --git a/src/ipa/simple/data/s5k3j1.yaml b/src/ipa/simple/data/s5k3j1.yaml
+index b9e2c55..9bc6289 100644
+--- a/src/ipa/simple/data/s5k3j1.yaml
++++ b/src/ipa/simple/data/s5k3j1.yaml
+@@ -21,5 +21,9 @@ algorithms:
+   - Adjust:
+       contrast: 1.2
+       saturation: 1.1
++  # Luma noise reduction and sharpening, scaled with the gain
++  - Detail:
++      sharpen: 0.6
++      denoise: 0.015
+   - Agc:
+ ...
+diff --git a/src/ipa/simple/data/s5kgm5.yaml b/src/ipa/simple/data/s5kgm5.yaml
+index 35ccf44..961f6b2 100644
+--- a/src/ipa/simple/data/s5kgm5.yaml
++++ b/src/ipa/simple/data/s5kgm5.yaml
+@@ -26,6 +26,10 @@ algorithms:
+   - Adjust:
+       contrast: 1.2
+       saturation: 1.1
++  # Luma noise reduction and sharpening, scaled with the gain
++  - Detail:
++      sharpen: 0.6
++      denoise: 0.015
+   - Agc:
+   - Af:
+       coarseSteps: 8
+diff --git a/src/ipa/simple/data/s5kgn1.yaml b/src/ipa/simple/data/s5kgn1.yaml
+index 508c1e0..0c27ee4 100644
+--- a/src/ipa/simple/data/s5kgn1.yaml
++++ b/src/ipa/simple/data/s5kgn1.yaml
+@@ -26,6 +26,10 @@ algorithms:
+   - Adjust:
+       contrast: 1.2
+       saturation: 1.1
++  # Luma noise reduction and sharpening, scaled with the gain
++  - Detail:
++      sharpen: 0.6
++      denoise: 0.015
+   - Agc:
+   - Af:
+       coarseSteps: 8
+-- 
+2.55.0
+

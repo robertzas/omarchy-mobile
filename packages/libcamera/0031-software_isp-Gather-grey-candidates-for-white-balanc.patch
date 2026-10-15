@@ -1,0 +1,224 @@
+From 84afdf93720fd1d86b08114ad18fecdb4829de13 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Wed, 14 Oct 2026 20:53:15 -0400
+Subject: [PATCH 31/32] software_isp: Gather grey candidates for white balance
+
+The grey world estimate averages every sample, so a picture filled with
+one colour, grass or sky, turns its opposite, and saturated highlights,
+clipped in their brightest colour, pull it too.
+
+Also sum the samples that may be grey: green above about 4% and every
+colour below about 95% of full scale, and, with the black level taken
+off and the white balance gains in use applied, red and blue within a
+factor of 5/3 of green. The debayers pass the gains and black level
+from their parameters. Iterated over frames, the estimate settles on
+the near-grey surfaces.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../internal/software_isp/swisp_stats.h       | 10 +++++
+ .../internal/software_isp/swstats_cpu.h       | 25 +++++++++++
+ src/libcamera/software_isp/debayer_cpu.cpp    |  1 +
+ src/libcamera/software_isp/debayer_egl.cpp    |  1 +
+ src/libcamera/software_isp/swstats_cpu.cpp    | 44 ++++++++++++++++++-
+ 5 files changed, 80 insertions(+), 1 deletion(-)
+
+diff --git a/include/libcamera/internal/software_isp/swisp_stats.h b/include/libcamera/internal/software_isp/swisp_stats.h
+index 23d9fce..70a4b04 100644
+--- a/include/libcamera/internal/software_isp/swisp_stats.h
++++ b/include/libcamera/internal/software_isp/swisp_stats.h
+@@ -31,6 +31,16 @@ struct SwIspStats {
+ 	 * \brief Sums of colour channels of all the sampled pixels
+ 	 */
+ 	RGB<uint64_t> sum_;
++	/**
++	 * \brief Sums of colour channels of the sampled pixels that may be
++	 * grey: neither dark nor saturated, and within a band around the
++	 * white point of the current white balance gains
++	 */
++	RGB<uint64_t> greySum_;
++	/**
++	 * \brief Number of samples in \a greySum_
++	 */
++	uint64_t greyCount;
+ 	/**
+ 	 * \brief Number of bins in the yHistogram
+ 	 */
+diff --git a/include/libcamera/internal/software_isp/swstats_cpu.h b/include/libcamera/internal/software_isp/swstats_cpu.h
+index e95cc3b..476f62c 100644
+--- a/include/libcamera/internal/software_isp/swstats_cpu.h
++++ b/include/libcamera/internal/software_isp/swstats_cpu.h
+@@ -62,6 +62,7 @@ public:
+ 	int configure(const StreamConfiguration &inputCfg, unsigned int statsBufferCount = 1);
+ 	void setWindow(const Rectangle &window);
+ 	void setFocusWindow(const std::array<float, 4> &window);
++	void setWhitePoint(const RGB<float> &gains, float blackLevel);
+ 	void startFrame(uint32_t frame);
+ 	void finishFrame(uint32_t frame, uint32_t bufferId);
+ 	void processFrame(uint32_t frame, uint32_t bufferId, MappedFrameBuffer &input);
+@@ -113,6 +114,25 @@ private:
+ 
+ 	void processBayerFrame2(MappedFrameBuffer &in);
+ 
++	/*
++	 * A grey candidate: green above about 4% and every colour below about
++	 * 95% of full scale (8 bits times div), and red and blue under the
++	 * current gains within a factor of 5/3 of green.
++	 */
++	bool isGrey(int64_t r, int64_t g, int64_t b, int64_t div) const
++	{
++		const int64_t black = greyBlack_ * div;
++		const int64_t sat = 243 * div;
++		if (g - black < 10 * div || r >= sat || g >= sat || b >= sat)
++			return false;
++
++		const int64_t gw = (g - black) * 256;
++		const int64_t rw = (r - black) * greyGainR_;
++		const int64_t bw = (b - black) * greyGainB_;
++		return rw * 5 > gw * 3 && rw * 3 < gw * 5 &&
++		       bw * 5 > gw * 3 && bw * 3 < gw * 5;
++	}
++
+ 	/* Lines in the focus window, relative to the statistics window. */
+ 	bool isFocusLine(unsigned int y) const
+ 	{
+@@ -134,6 +154,11 @@ private:
+ 	unsigned int focusLineEnd_;
+ 	std::array<float, 4> focusWindow_ = { 0.25f, 0.25f, 0.5f, 0.5f };
+ 
++	/* Grey candidates: gains x256 relative to green, levels in 8 bits */
++	int64_t greyGainR_ = 256;
++	int64_t greyGainB_ = 256;
++	int64_t greyBlack_ = 0;
++
+ 	Rectangle window_;
+ 
+ 	Size patternSize_;
+diff --git a/src/libcamera/software_isp/debayer_cpu.cpp b/src/libcamera/software_isp/debayer_cpu.cpp
+index f8f5699..f9ad5b0 100644
+--- a/src/libcamera/software_isp/debayer_cpu.cpp
++++ b/src/libcamera/software_isp/debayer_cpu.cpp
+@@ -1090,6 +1090,7 @@ void DebayerCpu::process(uint32_t frame, FrameBuffer *input, FrameBuffer *output
+ 	}
+ 
+ 	stats_->setFocusWindow(params.focusWindow);
++	stats_->setWhitePoint(params.gains, params.blackLevel[1]);
+ 	stats_->startFrame(frame);
+ 
+ 	workPendingMutex_.lock();
+diff --git a/src/libcamera/software_isp/debayer_egl.cpp b/src/libcamera/software_isp/debayer_egl.cpp
+index 07ecb13..2a765a0 100644
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -780,6 +780,7 @@ void DebayerEGL::process(uint32_t frame, FrameBuffer *input, FrameBuffer *output
+ 			inMapped.emplace(input, MappedFrameBuffer::MapFlag::Read);
+ 		}
+ 		stats_->setFocusWindow(params.focusWindow);
++		stats_->setWhitePoint(params.gains, params.blackLevel[1]);
+ 		stats_->processFrame(frame, 0, inMapped.value());
+ 	}
+ 	inDmaSyncer.reset();
+diff --git a/src/libcamera/software_isp/swstats_cpu.cpp b/src/libcamera/software_isp/swstats_cpu.cpp
+index fad9578..1dabcfb 100644
+--- a/src/libcamera/software_isp/swstats_cpu.cpp
++++ b/src/libcamera/software_isp/swstats_cpu.cpp
+@@ -198,6 +198,10 @@ static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
+ 	uint64_t sumB = 0;                \
+ 	uint64_t sharpness = 0;           \
+ 	uint64_t focusG = 0;              \
++	uint64_t greyR = 0;               \
++	uint64_t greyG = 0;               \
++	uint64_t greyB = 0;               \
++	uint64_t greyN = 0;               \
+ 	unsigned int sample = 0;          \
+ 	pixel_t previousG = 0;            \
+ 	bool havePreviousG = false;
+@@ -212,6 +216,12 @@ static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
+ 	yVal += b * kBlueYMul;                                                        \
+ 	yBin = yVal * SwIspStats::kYHistogramSize / (256 * 256 * (div));             \
+ 	stats.yHistogram[yBin]++;                                                     \
++	if (isGrey(r, g, b, (div))) {                                                 \
++		greyR += r;                                                           \
++		greyG += g;                                                           \
++		greyB += b;                                                           \
++		greyN++;                                                              \
++	}                                                                             \
+ 	if (focusLine && sample >= focusSampleStart_ &&                               \
+ 	    sample < focusSampleEnd_) {                                               \
+ 		stats.windowHistogram[yBin]++;                                        \
+@@ -230,7 +240,11 @@ static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
+ 	stats.sum_.g() += sumG;     \
+ 	stats.sum_.b() += sumB;     \
+ 	stats.sharpness += sharpness; \
+-	stats.focusGreen += focusG;
++	stats.focusGreen += focusG;   \
++	stats.greySum_.r() += greyR;  \
++	stats.greySum_.g() += greyG;  \
++	stats.greySum_.b() += greyB;  \
++	stats.greyCount += greyN;
+ 
+ void SwStatsCpu::statsBGGR8Line0(const uint8_t *src[], SwIspStats &stats, bool focusLine)
+ {
+@@ -431,6 +445,8 @@ void SwStatsCpu::startFrame(uint32_t frame)
+ 		s.sum_ = RGB<uint64_t>({ 0, 0, 0 });
+ 		s.yHistogram.fill(0);
+ 		s.windowHistogram.fill(0);
++		s.greySum_ = RGB<uint64_t>({ 0, 0, 0 });
++		s.greyCount = 0;
+ 		s.sharpness = 0;
+ 		s.focusGreen = 0;
+ 	}
+@@ -451,10 +467,14 @@ void SwStatsCpu::finishFrame(uint32_t frame, uint32_t bufferId)
+ 		sharedStats_->sum_ = RGB<uint64_t>({ 0, 0, 0 });
+ 		sharedStats_->yHistogram.fill(0);
+ 		sharedStats_->windowHistogram.fill(0);
++		sharedStats_->greySum_ = RGB<uint64_t>({ 0, 0, 0 });
++		sharedStats_->greyCount = 0;
+ 		uint64_t sharpness = 0;
+ 		uint64_t green = 0;
+ 		for (const auto &s : stats_) {
+ 			sharedStats_->sum_ += s.sum_;
++			sharedStats_->greySum_ += s.greySum_;
++			sharedStats_->greyCount += s.greyCount;
+ 			sharpness += s.sharpness;
+ 			green += s.focusGreen;
+ 			for (unsigned int j = 0; j < SwIspStats::kYHistogramSize; j++) {
+@@ -464,6 +484,7 @@ void SwStatsCpu::finishFrame(uint32_t frame, uint32_t bufferId)
+ 		}
+ 
+ 		sharedStats_->sum_ >>= sumShift_;
++		sharedStats_->greySum_ >>= sumShift_;
+ 		sharedStats_->focusGreen = green;
+ 		constexpr uint64_t scale = 1000000;
+ 		sharedStats_->sharpness = green
+@@ -628,6 +649,27 @@ void SwStatsCpu::setWindow(const Rectangle &window)
+ 	setFocusWindow(focusWindow_);
+ }
+ 
++/**
++ * \brief Set the white point that grey candidates are judged against
++ * \param[in] gains The white balance gains in use
++ * \param[in] blackLevel The black level, in fractions of full scale
++ *
++ * A sample counts towards SwIspStats::greySum_ when it is neither dark nor
++ * saturated and, with the black level taken off and these gains applied,
++ * its red and blue are within a factor of 1.67 of its green. Colourful
++ * surfaces, such as grass or sky filling the picture, then don't pull the
++ * grey world estimate towards their own colour.
++ */
++void SwStatsCpu::setWhitePoint(const RGB<float> &gains, float blackLevel)
++{
++	if (gains.g() <= 0.0f)
++		return;
++
++	greyGainR_ = static_cast<int64_t>(gains.r() / gains.g() * 256.0f);
++	greyGainB_ = static_cast<int64_t>(gains.b() / gains.g() * 256.0f);
++	greyBlack_ = static_cast<int64_t>(std::clamp(blackLevel, 0.0f, 0.5f) * 256.0f);
++}
++
+ /**
+  * \brief Set the window for autofocus and spot metering statistics
+  * \param[in] window The x, y, width and height of the window, in fractions
+-- 
+2.55.0
+

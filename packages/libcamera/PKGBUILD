@@ -104,7 +104,22 @@
 #    spot, centre-weighted) on that window.
 #  - 0026-ipa-simple-af-Support-pausing-continuous-autofocus.patch: AfPause
 #    in continuous autofocus (a focus lock).
-#  - pkgrel 4.11, so it sorts above Arch Linux ARM's 0.7.2-4.
+#  - 0027-ipa-simple-Support-FrameDurationLimits.patch: FrameDurationLimits
+#    per configured mode, through VBLANK (60 fps video).
+#  - 0028-software_isp-Correct-lens-shading-with-a-radial-mode.patch: a
+#    radial lens shading correction in the GPU debayer, with coefficients
+#    from the tuning file (LensShading).
+#  - 0029-software_isp-debayer_egl-Add-a-noise-reduction-and-s.patch: a
+#    second GPU pass for luma noise reduction and sharpening.
+#  - 0030-ipa-simple-Add-noise-reduction-and-sharpening.patch: the Detail
+#    algorithm drives that pass, scaled with the gain, and the Sharpness
+#    control.
+#  - 0031-software_isp-Gather-grey-candidates-for-white-balanc.patch: grey-
+#    candidate sums in the statistics.
+#  - 0032-ipa-simple-awb-Use-the-grey-candidates-and-smooth-th.patch: the
+#    grey world over grey candidates, and smoothed gains: no colour cast
+#    from grass or sky.
+#  - pkgrel 4.12, so it sorts above Arch Linux ARM's 0.7.2-4.
 #
 # Maintainers of the original: David Runge, Carl Smedstad.
 
@@ -117,7 +132,7 @@ pkgname=(
   python-libcamera
 )
 pkgver=0.7.2
-pkgrel=4.11
+pkgrel=4.12
 pkgdesc="A complex camera support library for Linux, Android, and ChromeOS (Omarchy Mobile: gs201 CSIS)"
 arch=(aarch64)
 url="https://libcamera.org/"
@@ -175,6 +190,12 @@ source=(
   0024-software_isp-Gather-focus-statistics-over-a-window-t.patch
   0025-ipa-simple-Focus-and-meter-on-the-application-s-wind.patch
   0026-ipa-simple-af-Support-pausing-continuous-autofocus.patch
+  0027-ipa-simple-Support-FrameDurationLimits.patch
+  0028-software_isp-Correct-lens-shading-with-a-radial-mode.patch
+  0029-software_isp-debayer_egl-Add-a-noise-reduction-and-s.patch
+  0030-ipa-simple-Add-noise-reduction-and-sharpening.patch
+  0031-software_isp-Gather-grey-candidates-for-white-balanc.patch
+  0032-ipa-simple-awb-Use-the-grey-candidates-and-smooth-th.patch
 )
 sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd8847f7bec755c753c72f6b065df76de53c15f9af2e5901e83e7a144a2ddcd'
             '8b54cbdf6ed767ae8d52a14480a4653f4f3a1c2187c4ccf7ceb65eaa60c819cce514122591d6e0c2dfc39d7482739f8fdd4090dbaf63701445510eefc88fb19f'
@@ -203,7 +224,13 @@ sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd
             '92276003b4921ddf9155b78e74c5a1f431a5098d37e9a2b843d9f7570adb5c36ad40efa3541c4df7ecb3696c7c44fe50424e50a573dce4b5720b1910aaa101c6'
             'd426f103663c205680fd66ed4b461cc4cdeb5b2bb7a8daaa73e1ae8932ba0882754c700d1ce098bc69667b236418f1efbf8a166967111b94f79f24795ce2c110'
             'fc313494db00494352482cc4dcae10069e17433ec59ba7940b61011120406acb4aa1a7d18719c08711b4014eb25b11fedb22c850834486cb5fe512e73652300d'
-            'b5ff30efa3c4530a122b9ba95e759b2aacabf7d23ea5d8c767051e20b04f4e7a939f22f9409d4c67dd46b3b55f8e5eedcb816ed876c56d1a6e103fa9e8f57f9f')
+            'b5ff30efa3c4530a122b9ba95e759b2aacabf7d23ea5d8c767051e20b04f4e7a939f22f9409d4c67dd46b3b55f8e5eedcb816ed876c56d1a6e103fa9e8f57f9f'
+            'e66972aa0f3eb672102c64edda725172c7dff56a9532546d01f39366824effa818a4027e8f2454395b3e2b32adf3d54917478f5b3a448f2e3196f8b25944c62a'
+            '02fd102e168a5376d0e8c10e5a7168e80bb707de42fa068b71b71f6ce39388efb86bbd15a7657935efa595a21704fe4925e64429448b869df5778c9585204256'
+            'e7259a847b1e68555ab6b322e4a22510ac6971bc676b5e9272ebceca9e278a3294d786aeb343b8aa7acb0afc373fb35b012a569ecfc7d4c0c930c4b19decc153'
+            '84ebedf8af440e51c145f7b76fba1b9569930f359f42209f1de3913c5fe6fa255d4039e5ad9dd4fd09f265a8f3a444e6889dd3d4fb2dc2ff67d628c6443b0559'
+            '215d91d287aa0ba729acc3e990097a1cf0ae0988c785306bd2c1e9e4c5c31f165f1fd4da367e0daded894b4d22c53558b429f4e2fdb9a3d53430dbc8f6c13995'
+            '52286ffa96632d0e48a26ee35b7c34ce2286abcb076d9f52cc3e98444ce2e5d26c63d1c565a3bad911515190f45483ad3c1d85850aee62b20a2daf3128a44c4d')
 b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc58494400e69feeec99a77894252d582f0d8f183508e5d1b8220e70f3d5'
         '4a0e24feed22d32b83b0ec49c9a7616b77deb26cae82c17a38b54a81a0468e982852147bc2d5e3b611ba014ddbd7647acfe2e68591542420da73945ba1c0d6c2'
         'cba8b638543a16bf80c2ae7dc0737f3874476fd1ff694639b459184725848e193518778d0336eef3d55ba4329d9bc63981d0aa8d8d9b5507c9ade4f17f7f407d'
@@ -231,7 +258,13 @@ b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc5
         '08ed601e6f24683559b16936a7cd4026a36803b46c6fb3ee58cf8cd85eae9963812618fdc3233e9bcd11bc1b5c205c03d316ac323d4372a76d5fc30c9a531bd2'
         '0ac682b2309802846c816c00405abca7e4f7c5ff123320026db7d164f867cbb2d58e4991d8a09fda7bbfd3bea36784c68378b5ea43375d0058e06c0209effccd'
         'cbf867153c8767742bd053d00105c62e083abfab8c54491eba1f9ad845aa2272a9d196402144ac3176b03a77f7aacd91a1a28892cc2dc2f2f64e473353938825'
-        '58d34c3fb401164fb5cc5a139f31d6a941b00cb0ddacbedd220eb38f00c90e7a4fc5269f7c18046dce8ca0eaebb9fd4099faf798e32170274f5a99b5aece66b8')
+        '58d34c3fb401164fb5cc5a139f31d6a941b00cb0ddacbedd220eb38f00c90e7a4fc5269f7c18046dce8ca0eaebb9fd4099faf798e32170274f5a99b5aece66b8'
+        'a4e7cdf1c55ad5f58edf7b260d909ba832e749b772ad8b32ced53f1ac2366cfa69ad631a180cf6149841e900f9f4f352edfd50460bf222a20e80f919b89218a6'
+        '7732a997d2dd0296c348938d20c0a31a2a4fcd042852739a4130d622804e2ccdee656815767840d1f538132bb6d3315de61ae0b0e8ff239823abddf7e04d8b8c'
+        '2a76f3cc17b399ac99ac9c3cf20e2455c32ac27d835ddd4b254ca8f4a94b2703264771a8de2bd99cb93fe331e115ce161ad9f4423dd2fa7a5ac93c75d213f62f'
+        '1e2edda1ee12cc9eae3e6c7cc4b88e72f9d017eedf12dffb56cb17468605d68dd116c1e1e47214b560caadfd9dc7459a8d79fc89f16f803ab18d2dc9c0aefc8e'
+        'dabec63ff77f3a831ce25c2337f0681163bcc540f4882046853491db441537ef676be3f96330c723998d1c53b6ce82d1d017faaeafd25f0f7dd3cdf4a30cbad2'
+        'fdd38af760b43cfd622d574bd75fd21fcc726434e09bfc196fc3a538a919751192c58d1d7b80b09b166671a290370317afd01d213b6a900185c715c7e62f1451')
 
 _pick() {
   local p="$1" f d; shift
@@ -272,6 +305,12 @@ prepare() {
   patch -Np1 < ../0024-software_isp-Gather-focus-statistics-over-a-window-t.patch
   patch -Np1 < ../0025-ipa-simple-Focus-and-meter-on-the-application-s-wind.patch
   patch -Np1 < ../0026-ipa-simple-af-Support-pausing-continuous-autofocus.patch
+  patch -Np1 < ../0027-ipa-simple-Support-FrameDurationLimits.patch
+  patch -Np1 < ../0028-software_isp-Correct-lens-shading-with-a-radial-mode.patch
+  patch -Np1 < ../0029-software_isp-debayer_egl-Add-a-noise-reduction-and-s.patch
+  patch -Np1 < ../0030-ipa-simple-Add-noise-reduction-and-sharpening.patch
+  patch -Np1 < ../0031-software_isp-Gather-grey-candidates-for-white-balanc.patch
+  patch -Np1 < ../0032-ipa-simple-awb-Use-the-grey-candidates-and-smooth-th.patch
 
   # add version, so that utils/gen-version.sh may rely on it
   printf "%s\n" "$pkgver" > .tarball-version

@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""Fit the libcamera simple IPA's radial lens shading model to a flat field.
+
+Point the camera at something evenly lit and featureless (a white wall in
+daylight, an overcast sky through a diffuser, or a sheet of paper held right
+in front of the lens), out of focus, with no part of it clipped, and capture
+a raw frame of a full-field mode:
+
+  cam -c N -C1 -s role=raw -F/tmp/flat-#.raw     # on the phone, as the user
+
+then, on the laptop or the phone:
+
+  tools/camera-lsc-fit /tmp/flat-cam0-stream0-000000.raw \\
+      --width 4080 --height 3072 --stride 5104 --order GRBG --black 64
+
+It prints the LensShading entry for the sensor's tuning file: k1 and k2 for
+red, green and blue in 1 + k1 r^2 + k2 r^4, with r the distance from the
+centre over half the diagonal; the centre is left unchanged. Only RAW10
+CSI-2 packed frames are read, and the frame should cover the whole active
+area (a full-field mode), as the model's radius is the active area's.
+"""
+
+import argparse
+import sys
+
+
+def unpack_raw10(data, width, height, stride):
+    """Rows of 10-bit values from MIPI CSI-2 packed RAW10."""
+    rows = []
+    for y in range(height):
+        line = data[y * stride:y * stride + width * 5 // 4]
+        row = [0] * width
+        for g in range(width // 4):
+            b = line[g * 5:g * 5 + 5]
+            low = b[4]
+            for i in range(4):
+                row[g * 4 + i] = (b[i] << 2) | ((low >> (2 * i)) & 3)
+        rows.append(row)
+    return rows
+
+
+def channel_of(order, x, y):
+    """'R', 'G' or 'B' for a pixel position in the given Bayer order."""
+    return order[(y & 1) * 2 + (x & 1)]
+
+
+def fit(samples):
+    """Least squares for v = c (1 + k1 r2 + k2 r4) over (r2, v) samples,
+    as v = a + b r2 + d r4: returns (k1, k2) = (b / a, d / a)."""
+    s = [[0.0] * 3 for _ in range(3)]
+    t = [0.0] * 3
+    for r2, v in samples:
+        basis = (1.0, r2, r2 * r2)
+        for i in range(3):
+            t[i] += basis[i] * v
+            for j in range(3):
+                s[i][j] += basis[i] * basis[j]
+    # Gaussian elimination
+    m = [s[i] + [t[i]] for i in range(3)]
+    for c in range(3):
+        p = max(range(c, 3), key=lambda r: abs(m[r][c]))
+        m[c], m[p] = m[p], m[c]
+        for r in range(3):
+            if r != c:
+                f = m[r][c] / m[c][c]
+                m[r] = [m[r][k] - f * m[c][k] for k in range(4)]
+    a, b, d = (m[i][3] / m[i][i] for i in range(3))
+    return a, b / a, d / a
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("raw")
+    ap.add_argument("--width", type=int, required=True)
+    ap.add_argument("--height", type=int, required=True)
+    ap.add_argument("--stride", type=int, required=True)
+    ap.add_argument("--order", default="GRBG", choices=("RGGB", "GRBG", "GBRG", "BGGR"))
+    ap.add_argument("--black", type=int, default=64, help="black level, 10 bits")
+    ap.add_argument("--block", type=int, default=32, help="averaging block, pixels")
+    args = ap.parse_args()
+
+    data = open(args.raw, "rb").read()
+    if len(data) < args.stride * args.height:
+        sys.exit(f"{args.raw}: {len(data)} bytes, fewer than stride x height")
+    rows = unpack_raw10(data, args.width, args.height, args.stride)
+
+    w, h, blk = args.width, args.height, args.block
+    half_diag2 = (w * w + h * h) / 4.0
+    samples = {"R": [], "G": [], "B": []}
+    clipped = 0
+    for by in range(0, h - blk + 1, blk):
+        for bx in range(0, w - blk + 1, blk):
+            sums = {"R": [0, 0], "G": [0, 0], "B": [0, 0]}
+            for y in range(by, by + blk):
+                row = rows[y]
+                for x in range(bx, bx + blk):
+                    v = row[x]
+                    if v >= 1000:
+                        clipped += 1
+                    c = channel_of(args.order, x, y)
+                    sums[c][0] += v - args.black
+                    sums[c][1] += 1
+            cx = bx + blk / 2 - w / 2
+            cy = by + blk / 2 - h / 2
+            r2 = (cx * cx + cy * cy) / half_diag2
+            for c, (s, n) in sums.items():
+                samples[c].append((r2, s / n))
+    if clipped:
+        print(f"# warning: {clipped} pixels at or above 1000 (clipped?)", file=sys.stderr)
+
+    coeffs = {}
+    for c in "RGB":
+        # The centre level from a smooth fit of the falloff, then the
+        # correction itself fitted as gain - 1 = k1 r^2 + k2 r^4.
+        a, _, _ = fit(samples[c])
+        s11 = s12 = s22 = t1 = t2 = 0.0
+        for r2, v in samples[c]:
+            if v <= 0:
+                continue
+            g = a / v - 1.0
+            r4 = r2 * r2
+            s11 += r2 * r2
+            s12 += r2 * r4
+            s22 += r4 * r4
+            t1 += r2 * g
+            t2 += r4 * g
+        det = s11 * s22 - s12 * s12
+        k1 = (t1 * s22 - t2 * s12) / det
+        k2 = (s11 * t2 - s12 * t1) / det
+        coeffs[c] = (k1, k2)
+        print(f"# {c}: centre {a:.1f}, corner gain {1 + k1 + k2:.2f}", file=sys.stderr)
+
+    k1 = ", ".join(f"{coeffs[c][0]:.4f}" for c in "RGB")
+    k2 = ", ".join(f"{coeffs[c][1]:.4f}" for c in "RGB")
+    print("  - LensShading:")
+    print(f"      k1: [ {k1} ]")
+    print(f"      k2: [ {k2} ]")
+
+
+if __name__ == "__main__":
+    main()

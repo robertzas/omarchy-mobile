@@ -1,0 +1,393 @@
+From e9d67ae28438d9af7dac4714d7a64dbb9475cdb6 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Wed, 14 Oct 2026 20:36:21 -0400
+Subject: [PATCH 27/32] ipa: simple: Support FrameDurationLimits
+
+Video at 60 frames a second needs the application to choose the frame
+rate, but the simple pipeline leaves the frame length where the sensor
+driver puts it and advertises no frame duration control.
+
+Set the frame length through VBLANK, which the pipeline now writes
+through its delayed controls ahead of the exposure:
+
+- FrameDurationLimits, advertised per configured mode from the line
+  duration and the VBLANK range, bound the frame length; the AE's
+  exposure limit follows the longest frame they allow;
+- without limits the frame keeps the driver's default length, as
+  before;
+- an application's own ExposureTime may lengthen the frame as far as
+  the sensor allows, so ExposureTime advertises that range.
+
+The IPA returns the configured mode's controls from configure(), and
+the software ISP passes them on as the camera's controls. Report
+FrameDuration in metadata.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../internal/software_isp/software_isp.h      |   2 +
+ include/libcamera/ipa/soft.mojom              |   2 +-
+ src/ipa/simple/algorithms/agc.cpp             |   3 +-
+ src/ipa/simple/ipa_context.h                  |  18 +++
+ src/ipa/simple/soft_simple.cpp                | 144 +++++++++++++++++-
+ src/libcamera/pipeline/simple/simple.cpp      |   6 +
+ src/libcamera/software_isp/software_isp.cpp   |   7 +-
+ 7 files changed, 175 insertions(+), 7 deletions(-)
+
+diff --git a/include/libcamera/internal/software_isp/software_isp.h b/include/libcamera/internal/software_isp/software_isp.h
+index a861657..f391e5e 100644
+--- a/include/libcamera/internal/software_isp/software_isp.h
++++ b/include/libcamera/internal/software_isp/software_isp.h
+@@ -104,6 +104,8 @@ private:
+ 	DebayerParams debayerParams_;
+ 	DmaBufAllocator dmaHeap_;
+ 	bool ccmEnabled_;
++	/* The camera's controls, which depend on the configured sensor mode */
++	ControlInfoMap *ipaControls_ = nullptr;
+ 
+ 	std::unique_ptr<ipa::soft::IPAProxySoft> ipa_;
+ 	std::deque<FrameBuffer *> queuedInputBuffers_;
+diff --git a/include/libcamera/ipa/soft.mojom b/include/libcamera/ipa/soft.mojom
+index b8ffc6f..6a58bd0 100644
+--- a/include/libcamera/ipa/soft.mojom
++++ b/include/libcamera/ipa/soft.mojom
+@@ -24,7 +24,7 @@ interface IPASoftInterface {
+ 	start() => (int32 ret);
+ 	stop();
+ 	configure(IPAConfigInfo configInfo)
+-		=> (int32 ret);
++		=> (int32 ret, libcamera.ControlInfoMap ipaControls);
+ 
+ 	[async] queueRequest(uint32 frame, libcamera.ControlList sensorControls);
+ 	[async] computeParams(uint32 frame);
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index a8709e7..8ea3f99 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -388,7 +388,8 @@ void Agc::process(IPAContext &context,
+ 	if (!agc.exposureTimeAuto && cfg.lineDuration.get<std::nano>() > 0)
+ 		agc.exposure = std::clamp(static_cast<int32_t>(std::lround(
+ 						  agc.manualExposureTime / cfg.lineDuration)),
+-					  cfg.exposureMin, cfg.exposureMax);
++					  cfg.exposureMin,
++					  std::max(cfg.exposureMax, cfg.exposureMaxManual));
+ 	if (!agc.gainAuto)
+ 		agc.again = std::clamp(agc.manualGain, cfg.againMin, cfg.againMax);
+ 
+diff --git a/src/ipa/simple/ipa_context.h b/src/ipa/simple/ipa_context.h
+index f524c63..9d315ed 100644
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -29,7 +29,20 @@ struct IPASessionConfiguration {
+ 		int32_t exposureMin, exposureMax;
+ 		double againMin, againMax, again10, againMinStep;
+ 		utils::Duration lineDuration;
++		/* The exposure limit for the mode's default frame length */
++		int32_t sensorExposureMax;
++		/* The limit for an application's exposure time: the longest frame */
++		int32_t exposureMaxManual;
+ 	} agc;
++	struct {
++		/* Frame length in lines is height + VBLANK; 0: no VBLANK control */
++		int32_t height;
++		int32_t vblankMin, vblankMax, vblankDefault;
++		/* Lines a frame needs beyond the exposure */
++		int32_t exposureMargin;
++		/* The frame lengths the application's limits allow */
++		int32_t minLines, maxLines;
++	} frame;
+ 	struct {
+ 		std::optional<uint8_t> level;
+ 	} black;
+@@ -82,6 +95,11 @@ struct IPAActiveState {
+ 
+ 	Matrix<float, 3, 3> combinedMatrix;
+ 
++	struct {
++		/* controls::FrameDurationLimits, if the application set them */
++		std::optional<std::pair<utils::Duration, utils::Duration>> limits;
++	} frameDuration;
++
+ 	struct {
+ 		/* x, y, width, height in fractions of the picture */
+ 		std::array<float, 4> rect;
+diff --git a/src/ipa/simple/soft_simple.cpp b/src/ipa/simple/soft_simple.cpp
+index 233fa2c..991346e 100644
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -70,7 +70,8 @@ public:
+ 		 const ControlInfoMap &sensorControls,
+ 		 ControlInfoMap *ipaControls,
+ 		 bool *ccmEnabled) override;
+-	int configure(const IPAConfigInfo &configInfo) override;
++	int configure(const IPAConfigInfo &configInfo,
++		      ControlInfoMap *ipaControls) override;
+ 
+ 	int start() override;
+ 	void stop() override;
+@@ -86,6 +87,7 @@ protected:
+ private:
+ 	void updateExposure(double exposureMSV);
+ 	void updateWindow(const ControlList &controls);
++	void updateFrameLimits();
+ 
+ 	DebayerParams *params_;
+ 	SwIspStats *stats_;
+@@ -227,6 +229,23 @@ int IPASoftSimple::init(const IPASettings &settings,
+ 		context_.ctrlMap[&controls::ExposureTime] =
+ 			ControlInfo(micros(exposureInfo.min()), micros(exposureInfo.max()),
+ 				    micros(exposureInfo.def()));
++
++		/*
++		 * The frame durations of the mode the sensor is in now, until
++		 * configure() gives the configured mode's.
++		 */
++		const auto vblank = sensorControls.find(V4L2_CID_VBLANK);
++		const int32_t height = sensorInfo.outputSize.height;
++		if (vblank != sensorControls.end() && height) {
++			const auto duration = [&](const ControlValue &v) {
++				return static_cast<int64_t>(utils::Duration(
++					line * (height + v.get<int32_t>())).get<std::micro>());
++			};
++			context_.ctrlMap[&controls::FrameDurationLimits] =
++				ControlInfo(duration(vblank->second.min()),
++					    duration(vblank->second.max()),
++					    duration(vblank->second.def()));
++		}
+ 	}
+ 	const auto gain = [&](const ControlValue &v) {
+ 		const int32_t code = v.get<int32_t>();
+@@ -312,7 +331,8 @@ void IPASoftSimple::updateWindow(const ControlList &controls)
+ 	}
+ }
+ 
+-int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
++int IPASoftSimple::configure(const IPAConfigInfo &configInfo,
++			     ControlInfoMap *ipaControls)
+ {
+ 	sensorInfoMap_ = configInfo.sensorControls;
+ 	lensInfoMap_ = configInfo.lensControls;
+@@ -331,10 +351,11 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
+ 	const auto previousAwb = context_.activeState.awb;
+ 	const auto previousAf = context_.activeState.af;
+ 	const auto previousWindow = context_.activeState.window;
++	const auto previousFrameDuration = context_.activeState.frameDuration;
+ 	const auto previousFocus = context_.configuration.focus;
+ 	const auto previousLineDuration = context_.configuration.agc.lineDuration;
+ 	const auto previousExposureMin = context_.configuration.agc.exposureMin;
+-	const auto previousExposureMax = context_.configuration.agc.exposureMax;
++	const auto previousExposureMax = context_.configuration.agc.sensorExposureMax;
+ 
+ 	/* Clear the IPA context before the streaming session. */
+ 	context_.configuration = {};
+@@ -353,6 +374,8 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
+ 		context_.sensorInfo.minLineLength * 1.0s / context_.sensorInfo.pixelRate;
+ 	context_.configuration.agc.exposureMin = exposureInfo.min().get<int32_t>();
+ 	context_.configuration.agc.exposureMax = exposureInfo.max().get<int32_t>();
++	context_.configuration.agc.sensorExposureMax =
++		context_.configuration.agc.exposureMax;
+ 	if (!context_.configuration.agc.exposureMin) {
+ 		LOG(IPASoft, Warning) << "Minimum exposure is zero, that can't be linear";
+ 		context_.configuration.agc.exposureMin = 1;
+@@ -393,10 +416,28 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
+ 			return ret;
+ 	}
+ 
++	/*
++	 * The frame length: the mode's height plus VBLANK, which the sensor
++	 * driver sets for its default frame rate. The exposure can come to
++	 * within exposureMargin lines of it.
++	 */
++	auto &frame = context_.configuration.frame;
++	const auto vblank = sensorInfoMap_.find(V4L2_CID_VBLANK);
++	if (vblank != sensorInfoMap_.end() && context_.sensorInfo.outputSize.height) {
++		frame.height = context_.sensorInfo.outputSize.height;
++		frame.vblankMin = vblank->second.min().get<int32_t>();
++		frame.vblankMax = vblank->second.max().get<int32_t>();
++		frame.vblankDefault = vblank->second.def().get<int32_t>();
++		frame.exposureMargin = std::max(0, frame.height + frame.vblankDefault -
++						      context_.configuration.agc.exposureMax);
++	}
++	context_.activeState.frameDuration = previousFrameDuration;
++	updateFrameLimits();
++
+ 	if (previousAgc.valid &&
+ 	    previousLineDuration == context_.configuration.agc.lineDuration &&
+ 	    previousExposureMin == context_.configuration.agc.exposureMin &&
+-	    previousExposureMax == context_.configuration.agc.exposureMax) {
++	    previousExposureMax == context_.configuration.agc.sensorExposureMax) {
+ 		context_.activeState.agc = previousAgc;
+ 		context_.activeState.awb = previousAwb;
+ 		LOG(IPASoft, Debug) << "Keeping exposure and white balance";
+@@ -455,9 +496,68 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
+ 		<< context_.configuration.agc.againMax
+ 		<< " (" << context_.configuration.agc.againMinStep << ")";
+ 
++	/* The configured mode's exposure and frame duration limits. */
++	const auto &cfg = context_.configuration.agc;
++	const auto micros = [&](int32_t lines) {
++		return static_cast<int32_t>(std::max<double>(
++			1.0, utils::Duration(cfg.lineDuration * lines).get<std::micro>()));
++	};
++	context_.ctrlMap[&controls::ExposureTime] =
++		ControlInfo(micros(cfg.exposureMin),
++			    micros(std::max(cfg.sensorExposureMax, cfg.exposureMaxManual)),
++			    micros(cfg.sensorExposureMax));
++	if (frame.height) {
++		const auto duration = [&](int32_t blank) {
++			return static_cast<int64_t>(utils::Duration(
++				cfg.lineDuration * (frame.height + blank)).get<std::micro>());
++		};
++		context_.ctrlMap[&controls::FrameDurationLimits] =
++			ControlInfo(duration(frame.vblankMin), duration(frame.vblankMax),
++				    duration(frame.vblankDefault));
++		LOG(IPASoft, Info)
++			<< "Frame durations " << duration(frame.vblankMin) << "-"
++			<< duration(frame.vblankMax) << " us";
++	}
++	ControlInfoMap::Map ctrlMap = context_.ctrlMap;
++	*ipaControls = ControlInfoMap(std::move(ctrlMap), controls::controls);
++
+ 	return 0;
+ }
+ 
++/*
++ * The frame lengths the application's FrameDurationLimits allow, and the
++ * exposure limits that follow: without limits the sensor keeps its default
++ * frame rate and the AE its exposure, while an application's own exposure
++ * time may lengthen the frame as far as the sensor allows.
++ */
++void IPASoftSimple::updateFrameLimits()
++{
++	auto &frame = context_.configuration.frame;
++	auto &agc = context_.configuration.agc;
++
++	agc.exposureMax = agc.sensorExposureMax;
++	agc.exposureMaxManual = agc.sensorExposureMax;
++	if (!frame.height)
++		return;
++
++	const int32_t linesMin = frame.height + frame.vblankMin;
++	const int32_t linesMax = frame.height + frame.vblankMax;
++	frame.minLines = frame.maxLines = frame.height + frame.vblankDefault;
++
++	const auto &limits = context_.activeState.frameDuration.limits;
++	if (limits && agc.lineDuration.get<std::nano>() > 0) {
++		frame.minLines = std::clamp(static_cast<int32_t>(std::ceil(
++						    limits->first / agc.lineDuration)),
++					    linesMin, linesMax);
++		frame.maxLines = std::clamp(static_cast<int32_t>(
++						    limits->second / agc.lineDuration),
++					    frame.minLines, linesMax);
++	}
++
++	agc.exposureMax = std::max(agc.exposureMin, frame.maxLines - frame.exposureMargin);
++	agc.exposureMaxManual = std::max(agc.exposureMax, linesMax - frame.exposureMargin);
++}
++
+ int IPASoftSimple::start()
+ {
+ 	return 0;
+@@ -474,6 +574,20 @@ void IPASoftSimple::queueRequest(const uint32_t frame, const ControlList &contro
+ 
+ 	updateWindow(controls);
+ 
++	if (const auto limits = controls.get(controls::FrameDurationLimits)) {
++		const auto min = std::chrono::microseconds((*limits)[0]);
++		const auto max = std::chrono::microseconds(std::max((*limits)[0], (*limits)[1]));
++		auto &current = context_.activeState.frameDuration.limits;
++		if (!current || current->first != utils::Duration(min) ||
++		    current->second != utils::Duration(max)) {
++			current = { utils::Duration(min), utils::Duration(max) };
++			updateFrameLimits();
++			LOG(IPASoft, Debug)
++				<< "Frame lines " << context_.configuration.frame.minLines
++				<< "-" << context_.configuration.frame.maxLines;
++		}
++	}
++
+ 	for (const auto &algo : algorithms())
+ 		algo->queueRequest(context_, frame, frameContext, controls);
+ }
+@@ -503,6 +617,14 @@ void IPASoftSimple::processStats(const uint32_t frame,
+ 	frameContext.sensor.gain = camHelper_ ? camHelper_->gain(again) : again;
+ 
+ 	ControlList metadata(controls::controls);
++	const auto &frameCfg = context_.configuration.frame;
++	if (frameCfg.height && sensorControls.contains(V4L2_CID_VBLANK)) {
++		const int32_t vblank = sensorControls.get(V4L2_CID_VBLANK).get<int32_t>();
++		const utils::Duration duration =
++			context_.configuration.agc.lineDuration * (frameCfg.height + vblank);
++		metadata.set(controls::FrameDuration,
++			     static_cast<int64_t>(duration.get<std::micro>()));
++	}
+ 	for (const auto &algo : algorithms())
+ 		algo->process(context_, frame, frameContext, stats_, metadata);
+ 	metadataReady.emit(frame, metadata);
+@@ -521,6 +643,20 @@ void IPASoftSimple::processStats(const uint32_t frame,
+ 	ctrls.set(V4L2_CID_ANALOGUE_GAIN,
+ 		  static_cast<int32_t>(camHelper_ ? camHelper_->gainCode(againNew) : againNew));
+ 
++	/*
++	 * The frame long enough for the exposure, within the application's
++	 * limits (or longer for its own exposure time).
++	 */
++	if (frameCfg.height && sensorInfoMap_.count(V4L2_CID_VBLANK)) {
++		const int32_t linesMax = context_.activeState.agc.exposureTimeAuto
++			? frameCfg.maxLines
++			: frameCfg.height + frameCfg.vblankMax;
++		const int32_t lines = std::clamp(frameContext.sensor.exposure +
++							 frameCfg.exposureMargin,
++						 frameCfg.minLines, linesMax);
++		ctrls.set(V4L2_CID_VBLANK, lines - frameCfg.height);
++	}
++
+ 	/*
+ 	 * Drive the lens only while autofocus runs (an Af entry in the tuning
+ 	 * file and a focus lens), and only when the position changes: each
+diff --git a/src/libcamera/pipeline/simple/simple.cpp b/src/libcamera/pipeline/simple/simple.cpp
+index 04a3b32..907e0d4 100644
+--- a/src/libcamera/pipeline/simple/simple.cpp
++++ b/src/libcamera/pipeline/simple/simple.cpp
+@@ -573,6 +573,12 @@ SimpleCameraData::SimpleCameraData(SimplePipelineHandler *pipe,
+ 		{ V4L2_CID_ANALOGUE_GAIN, { delays.gainDelay, false } },
+ 		{ V4L2_CID_EXPOSURE, { delays.exposureDelay, false } },
+ 	};
++	/*
++	 * The IPA sets the frame duration through VBLANK, written ahead of
++	 * the exposure, which the new frame length may allow.
++	 */
++	if (sensor_->controls().count(V4L2_CID_VBLANK))
++		params[V4L2_CID_VBLANK] = { delays.vblankDelay, true };
+ 	delayedCtrls_ = std::make_unique<DelayedControls>(sensor_->device(), params);
+ 
+ 	LOG(SimplePipeline, Debug)
+diff --git a/src/libcamera/software_isp/software_isp.cpp b/src/libcamera/software_isp/software_isp.cpp
+index 595ca7f..c8ac8d5 100644
+--- a/src/libcamera/software_isp/software_isp.cpp
++++ b/src/libcamera/software_isp/software_isp.cpp
+@@ -160,6 +160,7 @@ SoftwareIsp::SoftwareIsp(PipelineHandler *pipe, const CameraSensor *sensor,
+ 		return;
+ 	}
+ 
++	ipaControls_ = ipaControls;
+ 	ret = ipa_->init(IPASettings{ ipaTuningFile, sensor->model() },
+ 			 debayer_->getStatsFD(),
+ 			 sharedParams_.fd(),
+@@ -291,9 +292,13 @@ int SoftwareIsp::configure(const StreamConfiguration &inputCfg,
+ {
+ 	ASSERT(ipa_ && debayer_);
+ 
+-	int ret = ipa_->configure(configInfo);
++	ControlInfoMap ipaControls;
++	int ret = ipa_->configure(configInfo, &ipaControls);
+ 	if (ret < 0)
+ 		return ret;
++	/* Limits such as the frame durations belong to the configured mode. */
++	if (ipaControls_ && !ipaControls.empty())
++		*ipaControls_ = std::move(ipaControls);
+ 
+ 	/*
+ 	 * Contrast autofocus needs statistics every frame. Without a focus
+-- 
+2.55.0
+
