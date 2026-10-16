@@ -3690,6 +3690,25 @@ copy in /tmp, not installed):**
     - `cam` configures once, so the mode change of `0042` wasn't exercised.
       It shows in omacam's preview-to-still switch.
 
+**CAM5.4, daylight test 4 (4.16 + omacam 0.3.1, 2026-10-16, partly cloudy) and libcamera 4.17:**
+- **Good:** red leaves natural, a 5x hammock in shade at mean 109, patio
+  and grass natural, AWB neutral, no dark first stills.
+- **A blue sky clipped at the sensor came out as a white disc in a blue
+  ring** (105747, the ultrawide's 105828/832). Its clip contour follows the
+  lens's vignetting. The luminance histogram kept the clipped blue under
+  its top, so the cap didn't count it. `0046` counts the samples the
+  sensor saturated; `0047` limits them to 2% (5% or 10% when the rest is
+  dark); `0048` fades them to neutral from 80%, gently.
+- **A sunny lawn came out milky** (105758, a quarter at sRGB 240-250): the
+  shoulder kept it under the old 250 threshold. `0047` counts from sRGB
+  240.
+- **A room with a ceiling light came out dark** (105940): `0047` grades the
+  limits by the mean of the samples that don't clip (2%, 10% or 20%), so a
+  lamp doesn't hold the room's exposure.
+- **Main exposures from 1.2 to 25.9 ms** follow the scenes: sunlit sky
+  versus shaded foliage, about 4.5 stops. One still (105908) ran out of
+  omacam's wait with AE searching.
+
 ### CAM5.5: 60 fps on the main and telephoto cameras. Risk: medium (DMA)
 
 Kernel: omamobile-camera `9e5c1a218` ("media: i2c: s5kgn1: let VBLANK shorten

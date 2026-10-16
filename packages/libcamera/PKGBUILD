@@ -154,7 +154,15 @@
 #    AGC counts clipping through the shoulder.
 #  - 0045-ipa-simple-Soften-the-Samsung-sensors-hand-tuned-col.patch: the
 #    hand-tuned Samsung matrix softened by 30%.
-#  - pkgrel 4.16, so it sorts above Arch Linux ARM's 0.7.2-4.
+#  - 0046-software_isp-Count-the-samples-the-sensor-saturated.patch: the
+#    statistics count the samples the sensor saturated.
+#  - 0047-ipa-simple-agc-Mind-what-the-sensor-saturates-and-th.patch: the
+#    highlight cap counts sensor saturation and sRGB 240, and grades its
+#    limits by the mean of the rest (lamps, backlit subjects).
+#  - 0048-software_isp-debayer_egl-Fade-sensor-clipped-highlig.patch: the
+#    fade to neutral of sensor-clipped highlights starts at 80%, gently: no
+#    hard ring in a clipped sky.
+#  - pkgrel 4.17, so it sorts above Arch Linux ARM's 0.7.2-4.
 #
 # Maintainers of the original: David Runge, Carl Smedstad.
 
@@ -167,7 +175,7 @@ pkgname=(
   python-libcamera
 )
 pkgver=0.7.2
-pkgrel=4.16
+pkgrel=4.17
 pkgdesc="A complex camera support library for Linux, Android, and ChromeOS (Omarchy Mobile: gs201 CSIS)"
 arch=(aarch64)
 url="https://libcamera.org/"
@@ -244,6 +252,9 @@ source=(
   0043-software_isp-debayer_egl-Roll-highlights-off-and-kee.patch
   0044-ipa-simple-agc-Count-clipping-through-the-highlight-.patch
   0045-ipa-simple-Soften-the-Samsung-sensors-hand-tuned-col.patch
+  0046-software_isp-Count-the-samples-the-sensor-saturated.patch
+  0047-ipa-simple-agc-Mind-what-the-sensor-saturates-and-th.patch
+  0048-software_isp-debayer_egl-Fade-sensor-clipped-highlig.patch
 )
 sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd8847f7bec755c753c72f6b065df76de53c15f9af2e5901e83e7a144a2ddcd'
             '8b54cbdf6ed767ae8d52a14480a4653f4f3a1c2187c4ccf7ceb65eaa60c819cce514122591d6e0c2dfc39d7482739f8fdd4090dbaf63701445510eefc88fb19f'
@@ -291,7 +302,10 @@ sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd
             'e5a6bfbea2cc4377fcdda78189f604c54fb41ea2f27ff43ae41dccee40e7ccc9b11fb43bdebb60f6ed38f48ebb0c7bb718405b16e7490522e85b58b4c9cda053'
             '4d13a81c98f51b486d05d0a02c7ef89dec98c13e61028aa2802043a5c8d488c52606e85a0f91db451f574168af71a5090075175bdfa08997ce8827999266ef02'
             '52fdfa4ade0cac8282e784c58c39180436b1c06ad260060d1a77d0ff277990b6d410209677c26848f7fed9fef54763f6323569942eb1861e187d8d093a29ff04'
-            'fb6be4086be070bc2348eaba56cefdf5f71c4ce6019759907b7220d67ef0f146985faeee9fe7c109a6bf07c1d08f76d5761ee0fb78b72127c3a4b5f25705e7f2')
+            'fb6be4086be070bc2348eaba56cefdf5f71c4ce6019759907b7220d67ef0f146985faeee9fe7c109a6bf07c1d08f76d5761ee0fb78b72127c3a4b5f25705e7f2'
+            '0da493e85c3929d51901f8933a5d318e2e38a35645a13d86e73c5de9990902eeaf22728063badd79cd5a0241a8bd89c232ea5cccf01c7e1850ff2a0743d6e7c0'
+            '89f08252c6d3f9db85644880cb7b03e9dd711aba34e506ca76eb900e67c2a8f5544e6c5a2d498d31ece999844f6e5262b624c5b2dfecd9736f4b290a1164a15a'
+            '533e86dc0de1b7b79567a5997cccf055b2c639b6cf28045622755e6f04345dd1366d7c9f5159258664e9c6f5c8eeef0f1373bf93767776ae67ea71fbce32f4fc')
 b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc58494400e69feeec99a77894252d582f0d8f183508e5d1b8220e70f3d5'
         '4a0e24feed22d32b83b0ec49c9a7616b77deb26cae82c17a38b54a81a0468e982852147bc2d5e3b611ba014ddbd7647acfe2e68591542420da73945ba1c0d6c2'
         'cba8b638543a16bf80c2ae7dc0737f3874476fd1ff694639b459184725848e193518778d0336eef3d55ba4329d9bc63981d0aa8d8d9b5507c9ade4f17f7f407d'
@@ -338,7 +352,10 @@ b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc5
         '0ba85dd36e6dee3f56f1816226b73721691535f23f3cff17894d16c21988cc0e20dd15ad5195565f1d90ef5281f4d54ffe01d9b95ff10468ccad217cca28d863'
         '998d7cc1b0ff376bc5b8898f48650f10f139f9c557eb837bef0ee7caf1578d70352e27ede19889809b5a95ffc7a448fd383626221b5b5e3f389b04037d9dd6bf'
         '4aa9f21f6c5525e702e14396c4c702fcb248f5067305706adf4ede327986cd30b40014b1df5d53dcd86aac30133c60bdd0ca07f7ee593a7637e1d0315e4b3965'
-        'c57614a0877127c12e72ad606d6c4dba72a51aedfe968eb9f538717b88a6413c90f70c5609cd0a39c5babe4d017c1de94a137287ade723a6bd5890237e9dca5a')
+        'c57614a0877127c12e72ad606d6c4dba72a51aedfe968eb9f538717b88a6413c90f70c5609cd0a39c5babe4d017c1de94a137287ade723a6bd5890237e9dca5a'
+        'f260e114bfbcbe570bb8dd8033e99ff93605b47605aa773501c5ae008b373b590cbf084bdd84e170df25562b2cbc625d2c198c3814a6457800fccebabd523531'
+        '493c78f1113070fcf5d8bbee2bd05325d81bca1dc905da55be7ff00a324020f11a9d196109470eaf15d209343e4ff15b3e032bb63504bc263c53ad297df376b3'
+        '418d2dda620ebb4f8d961027566aabd6762ddc8f2f30f52f763af0aefbcbebe48a137e32aa4c1991c49c07ea736760fc27bb6c498f93c9129c653e041a80a79a')
 
 _pick() {
   local p="$1" f d; shift
@@ -398,6 +415,9 @@ prepare() {
   patch -Np1 < ../0043-software_isp-debayer_egl-Roll-highlights-off-and-kee.patch
   patch -Np1 < ../0044-ipa-simple-agc-Count-clipping-through-the-highlight-.patch
   patch -Np1 < ../0045-ipa-simple-Soften-the-Samsung-sensors-hand-tuned-col.patch
+  patch -Np1 < ../0046-software_isp-Count-the-samples-the-sensor-saturated.patch
+  patch -Np1 < ../0047-ipa-simple-agc-Mind-what-the-sensor-saturates-and-th.patch
+  patch -Np1 < ../0048-software_isp-debayer_egl-Fade-sensor-clipped-highlig.patch
 
   # add version, so that utils/gen-version.sh may rely on it
   printf "%s\n" "$pkgver" > .tarball-version

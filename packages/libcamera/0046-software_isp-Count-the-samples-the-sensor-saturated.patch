@@ -1,0 +1,92 @@
+From c0e4810cbf7b78ca8e02afb5d52770438fd47c8b Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Fri, 16 Oct 2026 11:04:34 -0400
+Subject: [PATCH 46/48] software_isp: Count the samples the sensor saturated
+
+The statistics' luminance histogram can't tell a sample with one
+colour at the sensor's full scale: a blue sky whose blue clipped at the
+sensor stays below the top of the histogram, and nothing brings that
+colour back.
+
+Count the sampled pixels with any colour at about 95% of full scale
+(243 in 8 bits), for the AGC's highlight protection.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ include/libcamera/internal/software_isp/swisp_stats.h | 5 +++++
+ src/libcamera/software_isp/swstats_cpu.cpp            | 9 ++++++++-
+ 2 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/include/libcamera/internal/software_isp/swisp_stats.h b/include/libcamera/internal/software_isp/swisp_stats.h
+index 70a4b0496..0aba0ca60 100644
+--- a/include/libcamera/internal/software_isp/swisp_stats.h
++++ b/include/libcamera/internal/software_isp/swisp_stats.h
+@@ -41,6 +41,11 @@ struct SwIspStats {
+ 	 * \brief Number of samples in \a greySum_
+ 	 */
+ 	uint64_t greyCount;
++	/**
++	 * \brief Number of sampled pixels with a colour at the sensor's full
++	 * scale (about 95% of it), which no gain or curve brings back
++	 */
++	uint64_t saturatedCount;
+ 	/**
+ 	 * \brief Number of bins in the yHistogram
+ 	 */
+diff --git a/src/libcamera/software_isp/swstats_cpu.cpp b/src/libcamera/software_isp/swstats_cpu.cpp
+index 1dabcfb92..abbdb6be9 100644
+--- a/src/libcamera/software_isp/swstats_cpu.cpp
++++ b/src/libcamera/software_isp/swstats_cpu.cpp
+@@ -202,6 +202,7 @@ static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
+ 	uint64_t greyG = 0;               \
+ 	uint64_t greyB = 0;               \
+ 	uint64_t greyN = 0;               \
++	uint64_t satN = 0;                \
+ 	unsigned int sample = 0;          \
+ 	pixel_t previousG = 0;            \
+ 	bool havePreviousG = false;
+@@ -216,6 +217,8 @@ static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
+ 	yVal += b * kBlueYMul;                                                        \
+ 	yBin = yVal * SwIspStats::kYHistogramSize / (256 * 256 * (div));             \
+ 	stats.yHistogram[yBin]++;                                                     \
++	if (r >= 243 * (div) || g >= 243 * (div) || b >= 243 * (div))                \
++		satN++;                                                               \
+ 	if (isGrey(r, g, b, (div))) {                                                 \
+ 		greyR += r;                                                           \
+ 		greyG += g;                                                           \
+@@ -244,7 +247,8 @@ static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
+ 	stats.greySum_.r() += greyR;  \
+ 	stats.greySum_.g() += greyG;  \
+ 	stats.greySum_.b() += greyB;  \
+-	stats.greyCount += greyN;
++	stats.greyCount += greyN;     \
++	stats.saturatedCount += satN;
+ 
+ void SwStatsCpu::statsBGGR8Line0(const uint8_t *src[], SwIspStats &stats, bool focusLine)
+ {
+@@ -447,6 +451,7 @@ void SwStatsCpu::startFrame(uint32_t frame)
+ 		s.windowHistogram.fill(0);
+ 		s.greySum_ = RGB<uint64_t>({ 0, 0, 0 });
+ 		s.greyCount = 0;
++		s.saturatedCount = 0;
+ 		s.sharpness = 0;
+ 		s.focusGreen = 0;
+ 	}
+@@ -469,12 +474,14 @@ void SwStatsCpu::finishFrame(uint32_t frame, uint32_t bufferId)
+ 		sharedStats_->windowHistogram.fill(0);
+ 		sharedStats_->greySum_ = RGB<uint64_t>({ 0, 0, 0 });
+ 		sharedStats_->greyCount = 0;
++		sharedStats_->saturatedCount = 0;
+ 		uint64_t sharpness = 0;
+ 		uint64_t green = 0;
+ 		for (const auto &s : stats_) {
+ 			sharedStats_->sum_ += s.sum_;
+ 			sharedStats_->greySum_ += s.greySum_;
+ 			sharedStats_->greyCount += s.greyCount;
++			sharedStats_->saturatedCount += s.saturatedCount;
+ 			sharpness += s.sharpness;
+ 			green += s.focusGreen;
+ 			for (unsigned int j = 0; j < SwIspStats::kYHistogramSize; j++) {
+-- 
+2.55.0
+
