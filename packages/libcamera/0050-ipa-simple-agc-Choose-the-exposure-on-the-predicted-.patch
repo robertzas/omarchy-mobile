@@ -1,0 +1,544 @@
+From 91d923c9f5813bb503544d80f9f7cc4cd8102e9a Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Fri, 16 Oct 2026 12:02:54 -0400
+Subject: [PATCH 50/52] ipa: simple: agc: Choose the exposure on the predicted
+ output
+
+Daylight test 5 on the Google Pixel 7 Pro (libcamera 4.17): pictures
+came out too dark (mean sRGB 35-92 against 80-109 from a reference
+phone on the same scenes), and three main camera stills of eleven were
+taken with the AE still searching after 1.5 s. The highlight limits
+stepped against shares of clipped samples that jump with the exposure,
+and the leniency for a dark rest of the picture flipped as the
+exposure moved the rest across its thresholds, so the loop hunted.
+
+Predict the picture instead. From the luminance histogram and the
+peak histogram, compute at any exposure the mean output (through the
+white balance and digital gains, the shoulder, the tone curve, the
+contrast curve and the gamma), the share at sRGB 240 or more, and the
+share the sensor saturates, and bisect for
+
+- the exposure that brings the mean output to sRGB 102, and
+- the highest one that keeps both shares within 2%, beyond what still
+  clips two stops under the first: a lamp or the sun that no exposure
+  saves no longer darkens the picture around it.
+
+Take the lower, but at most two stops under the first, and step three
+quarters of the way there in stops (three stops up from a very dark
+picture, a sixteenth down from one pinned bright). As the predictions
+move smoothly with the exposure, the loop settles.
+
+In a model of the loop with the sensor a frame slower than modelled,
+a sky scene, a lamp in a dark room and a lawn converge in 9-12 frames
+without a reversal; the lamp scene reversed 33 times with the previous
+limits.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/ipa/simple/algorithms/agc.cpp | 317 +++++++++++++++---------------
+ src/ipa/simple/algorithms/agc.h   |  25 ++-
+ src/ipa/simple/ipa_context.h      |   4 +-
+ 3 files changed, 180 insertions(+), 166 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index 92ae73c16..32ece6e67 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -32,13 +32,22 @@ namespace ipa::soft::algorithms {
+ static constexpr unsigned int kExposureBinsCount = 5;
+ 
+ /*
+- * The exposure aims the mean linear luminance (above the black level, after
+- * the digital gain) at kTargetLuminance of full scale: a mid-grey scene at
+- * about sRGB 120 after the gamma. Aiming the mean bin of a five-bin linear
+- * histogram at its middle, as before, put the mean near 45% of full scale
+- * (sRGB 160-185): sunlit stills came out about 1.5 stops bright.
++ * The exposure is chosen on the picture as it will come out: the AGC
++ * predicts the output of each histogram bin (through the white balance
++ * and digital gains, the shoulder, the tone curve, the contrast curve and
++ * the gamma) at any exposure, and looks for the one that
++ *
++ * - brings the mean output to kTargetOutput (sRGB 102), and
++ * - keeps no more than an allowed share of the picture at sRGB 240 or
++ *   more, and of the sensor's samples saturated,
++ *
++ * taking the lower, but never more than kHighlightMaxCut stops under the
++ * first: a picture with a big sky keeps its ground. Predicting both, the
++ * loop no longer steps against a share that jumps (a lamp clips all or
++ * nothing) and settles instead of hunting.
+  */
+-static constexpr double kTargetLuminance = 0.20;
++static constexpr double kTargetOutput = 0.40;
++
+ 
+ /*
+  * Hysteresis, in stops: small enough to keep the exposure close to the
+@@ -55,13 +64,12 @@ static constexpr double kStepGain = 0.75;
+ static constexpr double kMaxStepStops = 1.0;
+ 
+ /*
+- * A picture pinned at one end (a mean more than three stops under the
+- * target, or nearly everything in the brightest of the coarse bins) says
+- * only "much too dark" or "much too bright", not by how much. Change the total exposure by these factors then, in one step, and
+- * only judge again once the change has shown (see updateExposure()).
++ * A picture pinned bright (nearly everything in the brightest of the
++ * coarse bins) says only "much too bright", not by how much: step down by
++ * kExpPinnedDown at once. A very dark one may step up kMaxStepUpStops.
+  */
+ static constexpr double kExposurePinnedBright = kExposureBinsCount - 0.05;
+-static constexpr double kExpPinnedUp = 8.0;
++static constexpr double kMaxStepUpStops = 3.0;
+ static constexpr double kExpPinnedDown = 1.0 / 16.0;
+ 
+ /*
+@@ -81,28 +89,13 @@ static constexpr unsigned int kExpSettleFrames = 1;
+ static constexpr unsigned int kExpCarriedSettleFrames = 2;
+ 
+ /*
+- * Highlight protection: the share of the picture that may come out clipped
+- * (or clip at the sensor), more when the rest of the picture is dark: a
+- * subject against the light, or a lamp in a room, may clip
+- * kHighlightMaxDark, or kHighlightMaxDarker when the rest is darker still.
+- * The protection never takes the mean more than kHighlightMaxCut under the
+- * target: a picture with a big sky keeps some ground.
++ * Highlight protection: the share of the picture that may come out at sRGB
++ * 240 or more, and of the samples the sensor may saturate, beyond what
++ * clips at the lowest exposure it may take: kHighlightMaxCut stops under
++ * the mean's.
+  */
+ static constexpr double kHighlightMax = 0.02;
+-static constexpr double kHighlightMaxDark = 0.10;
+-static constexpr double kHighlightMaxDarker = 0.20;
+-static constexpr double kHighlightMaxCut = 0.5;
+-/* The same for what the sensor saturated, stricter */
+-static constexpr double kSaturatedMaxDark = 0.05;
+-static constexpr double kSaturatedMaxDarker = 0.10;
+-
+-/*
+- * After a cut, the exposure stays under kClipMargin of the one that clipped,
+- * and that limit loosens by kClipRelax a judgement (about a stop in a few
+- * seconds) in case the light changed.
+- */
+-static constexpr double kClipMargin = 0.85;
+-static constexpr double kClipRelax = 1.02;
++static constexpr double kHighlightMaxCut = 2.0;
+ 
+ /*
+  * The output level counted as clipped, before the gamma (sRGB 240): the
+@@ -177,7 +170,6 @@ int Agc::configure(IPAContext &context,
+ 	context.activeState.agc.settleFrames = 0;
+ 	context.activeState.agc.pendingFrames = 0;
+ 	context.activeState.agc.carried = false;
+-	context.activeState.agc.clipTotal = 0.0;
+ 	context.activeState.agc.state = controls::AeStateSearching;
+ 	context.activeState.agc.exposureValue = 0.0f;
+ 	context.activeState.agc.exposureTimeAuto = true;
+@@ -268,8 +260,7 @@ void Agc::queueRequest(typename Module::Context &context,
+ }
+ 
+ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+-			 double exposureMSV, double meanLuminance,
+-			 double highlights, double saturated, double restLuminance)
++			 double exposureMSV, const Metering &metering)
+ {
+ 	int32_t &exposure = frameContext.sensor.exposure;
+ 	double &again = frameContext.sensor.gain;
+@@ -305,66 +296,31 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	const bool carried = agc.carried;
+ 	agc.carried = false;
+ 
+-	/* The clipping point found by a cut loosens slowly, to probe again. */
+-	if (agc.clipTotal > 0.0)
+-		agc.clipTotal *= kClipRelax;
+-	/* Forget it when the picture went much darker (another scene). */
+-	if (meanLuminance < kTargetLuminance / 4)
+-		agc.clipTotal = 0.0;
+-
+ 	if (!agc.exposureTimeAuto && !agc.gainAuto) {
+ 		agc.state = controls::AeStateIdle;
+ 		return false;
+ 	}
+ 
+-	/* The error in stops: positive when too dark. */
+-	const double error = meanLuminance > 0.0
+-		? std::log2(kTargetLuminance / meanLuminance) : kMaxStepStops * 3;
++	double meanOut, clipped, saturated, factorMean, factorHighlights;
++	double wanted = exposureFactor(context, metering, meanOut, clipped, saturated,
++				       factorMean, factorHighlights);
++	const double error = std::log2(wanted);
+ 
+-	/*
+-	 * Highlight protection: no more than kHighlightMax of the picture
+-	 * clipped, more when the rest of it is dark (a subject against a
+-	 * bright sky keeps its exposure, a lamp in a dim room doesn't darken
+-	 * the room). Too many clipped samples cut the exposure whatever the
+-	 * mean says; close to the limit, the mean may no longer raise it.
+-	 */
+-	const double base = restLuminance < kTargetLuminance / 4 ? kHighlightMaxDarker
+-			  : restLuminance < kTargetLuminance / 2 ? kHighlightMaxDark
+-								 : kHighlightMax;
+-	const double evScale = std::exp2(std::max(0.0f, agc.exposureValue));
+-	const double allowed = base * evScale;
+-	/*
+-	 * What the sensor saturated gets less leniency: a large saturated
+-	 * sky comes out as a white disc in a blue ring.
+-	 */
+-	const double allowedSaturated =
+-		(restLuminance < kTargetLuminance / 4 ? kSaturatedMaxDarker
+-		 : restLuminance < kTargetLuminance / 2 ? kSaturatedMaxDark
+-							: kHighlightMax) *
+-		evScale;
+-	const double over = std::max(highlights / allowed, saturated / allowedSaturated);
+-	const bool tooBright = over > 1.5 &&
+-			       meanLuminance > kTargetLuminance * kHighlightMaxCut;
+-	const bool atLimit = over > 0.75;
+-	if (!tooBright && (std::abs(error) <= kSatisfactoryStops ||
+-			   (atLimit && error > 0))) {
++	if (std::abs(error) <= kSatisfactoryStops) {
+ 		agc.state = controls::AeStateConverged;
+ 		return false;
+ 	}
+ 
+ 	/*
+-	 * The correction applies to the total exposure (time x analogue gain
+-	 * x digital gain): a proportional step near the target, larger far
+-	 * from it, and a decisive one while the histogram is pinned at an end.
++	 * Correct three quarters of the error in stops, more upwards from a
++	 * very dark picture; a picture pinned bright (everything in the top
++	 * coarse bin) says nothing of by how much, so it steps down at once.
+ 	 */
+-	double factor;
+-	if (meanLuminance < kTargetLuminance / kExpPinnedUp)
+-		factor = kExpPinnedUp;
+-	else if (exposureMSV >= kExposurePinnedBright)
+-		factor = kExpPinnedDown;
+-	else
+-		factor = std::exp2(std::clamp(error * kStepGain,
+-					      -kMaxStepStops, kMaxStepStops));
++	double factor = exposureMSV >= kExposurePinnedBright
++		? kExpPinnedDown
++		: std::exp2(std::clamp(error * kStepGain, -kMaxStepStops,
++				       meanOut < kTargetOutput / 4 ? kMaxStepUpStops
++								   : kMaxStepStops));
+ 	/*
+ 	 * The first judgement after a mode change: the sensor starts a new
+ 	 * mode at its longest exposure, and a frame from before the carried
+@@ -373,24 +329,6 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	if (carried)
+ 		factor = std::clamp(factor, 0.5, 2.0);
+ 
+-	const double current = static_cast<double>(exposure) * again * dgain;
+-	if (tooBright && exposureMSV < kExposurePinnedBright) {
+-		factor = std::min(factor, std::clamp(std::sqrt(1.0 / over), 0.5, 0.9));
+-		agc.clipTotal = current;
+-	}
+-
+-	/*
+-	 * Don't climb back into the clipping a cut just left: a small bright
+-	 * light clips all or nothing, and the mean alone would take the
+-	 * exposure straight back.
+-	 */
+-	if (factor > 1.0 && agc.clipTotal > 0.0)
+-		factor = std::max(1.0, std::min(factor, agc.clipTotal * kClipMargin / current));
+-	if (factor == 1.0) {
+-		agc.state = controls::AeStateConverged;
+-		return false;
+-	}
+-
+ 	/*
+ 	 * Distribute it: exposure time first (up to its limit), then the
+ 	 * sensor's analogue gain, then digital gain. Going down, that takes
+@@ -416,9 +354,9 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	agc.again = again;
+ 
+ 	LOG(IPASoftExposure, Debug)
+-		<< "exposureMSV " << exposureMSV << " mean " << meanLuminance
+-		<< " highlights " << highlights << " saturated " << saturated
+-		<< " rest " << restLuminance
++		<< "exposureMSV " << exposureMSV << " out " << meanOut
++		<< " clipped " << clipped << " saturated " << saturated
++		<< " for mean " << factorMean << " highlights " << factorHighlights
+ 		<< " error " << error << " factor " << factor
+ 		<< " exp " << exposure << " again " << again
+ 		<< " dgain " << dgain;
+@@ -437,42 +375,104 @@ bool Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ }
+ 
+ /*
+- * The raw luminance, in fractions of the range above the black level, at
+- * which a neutral surface comes out clipped: the inverse of the output's
+- * gamma and contrast curve at kClippedOutput, over the white balance and
+- * digital gains. Statistics see the raw picture, and the gains push it
+- * past full scale well before the sensor clips.
++ * The output, gamma-encoded, of a linear output luminance: the debayer's
++ * highlight shoulder, the tone curve (see Look), the contrast curve and the
++ * gamma, as the shaders apply them.
+  */
+-double Agc::clipLevel(const IPAContext &context) const
++double Agc::encode(const IPAContext &context, double x) const
+ {
+ 	const auto &knobs = context.activeState.knobs;
+-	const double gamma = knobs.gamma > 0.0f ? knobs.gamma : 2.2;
+-	const double contrast = knobs.contrast.value_or(1.0f);
+-	const double exponent = std::tan(std::clamp(contrast * M_PI_4, 0.01, M_PI_2 - 0.00001));
+ 
+-	/*
+-	 * Undo the gamma, then the upper half of the contrast S-curve, then
+-	 * the debayer's highlight shoulder.
+-	 */
+-	const double y = std::pow(kClippedOutput, gamma);
+-	double x = 1.0 - 0.5 * std::pow((1.0 - y) / 0.5, 1.0 / exponent);
++	x = std::max(x, 0.0);
+ 	if (x > kShoulderKnee) {
+-		const double u = std::min((x - kShoulderKnee) / (1.0 - kShoulderKnee), 0.999);
+-		const double t = -std::log(1.0 - u * (1.0 - std::exp(-kShoulderShape))) /
+-				 kShoulderShape;
+-		x = kShoulderKnee + t * (kShoulderMax - kShoulderKnee);
++		const double t = std::min((x - kShoulderKnee) / (kShoulderMax - kShoulderKnee), 1.0);
++		x = kShoulderKnee + (1.0 - kShoulderKnee) *
++			(1.0 - std::exp(-kShoulderShape * t)) / (1.0 - std::exp(-kShoulderShape));
+ 	}
+ 
+-	const auto &gains = context.activeState.awb.gains;
+-	const double dgain = std::max(context.activeState.agc.digitalGain, 1.0);
+-	if (gains.r() <= 0.0f || gains.g() <= 0.0f || gains.b() <= 0.0f)
+-		return std::min(x / dgain, kSensorClip);
++	const double lift = knobs.toneLift;
++	if (lift > 0.0)
++		x = x * (1.0 + lift) / (x + lift);
+ 
+-	/* Raw luminance of a neutral surface that the gains bring to x. */
+-	const double neutral = (0.299 / gains.r() + 0.587 / gains.g() +
+-				0.114 / gains.b()) * x / dgain;
+-	/* The sensor clips too: the shoulder can't bring that back. */
+-	return std::clamp(neutral, 0.05, kSensorClip);
++	const double contrast = knobs.contrast.value_or(1.0f);
++	const double e = std::tan(std::clamp(contrast * M_PI_4, 0.01, M_PI_2 - 0.00001));
++	x = std::clamp(x, 0.0, 1.0);
++	x = x < 0.5 ? 0.5 * std::pow(x / 0.5, e) : 1.0 - 0.5 * std::pow((1.0 - x) / 0.5, e);
++
++	const double gamma = knobs.gamma > 0.0f ? knobs.gamma : 2.2;
++	return std::pow(x, 1.0 / gamma);
++}
++
++/*
++ * The factor on the total exposure that the picture asks for (see
++ * kTargetOutput), with what the picture shows now.
++ */
++double Agc::exposureFactor(const IPAContext &context, const Metering &m,
++			   double &meanOut, double &clipped, double &saturated,
++			   double &factorMean, double &factorHighlights) const
++{
++	const auto &agc = context.activeState.agc;
++	const double ev = std::exp2(-agc.exposureValue);
++
++	const auto mean = [&](double f) {
++		double sum = 0.0;
++		for (const auto &[v, n] : m.luminance)
++			sum += n * encode(context, v * f);
++		return m.samples ? sum / m.samples : 0.0;
++	};
++
++	/* The linear level that comes out at sRGB 240. */
++	double lo = 0.0, hi = 4.0;
++	for (unsigned int i = 0; i < 30; i++) {
++		const double mid = (lo + hi) / 2;
++		(encode(context, mid) < kClippedOutput ? lo : hi) = mid;
++	}
++	const double clipLevel = hi;
++
++	const auto clippedAt = [&](double f) {
++		uint64_t n = 0;
++		for (const auto &[v, c] : m.luminance)
++			if (v * f >= clipLevel)
++				n += c;
++		return m.samples ? static_cast<double>(n) / m.samples : 0.0;
++	};
++	const auto saturatedAt = [&](double f) {
++		uint64_t n = 0;
++		for (const auto &[v, c] : m.peaks)
++			if (v * f >= kSensorClip)
++				n += c;
++		return m.peakSamples ? static_cast<double>(n) / m.peakSamples : 0.0;
++	};
++
++	meanOut = mean(1.0);
++	clipped = clippedAt(1.0);
++	saturated = saturatedAt(1.0);
++
++	/* Bisect in stops: the mean grows, and the shares never fall, with f. */
++	const auto bisect = [](auto &&below, double from, double to) {
++		for (unsigned int i = 0; i < 24; i++) {
++			const double mid = (from + to) / 2;
++			(below(std::exp2(mid)) ? from : to) = mid;
++		}
++		return std::exp2(from);
++	};
++	factorMean = bisect([&](double f) { return mean(f * ev) < kTargetOutput; },
++			    -8.0, 8.0);
++
++	/*
++	 * What still clips at the lowest exposure the protection may take is
++	 * a light source (a lamp, the sun) that no exposure saves: allow it on
++	 * top of the limits, rather than darken the room around it.
++	 */
++	const double lowest = factorMean * std::exp2(-kHighlightMaxCut);
++	const double evScale = std::exp2(std::max(0.0f, agc.exposureValue));
++	const double allowed = kHighlightMax * evScale + clippedAt(lowest);
++	const double allowedSaturated = kHighlightMax * evScale + saturatedAt(lowest);
++	factorHighlights = bisect([&](double f) {
++		return clippedAt(f) <= allowed && saturatedAt(f) <= allowedSaturated;
++	}, -8.0, 8.0);
++
++	return std::min(factorMean, std::max(factorHighlights, lowest));
+ }
+ 
+ void Agc::process(IPAContext &context,
+@@ -577,13 +577,17 @@ void Agc::process(IPAContext &context,
+ 	const double scale = context.activeState.agc.digitalGain *
+ 			     std::exp2(-context.activeState.agc.exposureValue);
+ 	/*
+-	 * Highlights: the samples that come out clipped (see clipLevel()),
+-	 * and the mean of the rest, which tells a subject against the light
+-	 * or a lamp in a dim room.
++	 * The output's linear luminance of each bin: the raw luminance of a
++	 * neutral surface times what the white balance gains (green at one)
++	 * and the digital gain make of it.
+ 	 */
+-	const double clip = clipLevel(context) * histogramSize;
+-	uint64_t clipped = 0, all = 0;
+-	double luminance = 0.0, restSum = 0.0;
++	const auto &gains = context.activeState.awb.gains;
++	const double neutral = gains.r() > 0.0f && gains.b() > 0.0f
++		? 1.0 / (0.299 / gains.r() + 0.587 / std::max(gains.g(), 0.01f) +
++			 0.114 / gains.b())
++		: 1.0;
++	Metering metering;
++	metering.samples = 0;
+ 	for (unsigned int i = 0; i < histogramSize; i++) {
+ 		const unsigned int gained = std::min<unsigned int>(
+ 			histogramSize - 1, static_cast<unsigned int>(std::lround(i * scale)));
+@@ -591,28 +595,23 @@ void Agc::process(IPAContext &context,
+ 		const uint32_t n = histogram[blackLevelHistIdx + i];
+ 		exposureBins[idx] += n;
+ 
+-		const double value = n * std::min(1.0, (i + 0.5) * scale / histogramSize);
+-		luminance += value;
+-
+-		if (i + 0.5 >= clip)
+-			clipped += n;
+-		else
+-			restSum += value;
+-		all += n;
++		if (n)
++			metering.luminance.emplace_back((i + 0.5) / histogramSize * neutral *
++							context.activeState.agc.digitalGain, n);
++		metering.samples += n;
+ 	}
+-	const double meanLuminance = all ? luminance / all : 0.0;
+-	const double restLuminance = all > clipped ? restSum / (all - clipped) : 0.0;
+ 
+-	/*
+-	 * What the sensor saturated counts too: a colour clipped there (a
+-	 * blue sky) stays under the luminance histogram's top but comes out
+-	 * white, in a ring shaped by the lens's vignetting.
+-	 */
+-	const uint64_t samples = std::accumulate(histogram.begin(), histogram.end(),
+-						 uint64_t(0));
+-	const double saturated = samples
+-		? static_cast<double>(stats->saturatedCount) / samples : 0.0;
+-	const double highlights = all ? static_cast<double>(clipped) / all : 0.0;
++	/* The peaks over the whole picture, above the black level. */
++	const double black = context.activeState.blc.level;
++	metering.peakSamples = 0;
++	for (unsigned int j = 0; j < SwIspStats::kYHistogramSize; j++) {
++		const uint32_t n = stats->peakHistogram[j];
++		if (!n)
++			continue;
++		const double raw = (j + 0.5) * 256.0 / SwIspStats::kYHistogramSize;
++		metering.peaks.emplace_back(std::max(0.0, (raw - black) / (256.0 - black)), n);
++		metering.peakSamples += n;
++	}
+ 
+ 	for (unsigned int i = 0; i < kExposureBinsCount; i++) {
+ 		LOG(IPASoftExposure, Debug) << i << ": " << exposureBins[i];
+@@ -621,9 +620,7 @@ void Agc::process(IPAContext &context,
+ 	}
+ 
+ 	float exposureMSV = (denom == 0 ? 0 : static_cast<float>(num) / denom);
+-	const bool adjusted = updateExposure(context, frameContext, exposureMSV,
+-					     meanLuminance, highlights, saturated,
+-					     restLuminance);
++	const bool adjusted = updateExposure(context, frameContext, exposureMSV, metering);
+ 	if (adjusted)
+ 		context.activeState.agc.stableSamples = 0;
+ 	else
+diff --git a/src/ipa/simple/algorithms/agc.h b/src/ipa/simple/algorithms/agc.h
+index b6c7408ee..d941d9ba1 100644
+--- a/src/ipa/simple/algorithms/agc.h
++++ b/src/ipa/simple/algorithms/agc.h
+@@ -7,6 +7,8 @@
+ 
+ #pragma once
+ 
++#include <vector>
++
+ #include "algorithm.h"
+ 
+ namespace libcamera {
+@@ -31,11 +33,26 @@ public:
+ 		     ControlList &metadata) override;
+ 
+ private:
+-	double clipLevel(const IPAContext &context) const;
++
++	/*
++	 * The picture as the statistics give it: the output's linear
++	 * luminance of each histogram bin at the exposure in use, the
++	 * brightest colour of each peak histogram bin above the black level
++	 * as a share of the sensor's range, and their sample counts.
++	 */
++	struct Metering {
++		std::vector<std::pair<double, uint32_t>> luminance;
++		std::vector<std::pair<double, uint32_t>> peaks;
++		uint64_t samples;
++		uint64_t peakSamples;
++	};
++
+ 	bool updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+-			    double exposureMSV, double meanLuminance,
+-			    double highlights, double saturated,
+-			    double restLuminance);
++			    double exposureMSV, const Metering &metering);
++	double encode(const IPAContext &context, double linear) const;
++	double exposureFactor(const IPAContext &context, const Metering &m,
++			      double &meanOut, double &clipped, double &saturated,
++			      double &factorMean, double &factorHighlights) const;
+ };
+ 
+ } /* namespace ipa::soft::algorithms */
+diff --git a/src/ipa/simple/ipa_context.h b/src/ipa/simple/ipa_context.h
+index 435ff1459..2e9ba1e6d 100644
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -68,8 +68,6 @@ struct IPAActiveState {
+ 		unsigned int pendingFrames;
+ 		/* The exposure was carried over from another sensor mode */
+ 		bool carried;
+-		/* Total exposure (lines x gains) that clipped too much; 0: none */
+-		double clipTotal;
+ 		/* controls::AeState */
+ 		int32_t state;
+ 		/* controls::AeMeteringMode */
+@@ -118,6 +116,8 @@ struct IPAActiveState {
+ 		/* 0..2 range, 1.0 = normal */
+ 		std::optional<float> contrast;
+ 		std::optional<float> saturation;
++		/* The output tone curve's shadow lift (0: none), see Look */
++		float toneLift;
+ 	} knobs;
+ 
+ 	struct {
+-- 
+2.55.0
+

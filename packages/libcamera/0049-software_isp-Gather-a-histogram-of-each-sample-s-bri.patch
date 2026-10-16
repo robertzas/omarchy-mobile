@@ -1,0 +1,77 @@
+From cf3570caa169fd6065f78c7817b170d4e1928160 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Fri, 16 Oct 2026 11:59:52 -0400
+Subject: [PATCH 49/52] software_isp: Gather a histogram of each sample's
+ brightest colour
+
+Counting the samples the sensor saturated says how much clipped at the
+exposure in use, not how much would clip at another one, so an AGC
+can only react to it a step at a time, and overshoot.
+
+Gather a 64-bin histogram of the brightest colour of each sampled
+pixel as the sensor gave it, with which the AGC can predict the share
+the sensor would saturate at any exposure.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ include/libcamera/internal/software_isp/swisp_stats.h | 6 ++++++
+ src/libcamera/software_isp/swstats_cpu.cpp            | 5 +++++
+ 2 files changed, 11 insertions(+)
+
+diff --git a/include/libcamera/internal/software_isp/swisp_stats.h b/include/libcamera/internal/software_isp/swisp_stats.h
+index 0aba0ca60..edcd4c7f2 100644
+--- a/include/libcamera/internal/software_isp/swisp_stats.h
++++ b/include/libcamera/internal/software_isp/swisp_stats.h
+@@ -63,6 +63,12 @@ struct SwIspStats {
+ 	 * focus window, for spot metering
+ 	 */
+ 	Histogram windowHistogram;
++	/**
++	 * \brief A histogram of the brightest colour of each sampled pixel,
++	 * as the sensor gave it (black level included), for what the sensor
++	 * saturates at another exposure
++	 */
++	Histogram peakHistogram;
+ 	/**
+ 	 * \brief Exposure-normalized horizontal green-channel edge energy in
+ 	 * the centre of the frame, for contrast autofocus
+diff --git a/src/libcamera/software_isp/swstats_cpu.cpp b/src/libcamera/software_isp/swstats_cpu.cpp
+index abbdb6be9..3b6fd13eb 100644
+--- a/src/libcamera/software_isp/swstats_cpu.cpp
++++ b/src/libcamera/software_isp/swstats_cpu.cpp
+@@ -219,6 +219,8 @@ static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
+ 	stats.yHistogram[yBin]++;                                                     \
+ 	if (r >= 243 * (div) || g >= 243 * (div) || b >= 243 * (div))                \
+ 		satN++;                                                               \
++	stats.peakHistogram[std::max(std::max(r, g), b) *                            \
++			    SwIspStats::kYHistogramSize / (256 * (div))]++;           \
+ 	if (isGrey(r, g, b, (div))) {                                                 \
+ 		greyR += r;                                                           \
+ 		greyG += g;                                                           \
+@@ -449,6 +451,7 @@ void SwStatsCpu::startFrame(uint32_t frame)
+ 		s.sum_ = RGB<uint64_t>({ 0, 0, 0 });
+ 		s.yHistogram.fill(0);
+ 		s.windowHistogram.fill(0);
++		s.peakHistogram.fill(0);
+ 		s.greySum_ = RGB<uint64_t>({ 0, 0, 0 });
+ 		s.greyCount = 0;
+ 		s.saturatedCount = 0;
+@@ -472,6 +475,7 @@ void SwStatsCpu::finishFrame(uint32_t frame, uint32_t bufferId)
+ 		sharedStats_->sum_ = RGB<uint64_t>({ 0, 0, 0 });
+ 		sharedStats_->yHistogram.fill(0);
+ 		sharedStats_->windowHistogram.fill(0);
++		sharedStats_->peakHistogram.fill(0);
+ 		sharedStats_->greySum_ = RGB<uint64_t>({ 0, 0, 0 });
+ 		sharedStats_->greyCount = 0;
+ 		sharedStats_->saturatedCount = 0;
+@@ -487,6 +491,7 @@ void SwStatsCpu::finishFrame(uint32_t frame, uint32_t bufferId)
+ 			for (unsigned int j = 0; j < SwIspStats::kYHistogramSize; j++) {
+ 				sharedStats_->yHistogram[j] += s.yHistogram[j];
+ 				sharedStats_->windowHistogram[j] += s.windowHistogram[j];
++				sharedStats_->peakHistogram[j] += s.peakHistogram[j];
+ 			}
+ 		}
+ 
+-- 
+2.55.0
+

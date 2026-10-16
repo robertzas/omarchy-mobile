@@ -63,6 +63,10 @@ in the table. See `device/cheetah/CAMERA-PLAN.md`, section 5.2.
 | `0046-software_isp-Count-the-samples-the-sensor-saturated.patch` | The statistics count the samples the sensor saturated |
 | `0047-ipa-simple-agc-Mind-what-the-sensor-saturates-and-th.patch` | The highlight cap counts sensor saturation and sRGB 240, graded by the rest of the picture |
 | `0048-software_isp-debayer_egl-Fade-sensor-clipped-highlig.patch` | Sensor-clipped highlights fade to neutral gently, from 80% |
+| `0049-software_isp-Gather-a-histogram-of-each-sample-s-bri.patch` | A histogram of each sample's brightest colour |
+| `0050-ipa-simple-agc-Choose-the-exposure-on-the-predicted-.patch` | The AGC chooses the exposure on the predicted output |
+| `0051-software_isp-debayer_egl-Add-hue-vibrance-and-a-tone.patch` | Hue, vibrance and a tone curve in the GPU debayer |
+| `0052-ipa-simple-Add-the-Look-algorithm-and-tune-it-on-the.patch` | The Look algorithm and its tuning for the four cameras |
 | `libcamera-fix-python3.14-macro-redefinition.patch` | Arch's patch, unchanged (sha512 `8b54cbdf…`) |
 | `.SRCINFO` | `makepkg --printsrcinfo` output |
 
@@ -175,6 +179,8 @@ Pictures stay noisier and softer at the corners than with Google's ISP.
 ## Status
 
 0.7.2-4.4 (0001-0003) runs on the phone: the ultrawide captures end to end.
+0.7.2-4.18 adds 0049-0052 (2026-10-16): an AGC that predicts the output
+(brighter, no hunting), and hue, vibrance and a shadow-lifting tone curve.
 0.7.2-4.17 adds 0046-0048 (2026-10-16): the highlight cap counts what the
 sensor saturates and near-white output, lamps don't darken a room, and no
 hard ring in a clipped sky.

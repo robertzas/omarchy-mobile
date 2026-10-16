@@ -1,0 +1,287 @@
+From 093899c7ac9ff0838afcc6b03e090b12042ebde9 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Fri, 16 Oct 2026 12:03:52 -0400
+Subject: [PATCH 51/52] software_isp: debayer_egl: Add hue, vibrance and a tone
+ curve
+
+Compared with a reference phone on the same daylight scenes, the
+software ISP's greens came out on the cyan side and dull, its blue
+skies on the violet side, and its shadows crushed, which a 3x3 colour
+matrix can't correct together without overdoing the reds.
+
+After the colour matrix, in linear opponent space (chroma (B - Y, R - Y)
+over the luminance), shift the hue and raise the chroma of each of 12
+hue sectors 30 degrees wide, interpolated between their centres: the
+dullest colours most (vibrance, falling to none at a chroma limit), and
+near-neutral ones not at all. After the highlight shoulder, lift the
+shadows with x (1 + a) / (x + a) on the luminance, which keeps full
+scale and the hue. The debayer parameters carry the 12 shifts and
+vibrances, the limit and the lift; all zero leaves the picture as
+before.
+
+Validated with glslang.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../internal/software_isp/debayer_params.h    | 10 +++
+ src/libcamera/shaders/bayer_1x_packed.frag    | 67 +++++++++++++++++++
+ src/libcamera/shaders/bayer_unpacked.frag     | 67 +++++++++++++++++++
+ src/libcamera/software_isp/debayer_egl.cpp    | 12 ++++
+ src/libcamera/software_isp/debayer_egl.h      |  6 ++
+ 5 files changed, 162 insertions(+)
+
+diff --git a/include/libcamera/internal/software_isp/debayer_params.h b/include/libcamera/internal/software_isp/debayer_params.h
+index ccffa944b..c3bd32370 100644
+--- a/include/libcamera/internal/software_isp/debayer_params.h
++++ b/include/libcamera/internal/software_isp/debayer_params.h
+@@ -47,6 +47,16 @@ struct DebayerParams {
+ 	 */
+ 	float sharpen = 0.0f;
+ 	float denoise = 0.0f;
++	/*
++	 * The look, after the colour matrix: a hue shift (radians) and a
++	 * vibrance (the chroma gain for the dullest colours, falling to none
++	 * at chroma vibranceLimit) for each of 12 hue sectors in linear
++	 * opponent space, and the tone curve's shadow lift (0: none).
++	 */
++	std::array<float, 12> hueShift = {};
++	std::array<float, 12> vibrance = {};
++	float vibranceLimit = 1.0f;
++	float toneLift = 0.0f;
+ };
+ 
+ } /* namespace libcamera */
+diff --git a/src/libcamera/shaders/bayer_1x_packed.frag b/src/libcamera/shaders/bayer_1x_packed.frag
+index 550de26ba..9f5a59417 100644
+--- a/src/libcamera/shaders/bayer_1x_packed.frag
++++ b/src/libcamera/shaders/bayer_1x_packed.frag
+@@ -101,6 +101,67 @@ float shoulder(float x)
+ 	       (1.0 - exp(-SHOULDER_SHAPE * t)) / (1.0 - exp(-SHOULDER_SHAPE));
+ }
+ 
++/*
++ * The look: in linear opponent space (chroma (B - Y, R - Y) over the
++ * luminance Y), each of 12 hue sectors 30 degrees wide shifts its hue and
++ * raises its chroma, interpolated between the sectors' centres, the dull
++ * colours most (vibrance) and near-neutral ones not at all.
++ */
++uniform float hue_shift[12];
++uniform float vibrance[12];
++uniform float vibrance_limit;
++uniform float tone_lift;
++
++vec3 apply_look(vec3 rgb)
++{
++	float y = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
++	if (y < 1e-4)
++		return rgb;
++
++	vec2 c = vec2(rgb.b - y, rgb.r - y) / y;
++	float r = length(c);
++	if (r < 1e-4)
++		return rgb;
++	float h = atan(c.y, c.x);
++	if (h < 0.0)
++		h += 6.2831853;
++
++	float dh = 0.0;
++	float v = 0.0;
++	for (int i = 0; i < 12; i++) {
++		float centre = float(i) * 0.5235988;
++		float d = abs(h - centre);
++		d = min(d, 6.2831853 - d);
++		float w = max(0.0, 1.0 - d / 0.5235988);
++		dh += w * hue_shift[i];
++		v += w * vibrance[i];
++	}
++
++	float w = smoothstep(0.05, 0.2, r);
++	h += w * dh;
++	r *= 1.0 + w * v * max(0.0, 1.0 - r / vibrance_limit);
++
++	float red = y * (1.0 + r * sin(h));
++	float blue = y * (1.0 + r * cos(h));
++	float green = (y - 0.2126 * red - 0.0722 * blue) / 0.7152;
++	return vec3(red, green, blue);
++}
++
++/*
++ * The tone curve: a shadow lift on the luminance, x (1 + a) / (x + a),
++ * which keeps full scale and the hue, and raises the dark parts most.
++ */
++vec3 apply_tone(vec3 rgb)
++{
++	if (tone_lift <= 0.0)
++		return rgb;
++	float y = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
++	if (y < 1e-5)
++		return rgb;
++	float yc = min(y, 4.0);
++	return rgb * (yc * (1.0 + tone_lift) / (yc + tone_lift)) / y;
++}
++
+ void main(void)
+ {
+ 	vec3 rgb;
+@@ -275,6 +336,9 @@ void main(void)
+ 	/* Colour Correction Matrix */
+ 	rgb = ccm * rgb;
+ 
++	/* The look: hues and vibrance */
++	rgb = apply_look(rgb);
++
+ 	/*
+ 	 * Shoulder: colours the gains took past full scale roll off instead of
+ 	 * clipping, scaled together so they keep their hue: an overcast sky
+@@ -284,6 +348,9 @@ void main(void)
+ 	if (peak > SHOULDER_KNEE)
+ 		rgb *= shoulder(peak) / peak;
+ 
++	/* The tone curve: lift the shadows */
++	rgb = apply_tone(rgb);
++
+ 	/*
+ 	 * Gamut: a colour outside the range moves towards its luminance, not
+ 	 * channel by channel, so saturated colours don't change hue (neon red
+diff --git a/src/libcamera/shaders/bayer_unpacked.frag b/src/libcamera/shaders/bayer_unpacked.frag
+index 53b701e0b..2685cdf5a 100644
+--- a/src/libcamera/shaders/bayer_unpacked.frag
++++ b/src/libcamera/shaders/bayer_unpacked.frag
+@@ -61,6 +61,67 @@ float shoulder(float x)
+ 	       (1.0 - exp(-SHOULDER_SHAPE * t)) / (1.0 - exp(-SHOULDER_SHAPE));
+ }
+ 
++/*
++ * The look: in linear opponent space (chroma (B - Y, R - Y) over the
++ * luminance Y), each of 12 hue sectors 30 degrees wide shifts its hue and
++ * raises its chroma, interpolated between the sectors' centres, the dull
++ * colours most (vibrance) and near-neutral ones not at all.
++ */
++uniform float hue_shift[12];
++uniform float vibrance[12];
++uniform float vibrance_limit;
++uniform float tone_lift;
++
++vec3 apply_look(vec3 rgb)
++{
++	float y = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
++	if (y < 1e-4)
++		return rgb;
++
++	vec2 c = vec2(rgb.b - y, rgb.r - y) / y;
++	float r = length(c);
++	if (r < 1e-4)
++		return rgb;
++	float h = atan(c.y, c.x);
++	if (h < 0.0)
++		h += 6.2831853;
++
++	float dh = 0.0;
++	float v = 0.0;
++	for (int i = 0; i < 12; i++) {
++		float centre = float(i) * 0.5235988;
++		float d = abs(h - centre);
++		d = min(d, 6.2831853 - d);
++		float w = max(0.0, 1.0 - d / 0.5235988);
++		dh += w * hue_shift[i];
++		v += w * vibrance[i];
++	}
++
++	float w = smoothstep(0.05, 0.2, r);
++	h += w * dh;
++	r *= 1.0 + w * v * max(0.0, 1.0 - r / vibrance_limit);
++
++	float red = y * (1.0 + r * sin(h));
++	float blue = y * (1.0 + r * cos(h));
++	float green = (y - 0.2126 * red - 0.0722 * blue) / 0.7152;
++	return vec3(red, green, blue);
++}
++
++/*
++ * The tone curve: a shadow lift on the luminance, x (1 + a) / (x + a),
++ * which keeps full scale and the hue, and raises the dark parts most.
++ */
++vec3 apply_tone(vec3 rgb)
++{
++	if (tone_lift <= 0.0)
++		return rgb;
++	float y = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
++	if (y < 1e-5)
++		return rgb;
++	float yc = min(y, 4.0);
++	return rgb * (yc * (1.0 + tone_lift) / (yc + tone_lift)) / y;
++}
++
+ void main(void) {
+     vec3 rgb;
+ 
+@@ -179,6 +240,9 @@ void main(void) {
+     /* Colour Correction Matrix */
+     rgb = ccm * rgb;
+ 
++    /* The look: hues and vibrance */
++    rgb = apply_look(rgb);
++
+     /*
+      * Shoulder: colours the gains took past full scale roll off instead of
+      * clipping, scaled together so they keep their hue: an overcast sky
+@@ -188,6 +252,9 @@ void main(void) {
+     if (peak > SHOULDER_KNEE)
+     	rgb *= shoulder(peak) / peak;
+ 
++    /* The tone curve: lift the shadows */
++    rgb = apply_tone(rgb);
++
+     /*
+      * Gamut: a colour outside the range moves towards its luminance, not
+      * channel by channel, so saturated colours don't change hue (neon red
+diff --git a/src/libcamera/software_isp/debayer_egl.cpp b/src/libcamera/software_isp/debayer_egl.cpp
+index 2a765a038..f1b4de0f2 100644
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -122,6 +122,10 @@ int DebayerEGL::getShaderVariableLocations(void)
+ 	gammaUniformDataIn_ = glGetUniformLocation(programId_, "gamma");
+ 	contrastExpUniformDataIn_ = glGetUniformLocation(programId_, "contrastExp");
+ 	swapBlueUniformDataIn_ = glGetUniformLocation(programId_, "swap_blue");
++	hueShiftUniformDataIn_ = glGetUniformLocation(programId_, "hue_shift");
++	vibranceUniformDataIn_ = glGetUniformLocation(programId_, "vibrance");
++	vibranceLimitUniformDataIn_ = glGetUniformLocation(programId_, "vibrance_limit");
++	toneLiftUniformDataIn_ = glGetUniformLocation(programId_, "tone_lift");
+ 	lscK1UniformDataIn_ = glGetUniformLocation(programId_, "lsc_k1");
+ 	lscK2UniformDataIn_ = glGetUniformLocation(programId_, "lsc_k2");
+ 	lscScaleUniformDataIn_ = glGetUniformLocation(programId_, "lsc_scale");
+@@ -529,6 +533,14 @@ void DebayerEGL::setShaderVariableValues(eGLImage &eglImageIn, const DebayerPara
+ 	glUniform3f(lscK2UniformDataIn_, params.lscK2[0], params.lscK2[1], params.lscK2[2]);
+ 	glUniform2f(lscScaleUniformDataIn_, params.lscScale[0], params.lscScale[1]);
+ 
++	/*
++	 * The look and the tone curve
++	 */
++	glUniform1fv(hueShiftUniformDataIn_, 12, params.hueShift.data());
++	glUniform1fv(vibranceUniformDataIn_, 12, params.vibrance.data());
++	glUniform1f(vibranceLimitUniformDataIn_, std::max(params.vibranceLimit, 0.01f));
++	glUniform1f(toneLiftUniformDataIn_, params.toneLift);
++
+ 	return;
+ }
+ 
+diff --git a/src/libcamera/software_isp/debayer_egl.h b/src/libcamera/software_isp/debayer_egl.h
+index 168164947..dcd6d7abe 100644
+--- a/src/libcamera/software_isp/debayer_egl.h
++++ b/src/libcamera/software_isp/debayer_egl.h
+@@ -130,6 +130,12 @@ private:
+ 	GLint postUniformProjMatrix_;
+ 	GLint postUniformStrideFactor_;
+ 
++	/* The look and the tone curve */
++	GLint hueShiftUniformDataIn_;
++	GLint vibranceUniformDataIn_;
++	GLint vibranceLimitUniformDataIn_;
++	GLint toneLiftUniformDataIn_;
++
+ 	/* Lens shading */
+ 	GLint lscK1UniformDataIn_;
+ 	GLint lscK2UniformDataIn_;
+-- 
+2.55.0
+

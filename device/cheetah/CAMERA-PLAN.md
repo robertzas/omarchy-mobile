@@ -3709,6 +3709,30 @@ copy in /tmp, not installed):**
   versus shaded foliage, about 4.5 stops. One still (105908) ran out of
   omacam's wait with AE searching.
 
+**CAM5.4, daylight test 5 (4.17, 2026-10-16) against our own shots of the same scenes from another phone, and libcamera 4.18:**
+- **4.17 wins:** no sky ring, blue skies with cloud detail, no milky
+  lawn, near-white mostly 0-5%.
+- **4.17 was too dark.** On nine pairs our mean was sRGB 38-92 against the
+  reference's 80-109; median 30-97 against 65-114; up to 27% of the
+  picture at 20 or under.
+- **AE hunted:** 3 of 11 main stills were taken still searching after
+  1.5 s. The limits stepped against clipped shares that jump with the
+  exposure, and the dark-rest leniency flipped as the exposure moved.
+- **Colour (HSV, our vs reference):** grass hue 74-146° vs 70-99°;
+  shaded grass is cyan and dull (saturation 0.14-0.30 vs 0.37-0.57). Sky
+  hue 223-232° vs 209-224°. Reds close.
+- **4.18:**
+  - `0049`: a peak histogram (each sample's brightest colour);
+  - `0050`: the AGC predicts the output at any exposure and bisects for
+    a mean of sRGB 102, with highlights and saturation within 2% beyond
+    what still clips two stops lower (light sources). In a model of the
+    loop, a lamp scene that reversed 33 times with 4.17's limits settles
+    without a reversal;
+  - `0051`/`0052`: hue and vibrance per hue sector and a shadow lift.
+    Replayed offline on the nine pairs: mean 32 levels under the
+    reference → within 1, median within 7, sky hue 15° → 10° off, green
+    saturation matched.
+
 ### CAM5.5: 60 fps on the main and telephoto cameras. Risk: medium (DMA)
 
 Kernel: omamobile-camera `9e5c1a218` ("media: i2c: s5kgn1: let VBLANK shorten
