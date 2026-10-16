@@ -5,7 +5,8 @@
  * ABL picks a dtbo entry by board_id/board_rev and applies it on top of
  * our base DTB. The stock overlay references Google labels that do not
  * exist in the mainline DTB, so we ship one that changes nothing.
- * board_id/board_rev are not confirmed on a phone yet (NOTES.md).
+ * board_id/board_rev are the entry a retail Pixel 6 boots
+ * (ro.boot.dtbo_idx = 0 in the stock dtbo.img; NOTES.md).
  */
 /dts-v1/;
 /plugin/;

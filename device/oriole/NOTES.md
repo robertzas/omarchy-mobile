@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6 (oriole) bring-up notes
 
-Findings for the Pixel 6 port, newest first. The port is a community effort tracked in [issue #2](https://github.com/derekross/omarchy-mobile/issues/2); the 6 Pro (raven) and 6a (bluejay) share it. Facts are marked [V] (checked, with the source) or [I] (an inference to check on a phone). Nothing here has run on a phone yet.
+Findings for the Pixel 6 port, newest first. The port is a community effort tracked in [issue #2](https://github.com/derekross/omarchy-mobile/issues/2); the 6 Pro (raven) and 6a (bluejay) share it. Facts are marked [V] (checked, with the source) or [I] (an inference to check on a phone). Nothing has been flashed or booted yet: the phone facts come from read-only adb and fastboot queries of a stock phone.
 
 Sources:
 
@@ -9,12 +9,23 @@ Sources:
 - `U/`: upstream Linux v7.0, `arch/arm64/boot/dts/exynos/google/gs101*.dts(i)`.
 - `P/`: postmarketOS pmaports [`device/testing/device-google-oriole`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/device-google-oriole), [`soc-google-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/soc-google-gs101) and [`linux-postmarketos-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/linux-postmarketos-gs101) (7.0.6), which builds [gs101-mainline/linux @ d28cfa42](https://github.com/gs101-mainline/linux/tree/d28cfa4275b95e93f4b7a1e743de31b723bd21b8).
 
+## 2026-10-16: stage 0, part 2: a retail Pixel 6 (stock, bootloader locked)
+
+Read-only queries (`adb shell getprop`, `/dev/block/by-name`, `fastboot getvar all`) of a stock phone; facts only, no serial numbers.
+
+- **Same build as the factory image** [V]: `ro.build.id` CP3A.261005.002.A1, security patch 2026-10-05, bootloader `slider-17.0-15681480` (F/'s `android-info.txt` requires exactly that one). So the F/ facts below apply to this phone, and `OS_PATCH_LEVEL=2026-10` matches its stock build.
+- **The board dtbo entry is `0x20304`/`0x10000`** [V]: `ro.boot.dtbo_idx` is 0, and entry 0 of F/'s `dtbo.img` is board_id 0x20304, board_rev 0x10000, as `device.conf` assumed. `ro.boot.hardware.revision` and `getvar hw-revision` both say MP1.0.
+- **No `init_boot` or `vendor_kernel_boot` partition** [V] (`getvar all`, `/dev/block/by-name`). The A/B partitions are `boot`, `vendor_boot`, `dtbo`, `pvmfw`, `vbmeta`, `vbmeta_system`, `vbmeta_vendor`, `modem`, the bootloader images (`abl`, `bl1`, `bl2`, `bl31`, `pbl`, `tzsw`, `gsa`, `ldfw`, `dram_train`) and `dpm`, plus the dynamic partitions in `super`. `BOOT_IMAGES="boot vendor_boot dtbo"` is right.
+- **Not slotted** [V]: `persist`, `efs` and `efs_backup` (ext4), `modem_userdata`, `metadata`, `misc`, `frp`, `klog`, `fips`, `devinfo`, `mfg_data`, `super` and `userdata`. `/dev/block/by-name` also lists four whole LUNs, `sda` to `sdd`.
+- **Bootloader state** [V]: `product:oriole`, `secure-boot:PRODUCTION`, current slot a, `unlocked:no`. Unlocking (`fastboot flashing unlock`) wipes the phone, and comes before any slot B write.
+- **`soc_id` is still unknown** [I]: `/sys/firmware/devicetree/base/soc_id` is not readable without root on stock Android.
+
 ## 2026-10-14: stage 0, part 1: facts from the factory image (no phone)
 
 ### Boot images and partitions
 
-- **No `init_boot` and no `vendor_kernel_boot`** [V] (F/ image zip): the image ships `boot`, `vendor_boot`, `dtbo`, `pvmfw`, the vbmetas and the dynamic partitions, and `fastboot-info.txt` flashes `boot`, `dtbo`, `pvmfw` and `vendor_boot`. So `BOOT_IMAGES="boot vendor_boot dtbo"`: the DTB and our initramfs go in `vendor_boot`, and the generic (empty) ramdisk and the OS version in `boot`. `bin/omamobile images`, `flash` and `push` handle that layout, and `tests/images-layout` checks it. `fastboot getvar all` still has to confirm the partition table [I].
-- **Header v4 for `boot` and `vendor_boot`** [V] (F/): `vendor_boot` page size 0x800, two vendor ramdisks and a bootconfig section. Stock's `boot` header leaves `os_version` at 0 (GKI; the AVB footer carries it), so `OS_VERSION`/`OS_PATCH_LEVEL` in `device.conf` are the factory build's (17.0.0, 2026-10) [I].
+- **No `init_boot` and no `vendor_kernel_boot`** [V] (F/ image zip): the image ships `boot`, `vendor_boot`, `dtbo`, `pvmfw`, the vbmetas and the dynamic partitions, and `fastboot-info.txt` flashes `boot`, `dtbo`, `pvmfw` and `vendor_boot`. So `BOOT_IMAGES="boot vendor_boot dtbo"`: the DTB and our initramfs go in `vendor_boot`, and the generic (empty) ramdisk and the OS version in `boot`. `bin/omamobile images`, `flash` and `push` handle that layout, and `tests/images-layout` checks it. A retail phone confirms the partition table (2026-10-16).
+- **Header v4 for `boot` and `vendor_boot`** [V] (F/): `vendor_boot` page size 0x800, two vendor ramdisks and a bootconfig section. Stock's `boot` header leaves `os_version` at 0 (GKI; the AVB footer carries it), so `OS_VERSION`/`OS_PATCH_LEVEL` in `device.conf` are the factory build's (17.0.0, 2026-10), which is also the stock build on a retail phone (2026-10-16).
 - **One image for four boards** [V] (F/ `android-info.txt`): `board=slider|whitefin|oriole|raven`.
 
 ### Base DTB
@@ -36,7 +47,7 @@ Sources:
 | 0x201, 0x20001 | several | S6E3HC2 | both | development boards [I] |
 
 - **Oriole's panel is the Samsung S6E3FC3; its touch controller is an ST FTS on SPI** [V] (F/, and P/'s oriole DT: `"st,spi"` on SPI11, an out-of-tree driver). "goodix" in every entry is the under-display fingerprint sensor [I].
-- **Retail board_id/board_rev** [I]: probably the newest, `0x20304`/`0x10000` (cheetah's is `0x30306`/`0x10000`). `getprop ro.boot.dtbo_idx` on the phone settles it; `device.conf` and `oriole-m1-overlay.dts` use 0x20304/0x10000 until then.
+- **Retail board_id/board_rev**: the newest, `0x20304`/`0x10000` (cheetah's is `0x30306`/`0x10000`), as `device.conf` and `oriole-m1-overlay.dts` use. Confirmed with `ro.boot.dtbo_idx` on a retail phone (2026-10-16) [V].
 
 ### Display trigger
 
@@ -48,8 +59,7 @@ Sources:
 
 ### Still needs a phone
 
-- `ro.boot.dtbo_idx` and the `soc_id` the phone reports;
-- `fastboot getvar all` (partition table and sizes, slot state);
+- the `soc_id` the phone reports (needs root, or the bootloader's own report);
 - with root: the live DT (`/sys/firmware/fdt`) and `/proc/iomem`, to check every stock `reserved-memory` region.
 
 `bin/omamobile capture` collects these into a private folder (`~/android/reference`); post facts, never the files.
