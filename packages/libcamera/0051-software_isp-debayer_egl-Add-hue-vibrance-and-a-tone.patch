@@ -1,4 +1,4 @@
-From 093899c7ac9ff0838afcc6b03e090b12042ebde9 Mon Sep 17 00:00:00 2001
+From 65b85047ce50c49c285a59c66be93348985ff6ac Mon Sep 17 00:00:00 2001
 From: Derek Ross <derekross@gmail.com>
 Date: Fri, 16 Oct 2026 12:03:52 -0400
 Subject: [PATCH 51/52] software_isp: debayer_egl: Add hue, vibrance and a tone
@@ -52,7 +52,7 @@ index ccffa944b..c3bd32370 100644
  
  } /* namespace libcamera */
 diff --git a/src/libcamera/shaders/bayer_1x_packed.frag b/src/libcamera/shaders/bayer_1x_packed.frag
-index 550de26ba..9f5a59417 100644
+index 550de26ba..1c2a98753 100644
 --- a/src/libcamera/shaders/bayer_1x_packed.frag
 +++ b/src/libcamera/shaders/bayer_1x_packed.frag
 @@ -101,6 +101,67 @@ float shoulder(float x)
@@ -95,7 +95,7 @@ index 550de26ba..9f5a59417 100644
 +		v += w * vibrance[i];
 +	}
 +
-+	float w = smoothstep(0.05, 0.2, r);
++	float w = smoothstep(0.10, 0.30, r);
 +	h += w * dh;
 +	r *= 1.0 + w * v * max(0.0, 1.0 - r / vibrance_limit);
 +
@@ -144,7 +144,7 @@ index 550de26ba..9f5a59417 100644
  	 * Gamut: a colour outside the range moves towards its luminance, not
  	 * channel by channel, so saturated colours don't change hue (neon red
 diff --git a/src/libcamera/shaders/bayer_unpacked.frag b/src/libcamera/shaders/bayer_unpacked.frag
-index 53b701e0b..2685cdf5a 100644
+index 53b701e0b..f7a1d2ca3 100644
 --- a/src/libcamera/shaders/bayer_unpacked.frag
 +++ b/src/libcamera/shaders/bayer_unpacked.frag
 @@ -61,6 +61,67 @@ float shoulder(float x)
@@ -187,7 +187,7 @@ index 53b701e0b..2685cdf5a 100644
 +		v += w * vibrance[i];
 +	}
 +
-+	float w = smoothstep(0.05, 0.2, r);
++	float w = smoothstep(0.10, 0.30, r);
 +	h += w * dh;
 +	r *= 1.0 + w * v * max(0.0, 1.0 - r / vibrance_limit);
 +

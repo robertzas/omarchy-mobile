@@ -1,4 +1,4 @@
-From ea8058816b11af48b28519078dbac44074d00ed8 Mon Sep 17 00:00:00 2001
+From 4d2c342d986302725b12a1b82448c0efe031fc91 Mon Sep 17 00:00:00 2001
 From: Derek Ross <derekross@gmail.com>
 Date: Fri, 16 Oct 2026 12:04:51 -0400
 Subject: [PATCH 52/52] ipa: simple: Add the Look algorithm and tune it on the
@@ -13,25 +13,28 @@ Tune it for the Google Pixel 7 Pro's four cameras on our own daylight
 shots, compared with our own shots of the same scenes from another
 phone. Measured there, greens came out 15-45 degrees (HSV) on the cyan
 side of the reference and with half its saturation, and blue skies on
-the violet side; reds were close. So: greens 25 degrees towards
-yellow, blue skies 10 out of violet, vibrance 1.0 for greens, 0.8 for
-blues and 0.2 for reds, and a lift of 0.45. Replayed offline on nine
-pairs of shots, the mean output moved from 32 sRGB levels under the
-reference to within one (median within 7, 95th percentile 12 over), the
-sky's hue from 15 to 10 degrees off, and the greens' saturation to the
-reference's; the greens' HSV hue moved little (15 to 13 degrees off),
-so the green shift may want more in daylight.
+the violet side; reds were close. So: greens 15 degrees towards
+yellow, blue skies 5 out of violet, vibrance 1.0 for greens, 0.6-0.8
+for blues and none for reds and warm colours, and a lift of 0.45. An
+offline preview with twice the shifts and vibrance on the warm sectors
+turned skies cyan and gravel pink.
+
+Replayed offline on nine pairs of shots, the mean output moved from 32
+sRGB levels under the reference to within one (median within 6, 95th
+percentile 12 over) and the greens' saturation to the reference's; the
+greens' HSV hue moved from 15 to 11 degrees off and the sky's stayed
+about 15 off, which looks right rather than cyan.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  src/ipa/simple/algorithms/look.cpp    | 87 +++++++++++++++++++++++++++
  src/ipa/simple/algorithms/look.h      | 38 ++++++++++++
  src/ipa/simple/algorithms/meson.build |  1 +
- src/ipa/simple/data/imx386.yaml       | 10 +++
- src/ipa/simple/data/s5k3j1.yaml       | 10 +++
- src/ipa/simple/data/s5kgm5.yaml       | 10 +++
- src/ipa/simple/data/s5kgn1.yaml       | 10 +++
- 7 files changed, 166 insertions(+)
+ src/ipa/simple/data/imx386.yaml       | 11 ++++
+ src/ipa/simple/data/s5k3j1.yaml       | 11 ++++
+ src/ipa/simple/data/s5kgm5.yaml       | 11 ++++
+ src/ipa/simple/data/s5kgn1.yaml       | 11 ++++
+ 7 files changed, 170 insertions(+)
  create mode 100644 src/ipa/simple/algorithms/look.cpp
  create mode 100644 src/ipa/simple/algorithms/look.h
 
@@ -184,84 +187,88 @@ index fd99eb716..6c4306c3f 100644
      'lsc.cpp',
  ])
 diff --git a/src/ipa/simple/data/imx386.yaml b/src/ipa/simple/data/imx386.yaml
-index d1c865375..b3676a095 100644
+index d1c865375..0a83bdfef 100644
 --- a/src/ipa/simple/data/imx386.yaml
 +++ b/src/ipa/simple/data/imx386.yaml
-@@ -54,6 +54,16 @@ algorithms:
+@@ -54,6 +54,17 @@ algorithms:
            ccm: [ 1.34849, -0.05425, -0.29424,
                  -0.22182,  1.77684, -0.55502,
                  -0.07403, -0.55336,  1.62739 ]
 +  # Hues, vibrance and shadow lift, tuned by eye on our own daylight shots
 +  # against our own shots of the same scenes from another phone: greens
 +  # towards yellow, blue skies out of violet, dull colours livelier, reds
-+  # left alone, shadows lifted (Look in algorithms/look.cpp).
++  # and warm colours left alone (an offline preview made gravel pink and
++  # skies cyan with more), shadows lifted (Look in algorithms/look.cpp).
 +  - Look:
 +      #          0  30  60  90 120 150  180  210  240 270 300  330
-+      hueShift: [ -10, -4,  0,  0,  0, -8, -25, -25, -10,  0,  0, -10 ]
-+      vibrance: [ 0.8, 0.6, 0.3, 0.2, 0.2, 0.6, 1.0, 1.0, 0.8, 0.5, 0.5, 0.8 ]
++      hueShift: [ -5, -2,  0,  0,  0, -5, -15, -15, -6,  0,  0, -5 ]
++      vibrance: [ 0.6, 0.4, 0.0, 0.0, 0.0, 0.3, 1.0, 1.0, 0.8, 0.4, 0.4, 0.6 ]
 +      vibranceLimit: 1.0
 +      toneLift: 0.45
    # Defaults for applications that do not set the controls.
    - Adjust:
        contrast: 1.2
 diff --git a/src/ipa/simple/data/s5k3j1.yaml b/src/ipa/simple/data/s5k3j1.yaml
-index c59b6043f..34788b2bd 100644
+index c59b6043f..061f1868e 100644
 --- a/src/ipa/simple/data/s5k3j1.yaml
 +++ b/src/ipa/simple/data/s5k3j1.yaml
-@@ -22,6 +22,16 @@ algorithms:
+@@ -22,6 +22,17 @@ algorithms:
            ccm: [ 1.3184, -0.1750, -0.1092,
                   -0.1442,  1.2800, -0.1456,
                   -0.1081, -0.3850,  1.5496 ]
 +  # Hues, vibrance and shadow lift, tuned by eye on our own daylight shots
 +  # against our own shots of the same scenes from another phone: greens
 +  # towards yellow, blue skies out of violet, dull colours livelier, reds
-+  # left alone, shadows lifted (Look in algorithms/look.cpp).
++  # and warm colours left alone (an offline preview made gravel pink and
++  # skies cyan with more), shadows lifted (Look in algorithms/look.cpp).
 +  - Look:
 +      #          0  30  60  90 120 150  180  210  240 270 300  330
-+      hueShift: [ -10, -4,  0,  0,  0, -8, -25, -25, -10,  0,  0, -10 ]
-+      vibrance: [ 0.8, 0.6, 0.3, 0.2, 0.2, 0.6, 1.0, 1.0, 0.8, 0.5, 0.5, 0.8 ]
++      hueShift: [ -5, -2,  0,  0,  0, -5, -15, -15, -6,  0,  0, -5 ]
++      vibrance: [ 0.6, 0.4, 0.0, 0.0, 0.0, 0.3, 1.0, 1.0, 0.8, 0.4, 0.4, 0.6 ]
 +      vibranceLimit: 1.0
 +      toneLift: 0.45
    # Defaults for applications that do not set the controls.
    - Adjust:
        contrast: 1.2
 diff --git a/src/ipa/simple/data/s5kgm5.yaml b/src/ipa/simple/data/s5kgm5.yaml
-index 3ceb7f183..07cb81917 100644
+index 3ceb7f183..cc5c55889 100644
 --- a/src/ipa/simple/data/s5kgm5.yaml
 +++ b/src/ipa/simple/data/s5kgm5.yaml
-@@ -27,6 +27,16 @@ algorithms:
+@@ -27,6 +27,17 @@ algorithms:
            ccm: [ 1.3184, -0.1750, -0.1092,
                   -0.1442,  1.2800, -0.1456,
                   -0.1081, -0.3850,  1.5496 ]
 +  # Hues, vibrance and shadow lift, tuned by eye on our own daylight shots
 +  # against our own shots of the same scenes from another phone: greens
 +  # towards yellow, blue skies out of violet, dull colours livelier, reds
-+  # left alone, shadows lifted (Look in algorithms/look.cpp).
++  # and warm colours left alone (an offline preview made gravel pink and
++  # skies cyan with more), shadows lifted (Look in algorithms/look.cpp).
 +  - Look:
 +      #          0  30  60  90 120 150  180  210  240 270 300  330
-+      hueShift: [ -10, -4,  0,  0,  0, -8, -25, -25, -10,  0,  0, -10 ]
-+      vibrance: [ 0.8, 0.6, 0.3, 0.2, 0.2, 0.6, 1.0, 1.0, 0.8, 0.5, 0.5, 0.8 ]
++      hueShift: [ -5, -2,  0,  0,  0, -5, -15, -15, -6,  0,  0, -5 ]
++      vibrance: [ 0.6, 0.4, 0.0, 0.0, 0.0, 0.3, 1.0, 1.0, 0.8, 0.4, 0.4, 0.6 ]
 +      vibranceLimit: 1.0
 +      toneLift: 0.45
    # Defaults for applications that do not set the controls.
    - Adjust:
        contrast: 1.2
 diff --git a/src/ipa/simple/data/s5kgn1.yaml b/src/ipa/simple/data/s5kgn1.yaml
-index 07d0a704d..6172430e8 100644
+index 07d0a704d..c27e474ac 100644
 --- a/src/ipa/simple/data/s5kgn1.yaml
 +++ b/src/ipa/simple/data/s5kgn1.yaml
-@@ -26,6 +26,16 @@ algorithms:
+@@ -26,6 +26,17 @@ algorithms:
            ccm: [ 1.3184, -0.1750, -0.1092,
                   -0.1442,  1.2800, -0.1456,
                   -0.1081, -0.3850,  1.5496 ]
 +  # Hues, vibrance and shadow lift, tuned by eye on our own daylight shots
 +  # against our own shots of the same scenes from another phone: greens
 +  # towards yellow, blue skies out of violet, dull colours livelier, reds
-+  # left alone, shadows lifted (Look in algorithms/look.cpp).
++  # and warm colours left alone (an offline preview made gravel pink and
++  # skies cyan with more), shadows lifted (Look in algorithms/look.cpp).
 +  - Look:
 +      #          0  30  60  90 120 150  180  210  240 270 300  330
-+      hueShift: [ -10, -4,  0,  0,  0, -8, -25, -25, -10,  0,  0, -10 ]
-+      vibrance: [ 0.8, 0.6, 0.3, 0.2, 0.2, 0.6, 1.0, 1.0, 0.8, 0.5, 0.5, 0.8 ]
++      hueShift: [ -5, -2,  0,  0,  0, -5, -15, -15, -6,  0,  0, -5 ]
++      vibrance: [ 0.6, 0.4, 0.0, 0.0, 0.0, 0.3, 1.0, 1.0, 0.8, 0.4, 0.4, 0.6 ]
 +      vibranceLimit: 1.0
 +      toneLift: 0.45
    # Defaults for applications that do not set the controls.

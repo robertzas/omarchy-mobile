@@ -3729,9 +3729,15 @@ copy in /tmp, not installed):**
     loop, a lamp scene that reversed 33 times with 4.17's limits settles
     without a reversal;
   - `0051`/`0052`: hue and vibrance per hue sector and a shadow lift.
-    Replayed offline on the nine pairs: mean 32 levels under the
-    reference → within 1, median within 7, sky hue 15° → 10° off, green
-    saturation matched.
+    The first tuning, previewed offline on the nine pairs, turned skies
+    cyan and gravel pink. The final tuning shifts greens 15° and skies
+    5°, with no vibrance on warm hues: mean 32 levels under the reference
+    → within 1, median within 6, green saturation matched, sky hue about
+    15° off but blue. Salmon clouds in 115105 are that shot's warm white
+    balance (130/117/108 before the look), not the look.
+  - Smoke test of 4.18, unpacked, dim room: all four still modes and main
+    1080p stream and converge. The front camera, with a ceiling light in
+    view, held its exposure, the light's glow counting as highlights.
 
 ### CAM5.5: 60 fps on the main and telephoto cameras. Risk: medium (DMA)
 
