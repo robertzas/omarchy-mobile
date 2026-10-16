@@ -3669,7 +3669,26 @@ copy in /tmp, not installed):**
   project.
 - **White balance:** neutral on grey pavers (165413: 126/125/128), not
   drifting blue; the dark grass is the evening light.
-- **The shaders pass glslang.** The smoke test on the phone is pending.
+- **The shaders pass glslang.**
+- **Phone tests, 2026-10-16 (indoor and dim; 4.15 installed, 4.16 from an
+  unpacked copy):**
+  - **Telephoto gain test (4.15, manual exposure):** the gain takes effect.
+    Gain 2 → 6 at 30 ms took sRGB 5.4 → 18.5, and 10 → 30 ms at gain 2
+    took 0.6 → 5.3. So the dark telephoto stills weren't a gain mapping
+    fault.
+    - The reported metadata changes about two frames after the picture
+      does: the modelled delay of 2 is longer than the sensor's. That only
+      makes the AGC wait more than it needs to.
+    - A raw-only stream runs without the IPA, so manual controls need a
+      processed stream.
+  - **4.16 smoke test:** all four cameras open and stream in their still
+    modes (main 9.4, telephoto 13.1, ultrawide 21.1, front 26.1 fps), plus
+    main 1080p at 30 fps. AeState converged on each, with no errors.
+    - The main still went from mean 0.58/13% clipped to 0.33 and 0.23.
+    - The telephoto, ultrawide and front sat at their limits (too dim for
+      them).
+    - `cam` configures once, so the mode change of `0042` wasn't exercised.
+      It shows in omacam's preview-to-still switch.
 
 ### CAM5.5: 60 fps on the main and telephoto cameras. Risk: medium (DMA)
 
