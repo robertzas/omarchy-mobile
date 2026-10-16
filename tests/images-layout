@@ -7,7 +7,9 @@
 # version), vendor_boot (DTB and initramfs) and dtbo; flash, against a fake
 # fastboot, writes exactly the descriptor's BOOT_IMAGES and refuses images
 # built for another device; load_device refuses bad descriptors. Skips when
-# AOSP's mkbootimg isn't under $SRC_DIR.
+# AOSP's mkbootimg isn't under $SRC_DIR, or no dtc is found: $DTC, then dtc
+# on PATH, then a kernel build's scripts/dtc/dtc ($KERNEL_OUT, or
+# ~/android/mainline/out*).
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -20,7 +22,17 @@ fi
 mkbootimg=$SRC_DIR/system/tools/mkbootimg
 [[ -f $mkbootimg/mkbootimg.py && -f $mkbootimg/unpack_bootimg.py ]] || skip "no AOSP mkbootimg under SRC_DIR=$SRC_DIR"
 [[ -f $SRC_DIR/system/libufdt/utils/src/mkdtboimg.py ]] || skip "no mkdtboimg.py under SRC_DIR=$SRC_DIR"
-for tool in dtc lz4 cpio python3; do command -v $tool >/dev/null || skip "no $tool"; done
+for tool in lz4 cpio python3; do command -v $tool >/dev/null || skip "no $tool"; done
+# The kernel build ships its own dtc, so a machine without the
+# device-tree-compiler package can still run this test.
+dtc=${DTC:-$(command -v dtc || true)}
+if [[ -z $dtc ]]; then
+  for d in ${KERNEL_OUT:+"$KERNEL_OUT"} "$HOME"/android/mainline/out*; do
+    [[ -x $d/scripts/dtc/dtc ]] && { dtc=$d/scripts/dtc/dtc; break; }
+  done
+fi
+[[ -n $dtc && -x $dtc ]] || skip "no dtc: install device-tree-compiler, or set DTC to a kernel build's scripts/dtc/dtc"
+dtc=$(readlink -f "$dtc")
 t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
 
 # A repository-shaped tree: the tool, its config, two descriptors, a
@@ -66,13 +78,13 @@ overlay 0x20304 > "$R/device/six/six-overlay.dts"
 # The stub kernel output
 dts=$K/arch/arm64/boot/dts/exynos/google
 mkdir -p "$dts" "$K/scripts/dtc"
-ln -s "$(command -v dtc)" "$K/scripts/dtc/dtc"
+ln -s "$dtc" "$K/scripts/dtc/dtc"
 head -c 300000 /dev/urandom > "$K/arch/arm64/boot/Image"
 head -c 100000 /dev/urandom | lz4 -l -q > "$K/initramfs.cpio.lz4"
 for d in "gs201-twelve 0x9855001" "gs101-six 0x9845001"; do
   set -- $d
   printf '/dts-v1/;\n/ {\n\tsoc_id = <%s 0x00>;\n\tcompatible = "google,%s";\n\t#address-cells = <2>;\n\t#size-cells = <1>;\n\tect { };\n\tchosen { bootargs = ""; };\n};\n' "$2" "$1" \
-    | dtc -q -I dts -O dtb -o "$dts/$1.dtb" -
+    | "$dtc" -q -I dts -O dtb -o "$dts/$1.dtb" -
 done
 
 om() { (cd "$R" && KERNEL_OUT=$K DEVICE=$1 PATH="$t/bin:$PATH" bin/omamobile "${@:2}") > "$t/log" 2>&1; }
