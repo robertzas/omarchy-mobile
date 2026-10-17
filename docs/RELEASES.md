@@ -33,7 +33,7 @@ The audit behind this design (2026-10-13). "Step" names the roadmap step that re
 | `bin/omamobile initramfs` | the splash size comes from `PANEL_SIZE`; C sources from the device package when it has them. The init path and the trigger write come from the descriptor | 1 (done) |
 | `bin/omamobile capture` | the default capture name `cheetah-<date>` | 1 (done) |
 | `bin/omamobile push`, `flash` | the partition lookup assumes the main LUN is `sda` | 1 (allowlist check and `BOOT_IMAGES` layouts done; the Pixel 6 has no `init_boot` or `vendor_kernel_boot`, [oriole NOTES](../device/oriole/NOTES.md)), 3 |
-| `initramfs/init` | `UFS_RW` (checked against the descriptor at build time); `probe()` when `BRINGUP_PROBE=1` (watchdog and DPP reads); the USB product string "Pixel 7 Pro (M1)"; the main LUN `sda`. The TRIG_CON write is `SIMPLEFB_TRIG_CON` in the descriptor, packed into that device's initramfs only | 2 (trigger done; the rest still step 2) |
+| `initramfs/init` | `UFS_RW` (checked against the descriptor at build time); `probe()` when `BRINGUP_PROBE=1` and the board matches `COMPATIBLE` (watchdog and DPP reads); the USB product string "Pixel 7 Pro (M1)"; the main LUN `sda`. The TRIG_CON write is `SIMPLEFB_TRIG_CON` in the descriptor, packed into that device's initramfs only | 2 (trigger done; the rest still step 2) |
 | `bin/omamobile initramfs` | the developer's `~/.ssh/*.pub` baked in as `authorized_keys` (fine for development, never for a release) | 2 |
 | `tools/extract-vendor-firmware` | `BOARD="google,gs201-cheetah"`, `DEVICE="cheetah"`, the firmware `MAP` | 4 |
 | `tools/extract-vendor-chroot`, `extract-fingerprint-vendor` | `DEVICE="cheetah"`, cheetah's file lists | 4 |
@@ -74,7 +74,7 @@ Bring-up tools (`*-stage`, `display-hz`, `usbc-deadman`) stay per plan: they pok
 | `UFS_RW` | `boot_b … dtbo_b userdata` | The storage guard's allowlist. Only `*_b` names and `userdata` are accepted, and every `BOOT_IMAGES` entry must be on it |
 | `INITRAMFS_INIT` | `/initramfs/init` | The init script. A leading `/` is relative to the repo root, so devices share one script. Any other value is relative to the descriptor |
 | `SIMPLEFB_TRIG_CON` | `0x1c240030 0x3061` | This device's simplefb trigger write, `addr value`, packed into its initramfs next to `COMPATIBLE`. The init writes it only when that string is the board's first compatible. Absent or empty: no display write. Felix: `0x1c241030 0x3061` (cover, DECON1) |
-| `BRINGUP_PROBE` | `1` | Install the boot probe that reads watchdog and DPP registers. Absent on a phone whose panels are not driven yet |
+| `BRINGUP_PROBE` | `1` | Install the boot probe that reads watchdog and DPP registers. The init runs it only when the board matches `COMPATIBLE`. Absent on a phone whose panels are not driven yet |
 | `PANEL_SIZE` | `1440x3120` | Portrait panel size for the early splash |
 
 ### 3.2 Keys to add later

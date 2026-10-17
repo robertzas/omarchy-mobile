@@ -22,6 +22,13 @@ static s64 sc(s64 n, s64 a, s64 b, s64 c, s64 d, s64 e, s64 f)
 	return x0;
 }
 
+static void __attribute__((noreturn)) quit(int code)
+{
+	sc(93, code, 0, 0, 0, 0, 0);
+	for (;;)
+		;
+}
+
 static void wr(const char *s)
 {
 	u64 n = 0;
@@ -83,8 +90,10 @@ static u32 access_reg(u32 addr, int do_write, u32 value, int *ok)
 	if (fd < 0)
 		return 0;
 	map = sc(222, 0, 0x1000, 3, 1, fd, (s64)page);
-	if (map < 0)
+	if (map < 0) {
+		sc(57, fd, 0, 0, 0, 0, 0);
 		return 0;
+	}
 	if (do_write)
 		*(volatile u32 *)(map + (addr - page)) = value;
 	v = *(volatile u32 *)(map + (addr - page));
@@ -102,22 +111,22 @@ void devmem_main(unsigned long *sp)
 	int ok, do_write = 0;
 	if (argc < 2 || argc > 3 || parse_u32(argv[1], &addr)) {
 		wr("usage: devmem <address> [value]\n");
-		sc(93, 1, 0, 0, 0, 0, 0);
+		quit(1);
 	}
 	if (argc == 3) {
 		if (parse_u32(argv[2], &value)) {
 			wr("bad value\n");
-			sc(93, 1, 0, 0, 0, 0, 0);
+			quit(1);
 		}
 		do_write = 1;
 	}
 	got = access_reg(addr, do_write, value, &ok);
 	if (!ok) {
 		wr("devmem failed\n");
-		sc(93, 1, 0, 0, 0, 0, 0);
+		quit(1);
 	}
 	hex8(got);
-	sc(93, 0, 0, 0, 0, 0, 0);
+	quit(0);
 }
 
 __attribute__((naked)) void _start(void)
