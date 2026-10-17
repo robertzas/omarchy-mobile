@@ -77,6 +77,8 @@ Bring-up tools (`*-stage`, `display-hz`, `usbc-deadman`) stay per plan: they pok
 | `BRINGUP_PROBE` | `1` | Install the boot probe that reads watchdog and DPP registers. The init runs it only when the board matches `COMPATIBLE`. Absent on a phone whose panels are not driven yet |
 | `PANEL_SIZE` | `1440x3120` | Portrait panel size for the early splash |
 
+A descriptor directory may also hold `kernel.config`, a config fragment that `omamobile kernel` merges after `kernel/configs/omamobile.config`, for options that would break another device (gs101's AoC interface, which excludes gs201's). It is for bring-up only: the release kernel (§4) is one build for every device, so an option stays there until its driver handles both SoCs and the line moves to the shared fragment.
+
 ### 3.2 Keys to add later
 
 | Key | Step | Meaning |
