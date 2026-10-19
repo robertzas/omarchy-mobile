@@ -51,7 +51,7 @@ Read-only queries (`adb shell getprop`, `/dev/block/by-name`, `fastboot getvar a
 
 ### Display trigger
 
-- **postmarketOS writes `0x3061` to DECON at `0x1c300030` at boot** "to enable framebuffer refreshing" (P/ `soc-google-gs101/00-enable-fb.sh`). That is gs101's counterpart of cheetah's `TRIG_CON` write at `0x1c240030` [I]. Read it first, on a booted phone, before any write, and never use cheetah's address on oriole. It belongs in `device.conf` as `SIMPLEFB_TRIG_CON="0xADDR 0xVALUE"` (the key from #3 and #4), not in code; oriole gets no `SIMPLEFB_TRIG_CON` until that read has been done.
+- **postmarketOS writes `0x3061` to DECON at `0x1c300030` at boot** "to enable framebuffer refreshing" (P/ `soc-google-gs101/00-enable-fb.sh`). That is gs101's counterpart of cheetah's `TRIG_CON` write at `0x1c240030` [I]. Read it first, on a booted phone, before any write, and never use cheetah's address on oriole. It belongs in `device.conf` as `SIMPLEFB_TRIG_CON="0xADDR 0xVALUE"` (the key from #3 and #4, now on main), not in code; oriole gets no `SIMPLEFB_TRIG_CON` until that read has been done.
 
 ### GPU
 
@@ -66,6 +66,6 @@ Read-only queries (`adb shell getprop`, `/dev/block/by-name`, `fastboot getvar a
 
 And before oriole's first boot, in the tree:
 
-- **An initramfs.** `INITRAMFS_INIT` names a file that doesn't exist yet, so `DEVICE=oriole bin/omamobile initramfs` fails. Once #4 lands, oriole uses the shared `initramfs/init`.
+- **An initramfs.** Oriole uses the shared `/initramfs/init` (#4), but `DEVICE=oriole bin/omamobile initramfs` refuses it until the allowlist below is packed from the descriptor.
 - **The storage guard's allowlist packed from the descriptor.** The shared init still hard-codes cheetah's six-name `UFS_RW`, and the build requires an exact match with the descriptor, so oriole's `boot_b vendor_boot_b dtbo_b userdata` is refused. That fails closed, as it should; the init has to take the allowlist from `device.conf` first.
 - **`/soc_id` in the board DTS** (see Base DTB).
