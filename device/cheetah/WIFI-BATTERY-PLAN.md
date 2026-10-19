@@ -1,7 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Wi-Fi, Bluetooth and battery plan (cheetah / gs201)
 
-Status (2026-10-12): **Wi-Fi and the battery gauge work by default.** Wi-Fi:
+Status (2026-10-19): the gauge reports Charging and Full on the cable:
+`max17042_get_status` infers the status from the current when the DT names
+no supplier (kernel `de0aa4d4e`, in int `cbd727f42`; sent upstream with a
+Reviewed-by). Before it, the status read Unknown, upower took the phone for
+on battery, and its critical action slept it ([NOTES](NOTES.md),
+2026-10-18). Wi-Fi across s2idle: [SUSPEND-PLAN](SUSPEND-PLAN.md) S5.
+
+Earlier status (2026-10-12): **Wi-Fi and the battery gauge work by default.** Wi-Fi:
 W1-W3 passed (WPA2 on 5 GHz, about 19 MB/s; 9.14-9.16), and W4 ended in the
 decision of 9.21: brcmfmac comes up at boot behind the restricted DMA pool,
 without the SysMMU, which can't tell PCIe from UFS

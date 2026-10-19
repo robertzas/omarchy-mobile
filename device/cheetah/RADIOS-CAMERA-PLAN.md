@@ -1,7 +1,12 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Radios and cameras plan: modem, GNSS, NFC, cameras (cheetah / gs201)
 
-Status: **offline survey, 2026-10-12. Nothing has run on the phone.**
+Status (2026-10-19): **NFC works** (section 3: the ST54J through st-nci
+with our plain-NCI link, loaded at boot; neard reads and writes tags, and a
+tag with a web link opens it; N2 results below). The cameras moved to
+[CAMERA-PLAN](CAMERA-PLAN.md): all four run in omacam.
+
+Earlier status: **offline survey, 2026-10-12. Nothing has run on the phone.**
 Update: GNSS and NFC (N1) are built: see GNSS-PLAN.md and section 3.7. One
 kernel piece is built: the HSI1 pin controller that the modem and NFC both
 need (section 6). Kernel branch `omamobile-hsi1` in

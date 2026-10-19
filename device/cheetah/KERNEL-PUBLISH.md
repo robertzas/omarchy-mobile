@@ -1,7 +1,16 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Publishing the kernel: candidate `omamobile-next` (cheetah / gs201)
 
-Status (2026-10-12): **prepared, not pushed.** Branch `omamobile-next` in
+Status (2026-10-19): **published.** `omamobile` is on GitHub
+(linux-omarchy-mobile, 146 commits on v7.3-rc6) and moves forward without
+rewriting published commits: `tools/publish-kernel` fast-forwards when the
+published tip's tree matches a local commit. Community kernel PRs are reviewed
+against it (felix's board file and UFS are merged). First patch sent
+upstream: "power: supply: max17042_battery: infer the status when no
+supplier is described" (linux-pm, 2026-10-19), Reviewed-by Hans de Goede,
+waiting for the maintainer.
+
+Earlier status (2026-10-12): **prepared, not pushed.** Branch `omamobile-next` in
 `~/android/mainline/wt-next`, built in `~/android/mainline/out-next`
 (`7.3.0-rc6-omamobile-push1-00123-gadb29333ff8c`). Head `adb29333f`, 65
 commits on top of the published `omamobile` (`7b0f8b5d1`, 58 commits on

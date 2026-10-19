@@ -1,7 +1,13 @@
 <!-- SPDX-License-Identifier: MIT -->
 # GNSS plan (cheetah / gs201): BCM4775x, stock lhd and gpsd, GeoClue
 
-Status: **built offline, 2026-10-12. Nothing has run on the phone.** Kernel
+Status (2026-10-19): **works.** Google's GNSS stack runs in a chroot behind
+GeoClue, on demand from the Location tile: NMEA flowing (G3d) and a first
+outdoor fix (G4b, 2026-10-13: GPS and Galileo used, HDOP 0.4). GeoClue
+serves clients (G5-2, partly); GNOME Maps' outdoor check with the GPS is
+still to do. Results are in each stage's section.
+
+Earlier status: **built offline, 2026-10-12. Nothing has run on the phone.** Kernel
 branch `omamobile-gnss` in `~/android/mainline/wt-gnss`, build in
 `~/android/mainline/out-gnss` (release
 `7.3.0-rc6-omamobile-push1-00209-gec375b274d61`, logs `logs/kernel-gnss.log`,

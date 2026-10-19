@@ -1,7 +1,15 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Fingerprint plan (cheetah / gs201): fingerprint unlock on the lock screen
 
-Status (2026-10-12): **offline work done, nothing run on the phone for
+Status (2026-10-19): **works, opt-in.** F3-F9 (the HAL) and the fprintd
+stages through F16b passed on the phone (section 7): the lock screen
+unlocks with a finger alongside the PIN pad or password, and enrollment
+runs from the shell. libfprint 1.94.100-1.6 keeps a
+verify open across system sleep and fails an enrollment interrupted by sleep
+cleanly ([NOTES](NOTES.md), 2026-10-18). `omamobile-fp.service` still ships
+disabled, because its first run writes Trusty's secure storage.
+
+Earlier status (2026-10-12): **offline work done, nothing run on the phone for
 fingerprint yet.** Kernel branch `omamobile-fingerprint` in
 `~/android/mainline/wt-fingerprint` @ `1e5a4a701`, output
 `~/android/mainline/out-fingerprint`, release
