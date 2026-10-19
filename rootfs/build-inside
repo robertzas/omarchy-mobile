@@ -7,9 +7,9 @@
 #   /modules  the kernel modules tarball (read-only)
 #   /target   an empty volume: the root file system is assembled here
 #   /out      where the raw image and the MANIFEST go
-# Environment: VERSION, DEVICE, DEVICE_PACKAGE, KERNEL_RELEASE,
-# MODULES_SHA256, GIT_COMMIT, ALARM_SHA256, OMARCHY_CHANNEL, ALLOW_MISSING
-# (space-separated), OUT_UID, OUT_GID.
+# Environment: VERSION, DEVICE, DEVICE_PACKAGE, ROOTFS_PACKAGES and
+# ALLOW_MISSING (both space-separated), KERNEL_RELEASE, MODULES_SHA256,
+# GIT_COMMIT, ALARM_SHA256, OMARCHY_CHANNEL, OUT_UID, OUT_GID.
 set -euo pipefail
 
 T=/target
@@ -26,6 +26,8 @@ available() { pacman -Sp --print-format %n "$1" >/dev/null 2>&1; }
 mapfile -t base < <(list /src/rootfs/packages.base)
 mapfile -t ours < <(list /src/rootfs/packages.omamobile)
 ours+=("$DEVICE_PACKAGE")
+read -ra board <<<"${ROOTFS_PACKAGES:-}"
+ours+=("${board[@]}")
 missing=() skipped_ours=()
 for p in "${base[@]}"; do available "$p" || missing+=("$p"); done
 ((${#missing[@]} == 0)) || die "not in any repository: ${missing[*]}"
@@ -124,7 +126,7 @@ say "MANIFEST"
 {
   echo "# Omarchy Mobile root image"
   echo "version: $VERSION"
-  echo "device: $DEVICE ($DEVICE_PACKAGE)"
+  echo "device: $DEVICE ($DEVICE_PACKAGE${ROOTFS_PACKAGES:+ $ROOTFS_PACKAGES})"
   echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "repository commit: $GIT_COMMIT"
   echo "arch linux arm tarball sha256: $ALARM_SHA256"

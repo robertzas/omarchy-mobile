@@ -41,7 +41,7 @@ The audit behind this design (2026-10-13). "Step" names the roadmap step that re
 | `tools/display-hz` | DECON register addresses (gs201) | bring-up tool, per plan |
 | `tools/repo-build` | the default package list names `omamobile-device-cheetah` | 3 |
 | `CONTRIBUTING.md` §4 `ov` helper | `gs201-cheetah.dtb`, `device/cheetah/overlays` | 2 (`bin/omamobile overlay`) |
-| `packages/omamobile-modem` | `depends=(… omamobile-device-cheetah)` | 3 (depend on a virtual `omamobile-device`) |
+| `packages/omamobile-modem` | `depends=(… omamobile-device-cheetah)`; only cheetah's image installs it (`ROOTFS_PACKAGES`) | 3 (depend on a virtual `omamobile-device` once another phone's modem runs) |
 | `packages/omamobile-gnss`, `-modem` | `ro.hardware=cheetah` in the chroot props | per device, with its chroot map |
 | `packages/omamobile-audio` | the UCM profile `Google/cheetah/HiFi.conf`, the speaker stages | per device (audio is board tuning) |
 | `packages/omamobile-device-cheetah` | `gs201_aoc_rails`, `pcie_gs201`, modprobe and udev policy | stays per device: this is what the package is for |
@@ -64,6 +64,7 @@ Bring-up tools (`*-stage`, `display-hz`, `usbc-deadman`) stay per plan: they pok
 | `SOC` | `gs201` | SoC family |
 | `COMPATIBLE` | `google,gs201-cheetah` | First DT root compatible; firmware names and the device check at install time use it |
 | `PACKAGE` | `omamobile-device-cheetah` | The device's package (and, for now, where the initramfs C helpers' sources live) |
+| `ROOTFS_PACKAGES` | `omamobile-audio omamobile-sensors omamobile-gnss omamobile-fingerprint omamobile-modem` | Optional. The board's own packages that `tools/build-rootfs` installs on top of the shared `rootfs/packages.omamobile`: ones tuned to this phone, which another device's image must not pull in |
 | `DTB` | `exynos/google/gs201-cheetah.dtb` | Under `arch/arm64/boot/dts` in the kernel build, and under `dtbs/` in the kernel package |
 | `SOC_IDS` | `b0:0x9855001 a0:0x9855000` | `label:soc_id`. The first is what the DTB is built with; each other entry is a copy with `/soc_id` rewritten. Order is the order in `dtb.img` |
 | `DTBO_SOURCE` | `cheetah-m1-overlay.dts` | The board dtbo source beside the descriptor (GPL-2.0) |
@@ -212,7 +213,7 @@ For a first install, or to recover a phone that won't boot. One bundle per devic
 | Piece | Where | Notes |
 | --- | --- | --- |
 | aarch64 packages without a phone | `tools/build-packages` | makepkg in an Arch Linux ARM container (the official tarball, MD5 and signature checked against the pinned build key, `tools/lib/alarm.sh`) under the laptop's qemu-user; signs with `keys/` into `out/repo/aarch64`. Mesa, Hyprland and libcamera take hours this way, so they're built only when named, once per version |
-| The shared root image | `tools/build-rootfs`, `rootfs/` | pacstrap in that container: `rootfs/packages.base`, then Omarchy's own `install/omarchy-base.packages` (minus `rootfs/packages.omarchy-skip` and what isn't built for aarch64), then `rootfs/packages.omamobile` and the device package, the `[omamobile]` repository itself, the kernel modules of the current build, and `patches/omarchy`. Output `out/omamobile-rootfs-<date>-aarch64.img.zst`, `.sha256` and a `MANIFEST` with every package version (also inside, `/usr/share/omamobile/rootfs/MANIFEST`) |
+| The shared root image | `tools/build-rootfs`, `rootfs/` | pacstrap in that container: `rootfs/packages.base`, then Omarchy's own `install/omarchy-base.packages` (minus `rootfs/packages.omarchy-skip` and what isn't built for aarch64), then `rootfs/packages.omamobile`, the device package and the board's `ROOTFS_PACKAGES`, the `[omamobile]` repository itself, the kernel modules of the current build, and `patches/omarchy`. Output `out/omamobile-rootfs-<date>-aarch64.img.zst`, `.sha256` and a `MANIFEST` with every package version (also inside, `/usr/share/omamobile/rootfs/MANIFEST`) |
 | First boot | `packages/omamobile-firstboot` | reads `/etc/omamobile/firstboot.conf` (data, never sourced), creates the user, SSH keys, ufw with SSH on `usb0`, runs Omarchy's own setup leaves (skipping four that don't fit a phone), SDDM autologin and the lock, Omarchy's and our user setup, then deletes the file |
 | Growing the root | `initramfs/init` (`grow_root`) | `resize2fs` before mounting, only for a file system labelled `omamobile-root` smaller than its partition; `omamobile.noresize` skips it |
 | The installer | `tools/install-phone` (the bundle's `install`) | as described below, steps 1, 3-5; the factory-image step (2) is `tools/phone-provision` after the first boot instead |

@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: MIT
 # Omarchy Mobile's packages in the root image, from [omamobile] (out/repo,
-# built by tools/build-packages). The device's own package (PACKAGE in
-# device/<codename>/device.conf) is added by tools/build-rootfs.
+# built by tools/build-packages), for every device. tools/build-rootfs adds
+# the device's own package (PACKAGE in device/<codename>/device.conf) and its
+# board-specific ones (ROOTFS_PACKAGES there: audio, sensors, GNSS,
+# fingerprint and modem are tuned to one phone).
 # Not here on purpose: omamobile-modem-sit and omamobile-mmd (no SIM run yet),
 # omamobile-speaker-tuning (off by default; needs the user's extracted
 # Waves libraries), omamobile-waydroid (a later goal).
@@ -11,12 +13,7 @@ omamobile-omarchy
 omamobile-shell
 omacam
 omamobile-apps
-omamobile-audio
-omamobile-sensors
-omamobile-gnss
-omamobile-fingerprint
 omamobile-mirror
-omamobile-modem
 libfprint
 neard
 mesa

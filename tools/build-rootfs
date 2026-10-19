@@ -13,7 +13,8 @@
 #                              rootfs/packages.omarchy-skip and whatever isn't
 #                              built for aarch64 (listed in the MANIFEST)
 #   rootfs/packages.omamobile  ours, from out/repo (tools/build-packages), plus
-#                              the device package (PACKAGE in device.conf)
+#                              the device package and the board's own ones
+#                              (PACKAGE and ROOTFS_PACKAGES in device.conf)
 # then adds the [omamobile] repository itself (file:///var/lib/omamobile/repo),
 # and the kernel modules from the current kernel build. Omarchy's pending
 # patches come with omamobile-omarchy, whose pacman hook applies them as it
@@ -61,6 +62,8 @@ conf=device/$DEVICE/device.conf
 [[ -f $conf ]] || alarm_die "no $conf"
 DEVICE_PACKAGE=$(sed -n 's/^PACKAGE=\([a-z0-9-]*\)$/\1/p' "$conf")
 [[ -n $DEVICE_PACKAGE ]] || alarm_die "$conf has no PACKAGE"
+ROOTFS_PACKAGES=$(sed -n 's/^ROOTFS_PACKAGES="\(.*\)"$/\1/p' "$conf")
+[[ $ROOTFS_PACKAGES =~ ^[a-z0-9\ -]*$ ]] || alarm_die "$conf: ROOTFS_PACKAGES may hold only package names"
 
 repo=out/repo/aarch64
 [[ -f $repo/omamobile.db ]] ||
@@ -90,6 +93,7 @@ docker run --rm --privileged --platform linux/arm64 \
   -v "$ROOT:/src:ro" -v "$ROOT/out/repo:/repo:ro" -v "$modules:/modules:ro" \
   -v "$volume:/target" -v "$work:/out" -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" \
   -e VERSION="$VERSION" -e DEVICE="$DEVICE" -e DEVICE_PACKAGE="$DEVICE_PACKAGE" \
+  -e ROOTFS_PACKAGES="$ROOTFS_PACKAGES" \
   -e KERNEL_RELEASE="$release" -e MODULES_SHA256="$(sha256sum < "$modules" | cut -d' ' -f1)" \
   -e GIT_COMMIT="$commit" -e ALARM_SHA256="$(sha256sum < "$ALARM_TARBALL" | cut -d' ' -f1)" \
   -e OMARCHY_CHANNEL="$OMARCHY_CHANNEL" -e ALLOW_MISSING="$ALLOW_MISSING" \
