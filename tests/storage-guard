@@ -121,6 +121,19 @@ grep -q "allowlist: $cheetah_rw" "$B/dev/kmsg" || fail "the allowlist is logged"
 disk_checks cheetah
 pass "cheetah's packed list: the same six partitions writable as the old hard-coded list"
 
+# The check boot_arch makes before handing over: nothing outside the list.
+unguarded() { PATH="$t/bin:$PATH" sh -c ". '$t/guard-test.sh'; ufs_unguarded"; }
+[[ -z $(unguarded) ]] || fail "after a pass nothing outside the allowlist is writable (got: $(unguarded))"
+mkdir -p "$B/sys/block/sda/sda99"
+printf 'PARTNAME=late\n' > "$B/sys/block/sda/sda99/uevent"; echo 0 > "$B/sys/block/sda/sda99/ro"
+[[ $(unguarded) == "sda99 (late)" ]] || fail "a partition the guard hasn't reached is reported (got: $(unguarded))"
+echo 0 > "$B/sys/block/sdb/sdb1/ro"
+[[ $(unguarded | tr '\n' ' ') == "sdb1 (bl1_a) sda99 (late) " || $(unguarded | tr '\n' ' ') == "sda99 (late) sdb1 (bl1_a) " ]] \
+  || fail "a boot LUN partition made writable is reported (got: $(unguarded | tr '\n' ' '))"
+awk '/^boot_arch\(\) \{/ {on = 1} on && /ufs_unguarded/ {u = NR} on && /kill -9 -1/ {k = NR} on && /^}/ {exit} END {exit !(u && k && u < k)}' initramfs/init \
+  || fail "boot_arch checks ufs_unguarded before it stops the initramfs's processes"
+pass "the hand-over check reports a late or reopened partition, and runs before SSH is stopped"
+
 fake_disks
 cp "$t/etc-oriole/omamobile-ufs-rw" "$B/etc/omamobile-ufs-rw"
 guard

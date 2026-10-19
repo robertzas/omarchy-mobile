@@ -116,6 +116,23 @@ ufs_ro_pass() {
     fi
   done
 }
+# Prints every disk or partition that is writable but not on the allowlist
+# (sda itself excepted: its node is removed). Empty means the guard holds.
+ufs_unguarded() {
+  local s name part ro
+  for s in /sys/block/sd* /sys/block/sd*/sd*; do
+    [ -r "$s/ro" ] || continue
+    name=${s##*/}
+    [ "$name" = sda ] && continue
+    read -r ro < "$s/ro"
+    [ "$ro" = 0 ] || continue
+    part=$(ufs_partname "$s")
+    if [ -n "$part" ] && [ "${name%%[0-9]*}" = sda ]; then
+      case " $UFS_RW " in *" $part "*) continue ;; esac
+    fi
+    echo "$name${part:+ ($part)}"
+  done
+}
 ufs_ro_pass
 ( while true; do ufs_ro_pass; sleep 0.2 2>/dev/null || sleep 1; done ) &
 ufs_ro_log "guard running (pid $!)"
@@ -351,6 +368,18 @@ boot_arch() {
   mount -t ext4 -o rw,relatime "$dev" /newroot || { say "arch: cannot mount $dev"; return 1; }
   if [ ! -x /newroot/usr/lib/systemd/systemd ]; then
     say "arch: no systemd on $dev"; umount /newroot; return 1
+  fi
+  # The guard loop dies below and nothing in Arch sets a partition read-only,
+  # so make one last pass and check, while SSH still runs: anything outside
+  # the allowlist still writable (a late partition, a failed setro) keeps
+  # the phone here.
+  local open
+  ufs_ro_pass
+  open=$(ufs_unguarded)
+  if [ -n "$open" ]; then
+    say "arch: writable outside the allowlist: $(echo "$open" | tr "\n" " ")(staying in the initramfs)"
+    umount /newroot
+    return 1
   fi
   say "arch: switching to Arch Linux on $dev"
   # Stop the initramfs helpers (dropbear, udhcpd, guards); the kernel keeps
