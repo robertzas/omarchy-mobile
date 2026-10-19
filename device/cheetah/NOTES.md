@@ -2,6 +2,40 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-10-18: a charging phone put to sleep at low battery; fingerprint stuck afterwards; the shared init boots
+
+- **The battery read "Unknown" while charging**, so the bar showed no
+  charging icon and upower counted the phone as on battery. The charger
+  runs on the bootloader's settings with no driver bound (USB-C-PLAN B3),
+  so nothing is described as supplying the battery, and
+  `max17042_get_status()` gave up on `power_supply_am_i_supplied()`'s
+  -ENODEV. At its action level (`PercentageAction=2`; the battery read
+  11 % sixteen minutes later), upower's critical action (`Sleep`)
+  suspended the phone while it was charging
+  ("suspend requested from client … 'upowerd'"); the fuel gauge's alert
+  IRQ woke it 75 s later.
+- **Fix:** kernel `omamobile-battery` @ `de0aa4d4e` ("infer the status when
+  no supplier is described"): with no supplier and current sense on, the
+  status comes from the gauge's current (charging when positive, full at
+  end of charge with no current, else discharging). Merged into
+  `omamobile-int` (`cbd727f42`). On 7.3.0-rc6-omamobile-push1-00558-gcbd727f42785:
+  `status` Charging at +1.9 A, upower `state: charging`, `on-battery: no`.
+- **The fingerprint stopped working after that sleep** (the same on
+  2026-10-17 19:05). The lock screen was mid-verify when fprintd suspended
+  the sensor for sleep: "Cannot run while suspended", then pam_fprintd's
+  `ReleaseDevice` failed ("still busy"). After resume fprintd refused the
+  lock screen ("Authorization denied … ListEnrolledFingers"), and the lock
+  screen retried `omarchy-lock-fingerprint` about three times a second
+  with PAM_AUTHINFO_UNAVAIL, keeping fprintd alive in that state. It only
+  recovered when the lock ended and fprintd exited idle; the next lock
+  matched at once. **Open:** any sleep during a verify will do this again
+  (the battery fix only removes this trigger).
+- **The shared initramfs init (PR #4) boots cheetah** (same kernel, new
+  initramfs only): no "skipped" or "trigger failed" line, so the board
+  check matched and `0x1c240030 0x3061` was written; the bring-up probe ran
+  (wtcon and DPP reads as before); the guard left exactly slot B's five
+  boot images and `userdata` writable.
+
 ## 2026-10-12: first sound from the built-in speaker; accelerometer at every boot
 
 - **The top speaker plays** (AOC-PLAN C7d-6, kernel
