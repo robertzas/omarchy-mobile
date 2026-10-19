@@ -18,6 +18,7 @@ pkgbase = libcamera
 	makedepends = libyaml
 	makedepends = libyuv
 	makedepends = meson
+	makedepends = pkgconf
 	makedepends = pybind11
 	makedepends = python-jinja
 	makedepends = python-ply

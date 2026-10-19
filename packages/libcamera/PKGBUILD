@@ -206,6 +206,7 @@ makedepends=(
   libyaml
   libyuv
   meson
+  pkgconf
   pybind11
   python-jinja
   python-ply
