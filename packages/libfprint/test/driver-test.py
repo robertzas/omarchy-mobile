@@ -8,14 +8,16 @@
 Starts a fake omamobile-fp-bridge on a Unix socket that speaks the bridge's
 line protocol with scripted HAL answers, points the driver at it
 (FP_OMAMOBILE_UDFPS), and runs enroll, list, verify (match and no match),
-identify, cancel, a lockout, delete and a bridge that goes away. No phone,
-no HAL: this checks the driver's side of the protocol only.
+identify, cancel, a lockout, system sleep mid-verify, delete and a bridge
+that goes away. No phone, no HAL: this checks the driver's side of the
+protocol only.
 """
 import os
 import socket
 import sys
 import tempfile
 import threading
+import time
 
 import gi
 
@@ -216,6 +218,59 @@ def main():
     bridge.hold_auth = False
     bridge.auth_answers = [f"MATCH {ENROLL_ID}"]
     check("verify works after an unanswered cancel", dev.verify_sync(enrolled)[0])
+
+    # system sleep mid-verify (the lock screen's): the verify stays open, the
+    # HAL's capture stops (CANCEL, its ERROR 5 swallowed) and starts again on
+    # resume (AUTH); the client sees only the match
+    ctx = GLib.MainContext.default()
+
+    def spin(cond, ms=3000):
+        end = time.monotonic() + ms / 1000
+        while not cond() and time.monotonic() < end:
+            ctx.iteration(False)
+            time.sleep(0.005)
+
+    def start_verify(cancellable=None):
+        done = []
+        dev.verify(enrolled, cancellable=cancellable, match_cb=None, match_data=None,
+                   callback=lambda d, res, *_: done.append(res), user_data=None)
+        return done
+
+    bridge.hold_auth = True
+    auths, cancels = bridge.commands.count("AUTH"), bridge.commands.count("CANCEL")
+    done = start_verify()
+    spin(lambda: bridge.commands.count("AUTH") == auths + 1)
+    dev.suspend_sync()
+    spin(lambda: False, 200)
+    check("suspend mid-verify stops the capture",
+          bridge.commands.count("CANCEL") == cancels + 1)
+    check("the verify stays open across sleep", not done)
+    bridge.hold_auth = False
+    bridge.auth_answers = [f"MATCH {ENROLL_ID}"]
+    dev.resume_sync()
+    spin(lambda: done)
+    check("resume starts the capture again", bridge.commands.count("AUTH") == auths + 2)
+    check("the verify matches after resume", done and dev.verify_finish(done[0])[0])
+
+    # cancelled while asleep (the client gave up): ends at once, and the
+    # device works after resume
+    bridge.hold_auth = True
+    cancellable = Gio.Cancellable()
+    done = start_verify(cancellable)
+    spin(lambda: bridge.commands.count("AUTH") == auths + 3)
+    dev.suspend_sync()
+    cancellable.cancel()
+    spin(lambda: done, 1000)
+    try:
+        dev.verify_finish(done[0]) if done else None
+        check("cancel while asleep ends verify as cancelled", False)
+    except GLib.Error as e:
+        check("cancel while asleep ends verify as cancelled",
+              e.matches(Gio.io_error_quark(), Gio.IOErrorEnum.CANCELLED))
+    dev.resume_sync()
+    bridge.hold_auth = False
+    bridge.auth_answers = [f"MATCH {ENROLL_ID}"]
+    check("verify works after a sleep", dev.verify_sync(enrolled)[0])
 
     dev.delete_print_sync(enrolled)
     check("delete removes it", bridge.enrolled == [])

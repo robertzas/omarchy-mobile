@@ -15,21 +15,21 @@
 
 pkgname=libfprint
 pkgver=1.94.100
-pkgrel=1.4
+pkgrel=1.5
 _tag=v$pkgver
 pkgdesc="Library for fingerprint readers (Omarchy Mobile: Pixel 7 Pro under-display sensor)"
 arch=(aarch64)
 url="https://fprint.freedesktop.org/"
 license=(LGPL-2.1-or-later)
 depends=(gcc-libs glib2 glibc libgudev libgusb openssl pixman)
-makedepends=(git glib2-devel gobject-introspection meson)
+makedepends=(git glib2-devel gobject-introspection meson pkgconf)
 provides=(libfprint-2.so)
 source=("git+https://gitlab.freedesktop.org/libfprint/libfprint.git#tag=$_tag"
         0001-add-the-omamobile_udfps-driver.patch
         omamobile-udfps.c)
 sha256sums=('SKIP'
             'fa0cf06a639cc128fcf048cded822643b6821ce0b230db4771cde3061e7f5cab'
-            '701e2e3aa0d21f981db717863d861a1990bfc7f01091087c0833d7abdf976baf')
+            'd1d39ad4cf922344a39cdab4adeeac64752b29cefab99ee9135cc1de20d1e41a')
 
 prepare() {
   cd libfprint

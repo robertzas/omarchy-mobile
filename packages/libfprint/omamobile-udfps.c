@@ -83,6 +83,10 @@ struct _FpiDeviceOmamobileUdfps
   gint                enroll_stages;
   gboolean            cancelling;
   guint               cancel_timeout_id;
+  /* System sleep (dev_suspend): the HAL's capture is stopped, and the
+   * ERROR 5 that answers the CANCEL hasn't arrived yet. */
+  gboolean            asleep;
+  gboolean            sleep_cancel_pending;
 };
 
 G_DECLARE_FINAL_TYPE (FpiDeviceOmamobileUdfps, fpi_device_omamobile_udfps, FPI,
@@ -199,6 +203,7 @@ start_action (FpiDeviceOmamobileUdfps *self, const char *command)
   GError *error = NULL;
 
   self->cancelling = FALSE;
+  self->asleep = FALSE;		/* libfprint starts nothing while suspended */
   g_clear_handle_id (&self->cancel_timeout_id, g_source_remove);
   if (!send_command (self, command, &error))
     fpi_device_action_error (FP_DEVICE (self), error);
@@ -357,6 +362,23 @@ handle_line (FpiDeviceOmamobileUdfps *self, const char *line)
   if (!argv[0])
     return;
 
+  /* The ERROR 5 answering the CANCEL sent for sleep belongs to no action.
+   * Any other end of that capture (a match racing the CANCEL) means no
+   * ERROR 5 follows; asleep it is dropped below, and resume starts anew. */
+  if (self->sleep_cancel_pending &&
+      (g_str_equal (argv[0], "ERROR") || g_str_equal (argv[0], "MATCH") ||
+       g_str_equal (argv[0], "NOMATCH") || g_str_equal (argv[0], "LOCKOUT")))
+    {
+      self->sleep_cancel_pending = FALSE;
+      if (g_str_equal (argv[0], "ERROR") && argv[1] && atoi (argv[1]) == HAL_ERROR_CANCELED)
+        return;
+    }
+  if (self->asleep)
+    {
+      fp_dbg ("asleep, ignored: %s", line);
+      return;
+    }
+
   /* finger status, for every capture */
   if (g_str_equal (argv[0], "FINGER") && argv[1])
     {
@@ -476,6 +498,8 @@ static void
 disconnect (FpiDeviceOmamobileUdfps *self)
 {
   g_clear_handle_id (&self->cancel_timeout_id, g_source_remove);
+  self->asleep = FALSE;
+  self->sleep_cancel_pending = FALSE;
   if (self->cancellable)
     g_cancellable_cancel (self->cancellable);
   g_clear_object (&self->cancellable);
@@ -599,6 +623,15 @@ dev_cancel (FpDevice *dev)
   FpiDeviceOmamobileUdfps *self = FPI_DEVICE_OMAMOBILE_UDFPS (dev);
   g_autoptr(GError) error = NULL;
 
+  /* Asleep, the HAL's capture is already stopped: nothing to wait for.
+   * libfprint then resumes without calling dev_resume (no action left). */
+  if (self->asleep)
+    {
+      self->asleep = FALSE;
+      fpi_device_action_error (dev, g_error_new_literal (G_IO_ERROR, G_IO_ERROR_CANCELLED,
+                                                         "Operation was cancelled"));
+      return;
+    }
   if (self->cancelling)
     return;
   self->cancelling = TRUE;
@@ -606,6 +639,56 @@ dev_cancel (FpDevice *dev)
     fp_warn ("cannot cancel: %s", error->message);
   g_clear_handle_id (&self->cancel_timeout_id, g_source_remove);
   self->cancel_timeout_id = g_timeout_add (CANCEL_TIMEOUT_MS, cancel_timeout_cb, self);
+}
+
+/*
+ * System sleep: fprintd suspends the device on logind's PrepareForSleep and
+ * resumes it after. A verify or identify (the lock screen's) stays open
+ * across the sleep: the HAL's capture is stopped now and started again on
+ * resume, so the client never sees an error. Without these, libfprint failed
+ * the verify "while suspended", the client's Release failed as busy, and
+ * fprintd dropped its claim on a device libfprint still held open, so every
+ * later Claim failed until fprintd exited (the lock screen retrying kept it
+ * running). An enrollment can't pick up midway; libfprint cancels it.
+ */
+static void
+dev_suspend (FpDevice *dev)
+{
+  FpiDeviceOmamobileUdfps *self = FPI_DEVICE_OMAMOBILE_UDFPS (dev);
+  FpiDeviceAction action = fpi_device_get_current_action (dev);
+  g_autoptr(GError) error = NULL;
+
+  if (action != FPI_DEVICE_ACTION_VERIFY && action != FPI_DEVICE_ACTION_IDENTIFY)
+    {
+      fpi_device_suspend_complete (dev, fpi_device_error_new (FP_DEVICE_ERROR_NOT_SUPPORTED));
+      return;
+    }
+
+  self->asleep = TRUE;
+  if (send_command (self, "CANCEL", &error))
+    self->sleep_cancel_pending = TRUE;
+  else
+    fp_warn ("cannot stop the capture for sleep: %s", error->message);
+  fpi_device_suspend_complete (dev, NULL);
+}
+
+static void
+dev_resume (FpDevice *dev)
+{
+  FpiDeviceOmamobileUdfps *self = FPI_DEVICE_OMAMOBILE_UDFPS (dev);
+  FpiDeviceAction action = fpi_device_get_current_action (dev);
+  gboolean was_asleep = self->asleep;
+  GError *error = NULL;
+
+  self->asleep = FALSE;
+  fpi_device_resume_complete (dev, NULL);
+
+  /* an enrollment cancelled for sleep: nothing to start again */
+  if (!was_asleep ||
+      (action != FPI_DEVICE_ACTION_VERIFY && action != FPI_DEVICE_ACTION_IDENTIFY))
+    return;
+  if (!send_command (self, "AUTH", &error))
+    fpi_device_action_error (dev, error);
 }
 
 static void
@@ -651,6 +734,8 @@ fpi_device_omamobile_udfps_class_init (FpiDeviceOmamobileUdfpsClass *klass)
   dev_class->list = dev_list;
   dev_class->delete = dev_delete;
   dev_class->cancel = dev_cancel;
+  dev_class->suspend = dev_suspend;
+  dev_class->resume = dev_resume;
 
   fpi_device_class_auto_initialize_features (dev_class);
 }

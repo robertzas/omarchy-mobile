@@ -28,8 +28,17 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
   screen retried `omarchy-lock-fingerprint` about three times a second
   with PAM_AUTHINFO_UNAVAIL, keeping fprintd alive in that state. It only
   recovered when the lock ended and fprintd exited idle; the next lock
-  matched at once. **Open:** any sleep during a verify will do this again
-  (the battery fix only removes this trigger).
+  matched at once. Reproduced with an RTC wake (`rtcwake -m no -s 25`, then
+  `systemctl suspend`, lock screen up) and fprintd debug logging: the close
+  that pam_fprintd's Release asked for was refused while libfprint had the
+  device suspended, fprintd dropped its claim anyway, and every later Claim's
+  open failed on the device libfprint still held open.
+- **Fix:** libfprint 1.94.100-1.5: the `omamobile_udfps` driver has suspend
+  and resume hooks. A verify stays open across the sleep (the HAL's capture
+  is cancelled before and started again after), so the lock screen sees no
+  error. Same test on the phone: suspend and resume completed without
+  error, `AUTH` went out on resume, and a later Release closed the device
+  and the next Claim opened it.
 - **The shared initramfs init (PR #4) boots cheetah** (same kernel, new
   initramfs only): no "skipped" or "trigger failed" line, so the board
   check matched and `0x1c240030 0x3061` was written; the bring-up probe ran
