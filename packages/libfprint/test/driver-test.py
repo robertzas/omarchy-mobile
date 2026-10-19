@@ -8,9 +8,9 @@
 Starts a fake omamobile-fp-bridge on a Unix socket that speaks the bridge's
 line protocol with scripted HAL answers, points the driver at it
 (FP_OMAMOBILE_UDFPS), and runs enroll, list, verify (match and no match),
-identify, cancel, a lockout, system sleep mid-verify, delete and a bridge
-that goes away. No phone, no HAL: this checks the driver's side of the
-protocol only.
+identify, cancel, a lockout, system sleep mid-verify and mid-enrollment,
+delete and a bridge that goes away. No phone, no HAL: this checks the
+driver's side of the protocol only.
 """
 import os
 import socket
@@ -41,6 +41,7 @@ class FakeBridge(threading.Thread):
         self.auth_answers = []
         self.commands = []
         self.hold_auth = False
+        self.hold_enroll = False
         self.conn = None
         self.drop_next = False
         self.mute_cancel = False
@@ -73,6 +74,9 @@ class FakeBridge(threading.Thread):
     def handle(self, cmd):
         self.commands.append(cmd)
         if cmd == "ENROLL":
+            if self.hold_enroll:
+                self.send("FINGER NEEDED")
+                return  # wait for CANCEL
             self.send("FINGER NEEDED", "FINGER DOWN", "ACQUIRED 1 0",
                       f"PROGRESS {ENROLL_ID} 38", "FINGER UP", "FINGER DOWN",
                       "ACQUIRED 2 0", "FINGER UP")
@@ -271,6 +275,32 @@ def main():
     bridge.hold_auth = False
     bridge.auth_answers = [f"MATCH {ENROLL_ID}"]
     check("verify works after a sleep", dev.verify_sync(enrolled)[0])
+
+    # sleep mid-enrollment: held across the sleep, then failed on resume (it
+    # can't pick up midway), so the client's Release comes after the sleep
+    bridge.hold_enroll = True
+    enrolls, auths = bridge.commands.count("ENROLL"), bridge.commands.count("AUTH")
+    second = FPrint.Print.new(dev)
+    second.set_finger(FPrint.Finger.LEFT_THUMB)
+    second.set_username("tester")
+    done = []
+    dev.enroll(second, cancellable=None, progress_cb=None, progress_data=None,
+               callback=lambda d, res, *_: done.append(res), user_data=None)
+    spin(lambda: bridge.commands.count("ENROLL") == enrolls + 1)
+    dev.suspend_sync()
+    spin(lambda: False, 200)
+    check("the enrollment stays open across sleep", not done)
+    dev.resume_sync()
+    spin(lambda: done)
+    try:
+        dev.enroll_finish(done[0]) if done else None
+        check("resume fails the interrupted enrollment", False)
+    except GLib.Error as e:
+        check("resume fails the interrupted enrollment", "interrupted by sleep" in e.message)
+    check("resume starts no capture for it", bridge.commands.count("AUTH") == auths)
+    bridge.hold_enroll = False
+    bridge.auth_answers = [f"MATCH {ENROLL_ID}"]
+    check("verify works after an interrupted enrollment", dev.verify_sync(enrolled)[0])
 
     dev.delete_print_sync(enrolled)
     check("delete removes it", bridge.enrolled == [])

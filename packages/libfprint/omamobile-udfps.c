@@ -367,7 +367,8 @@ handle_line (FpiDeviceOmamobileUdfps *self, const char *line)
    * ERROR 5 follows; asleep it is dropped below, and resume starts anew. */
   if (self->sleep_cancel_pending &&
       (g_str_equal (argv[0], "ERROR") || g_str_equal (argv[0], "MATCH") ||
-       g_str_equal (argv[0], "NOMATCH") || g_str_equal (argv[0], "LOCKOUT")))
+       g_str_equal (argv[0], "NOMATCH") || g_str_equal (argv[0], "LOCKOUT") ||
+       g_str_equal (argv[0], "ENROLLED")))
     {
       self->sleep_cancel_pending = FALSE;
       if (g_str_equal (argv[0], "ERROR") && argv[1] && atoi (argv[1]) == HAL_ERROR_CANCELED)
@@ -649,7 +650,9 @@ dev_cancel (FpDevice *dev)
  * the verify "while suspended", the client's Release failed as busy, and
  * fprintd dropped its claim on a device libfprint still held open, so every
  * later Claim failed until fprintd exited (the lock screen retrying kept it
- * running). An enrollment can't pick up midway; libfprint cancels it.
+ * running). An enrollment can't pick up midway, so it is held the same
+ * way and failed on resume: the client's Release then comes after the sleep,
+ * when libfprint can close the device.
  */
 static void
 dev_suspend (FpDevice *dev)
@@ -658,7 +661,8 @@ dev_suspend (FpDevice *dev)
   FpiDeviceAction action = fpi_device_get_current_action (dev);
   g_autoptr(GError) error = NULL;
 
-  if (action != FPI_DEVICE_ACTION_VERIFY && action != FPI_DEVICE_ACTION_IDENTIFY)
+  if (action != FPI_DEVICE_ACTION_VERIFY && action != FPI_DEVICE_ACTION_IDENTIFY &&
+      action != FPI_DEVICE_ACTION_ENROLL)
     {
       fpi_device_suspend_complete (dev, fpi_device_error_new (FP_DEVICE_ERROR_NOT_SUPPORTED));
       return;
@@ -683,9 +687,16 @@ dev_resume (FpDevice *dev)
   self->asleep = FALSE;
   fpi_device_resume_complete (dev, NULL);
 
-  /* an enrollment cancelled for sleep: nothing to start again */
-  if (!was_asleep ||
-      (action != FPI_DEVICE_ACTION_VERIFY && action != FPI_DEVICE_ACTION_IDENTIFY))
+  if (!was_asleep)
+    return;
+  if (action == FPI_DEVICE_ACTION_ENROLL)
+    {
+      fpi_device_action_error (dev,
+                               fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
+                                                         "Enrollment was interrupted by sleep, start again"));
+      return;
+    }
+  if (action != FPI_DEVICE_ACTION_VERIFY && action != FPI_DEVICE_ACTION_IDENTIFY)
     return;
   if (!send_command (self, "AUTH", &error))
     fpi_device_action_error (dev, error);
