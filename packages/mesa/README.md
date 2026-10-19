@@ -2,7 +2,7 @@
 # mesa (Omarchy Mobile build)
 
 Arch Linux's Mesa 26.2.4 package, rebuilt for the Pixel 7 Pro and the
-Pixel 6 Pro. Mali-G710 (gs201) and Mali-G78 (gs101, with upstream's G68
+Pixel 6 and 6 Pro. Mali-G710 (gs201) and Mali-G78 (gs101, with upstream's G68
 next to it) are added to Panfrost's model table. Without an entry, Mesa
 rejects the GPU (for the G710 even when Panthor is loaded): the Gallium
 driver bails out on an unknown model, and PanVK returns
@@ -14,7 +14,7 @@ driver bails out on an unknown model, and PanVK returns
 | `0001-panfrost-add-Mali-G710-to-the-model-table.patch` | The G710 entry, in `git format-patch` form |
 | `0002-panfrost-don-t-make-image-BOs-private-on-panthor.patch` | Image BOs are always shareable: panthor can't export a BO private to one GPU VM, and GTK 4 exports GL textures made without `PIPE_BIND_SHARED` (GNOME Snapshot crashed after photos with "drmPrimeHandleToFD() failed (err=22)") |
 | `0003-panfrost-Advertise-Mali-G68-support.patch` | Upstream's G68 entry (93d2c51f, Markuss Broks), backported to 26.2.4 |
-| `0004-panfrost-add-Mali-G78-to-the-model-table.patch` | The G78 entry (Valhall v9, run as the G57). Gallium only: PanVK still refuses the G78 |
+| `0004-panfrost-add-Mali-G78-to-the-model-table.patch` | The G78 entry (Valhall v9), with the G68's tile-buffer sizes and rates and the G78 counter layout. Gallium only: PanVK still refuses the G78 |
 | `UPSTREAM.md` | Merge request text for upstream Mesa |
 | `.SRCINFO` | `makepkg --printsrcinfo` output |
 
@@ -81,7 +81,8 @@ Alternatively, publish the build in Omarchy Mobile's own repo listed ahead of
 2. Re-apply the trimming.
 3. Check that the patch still applies.
 
-Drop the G710 and G78 patches once upstream Mesa ships their entries.
+Drop the G710 and G78 patches once upstream Mesa ships their entries, and
+the G68 backport (0003) once a Mesa release carries it.
 
 On the Pixel 6 Pro (raven) the G78 patch runs GLES 3.1 with Hyprland on
 top. It needs the kernel's AArch64 page-table quirk for gs101 in
