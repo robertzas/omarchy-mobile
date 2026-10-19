@@ -67,6 +67,7 @@ in the table. See `device/cheetah/CAMERA-PLAN.md`, section 5.2.
 | `0050-ipa-simple-agc-Choose-the-exposure-on-the-predicted-.patch` | The AGC chooses the exposure on the predicted output |
 | `0051-software_isp-debayer_egl-Add-hue-vibrance-and-a-tone.patch` | Hue, vibrance and a tone curve in the GPU debayer |
 | `0052-ipa-simple-Add-the-Look-algorithm-and-tune-it-on-the.patch` | The Look algorithm and its tuning for the four cameras |
+| `0053-software_isp-debayer_egl-Smooth-the-chroma.patch` | Chroma noise reduction in the GPU's second pass: colour differences averaged over a 9x9 footprint, guided by luma and chroma; `chromaDenoise` in each camera's `Detail` tuning |
 | `libcamera-fix-python3.14-macro-redefinition.patch` | Arch's patch, unchanged (sha512 `8b54cbdf…`) |
 | `.SRCINFO` | `makepkg --printsrcinfo` output |
 

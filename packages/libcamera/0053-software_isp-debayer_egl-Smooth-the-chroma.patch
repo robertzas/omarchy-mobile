@@ -1,0 +1,304 @@
+From 0d7c2a498c6e4e1d4b327762a785f4cb17e064fe Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Mon, 19 Oct 2026 15:34:03 -0400
+Subject: [PATCH] software_isp: debayer_egl: Smooth the chroma
+
+At high gain the picture carries blotchy colour noise, coarser than
+the 3x3 luma filter of the second pass and untouched by it.
+
+Average the colour differences over a 9x9 footprint (16 taps at 2 and
+4 pixels in eight directions) in the same pass, weighted by luma and
+chroma similarity so that colour doesn't bleed across edges and real
+colour detail survives, and rebuild RGB from the filtered luma and the
+smoothed chroma. The Detail algorithm drives it from the tuning file's
+chromaDenoise, scaled with the square root of the gain like the luma
+smoothing; 0.03 for the four Pixel 7 Pro cameras.
+
+On a synthetic chart with high-gain noise, the shader's numpy port
+cuts the chroma noise on flat patches from 6.1 to 2.8 (gain 4) and from
+12.1 to 5.6 (gain 16), 8-bit RMS, and changes a clean picture's colour
+at edges and 6 px colour stripes by 1.0 and 1.9.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../internal/software_isp/debayer_params.h    |  7 +--
+ src/ipa/simple/algorithms/detail.cpp          | 15 ++++--
+ src/ipa/simple/algorithms/detail.h            |  1 +
+ src/ipa/simple/data/imx386.yaml               |  3 +-
+ src/ipa/simple/data/s5k3j1.yaml               |  3 +-
+ src/ipa/simple/data/s5kgm5.yaml               |  3 +-
+ src/ipa/simple/data/s5kgn1.yaml               |  3 +-
+ src/libcamera/shaders/postfilter.frag         | 46 +++++++++++++++++--
+ src/libcamera/software_isp/debayer_egl.cpp    |  5 +-
+ src/libcamera/software_isp/debayer_egl.h      |  1 +
+ 10 files changed, 73 insertions(+), 14 deletions(-)
+
+diff --git a/include/libcamera/internal/software_isp/debayer_params.h b/include/libcamera/internal/software_isp/debayer_params.h
+index c3bd323..7bd693a 100644
+--- a/include/libcamera/internal/software_isp/debayer_params.h
++++ b/include/libcamera/internal/software_isp/debayer_params.h
+@@ -41,12 +41,13 @@ struct DebayerParams {
+ 	RGB<float> lscK2 = RGB<float>({ 0.0, 0.0, 0.0 });
+ 	std::array<float, 2> lscScale = { 1.0f, 1.0f };
+ 	/*
+-	 * Luma sharpening (unsharp mask amount) and noise reduction (range
+-	 * sigma, in fractions of full scale), in a second pass of the GPU
+-	 * debayer that runs only while either is set.
++	 * Luma sharpening (unsharp mask amount), luma noise reduction and
++	 * chroma noise reduction (range sigmas, in fractions of full scale),
++	 * in a second pass of the GPU debayer that runs only while one is set.
+ 	 */
+ 	float sharpen = 0.0f;
+ 	float denoise = 0.0f;
++	float chromaDenoise = 0.0f;
+ 	/*
+ 	 * The look, after the colour matrix: a hue shift (radians) and a
+ 	 * vibrance (the chroma gain for the dullest colours, falling to none
+diff --git a/src/ipa/simple/algorithms/detail.cpp b/src/ipa/simple/algorithms/detail.cpp
+index ab5184d..7b3f5a0 100644
+--- a/src/ipa/simple/algorithms/detail.cpp
++++ b/src/ipa/simple/algorithms/detail.cpp
+@@ -24,14 +24,17 @@ namespace ipa::soft::algorithms {
+ 
+ /**
+  * \class Detail
+- * \brief Luma noise reduction and sharpening, scaled with the gain
++ * \brief Luma and chroma noise reduction and sharpening, scaled with the gain
+  *
+  * The GPU debayer's second pass smooths the luma with an edge-preserving
+  * (bilateral) 3x3 filter and sharpens it with an unsharp mask, cored by the
+- * noise level. Noise grows with the gain, so the smoothing grows with it and
+- * the sharpening falls:
++ * noise level. It also averages the chroma over a 9x9 footprint, guided by
++ * the luma and the chroma, for the blotchy colour noise of high gains.
++ * Noise grows with the gain, so the smoothing grows with it and the
++ * sharpening falls:
+  *
+  *   denoise = denoise_base * sqrt(gain), at most kDenoiseMax
++ *   chroma_denoise = chroma_denoise_base * sqrt(gain), at most kChromaDenoiseMax
+  *   sharpen = sharpen_base * Sharpness / (1 + log2(gain) / 3)
+  *
+  * where gain is the analogue gain times the digital gain. The tuning file
+@@ -40,9 +43,11 @@ namespace ipa::soft::algorithms {
+  *   - Detail:
+  *       sharpen: 0.6
+  *       denoise: 0.015
++ *       chromaDenoise: 0.03
+  */
+ 
+ static constexpr float kDenoiseMax = 0.15f;
++static constexpr float kChromaDenoiseMax = 0.25f;
+ static constexpr float kSharpnessMax = 4.0f;
+ 
+ int Detail::init(IPAContext &context, const ValueNode &tuningData)
+@@ -50,6 +55,8 @@ int Detail::init(IPAContext &context, const ValueNode &tuningData)
+ 	sharpen_ = std::clamp(tuningData["sharpen"].get<float>().value_or(0.6f), 0.0f, 4.0f);
+ 	denoise_ = std::clamp(tuningData["denoise"].get<float>().value_or(0.015f), 0.0f,
+ 			      kDenoiseMax);
++	chromaDenoise_ = std::clamp(tuningData["chromaDenoise"].get<float>().value_or(0.03f),
++				    0.0f, kChromaDenoiseMax);
+ 
+ 	context.ctrlMap[&controls::Sharpness] = ControlInfo(0.0f, kSharpnessMax, 1.0f);
+ 
+@@ -76,6 +83,8 @@ void Detail::prepare(IPAContext &context,
+ 
+ 	params->denoise = std::min(static_cast<float>(denoise_ * std::sqrt(gain)),
+ 				   kDenoiseMax);
++	params->chromaDenoise = std::min(static_cast<float>(chromaDenoise_ * std::sqrt(gain)),
++					 kChromaDenoiseMax);
+ 	params->sharpen = static_cast<float>(sharpen_ * sharpness_ /
+ 					     (1.0 + std::log2(gain) / 3.0));
+ }
+diff --git a/src/ipa/simple/algorithms/detail.h b/src/ipa/simple/algorithms/detail.h
+index 0b2517e..a16eb46 100644
+--- a/src/ipa/simple/algorithms/detail.h
++++ b/src/ipa/simple/algorithms/detail.h
+@@ -35,6 +35,7 @@ private:
+ 	float sharpness_ = 1.0f;
+ 	float sharpen_ = 0.0f;
+ 	float denoise_ = 0.0f;
++	float chromaDenoise_ = 0.0f;
+ };
+ 
+ } /* namespace ipa::soft::algorithms */
+diff --git a/src/ipa/simple/data/imx386.yaml b/src/ipa/simple/data/imx386.yaml
+index 0a83bdf..a8948bb 100644
+--- a/src/ipa/simple/data/imx386.yaml
++++ b/src/ipa/simple/data/imx386.yaml
+@@ -68,10 +68,11 @@ algorithms:
+   # Defaults for applications that do not set the controls.
+   - Adjust:
+       contrast: 1.2
+-  # Luma noise reduction and sharpening, scaled with the gain
++  # Luma and chroma noise reduction and sharpening, scaled with the gain
+   - Detail:
+       sharpen: 0.6
+       denoise: 0.015
++      chromaDenoise: 0.03
+   - Agc:
+   - Af:
+       coarseSteps: 4
+diff --git a/src/ipa/simple/data/s5k3j1.yaml b/src/ipa/simple/data/s5k3j1.yaml
+index 061f186..e7e5424 100644
+--- a/src/ipa/simple/data/s5k3j1.yaml
++++ b/src/ipa/simple/data/s5k3j1.yaml
+@@ -37,9 +37,10 @@ algorithms:
+   - Adjust:
+       contrast: 1.2
+       saturation: 1.1
+-  # Luma noise reduction and sharpening, scaled with the gain
++  # Luma and chroma noise reduction and sharpening, scaled with the gain
+   - Detail:
+       sharpen: 0.6
+       denoise: 0.015
++      chromaDenoise: 0.03
+   - Agc:
+ ...
+diff --git a/src/ipa/simple/data/s5kgm5.yaml b/src/ipa/simple/data/s5kgm5.yaml
+index cc5c558..29a4cac 100644
+--- a/src/ipa/simple/data/s5kgm5.yaml
++++ b/src/ipa/simple/data/s5kgm5.yaml
+@@ -42,10 +42,11 @@ algorithms:
+   - Adjust:
+       contrast: 1.2
+       saturation: 1.1
+-  # Luma noise reduction and sharpening, scaled with the gain
++  # Luma and chroma noise reduction and sharpening, scaled with the gain
+   - Detail:
+       sharpen: 0.6
+       denoise: 0.015
++      chromaDenoise: 0.03
+   - Agc:
+   - Af:
+       coarseSteps: 8
+diff --git a/src/ipa/simple/data/s5kgn1.yaml b/src/ipa/simple/data/s5kgn1.yaml
+index c27e474..3fffe0d 100644
+--- a/src/ipa/simple/data/s5kgn1.yaml
++++ b/src/ipa/simple/data/s5kgn1.yaml
+@@ -41,10 +41,11 @@ algorithms:
+   - Adjust:
+       contrast: 1.2
+       saturation: 1.1
+-  # Luma noise reduction and sharpening, scaled with the gain
++  # Luma and chroma noise reduction and sharpening, scaled with the gain
+   - Detail:
+       sharpen: 0.6
+       denoise: 0.015
++      chromaDenoise: 0.03
+   - Agc:
+   - Af:
+       coarseSteps: 8
+diff --git a/src/libcamera/shaders/postfilter.frag b/src/libcamera/shaders/postfilter.frag
+index ed456ae..9d9615c 100644
+--- a/src/libcamera/shaders/postfilter.frag
++++ b/src/libcamera/shaders/postfilter.frag
+@@ -1,7 +1,7 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ /*
+- * Luma noise reduction and sharpening, a second pass over the debayered
+- * picture (gamma-encoded RGB).
++ * Luma noise reduction and sharpening, and chroma noise reduction, a
++ * second pass over the debayered picture (gamma-encoded RGB).
+  */
+ 
+ #ifdef GL_ES
+@@ -17,6 +17,8 @@ uniform vec2 tex_step;
+ uniform float sharpen;
+ /* Range sigma of the edge-preserving luma smoothing: 0 leaves it */
+ uniform float denoise;
++/* Range sigma of the chroma smoothing: 0 leaves the chroma */
++uniform float chroma_denoise;
+ uniform float swap_blue;
+ 
+ float luma(vec3 c)
+@@ -63,6 +65,44 @@ void main(void)
+ 	detail = sign(detail) * max(abs(detail) - 0.5 * denoise, 0.0);
+ 	y_out = clamp(y_out + sharpen * detail, 0.0, 1.0);
+ 
+-	vec3 rgb = clamp(c + (y_out - y), 0.0, 1.0);
++	vec3 rgb = c + (y_out - y);
++
++	if (chroma_denoise > 0.0) {
++		/*
++		 * Colour noise is blotchy, coarser than the 3x3 above: average
++		 * the chroma over a 9x9 footprint (16 taps at 2 and 4 pixels in
++		 * eight directions), guided by the luma so that colour doesn't
++		 * bleed across edges, and by the chroma itself so that real
++		 * colour detail survives. BT.601 colour differences.
++		 */
++		vec2 cc = vec2(c.b - y, c.r - y);
++		vec2 c_sum = cc;
++		float c_weight = 1.0;
++		float inv_c = 1.0 / chroma_denoise;
++		float inv_y = 1.0 / (0.04 + 2.0 * denoise);
++
++		for (int k = 0; k < 16; k++) {
++			float a = float(k) * 0.7853982;
++			float rad = k < 8 ? 2.0 : 4.0;
++			vec2 offset = vec2(cos(a), sin(a)) * rad * tex_step;
++			vec3 cn = texture2D(tex_rgb, textureOut + offset).rgb;
++			float yn = luma(cn);
++			vec2 ccn = vec2(cn.b - yn, cn.r - yn);
++			float dy = (yn - y) * inv_y;
++			vec2 dc = (ccn - cc) * inv_c;
++			float w = (k < 8 ? 1.0 : 0.6) * exp(-dy * dy - dot(dc, dc));
++
++			c_sum += w * ccn;
++			c_weight += w;
++		}
++		cc = c_sum / c_weight;
++
++		/* Rebuild RGB from the luma and the smoothed colour differences */
++		rgb.b = y_out + cc.x;
++		rgb.r = y_out + cc.y;
++		rgb.g = (y_out - 0.299 * rgb.r - 0.114 * rgb.b) / 0.587;
++	}
++
++	rgb = clamp(rgb, 0.0, 1.0);
+ 	gl_FragColor = vec4(mix(rgb, rgb.bgr, swap_blue), 1.0);
+ }
+diff --git a/src/libcamera/software_isp/debayer_egl.cpp b/src/libcamera/software_isp/debayer_egl.cpp
+index f1b4de0..c24b6cd 100644
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -656,6 +656,7 @@ int DebayerEGL::initPostShaders()
+ 	postUniformStep_ = glGetUniformLocation(postProgramId_, "tex_step");
+ 	postUniformSharpen_ = glGetUniformLocation(postProgramId_, "sharpen");
+ 	postUniformDenoise_ = glGetUniformLocation(postProgramId_, "denoise");
++	postUniformChromaDenoise_ = glGetUniformLocation(postProgramId_, "chroma_denoise");
+ 	postUniformSwapBlue_ = glGetUniformLocation(postProgramId_, "swap_blue");
+ 	postUniformProjMatrix_ = glGetUniformLocation(postProgramId_, "proj_matrix");
+ 	postUniformStrideFactor_ = glGetUniformLocation(postProgramId_, "stride_factor");
+@@ -708,6 +709,7 @@ int DebayerEGL::postFilter(eGLImage &eglImageOut, const DebayerParams &params)
+ 		    1.0f / outputSize_.height);
+ 	glUniform1f(postUniformSharpen_, params.sharpen);
+ 	glUniform1f(postUniformDenoise_, params.denoise);
++	glUniform1f(postUniformChromaDenoise_, params.chromaDenoise);
+ 	glUniform1f(postUniformSwapBlue_, swapBlue_ ? 1.0f : 0.0f);
+ 	glUniformMatrix4fv(postUniformProjMatrix_, 1, GL_FALSE, identity);
+ 	glUniform1f(postUniformStrideFactor_, 1.0f);
+@@ -733,7 +735,8 @@ int DebayerEGL::debayerGPU(FrameBuffer *input, FrameBuffer *output, const Debaye
+ 	if (!eglImageOut)
+ 		return -ENOMEM;
+ 
+-	const bool post = postImage_ && (params.sharpen > 0.0f || params.denoise > 0.0f);
++	const bool post = postImage_ && (params.sharpen > 0.0f || params.denoise > 0.0f ||
++					  params.chromaDenoise > 0.0f);
+ 
+ 	egl_.attachTextureToFBO(post ? *postImage_ : *eglImageOut);
+ 	setShaderVariableValues(*eglImageIn, params);
+diff --git a/src/libcamera/software_isp/debayer_egl.h b/src/libcamera/software_isp/debayer_egl.h
+index dcd6d7a..b5f5028 100644
+--- a/src/libcamera/software_isp/debayer_egl.h
++++ b/src/libcamera/software_isp/debayer_egl.h
+@@ -126,6 +126,7 @@ private:
+ 	GLint postUniformStep_;
+ 	GLint postUniformSharpen_;
+ 	GLint postUniformDenoise_;
++	GLint postUniformChromaDenoise_;
+ 	GLint postUniformSwapBlue_;
+ 	GLint postUniformProjMatrix_;
+ 	GLint postUniformStrideFactor_;
+-- 
+2.56.0
+
