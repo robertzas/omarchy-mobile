@@ -221,6 +221,18 @@ if omarchy-done ensure omamobile-screensaver; then
   install -Dm644 "$share/branding/foot-screensaver.ini" ~/.config/foot/screensaver.ini
 fi
 
+# Hermes is the one agent in Omarchy's Setup > Default Agent with no aarch64
+# build (hermes-desktop isn't in the aarch64 repository): hide it there and
+# under Install > AI, through the menu extension file. Once.
+if omarchy-done ensure omamobile-menu-agents; then
+  extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
+  mkdir -p "$(dirname "$extension")"
+  [[ -s $extension ]] || printf '{\n}\n' >"$extension"
+  if ! grep -q '"setup.default.agent.hermes"' "$extension"; then
+    sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: no aarch64 build of Hermes\n  "setup.default.agent.hermes": {"when": "false"},\n  "install.ai.hermes": {"when": "false"},/' "$extension"
+  fi
+fi
+
 # System > PIN sets or changes the phone's PIN (omamobile-set-pin), through
 # Omarchy's menu extension file. Added once.
 if omarchy-done ensure omamobile-menu-pin; then

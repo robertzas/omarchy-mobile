@@ -3,7 +3,9 @@
 # First-run setup for a phone, the part Omarchy's installer asks on a computer:
 # your name and email (git identity and XCompose, through Omarchy's own
 # install/user/git.sh and xcompose.sh), then a PIN or password if there isn't
-# one (omamobile-set-pin asks which).
+# one (omamobile-set-pin asks which). Then Omarchy's own invitation to pick a
+# default AI agent (Setup > Default Agent): Omarchy shows it after the first
+# update, a phone at first login.
 #
 #   omamobile-onboarding           open a terminal and run it
 #   omamobile-onboarding --nudge   at login: if anything is missing, say so
@@ -19,9 +21,19 @@ has_pin() {
   ! printf '' | unix_chkpwd "$USER" nullok 2>/dev/null
 }
 
+# Omarchy's hook: one notification, only while no agent is chosen, never twice.
+invite_agent() {
+  local hook=$omarchy_path/install/user/first-run/setup-agent.hook
+  [[ -f $hook ]] && bash "$hook" || true
+}
+
 case "${1:-}" in
   --nudge)
-    has_identity && has_pin && exit 0
+    # one nudge at a time: the agent waits until the phone itself is set up
+    if has_identity && has_pin; then
+      invite_agent
+      exit 0
+    fi
     omarchy-notification-send -u critical "Finish setting up your phone" \
       "Add your name and email, and a PIN or password to lock it. Tap to start." \
       --exec omamobile-onboarding
@@ -42,6 +54,7 @@ case "${1:-}" in
     else
       omamobile-set-pin --inner
     fi
+    invite_agent
     ;;
   "")
     exec omarchy-launch-floating-terminal-with-presentation "omamobile-onboarding --inner"
