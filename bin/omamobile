@@ -23,6 +23,9 @@ Usage: [DEVICE=<codename>] omamobile <command>
   capture [name]   Save what the connected phone exposes (Android over adb, or fastboot)
                    into $REFERENCE_DIR/<name>
   initramfs        Build the M1 initramfs (Alpine + dropbear + our init) into $KERNEL_OUT
+  initramfs-config <dir>
+                   Write only the device's files for the shared init (storage-guard
+                   allowlist, trigger, ...) into <dir>, to check what initramfs packs
   kernel           Build the mainline kernel ($KERNEL_DIR) with our config fragment
   modules          Package the kernel's modules (stripped) as a tarball for the Arch
                    root: $KERNEL_OUT/modules-<release>.tar.zst, unpacked under
@@ -48,6 +51,11 @@ USAGE
 say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 
+# Every name a descriptor's UFS_RW may hold: slot B's boot images and
+# userdata. Never persist, efs*, modem*, devinfo, vbmeta*, bootloader, radio
+# or anything in slot A. initramfs/init's ufs_rw_load accepts the same set.
+UFS_RW_ALLOWED="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
+
 # Load device/$DEVICE/device.conf into DEV_* variables. The descriptor is data,
 # not shell: only KEY=value and KEY="value" lines, no $, backticks or
 # backslashes, so other tools can read it too. Nothing in it is executed.
@@ -71,11 +79,19 @@ load_device() {
     [[ -n ${!p:-} ]] || die "$file: $key is missing"
   done
   [[ $DEV_CODENAME == "$DEVICE" ]] || die "$file: CODENAME=$DEV_CODENAME, expected $DEVICE"
-  # Safety: the guard's allowlist may name slot B partitions and userdata only,
-  # and every boot image we write must be on it.
+  # Safety: the guard's allowlist may name slot B's boot images and userdata
+  # only, must hold userdata, and every boot image we write must be on it.
+  # initramfs packs this list into the image, and the init checks it again.
+  local rw_chars='^[a-z0-9_ ]+$' seen_rw=" "
+  [[ $DEV_UFS_RW =~ $rw_chars ]] || die "$file: UFS_RW may hold only partition names ([a-z0-9_]) separated by spaces"
   for p in $DEV_UFS_RW; do
     [[ $p == *_b || $p == userdata ]] || die "$file: UFS_RW may hold only *_b partitions and userdata, not $p"
+    [[ " $UFS_RW_ALLOWED " == *" $p "* ]] \
+      || die "$file: UFS_RW may hold only slot B boot images ($UFS_RW_ALLOWED), not $p"
+    [[ $seen_rw != *" $p "* ]] || die "$file: UFS_RW names $p twice"
+    seen_rw+="$p "
   done
+  [[ $seen_rw == *" userdata "* ]] || die "$file: UFS_RW must include userdata"
   for p in $DEV_BOOT_IMAGES; do slot_b_allowed "$p" || die "$file: ${p}_b is not in UFS_RW"; done
   # images builds one of two layouts from these names: a typo must not
   # quietly pick the other one.
@@ -212,6 +228,53 @@ cmd_modules_push() {
   "$ssh" "find /usr/lib/modules/$rel -name '*.ko*' | wc -l; ls /usr/lib/modules/$rel/modules.dep"
 }
 
+# The per-device files the shared init reads, written into $1 (the
+# initramfs's /etc). Without $1 it only checks the descriptor's values.
+initramfs_config() {
+  local etc=${1:-} rw
+  if [[ -n ${DEV_SIMPLEFB_TRIG_CON:-} || -n ${DEV_BRINGUP_PROBE:-} ]]; then
+    [[ -n ${DEV_COMPATIBLE:-} ]] || die "COMPATIBLE is missing"
+  fi
+  if [[ -n ${DEV_SIMPLEFB_TRIG_CON:-} ]]; then
+    [[ $DEV_SIMPLEFB_TRIG_CON =~ ^0x[0-9a-fA-F]+[[:space:]]+0x[0-9a-fA-F]+$ ]] \
+      || die "SIMPLEFB_TRIG_CON must be \"0xADDR 0xVALUE\" (hex)"
+  fi
+  if [[ -n ${DEV_BRINGUP_PROBE:-} ]]; then
+    [[ $DEV_BRINGUP_PROBE == 1 ]] || die "BRINGUP_PROBE must be 1 or absent"
+  fi
+  # load_device has checked UFS_RW (names, slot B boot images, userdata);
+  # pack it as one line with single spaces, the form the init accepts
+  read -ra rw <<<"$DEV_UFS_RW"
+  [[ -n $etc ]] || return 0
+  mkdir -p "$etc"
+
+  # This device's simplefb trigger, and nothing else's. The init writes
+  # exactly this pair, and only when the board matches COMPATIBLE.
+  # Absent or empty: it writes no display register. The bring-up probe
+  # uses the same COMPATIBLE file, so it is packed for either step.
+  if [[ -n ${DEV_SIMPLEFB_TRIG_CON:-} || -n ${DEV_BRINGUP_PROBE:-} ]]; then
+    printf '%s\n' "$DEV_COMPATIBLE" > "$etc/omamobile-compatible"
+  fi
+  if [[ -n ${DEV_SIMPLEFB_TRIG_CON:-} ]]; then
+    printf '%s\n' "$DEV_SIMPLEFB_TRIG_CON" > "$etc/omamobile-simplefb-trig"
+  fi
+  # DPP and watchdog reads. Off unless the descriptor asks, and the init
+  # still refuses them when the board does not match COMPATIBLE.
+  if [[ -n ${DEV_BRINGUP_PROBE:-} ]]; then
+    : > "$etc/omamobile-bringup-probe"
+  fi
+  # The storage guard's allowlist. Without this file the init leaves every
+  # partition read-only.
+  printf '%s\n' "${rw[*]}" > "$etc/omamobile-ufs-rw"
+}
+
+cmd_initramfs_config() {
+  [[ -n ${1:-} ]] || die "usage: omamobile initramfs-config <dir>"
+  load_device
+  initramfs_config "$1"
+  ls -l "$1"
+}
+
 cmd_initramfs() {
   local dl="$WORK/downloads/alpine" stage="$KERNEL_OUT/initramfs" ver=3.24.2
   load_device
@@ -224,9 +287,8 @@ cmd_initramfs() {
     init="$ROOT/device/$DEVICE/$DEV_INITRAMFS_INIT"
   fi
   [[ -f $init ]] || die "no init script $init"
-  # The init's own storage-guard allowlist must be the descriptor's
-  [[ "$(sed -n 's/^UFS_RW="\(.*\)"$/\1/p' "$init")" == "$DEV_UFS_RW" ]] \
-    || die "UFS_RW in $init differs from device/$DEVICE/device.conf"
+  # Every per-device value is checked before anything is downloaded or built
+  initramfs_config
   local tarball="alpine-minirootfs-$ver-aarch64.tar.gz"
   local sum=9bf70a7f18ea44094cbb5f70c58f9af129c8214745743db0e68e5502cc2ce773
   mkdir -p "$dl"
@@ -250,26 +312,7 @@ cmd_initramfs() {
   done
   install -m 755 "$init" "$stage/init"
 
-  # This device's simplefb trigger, and nothing else's. The init writes
-  # exactly this pair, and only when the board matches COMPATIBLE.
-  # Absent or empty: it writes no display register. The bring-up probe
-  # uses the same COMPATIBLE file, so it is packed for either step.
-  mkdir -p "$stage/etc"
-  if [[ -n ${DEV_SIMPLEFB_TRIG_CON:-} || -n ${DEV_BRINGUP_PROBE:-} ]]; then
-    [[ -n ${DEV_COMPATIBLE:-} ]] || die "COMPATIBLE is missing"
-    printf '%s\n' "$DEV_COMPATIBLE" > "$stage/etc/omamobile-compatible"
-  fi
-  if [[ -n ${DEV_SIMPLEFB_TRIG_CON:-} ]]; then
-    [[ $DEV_SIMPLEFB_TRIG_CON =~ ^0x[0-9a-fA-F]+[[:space:]]+0x[0-9a-fA-F]+$ ]] \
-      || die "SIMPLEFB_TRIG_CON must be \"0xADDR 0xVALUE\" (hex)"
-    printf '%s\n' "$DEV_SIMPLEFB_TRIG_CON" > "$stage/etc/omamobile-simplefb-trig"
-  fi
-  # DPP and watchdog reads. Off unless the descriptor asks, and the init
-  # still refuses them when the board does not match COMPATIBLE.
-  if [[ -n ${DEV_BRINGUP_PROBE:-} ]]; then
-    [[ $DEV_BRINGUP_PROBE == 1 ]] || die "BRINGUP_PROBE must be 1 or absent"
-    : > "$stage/etc/omamobile-bringup-probe"
-  fi
+  initramfs_config "$stage/etc"
 
   # Boot logo, drawn by init straight onto the framebuffer until Plymouth
   # takes over: Omarchy's Plymouth screen (logo centred on #1a1b26, at scale
@@ -580,6 +623,7 @@ cmd_kernel_shell() {
 case "${1:-}" in
   capture) shift; cmd_capture "$@" ;;
   initramfs) cmd_initramfs ;;
+  initramfs-config) shift; cmd_initramfs_config "$@" ;;
   kernel) cmd_kernel ;;
   modules) cmd_modules ;;
   modules-push) cmd_modules_push ;;

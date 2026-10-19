@@ -1,0 +1,153 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The storage guard's allowlist (no phone): bin/omamobile packs the
+# descriptor's UFS_RW into the initramfs as /etc/omamobile-ufs-rw, and
+# refuses any list that names more than slot B's boot images and userdata;
+# initramfs/init reads that file and fails closed. Its guard functions run
+# here against a fake sysfs and /dev: a missing, empty or malformed file, or
+# a forbidden name, leaves every partition read-only; cheetah's list leaves
+# exactly its six partitions writable, as the hard-coded list did; /dev/sda's
+# whole-disk node is removed either way.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
+cheetah_rw="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
+
+# --- Pack time: the real descriptors ---
+for d in cheetah:"$cheetah_rw" felix:"$cheetah_rw" oriole:"boot_b vendor_boot_b dtbo_b userdata"; do
+  dev=${d%%:*} want=${d#*:}
+  DEVICE=$dev bin/omamobile initramfs-config "$t/etc-$dev" > "$t/log" 2>&1 || { cat "$t/log"; fail "$dev: initramfs-config"; }
+  [[ $(cat "$t/etc-$dev/omamobile-ufs-rw") == "$want" ]] || fail "$dev packs its UFS_RW (got $(cat "$t/etc-$dev/omamobile-ufs-rw"))"
+done
+if [[ $(grep -c '^ *UFS_RW=' initramfs/init) != 2 ]] || ! grep -q '^UFS_RW=""$' initramfs/init \
+   || ! grep -q '^  UFS_RW="\$\*"$' initramfs/init; then
+  fail "initramfs/init has no allowlist of its own, only the packed one"
+fi
+grep -q '^  initramfs_config "\$stage/etc"$' bin/omamobile || fail "initramfs packs the files into the image's /etc"
+pass "cheetah and felix pack the six-name list, oriole its three boot images and userdata"
+
+# --- Pack time: refused descriptors, in a repository-shaped tree ---
+R=$t/repo
+mkdir -p "$R/bin" "$R/device/six"
+cp bin/omamobile "$R/bin/omamobile"
+printf 'DEVICE="${DEVICE:-six}"\nSRC_DIR=%s\n' "$t/nosrc" > "$R/omamobile.conf"
+sed -e 's/^CODENAME=.*/CODENAME=six/' device/oriole/device.conf > "$R/device/six/device.conf"
+cp "$R/device/six/device.conf" "$t/good.conf"
+om() { (cd "$R" && DEVICE=six bin/omamobile "$@") > "$t/log" 2>&1; }
+om initramfs-config "$t/etc-six" || { cat "$t/log"; fail "the test descriptor packs"; }
+refused() { # what, UFS_RW value, expected message
+  cp "$t/good.conf" "$R/device/six/device.conf"
+  sed -i "s/^UFS_RW=.*/UFS_RW=\"$2\"/" "$R/device/six/device.conf"
+  rm -rf "$t/etc-bad"
+  if om initramfs-config "$t/etc-bad"; then fail "refuses $1"; fi
+  grep -c -- "$3" "$t/log" >/dev/null || { cat "$t/log"; fail "refuses $1 with: $3"; }
+  [[ ! -e $t/etc-bad ]] || fail "writes nothing for $1"
+  pass "refuses $1"
+}
+refused "persist" "boot_b vendor_boot_b dtbo_b persist userdata" "not persist"
+refused "efs" "boot_b vendor_boot_b dtbo_b efs userdata" "not efs"
+refused "a slot A boot image" "boot_a boot_b vendor_boot_b dtbo_b userdata" "not boot_a"
+refused "modem_b" "boot_b vendor_boot_b dtbo_b modem_b userdata" "not modem_b"
+refused "vbmeta_b" "boot_b vendor_boot_b dtbo_b vbmeta_b userdata" "not vbmeta_b"
+refused "bootloader_b" "boot_b vendor_boot_b dtbo_b bootloader_b userdata" "not bootloader_b"
+refused "radio_b" "boot_b vendor_boot_b dtbo_b radio_b userdata" "not radio_b"
+refused "a list without userdata" "boot_b vendor_boot_b dtbo_b" "must include userdata"
+refused "a name twice" "boot_b vendor_boot_b dtbo_b userdata boot_b" "names boot_b twice"
+refused "upper case" "boot_b vendor_boot_b dtbo_b USERDATA" "only partition names"
+refused "a glob" "boot_b vendor_boot_b dtbo_b userdata *" "only partition names"
+refused "a boot image missing" "boot_b vendor_boot_b userdata" "dtbo_b is not in UFS_RW"
+cp "$t/good.conf" "$R/device/six/device.conf"
+
+# --- Boot time: initramfs/init's guard against a fake sysfs and /dev ---
+# The guard as init has it: ufs_ro_log through the ufs_rw_load call and
+# ufs_ro_pass, with its paths pointed into $t/b. blockdev --setro writes 1
+# into the partition's ro file, as the kernel would.
+awk '/^ufs_ro_log\(\) \{/ {on = 1} /^ufs_ro_pass$/ {exit} on' initramfs/init > "$t/guard.sh"
+grep -q '^ufs_rw_load() {$' "$t/guard.sh" || fail "ufs_rw_load found in initramfs/init"
+grep -q '^ufs_rw_load$' "$t/guard.sh" || fail "the init loads the allowlist before its first pass"
+grep -q '^ufs_ro_pass() {$' "$t/guard.sh" || fail "ufs_ro_pass found in initramfs/init"
+B=$t/b
+sed -e "s|> /dev/kmsg|>> /dev/kmsg|" -e "s|/sys/block/|$B/sys/block/|g" -e "s|/dev/|$B/dev/|g" -e "s|/run/|$B/run/|g" \
+    -e "s|/etc/omamobile-|$B/etc/omamobile-|g" -e 's/\[ -b /[ -e /' "$t/guard.sh" > "$t/guard-test.sh"
+mkdir -p "$t/bin"
+cat > "$t/bin/blockdev" <<EOF
+#!/bin/sh
+[ "\$1" = --setro ] || exit 1
+n=\${2##*/}
+for f in $B/sys/block/\$n/ro $B/sys/block/*/\$n/ro; do [ -f "\$f" ] && echo 1 > "\$f"; done
+exit 0
+EOF
+chmod +x "$t/bin/blockdev"
+parts="boot_a boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata persist efs modem_b vbmeta_b devinfo"
+fake_disks() {
+  rm -rf "$B" && mkdir -p "$B/dev" "$B/etc" "$B/sys/block/sda" "$B/sys/block/sdb/sdb1"
+  echo 0 > "$B/sys/block/sda/ro"; : > "$B/dev/sda"
+  local i=0 p
+  for p in $parts; do
+    i=$((i + 1))
+    mkdir -p "$B/sys/block/sda/sda$i"
+    printf 'MAJOR=8\nPARTN=%s\nPARTNAME=%s\n' "$i" "$p" > "$B/sys/block/sda/sda$i/uevent"
+    echo 0 > "$B/sys/block/sda/sda$i/ro"; : > "$B/dev/sda$i"
+  done
+  # A boot LUN, read-only at the disk level
+  echo 0 > "$B/sys/block/sdb/ro"; : > "$B/dev/sdb"
+  printf 'PARTNAME=bl1_a\n' > "$B/sys/block/sdb/sdb1/uevent"
+  echo 0 > "$B/sys/block/sdb/sdb1/ro"; : > "$B/dev/sdb1"
+}
+guard() { # run the guard's load and one pass
+  PATH="$t/bin:$PATH" sh -c ". '$t/guard-test.sh'; ufs_ro_pass"
+}
+writable() { # names of the partitions left writable, in GPT order
+  local s out=""
+  for s in "$B"/sys/block/sda/sda*; do
+    [[ $(cat "$s/ro") == 0 ]] && out+="$(sed -n 's/^PARTNAME=//p' "$s/uevent") "
+  done
+  printf '%s' "${out% }"
+}
+disk_checks() { # $1: case name
+  [[ ! -e $B/dev/sda ]] || fail "$1: /dev/sda's whole-disk node is removed"
+  [[ $(cat "$B/sys/block/sda/ro") == 0 ]] || fail "$1: sda itself stays writable (the kernel needs it for its partitions)"
+  [[ $(cat "$B/sys/block/sdb/ro") == 1 && $(cat "$B/sys/block/sdb/sdb1/ro") == 1 ]] || fail "$1: the boot LUN is read-only"
+  grep -q 'whole-disk node removed' "$B/dev/kmsg" || fail "$1: the sda removal is logged"
+}
+
+fake_disks
+printf '%s\n' "$cheetah_rw" > "$B/etc/omamobile-ufs-rw"
+guard
+[[ $(writable) == "$cheetah_rw" ]] || fail "cheetah's list leaves exactly its six partitions writable (got: $(writable))"
+grep -q "allowlist: $cheetah_rw" "$B/dev/kmsg" || fail "the allowlist is logged"
+disk_checks cheetah
+pass "cheetah's packed list: the same six partitions writable as the old hard-coded list"
+
+fake_disks
+cp "$t/etc-oriole/omamobile-ufs-rw" "$B/etc/omamobile-ufs-rw"
+guard
+[[ $(writable) == "boot_b vendor_boot_b dtbo_b userdata" ]] || fail "oriole's list leaves its four partitions writable (got: $(writable))"
+disk_checks oriole
+pass "oriole's packed list: boot_b, vendor_boot_b, dtbo_b and userdata writable"
+
+closed() { # what, expected kmsg text; the file is set up by the caller
+  guard
+  [[ -z $(writable) ]] || fail "$1: every partition read-only (writable: $(writable))"
+  grep -q -- "$2" "$B/dev/kmsg" || { cat "$B/dev/kmsg"; fail "$1: says so on kmsg ($2)"; }
+  disk_checks "$1"
+  pass "$1: every partition read-only"
+}
+fake_disks
+closed "no allowlist file" "no allowlist in this image"
+fake_disks; : > "$B/etc/omamobile-ufs-rw"
+closed "an empty allowlist file" "no allowlist in this image"
+fake_disks; printf '   \n' > "$B/etc/omamobile-ufs-rw"
+closed "a blank allowlist" "empty allowlist"
+fake_disks; printf 'boot_b userdata\npersist\n' > "$B/etc/omamobile-ufs-rw"
+closed "a two-line allowlist" "malformed allowlist"
+fake_disks; printf 'boot_b userdata *\n' > "$B/etc/omamobile-ufs-rw"
+closed "a glob in the allowlist" "malformed allowlist"
+fake_disks; printf 'boot_b;rm userdata\n' > "$B/etc/omamobile-ufs-rw"
+closed "shell syntax in the allowlist" "malformed allowlist"
+fake_disks; printf 'boot_b vendor_boot_b dtbo_b userdata persist\n' > "$B/etc/omamobile-ufs-rw"
+closed "persist in the allowlist" "allowlist names persist"
+fake_disks; printf 'boot_a userdata\n' > "$B/etc/omamobile-ufs-rw"
+closed "a slot A name in the allowlist" "allowlist names boot_a"

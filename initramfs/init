@@ -45,7 +45,43 @@ ufs_ro_log() { echo "omamobile: ufs-ro: $*" > /dev/kmsg; }
 # accident. The boot LUNs (sdb, sdc, sdd: bootloader images) are read-only
 # at the disk level. Calibration partitions (efs, persist, modem_userdata...)
 # and all of slot A stay read-only.
-UFS_RW="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
+# The allowlist is the descriptor's UFS_RW, which bin/omamobile initramfs
+# checks and packs into /etc/omamobile-ufs-rw. It fails closed: a missing,
+# empty or malformed file leaves every partition read-only, so Arch does not
+# start and the initramfs shell stays up over SSH. Whatever the file says,
+# only slot B's boot images and userdata can be named.
+UFS_RW=""
+ufs_rw_load() {
+  local list p
+  if [ ! -s /etc/omamobile-ufs-rw ]; then
+    ufs_ro_log "no allowlist in this image (/etc/omamobile-ufs-rw): every partition read-only"
+    return 0
+  fi
+  list=$(cat /etc/omamobile-ufs-rw)
+  # One line of lower-case names and spaces; this also rules out globs below
+  case "$list" in
+    *[!a-z0-9_\ ]*)
+      ufs_ro_log "malformed allowlist in /etc/omamobile-ufs-rw: every partition read-only"
+      return 0 ;;
+  esac
+  # shellcheck disable=SC2086 # split into names on purpose
+  set -- $list
+  if [ $# = 0 ]; then
+    ufs_ro_log "empty allowlist in /etc/omamobile-ufs-rw: every partition read-only"
+    return 0
+  fi
+  for p in "$@"; do
+    case "$p" in
+      boot_b|init_boot_b|vendor_boot_b|vendor_kernel_boot_b|dtbo_b|userdata) ;;
+      *)
+        ufs_ro_log "allowlist names $p, which is never writable: every partition read-only"
+        return 0 ;;
+    esac
+  done
+  UFS_RW="$*"
+  ufs_ro_log "allowlist: $UFS_RW"
+}
+ufs_rw_load
 mkdir -p /run/ufs-ro
 ufs_partname() { sed -n 's/^PARTNAME=//p' "$1/uevent" 2>/dev/null; }
 ufs_ro_pass() {
