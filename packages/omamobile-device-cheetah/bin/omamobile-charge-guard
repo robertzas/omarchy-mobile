@@ -11,7 +11,7 @@ param=/sys/module/max77759_charger/parameters/temp_guard
 bat=/sys/class/power_supply/max170xx_battery
 chg=/sys/class/power_supply/max77759-charger
 
-read_or() { cat "$1" 2>/dev/null || echo "${2:-?}"; }
+read_or() { cat "$1" 2>/dev/null || echo "${2-?}"; }  # an empty default stays empty
 
 status() {
   if [[ -r $param ]]; then
