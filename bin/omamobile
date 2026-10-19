@@ -612,17 +612,23 @@ cmd_push() {
   say "Rebooting into the new images"
   "$ssh" 'sync; (sleep 1; PATH=/usr/local/bin:$PATH reboot-to omamobile) >/dev/null 2>&1 &' || true
   sleep 15
-  local i saw_same=0
+  # Judge by the last answer only: a phone that still answered with the old
+  # boot id just before it went down did reboot, and then never came back.
+  local i last=none
   for i in $(seq 1 45); do
     if id=$("$ssh" 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null); then
-      if [[ $id != "$booted" ]]; then
+      if [[ $id == "$booted" ]]; then
+        last=same
+      else
+        last=new
         "$ssh" 'uname -v; cut -d" " -f1 /proc/uptime' && return 0
       fi
-      saw_same=1
+    else
+      last=none
     fi
     sleep 2
   done
-  if [[ $saw_same == 1 ]]; then
+  if [[ $last == same ]]; then
     die "same boot id: the reboot did not happen"
   fi
   die "no SSH after reboot (the safety net crashes back to slot A within about a minute)"

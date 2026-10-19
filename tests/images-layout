@@ -6,7 +6,9 @@
 # one (no init_boot or vendor_kernel_boot) yields boot (ramdisk and OS
 # version), vendor_boot (DTB and initramfs) and dtbo; flash, against a fake
 # fastboot, writes exactly the descriptor's BOOT_IMAGES and refuses images
-# built for another device; load_device refuses bad descriptors. Skips when
+# built for another device; load_device refuses bad descriptors; push,
+# against a fake phone, writes and verifies the images and tells a reboot
+# that did not happen from a phone that never came back. Skips when
 # AOSP's mkbootimg isn't under $SRC_DIR, or no dtc is found: $DTC, then dtc
 # on PATH, then a kernel build's scripts/dtc/dtc ($KERNEL_OUT, or
 # ~/android/mainline/out*).
@@ -170,3 +172,53 @@ bad "a boot image named twice" 's/^BOOT_IMAGES=.*/BOOT_IMAGES="boot vendor_boot 
 bad "BOOT_IMAGES without dtbo" 's/^BOOT_IMAGES=.*/BOOT_IMAGES="boot vendor_boot"/' "must include dtbo"
 bad "a boot image missing from UFS_RW" 's/^UFS_RW=.*/UFS_RW="boot_b vendor_boot_b userdata"/' "dtbo_b is not in UFS_RW"
 bad "a partition other than slot B in UFS_RW" 's/^UFS_RW=.*/UFS_RW="boot_b vendor_boot_b dtbo_b efs userdata"/' "not efs"
+
+# push against a fake phone: phone-ssh answers each command push sends and
+# keeps what dd writes, so the checksum check reads it back. The boot_id
+# answers follow $T/phone/script, one line per read (old, new or down; the
+# last line repeats). sleep is a no-op, so the tries after the reboot take
+# no time.
+P=$t/phone
+mkdir -p "$P" "$K/include/config"
+printf '7.0.0-test\n' > "$K/include/config/kernel.release"
+head -c 1000 /dev/urandom > "$K/modules-7.0.0-test.tar.zst"
+sha256sum < "$K/modules-7.0.0-test.tar.zst" | cut -d' ' -f1 > "$P/modules-sum"
+printf '#!/bin/sh\nexit 0\n' > "$t/bin/sleep"
+chmod +x "$t/bin/sleep"
+cat > "$R/tools/phone-ssh" <<'PHONE'
+#!/bin/bash
+P=$T/phone cmd="$*"
+case $cmd in
+  true|*'command -v reboot-to'*) exit 0 ;;
+  'cat /proc/sys/kernel/random/boot_id')
+    n=$(( $(cat "$P/reads" 2>/dev/null || echo 0) + 1 )); echo $n > "$P/reads"
+    state=$(sed -n "${n}p" "$P/script"); [[ -n $state ]] || state=$(tail -n 1 "$P/script")
+    case $state in old) echo old-boot ;; new) echo new-boot ;; *) exit 255 ;; esac ;;
+  *.omamobile-tarball*) cat "$P/modules-sum" ;;
+  *PARTNAME=*) [[ $cmd =~ PARTNAME=([a-z_]+) ]] && echo "/dev/sda_${BASH_REMATCH[1]}" ;;
+  cat\ /sys/block/sda/*/ro) echo 0 ;;
+  dd\ of=*) dev=${cmd#dd of=/dev/}; cat > "$P/${dev%% *}" ;;
+  head\ -c*) read -r _ _ n dev _ <<<"$cmd"; head -c "$n" "$P/${dev#/dev/}" | sha256sum ;;
+  sync\;*) echo rebooted >> "$P/log" ;;
+  uname*) echo "#1 test"; echo 12.3 ;;
+  *) echo "fake phone: unexpected command: $cmd" >&2; exit 1 ;;
+esac
+PHONE
+chmod +x "$R/tools/phone-ssh"
+push() { # the boot_id answers, one per argument
+  rm -f "$P/reads" "$P/log" "$P"/sda_*
+  printf '%s\n' "$@" > "$P/script"
+  om six push
+}
+push old down new || { cat "$t/log"; fail "push succeeds when the phone comes back with a new boot id"; }
+[[ $(find "$P" -name 'sda_*' | wc -l) == 3 && $(cat "$P/log") == rebooted ]] || fail "push writes the three images and reboots once"
+pass "push writes and verifies the images, then sees the new boot id"
+if push old old; then fail "push fails when the boot id never changes"; fi
+grep -c 'same boot id: the reboot did not happen' "$t/log" >/dev/null || { cat "$t/log"; fail "an unchanged boot id is reported as such"; }
+pass "push reports a reboot that did not happen"
+if push old old down; then fail "push fails when SSH never comes back"; fi
+grep -c 'no SSH after reboot' "$t/log" >/dev/null || { cat "$t/log"; fail "old boot id once, then silence, is reported as no SSH"; }
+pass "push reports no SSH when the phone answered once with the old boot id, then went down"
+if push old down; then fail "push fails when SSH never comes back"; fi
+grep -c 'no SSH after reboot' "$t/log" >/dev/null || { cat "$t/log"; fail "no answer at all is reported as no SSH"; }
+pass "push reports no SSH when the phone never answers after the reboot"
