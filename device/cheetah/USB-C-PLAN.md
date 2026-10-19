@@ -1,7 +1,8 @@
 # USB-C and charging plan: gates B3 (charger) and B4 (Type-C) (cheetah / gs201)
 
-Status (2026-10-19): **the temperature guard works on the phone (G1, G2
-passed); charging still runs on the bootloader's settings at boot.** Kernel
+Status (2026-10-19): **the charger driver and its temperature guard load
+at boot (D1, device-cheetah 0.1.33); G1, G2 and D1 passed.** Still open:
+D1's cold-plug check (boot without the cable, then plug in), then B4a. Kernel
 7.3.0-rc6-omamobile-push1-00558-gcbd727f42785 (`omamobile-int` @
 `cbd727f42`) has every piece B3g, B4a and B4b need; nothing has to be built
 before B4b. Section 9 is the current runbook (it replaces section 6 from
@@ -457,6 +458,13 @@ knob.
   inhibited`, mode 4, CHG_DTLS 8, charger `online` 1, USB unaffected; gauge
   reloaded: a band line and mode 5 within 60 s. `omamobile-charge-guard
   status` crashed without a gauge (fixed in device-cheetah 0.1.32).
+- **D1 passed** (device-cheetah 0.1.33, reboot): `found: mode 0x5, float
+  voltage 4350 mV, fast charge 1933420 uA`, `temperature guard on`,
+  `probed: mode 0x5, float voltage 4450 mV, fast charge 1466730 uA, input
+  limit 500000 uA`, then `battery 30.2 C, 4324 mV: band 20-42 C` with no
+  "no reading" (the softdep works); dump mode 5, sel 45/22, CHG_DTLS 2;
+  USB, SSH and `omamobile-usb-rescue` as before. Not yet done: the boot
+  without the cable, then plugging in.
 
 ### Status as written for this runbook (2026-10-18)
 

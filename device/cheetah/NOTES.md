@@ -15,6 +15,13 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
 - **Charger temperature guard (USB-C-PLAN B3g G1, G2) passed** under the
   dead-man switch; details and the Rp 3.0 A answer to the B3.3 current
   question in USB-C-PLAN section 9.
+- **The charger and the guard now load at boot** (device-cheetah 0.1.33,
+  USB-C-PLAN D1): 1.47 A and 4.45 V in the 20-42 C band instead of the
+  bootloader's 1.93 A with no bands; the battery had reached 39.5 C at
+  1.9 A without the guard.
+- **The init checks the guard once more before switching to Arch** and
+  stays in the initramfs if anything outside the allowlist is writable;
+  test boot passed (same six writable, "switching to Arch Linux").
 
 ## 2026-10-18: a charging phone put to sleep at low battery; fingerprint stuck afterwards; the shared init boots
 
