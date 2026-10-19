@@ -1,8 +1,8 @@
 # USB-C and charging plan: gates B3 (charger) and B4 (Type-C) (cheetah / gs201)
 
 Status (2026-10-19): **the charger driver and its temperature guard load
-at boot (D1, device-cheetah 0.1.33); G1, G2 and D1 passed.** Still open:
-D1's cold-plug check (boot without the cable, then plug in), then B4a. Kernel
+at boot (D1, device-cheetah 0.1.33); G1, G2 and D1 passed, replug
+included.** Next: G3-G6 (optional, attended), then B4a. Kernel
 7.3.0-rc6-omamobile-push1-00558-gcbd727f42785 (`omamobile-int` @
 `cbd727f42`) has every piece B3g, B4a and B4b need; nothing has to be built
 before B4b. Section 9 is the current runbook (it replaces section 6 from
@@ -463,8 +463,14 @@ knob.
   `probed: mode 0x5, float voltage 4450 mV, fast charge 1466730 uA, input
   limit 500000 uA`, then `battery 30.2 C, 4324 mV: band 20-42 C` with no
   "no reading" (the softdep works); dump mode 5, sel 45/22, CHG_DTLS 2;
-  USB, SSH and `omamobile-usb-rescue` as before. Not yet done: the boot
-  without the cable, then plugging in.
+  USB, SSH and `omamobile-usb-rescue` as before.
+- **D1 replug passed** (2026-10-19, charger and guard loaded at boot): with
+  the phone booted, unplugged for about 15 s and plugged back in,
+  `omamobile-usb-rescue: VBUS valid, USBSW_CTRL 0x00: closing the data
+  switch` at 48.9 s, `usb0` carrier back 0.35 s later, USBSW_CTRL 0x09,
+  charger mode 5, CHG_DTLS 2, no inhibit. (A cold boot with the cable
+  plugged in within the first seconds also came up normally; that one
+  never needs the rescue.)
 
 ### Status as written for this runbook (2026-10-18)
 
