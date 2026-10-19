@@ -27,14 +27,39 @@ The tree of Linus Torvalds' $tag tag ($(git rev-parse "$tag^{commit}")),
 squashed so this repository stays small. Omarchy Mobile's changes follow as
 individual commits; they apply unchanged on top of the upstream tag.")
 
+# Published commit ids must stay put: pull requests are based on them, and a
+# full replay gives every commit a new id. So when the published tip has the
+# tree of a commit on the local branch, replay only the commits after it, on
+# top of the published tip, and push a fast-forward. Only when no such commit
+# exists (local history rewritten) is the branch rebuilt and force-pushed.
+pub=
+git fetch -q "$remote" "refs/heads/$branch" 2>/dev/null && pub=$(git rev-parse FETCH_HEAD)
+from=
+if [[ -n $pub ]]; then
+  ptree=$(git rev-parse "$pub^{tree}")
+  for c in $(git rev-list "$tag..$branch"); do
+    [[ $(git rev-parse "$c^{tree}") == "$ptree" ]] && { from=$c; break; }
+  done
+fi
+
 # Replay in a throwaway worktree, so no checkout in use changes.
 work=$(mktemp -d)
 trap 'git worktree remove --force "$work" >/dev/null 2>&1 || true' EXIT
 git worktree add -q --detach "$work" "$branch"
-git -C "$work" rebase -q --onto "$base" "$tag"
+if [[ -n $from ]]; then
+  git -C "$work" rebase -q --onto "$pub" "$from"
+else
+  git -C "$work" rebase -q --onto "$base" "$tag"
+fi
 published=$(git -C "$work" rev-parse HEAD)
 
 [[ -z $(git diff "$branch" "$published") ]] || { echo "Replayed tree differs from $branch; not publishing" >&2; exit 1; }
 git branch -f "publish/$branch" "$published"
-git push --force "$remote" "publish/$branch:refs/heads/$branch"
-echo "Published $branch ($(git rev-list --count "$tag..$branch") commits on $tag) to $remote"
+if [[ -n $from ]]; then
+  git push "$remote" "publish/$branch:refs/heads/$branch"
+  echo "Published $branch to $remote: $(git rev-list --count "$pub..$published") new commit(s), fast-forward"
+else
+  echo "No published commit matches $branch's history: rebuilding, which changes every published commit id" >&2
+  git push --force "$remote" "publish/$branch:refs/heads/$branch"
+  echo "Published $branch ($(git rev-list --count "$tag..$branch") commits on $tag) to $remote"
+fi
