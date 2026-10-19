@@ -2,6 +2,20 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-10-19: the guard's allowlist from the descriptor; the temperature guard on the phone
+
+- **The storage guard's allowlist now comes from `device.conf`**
+  (`/etc/omamobile-ufs-rw`, packed and checked by `bin/omamobile
+  initramfs`; a missing or bad file leaves every partition read-only). Test
+  boot on 7.3.0-rc6-omamobile-push1-00558-gcbd727f42785, new initramfs only:
+  `ufs-ro: allowlist: boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b
+  dtbo_b userdata`, no fail-closed line, the same six partitions writable as
+  before, `persist`, `efs`, `efs_backup`, `modem_userdata` and `modem_a/b`
+  read-only, `/dev/sda` removed, USB product still "Pixel 7 Pro (M1)".
+- **Charger temperature guard (USB-C-PLAN B3g G1, G2) passed** under the
+  dead-man switch; details and the Rp 3.0 A answer to the B3.3 current
+  question in USB-C-PLAN section 9.
+
 ## 2026-10-18: a charging phone put to sleep at low battery; fingerprint stuck afterwards; the shared init boots
 
 - **The battery read "Unknown" while charging**, so the bar showed no

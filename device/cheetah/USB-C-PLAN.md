@@ -1,18 +1,13 @@
 # USB-C and charging plan: gates B3 (charger) and B4 (Type-C) (cheetah / gs201)
 
-Status (2026-10-12): **charging works by hand; Type-C has not run yet.**
-B3.3 passed on the phone under the dead-man switch (NOTES.md: 500 mA input,
-4450 mV float, 93 to 96 % in 10 minutes). USB comes back after a replug
-through `omamobile-usb-rescue.service` (the R1 fix, omamobile-device-cheetah
-0.1.15+). The battery temperature guard (B3g) is built, not run: kernel
-`omamobile-chgguard` @ `37a83337c` (`temp_guard`, default off) and
-`omamobile-charge-guard` (device-cheetah 0.1.14+), so the charger stays
-blacklisted at boot and the bootloader's settings apply. Kernel:
-`omamobile-usbc` @ `c86bd2db7` (`wt-usbc`, `out-usbc`) and
-`omamobile-chgguard`, both merged into `omamobile-int`. **Next:** the B3g
-runbook, then B4a and B4b (Type-C and the role switch), which retire the
-rescue service; B4c (host mode) is design only. Open: the gauge current
-above the 500 mA input limit in B3.3 (NOTES.md).
+Status (2026-10-19): **the temperature guard works on the phone (G1, G2
+passed); charging still runs on the bootloader's settings at boot.** Kernel
+7.3.0-rc6-omamobile-push1-00558-gcbd727f42785 (`omamobile-int` @
+`cbd727f42`) has every piece B3g, B4a and B4b need; nothing has to be built
+before B4b. Section 9 is the current runbook (it replaces section 6 from
+B3.1 on: that one pushed the old `out-usbc` kernel, which would drop the
+camera, audio and AoC), with today's results. **Next:** G3-G6 (attended),
+then D1 (device-cheetah: charger and guard on by default), then B4a.
 
 Earlier status (historical, superseded by the status above): Follows `WIFI-BATTERY-PLAN.md` sections 4-5 (MAX77759 wiring, gates B1/B1b
 done, B2 pending). Written 2026-10-12, offline: nothing here has run on the
@@ -438,3 +433,436 @@ knob.
 | `dr_mode = "otg"` changes the boot path | separate gate (B4b), after B4a passed |
 | Watchdog cannot be armed (in use) | the tool refuses; `--no-watchdog` falls back to a crash reboot |
 | Something requests MAX77759 GPIO5/6 | nothing in the DT does; GPIO6 is the VBUS input switch: never drive it during bring-up |
+
+## 9. Runbook 2026-10-19 (B3g to Type-C by default)
+
+### Results 2026-10-19 (kernel 7.3.0-rc6-omamobile-push1-00558-gcbd727f42785)
+
+- **P0/G0 passed** (read-only): charger mode 5, WDTEN 0, JEITA_EN 1
+  (0xc1 = 0x05), no stale bring-up files in `/etc/modprobe.d`. The
+  bootloader leaves fast charge at 1933 mA (sel 29), above stock's 1.47 A
+  ceiling: the battery read 39.5 C at +1.9 A with no guard.
+- **The B3.3 question:** TCPC `BC_STATUS1` (0x87) = 0x01, so BC1.2 says
+  SDP (500 mA), while the battery took about 1.9 A. But `CC_STATUS` (0x1d)
+  = 0x1c: CC2 shows Rp 3.0 A, so the source allows 3 A at 5 V under Type-C.
+  Not a violation; the "SDP above 0.55 A: stop" rule below must also read
+  the Rp level. K1 stays open (a port with Rp default current and SDP would
+  still be over).
+- **G1 passed** (dead-man `b3-charger --ilim 500000`, CONFIRMED):
+  `probed: mode 0x5, float voltage 4450 mV, fast charge 1466730 uA, input
+  limit 500000 uA`; guard on: `battery 29.2 C, 4401 mV: band 20-42 C, float
+  4450 mV, charge 1466730 uA`; dump mode 5, CNFG_04 sel 45, CNFG_02 sel 22,
+  CHG_DTLS 2.
+- **G2 passed:** gauge unloaded: `no reading from max170xx_battery: charging
+  inhibited`, mode 4, CHG_DTLS 8, charger `online` 1, USB unaffected; gauge
+  reloaded: a band line and mode 5 within 60 s. `omamobile-charge-guard
+  status` crashed without a gauge (fixed in device-cheetah 0.1.32).
+
+### Status as written for this runbook (2026-10-18)
+
+Status (2026-10-18): **charging runs on the bootloader's settings; the
+kernel driver and the temperature guard are built and on the phone, not yet
+used.** The phone runs `omamobile-int` @ `cbd727f42`
+(`7.3.0-rc6-omamobile-push1-00558-gcbd727f42785`). It contains everything
+B3g, B4a and B4b need:
+
+- `omamobile-usbc` @ `c86bd2db7` (charger `default_ilim_ua`, the tcpci_maxim
+  data switch on attach, the PHY's `force_vbus_valid`, the battery limits
+  and sink-only connector in the DTS);
+- `omamobile-chgguard` @ `37a83337c` (`temp_guard`, default off);
+- `omamobile-battery` @ `de0aa4d4e` (the gauge works out Charging from its
+  current when no supplier is described: the stopgap from NOTES 2026-10-18).
+
+All three are ancestors of `omamobile-int`. In `out-int`, `max77759_charger.ko`
+has the `default_ilim_ua`, `temp_guard` and `guard_psy` parameters, the PHY
+has `force_vbus_valid`, and `tcpm`, `tcpci` and `tcpci_maxim` are built as
+modules (from arm64 defconfig). The B4a and B4b overlays apply cleanly with
+fdtoverlay to today's `out-int/images/cheetah-overlaid.dtb` (checked
+offline, in a scratch directory). **No kernel build is needed before
+B4b.** Userspace: device-cheetah 0.1.31 (`omamobile-charge-guard`;
+`omamobile-charger.conf` with its option commented out; `max77759`,
+`max77759_charger`, `tcpci_maxim`, `gpio_max77759` and `nvmem_max77759`
+blacklisted; `omamobile-usb-rescue.service` enabled), plus
+`tools/usbc-deadman` and `usbc-deadman-phone` (R0 drill and R1 passed
+2026-10-12).
+
+Gates passed: R0, R1, B3.0, B3.1 (on the old `out-usbc` kernel), B3.2,
+B3.3 (2026-10-12: 500 mA, 4450 mV, 93 to 96 % in 10 min). **Next:** P0,
+then B3g (G0 read-only first), then D1 (charger and guard on by default),
+then B4a, B4b, D2 to D4.
+
+**Do not push `out-usbc` again.** It is a 7-day-old branch kernel without the
+camera, audio, AoC, fingerprint and battery-model work. Every step below
+uses the integration build (`O=~/android/mainline/out-int`), and only B4a.1
+and B4b.1 change the images (DTB only, same kernel and modules).
+
+---
+
+### Findings this runbook rests on (new since 2026-10-12)
+
+| Finding | Evidence |
+|---|---|
+| The charger's regmap is cached (`REGCACHE_FLAT`). Only 0xb0-0xb1 and 0xb4-0xb8 are volatile. sysfs `constant_charge_voltage_max`, `constant_charge_current_max` and `input_current_limit` show what the driver wrote, not what the chip holds. Verify hardware with `i2cget` (the dump) only | `drivers/mfd/max77759.c` `max77759_regmap_config_charger` |
+| The guard's `CHG_CNFG_02`/`CHG_CNFG_04` writes don't unlock CHGPROT. Google's driver writes the same two registers without unlocking, so they are not protected registers. Still, G3/G4 must read the chip back to prove it | `max77759_charger.c` `set_*_limit()`; Google `max77759_charger.c:1394,1464` (`max77759_reg_update`, no `chg_prot`) |
+| While the guard holds charging off (mode 4), the **charger's `status` reads Discharging**, not "Not charging". `CHG_DTLS` is 8 (off), which the driver maps to DISCHARGING. `online` stays 1 (VBUS valid, software mode CHG_BUCK_ON) | `get_status()`, `get_online()` |
+| The guard's current is rounded **up** to the next charger step (`linear_range_get_selector_high_array`). It matters only below the 1.47 A cap: 0-10 °C at 4.2-4.3 V asks for 10 % = 493 mA and gets 533 mA (sel 8). That is 8 % over stock's table, in the cold band only. Follow-up: round down | `set_fast_charge_current_limit()` |
+| The guard is a delayed work item, so **it doesn't run in s2idle**. A sleeping phone keeps the last float voltage and current until it wakes, then the overdue work runs at once. The backstop is the charger's own JEITA (`CHG_CNFG_08` bit 2, POR default 0x05 = on). G0 reads it | Google `max77759_A1_regs.h:1954-1963` |
+| **Open question B3.3, likely answer:** the upstream driver never sets `CHG_CNFG_09.NO_AUTOIBUS`, so the chip's own charger-type detection (BC1.2) can raise the effective input limit above the 500 mA in the register (SDP 500 mA, CDP/DCP 1.5 A). Google's driver always sets NO_AUTOIBUS=1 together with the limit. A CDP laptop port (1.5 A) explains 1.02 A into the battery at 500 mA "input" (B3.3), and +1.9 A on the bootloader's 1933 mA charge current (NOTES 2026-10-18). G0 reads the detection result: TCPC vendor `BC_STATUS1` 0x87, `CHGTYP` bits 1:0 (1 SDP, 2 CDP, 3 DCP), and `CC_STATUS` 0x1d (Rp level) | Google `max77759_charger.c:1500-1525`, `bc_max77759.h:33-42` |
+| **Gauge and charger are not linked.** The charger registers its power supply with no `supplied_to`, and `fuel-gauge@36` has no `power-supplies`. Loading the charger therefore changes nothing for the gauge: `power_supply_am_i_supplied()` keeps returning -ENODEV, and `de0aa4d4e`'s path (status from the current's sign) stays in use | `max77759_charger_probe()`; cheetah DTS; `power_supply_am_i_supplied()` |
+| Adding `power-supplies = <&pmic66>` to the gauge would link them: the charger's power supply takes pmic@66's fwnode (`device_set_of_node_from_dev`). But `power_supply_check_supplies()` then returns **-EPROBE_DEFER until the charger has registered**, so with the charger blacklisted the battery would disappear. Add the link only with or after D1, never before | `power_supply_core.c` `power_supply_check_supplies()`, `__power_supply_register()` |
+| `bin/omamobile images` applies `DTB_OVERLAYS` from `device/cheetah/device.conf` (no environment override) into `$O/images`, after `rm -rf $O/images/*`. The plan's old `cp $D $D.default` / fdtoverlay-into-the-kernel-DTB steps are obsolete | `bin/omamobile` `cmd_images()` |
+
+---
+
+### P0: preflight (read-only, no risk)
+
+```sh
+tools/phone-ssh 'uname -r; pacman -Q omamobile-device-cheetah; lsmod | grep -E "^(max77759|max17042|tcpci|tcpm|gpio_max77759)" ;
+  systemctl is-active omamobile-usb-rescue; ls /etc/modprobe.d/; modinfo -F parm max77759_charger | cut -c1-40;
+  cat /sys/module/phy_exynos5_usbdrd/parameters/force_vbus_valid'
+tools/usbc-deadman install
+```
+
+**Pass:** release `...-00558-gcbd727f42785`; device-cheetah 0.1.31; only
+`max17042_battery` loaded; rescue `active`; **no `omamobile-max77759.conf`,
+`omamobile-charger.conf` or other hand-copied bring-up file in
+`/etc/modprobe.d`** (it would shadow the package's file, AGENTS §2); three
+charger parameters; `force_vbus_valid` N. **Stop** on any difference.
+
+---
+
+### B3g: the temperature guard
+
+Safety net for G1 to G5: the charger is loaded with `tools/usbc-deadman b3-charger`
+(watchdog, kmsg stream to `logs/`, undo unless a fresh SSH login confirms).
+B3.3 proved that the charger doesn't touch the USB data path. Battery 30 to
+80 %, phone at room temperature, cable in the laptop's usual port. Second
+terminal: `tools/phone-ssh dmesg -w`.
+
+### G0: read-only (risk: none)
+
+```sh
+tools/usbc-deadman dump > logs/b3g-g0-dump.txt; cat logs/b3g-g0-dump.txt
+tools/phone-ssh 'B=$(for d in /sys/bus/i2c/devices/i2c-*; do readlink -f $d | grep -q 10d60000.i2c && echo ${d##*-}; done)
+  for r in 0xb4 0xb5 0xb6 0xb7 0xc1 0xc2; do echo "chg $r $(i2cget -f -y $B 0x69 $r)"; done
+  for r in 0x1d 0x1e 0x87 0x88; do echo "tcpc $r $(i2cget -f -y $B 0x25 $r)"; done'
+tools/phone-ssh 'cd /sys/class/power_supply/max170xx_battery; cat temp current_now status; sleep 60; cat temp current_now'
+```
+
+Record:
+
+- `0xc1` CHG_CNFG_08: **bit 2 JEITA_EN** (expect 1, POR default 0x05).
+- `0xc2` CHG_CNFG_09: bit 7 NO_AUTOIBUS (B3.0: 0) and the ILIM selector.
+- `tcpc 0x87` BC_STATUS1: **CHGTYP = bits 1:0** (1 SDP, 2 CDP, 3 DCP), bit 6
+  CHGTYPRUN. `tcpc 0x1d` CC_STATUS: CC1 bits 1:0, CC2 bits 3:2 (as sink:
+  1 default, 2 1.5 A, 3 3.0 A Rp).
+- `0xb4` CHG_INT_OK: bit 7 AICL_OK, bit 2 INLIM_OK (0 = input-limited now).
+- Gauge `temp` (0.1 °C): plausible and moving; `current_now` sign.
+
+**Pass:** mode 5, WDTEN 0, JEITA_EN 1, a moving temperature. **Stop** if JEITA_EN
+is 0: the guard is then the only temperature policy and blind in suspend, so
+D1 needs a JEITA-on write first (a follow-up decision). **Closes the B3.3 open
+question:** CHGTYP 2/3 with ILIM sel 19 means the extra current is BC1.2's
+legitimate 1.5 A. CHGTYP 1 (SDP) with more than ~0.55 A into the battery
+means the chip draws more than an SDP allows: **stop**, and add NO_AUTOIBUS
+handling to the driver before D1 (section "To build", item K1).
+
+### G1: guard on at normal temperature (risk: low)
+
+```sh
+tools/usbc-deadman b3-charger --ilim 500000          # B3.3 again: expect CONFIRMED
+tools/phone-ssh 'omamobile-charge-guard on; sleep 35; omamobile-charge-guard status'
+tools/usbc-deadman dump | grep -E 'CNFG_0[0249]|DTLS'
+```
+
+**Pass:** dmesg `found: mode 0x5, float voltage 4350 mV...` and then
+`probed: mode 0x5, float voltage 4450 mV, fast charge 1466730 uA, input limit 500000 uA`;
+`temperature guard on (max170xx_battery)`; then
+`battery 2x.x C, 4xxx mV: band 20-42 C, float 4450 mV, charge 1466730 uA`
+(10-20 band in a cold room: same numbers, capped). Dump: mode 5, CNFG_04
+sel 45, CNFG_02 sel 22, CHG_DTLS 1 or 2. Gauge `status` Charging (still
+the stopgap path). **Stop** on a missing band line, on mode 4 at room
+temperature, or on "no reading". **Rollback:** `tools/usbc-deadman undo b3-charger`
+(unloads, writes back the bootloader's 0xbb/0xbd/0xc2/0xb9).
+
+### G2: simulated read failure (risk: low; tell the human first: the battery icon disappears for about a minute)
+
+```sh
+tools/phone-ssh 'modprobe -r max17042_battery; sleep 35; omamobile-charge-guard status'
+tools/usbc-deadman dump | grep -E 'CNFG_00|DTLS'
+tools/phone-ssh 'modprobe max17042_battery; sleep 65; omamobile-charge-guard status'
+```
+
+**Pass:** `no reading from max170xx_battery: charging inhibited`; dump mode
+**4**, CHG_DTLS 8; charger `status` **Discharging** (not "Not charging", see
+findings), `online` 1; USB unaffected. After the reload: within 60 s a
+band line again, mode 5. **Stop** if the mode stays 5 while inhibited (the
+guard doesn't reach the chip), or if the gauge doesn't come back (its model
+loads only on POR, so a reload must just read). **Rollback:**
+`modprobe max17042_battery`, `omamobile-charge-guard off`.
+
+### G3: hot bands (attended, optional; risk: medium, the battery is warmed on purpose)
+
+As in the plan (GPU load, full brightness, **stop the load at 50 °C**).
+Every minute: `omamobile-charge-guard status` and
+`tools/usbc-deadman dump | grep -E 'CNFG_0[024]|DTLS|DETAILS_00'`.
+**Pass, read back from the chip:** 42-46 °C CNFG_04 sel 45 and CNFG_02 sel 22;
+46-48 °C **sel 30 (4300 mV)**; 48-55 °C **sel 20 (4200 mV)**, and CNFG_02 sel 22
+(30 % = 1478 mA, capped at 1467). Cooling: each band returns only 2 °C
+inside it. **Stop and rollback:** `omamobile-charge-guard off` or undo
+b3-charger; end the load.
+
+### G4: cold bands (attended, optional; risk: low)
+
+As in the plan. Pass, from the chip: below 10 °C CNFG_04 sel 30. CNFG_02 is
+sel 22 below 4.2 V (30 % capped), **sel 8 (533 mA)** from 4.2 V (10 %,
+rounded up, see findings). Below 0 °C: mode 4.
+
+### G5: soak (attended; risk: low)
+
+A full charge from below 50 % with the guard on, charger loaded as in G1.
+**Pass:** CV near 4.45 V, CHG_DTLS 3/4, capacity 100 %; the only guard
+messages are band and tier lines (`journalctl -k | grep max77759-charger`).
+Watch the gauge `status` at the end: with no supplier link it goes Full only
+when the current reads exactly 0. Otherwise it reads Discharging at 100 %
+while plugged in. Note what upower and the bar show (feeds D4c).
+
+### G6: sleep while charging (attended; risk: low; announce: the phone sleeps)
+
+With the charger loaded and the guard on, cable in, ufw/Wi-Fi as usual:
+`tools/phone-ssh 'rtcwake -m no -s 60; systemctl suspend'` (as in the NOTES
+2026-10-18 reproduction; the RTC wake needs the suspend kernel's RTC). After
+the wake: `omamobile-charge-guard status` shows a fresh band line within 30 s,
+and the dump shows mode 5. **Pass:** no "no reading" and no stuck mode 4
+after resume. **Stop:** an inhibited charger after resume, or USB not back
+(`omamobile-usb-rescue` should handle it as after any replug).
+
+**B3g pass:** G0, G1, G2, G5, G6 (and G3/G4 as far as is safe).
+
+---
+
+### D1: charger and guard on by default (package; one reboot; risk: medium-low)
+
+Package change (not written yet, see "To build" P1), device-cheetah
+0.1.32:
+
+- `omamobile-max77759.conf`: drop `blacklist max77759` and
+  `blacklist max77759_charger`. Keep `tcpci_maxim`, `gpio_max77759` and
+  `nvmem_max77759` blacklisted.
+- `omamobile-charger.conf`:
+  `options max77759_charger default_ilim_ua=500000 temp_guard=1` **and**
+  `softdep max77759_charger pre: max17042_battery`. Without the softdep the
+  charger can probe before the gauge, and the guard's first read fails
+  ("no reading", 30 s inhibited, a warning every boot). Without
+  `default_ilim_ua` the upstream driver turns charging **off** at probe
+  (no tcpm-source), which the old commented line alone would have done.
+- `test/all`: the two B3g checks flip. Require the option line with both
+  parameters whenever the charger is not blacklisted, and never one without
+  the other.
+
+```sh
+tools/phone-install-package packages/omamobile-device-cheetah   # human's go
+tools/phone-ssh 'ls /etc/modprobe.d/; modprobe -c | grep -E "max77759_charger|blacklist max77759"'
+# reboot: human's go
+tools/phone-ssh 'reboot-to omamobile'
+tools/phone-ssh 'journalctl -k -b -o cat | grep -E "max77759|max1704"; omamobile-charge-guard status; systemctl is-active omamobile-usb-rescue'
+tools/usbc-deadman dump
+```
+
+**Pass:** at boot `found: mode 0x5, float voltage 4350 mV` then `probed: ... 4450 mV,
+1466730 uA, 500000 uA`, `temperature guard on`, a band line within 30 s;
+dump mode 5, sel 45/22; USB and SSH as before; rescue still active. Also
+boot once **without the cable** (Wi-Fi SSH or the screen), then plug in:
+charging starts (CHG_DTLS 1/2) and USB comes up through the rescue
+service. **Stop:** no USB after boot (not expected: B3.3 showed that the
+charger doesn't touch data), mode 4 at room temperature, or any
+`Battery over-current`. **Rollback:** `pacman -U` the 0.1.31 package (in
+`/var/cache/pacman/pkg` or `out/repo`), reboot. Quick off switch without a
+package: `echo 'blacklist max77759_charger' > /etc/modprobe.d/omamobile-charger-off.conf`,
+reboot (remove the file afterwards: AGENTS §2). The bootloader's settings
+then apply again (4350 mV, no guard).
+
+---
+
+### B4a: TCPM drives VBUS valid and the data switch
+
+Wi-Fi is up at boot since W3/W4. Have a **Wi-Fi SSH session open as a
+second way in** (it must not be used to confirm the dead-man: the confirm
+must prove USB, so `tools/usbc-deadman` uses `tools/phone-ssh` on
+172.16.42.1 only).
+
+### B4a.1: DTB with the overlay (one reboot; risk: medium)
+
+```sh
+O=~/android/mainline/out-int
+cp -a $O/images $O/images.int-good                 # the known-good images, for rollback
+# local edit, do not commit yet: append usbc-tcpm-test to DTB_OVERLAYS in device/cheetah/device.conf
+KERNEL_DIR=~/android/mainline/wt-int KERNEL_OUT=$O bin/omamobile images > logs/images-int-b4a.log 2>&1
+cp -a $O/images $O/images.b4a
+KERNEL_OUT=$O bin/omamobile push                    # human's go; same kernel, no modules push
+tools/phone-ssh 'ls /proc/device-tree/soc@0/phy@11200000/; cat /sys/module/phy_exynos5_usbdrd/parameters/force_vbus_valid;
+  cat /sys/class/udc/*/state; ls /sys/bus/i2c/devices/ | grep 0025; ls /sys/bus/i2c/devices/*-0025/driver 2>&1'
+```
+
+`$O/images` belongs to the integration build. Back it up as above (or ask
+the human to copy out-int first). **Pass:** boots with USB as before,
+`orientation-switch` and `port` present, `N`, `configured`, `0-0025` present
+and unbound. **Stop/rollback (no USB at boot):** the initramfs crashes
+after 45 s, then slot A boots after ABL's retries (section 4 step 4). Then
+`adb reboot bootloader` and `bin/omamobile flash` with `$O/images.int-good`.
+**After any slot A boot, take a fresh read-only backup of efs, persist and
+modem_userdata before more radio work (AGENTS §1).**
+
+### B4a.2: TCPM takes over (risk: high, dead-man)
+
+```sh
+tools/phone-ssh 'systemctl stop omamobile-usb-rescue'    # TCPM owns the switch now; undo runs a rescue anyway
+tools/usbc-deadman b4a-tcpm
+tools/phone-ssh 'cat /sys/class/typec/port0/{power_role,data_role,power_operation_mode}; ls /sys/class/typec/;
+  grep -H . /sys/class/power_supply/tcpm-source-psy-0-0025/{online,current_max,usb_type} 2>/dev/null;
+  cat /sys/kernel/debug/usb/tcpm-0-0025 | tail -40'
+tools/usbc-deadman dump
+```
+
+**Pass:** as in the plan (`Type-C reported orientation`, `[sink]`,
+`host [device]`, partner present, `USBSW_CTRL` 0x09). With D1 in place:
+mode 5, ILIM = `current_max`, or 500 mA for default power, and the guard
+still reporting. Note `power_operation_mode` together with G0's CC_STATUS
+(they must agree). **Stop:** not CONFIRMED (the tool reverts: force VBUS,
+unload TCPM, rescue). **Rollback after a confirm:** `tools/usbc-deadman undo b4a-tcpm`,
+then `systemctl start omamobile-usb-rescue`.
+
+### B4a.3: replug, both orientations (risk: high, dead-man; the human replugs)
+
+```sh
+tools/usbc-deadman replug        # unplug 5 s, replug; then again with the plug turned over
+```
+
+**Pass:** CONFIRMED both times; dmesg shows detach (VBUS valid dropped,
+gadget disconnect, charger `mode` OFF from psy_work) and attach (orientation
+1 or 2, charger back to mode 5, guard line unchanged). **Stop/rollback:** as
+B4a.2; the replug undo forces VBUS, unloads TCPM and closes the switch.
+
+---
+
+### B4b: dwc3 behind the role switch
+
+### B4b.1: DTB with both overlays (one reboot; risk: high, the boot path changes)
+
+```sh
+# device.conf: DTB_OVERLAYS ... usbc-tcpm-test usbc-role-test (local edit)
+KERNEL_DIR=~/android/mainline/wt-int KERNEL_OUT=$O bin/omamobile images > logs/images-int-b4b.log 2>&1
+cp -a $O/images $O/images.b4b
+KERNEL_OUT=$O bin/omamobile push                    # human's go
+tools/phone-ssh 'cat /sys/class/usb_role/*/role; cat /sys/class/udc/*/state; journalctl -b -o cat | grep -i -E "udc|gadget" | head'
+```
+
+**Pass:** `device`, `configured`; the initramfs found its UDC (it waits
+30 s). **Stop/rollback:** same as B4a.1, with `images.b4a` or
+`images.int-good`.
+
+### B4b.2 and B4b.3 (risk: high, dead-man)
+
+```sh
+tools/phone-ssh 'systemctl stop omamobile-usb-rescue'
+tools/usbc-deadman b4b-role
+tools/phone-ssh 'cat /sys/class/usb_role/11210000.usb-role-switch/role'    # device
+tools/usbc-deadman replug          # both orientations
+```
+
+**Pass:** as B4a, plus role `device` after TCPM, and no second UDC
+re-registration loop in dmesg. Rollback as B4a.2.
+
+---
+
+### D2: Type-C by default, through a guarded loader (one reboot; risk: high)
+
+Not just an un-blacklist. A TCPM that kills USB at boot has no dead-man,
+and the initramfs crash path doesn't help once userspace is up. Ship the
+loader the way Wi-Fi ships (`omamobile-wifi-start`). See "To build" P2:
+
+- `tcpci_maxim` stays blacklisted. `omamobile-typec.service` (After=
+  `omamobile-usb-rescue`) runs `omamobile-typec-start`. If
+  `/var/lib/omamobile/typec-failed` exists, it does nothing. If VBUS is
+  valid and the UDC is `configured`, it loads `tcpci_maxim` and waits 60 s
+  for `configured` again (one re-enumeration is expected). Without it, it
+  unloads `tcpci_maxim tcpci tcpm`, sets `force_vbus_valid=1`, writes
+  `USBSW_CTRL=0x09`, records `typec-failed`, and logs to kmsg. With no VBUS
+  at start (on battery), it loads TCPM and keeps watching.
+- `omamobile-usb-rescue` no longer exits when a Type-C driver owns the chip.
+  It becomes the watchdog for D2/D3: VBUS valid for 30 s with the UDC not
+  `configured` triggers the same fallback as above.
+- DTB: `usbc-tcpm-test usbc-role-test` stay in `DTB_OVERLAYS` (committed
+  now, with the B4 results).
+
+```sh
+tools/phone-install-package packages/omamobile-device-cheetah    # human's go
+tools/phone-ssh 'reboot-to omamobile'                              # human's go
+tools/phone-ssh 'systemctl status omamobile-typec --no-pager; ls /sys/class/typec; cat /sys/class/udc/*/state'
+```
+
+**Pass:** port0 + partner, `configured`, no `typec-failed`. **Stop/rollback:**
+the loader undoes itself (that is its job). By hand:
+`touch /var/lib/omamobile/typec-failed`, reboot; or the previous package.
+
+### D3: cold plug and the replug soak (risk: medium; the human plugs)
+
+1. Boot with the cable **out** (start the reboot over Wi-Fi SSH, unplug
+   while the logo shows). Plug in after the lock screen: USB comes up,
+   the charger goes to mode 5.
+2. Ten replugs over a day, both orientations, laptop port and a wall
+   charger: USB back each time (laptop), charging each time.
+   `journalctl | grep omamobile-usb-rescue` shows **no** fallback action.
+3. A wall charger with Rp 1.5/3.0 A: ILIM follows `current_max` (up to
+   3.0 A), and the guard still caps the battery side at 1.47 A.
+
+### D4: retire the bring-up pieces (packages + kernel; risk: low to medium)
+
+- (a) After D3 passes: drop the rescue service's fallback, or keep it
+  as a passive logger for one release. Remove
+  `blacklist tcpci_maxim` and the loader only when the loader has never
+  fired in D3.
+- (b) Kernel: fold both overlays into `gs201-cheetah.dts` (TCPC `okay`,
+  graph to the PHY and dwc3, `dr_mode = "otg"`, role switch); remove them
+  from `DTB_OVERLAYS` in the same release (one boot to check).
+- (c) Optional, one boot: the gauge's supplier link
+  (`power-supplies = <&pmic66>` on `fuel-gauge@36`, label on `pmic@66`).
+  Only once the charger loads by default: the gauge then waits for the
+  charger, and **rolling the charger back to blacklisted also needs this
+  line removed**, or the battery disappears. Gain: Full at end of charge
+  even with a few mA of noise, Discharging the moment the cable comes out,
+  and immediate uevents on plug/unplug (the charger's IRQ propagates to the
+  battery through `external_power_changed`).
+
+---
+
+### What the battery reports, and what upower sees, in each state
+
+| State | Gauge `status` | Line power in upower | `on-battery` |
+|---|---|---|---|
+| Today (no charger driver; `de0aa4d4e`) | from the current: Charging if >0, Full only at exactly 0 with FullCAP≈RepCap, else Discharging | none | follows the battery state: no while Charging |
+| D1 (charger bound, no link) | same as today (am_i_supplied still -ENODEV) | `max77759-charger` (type USB), `online` = VBUS valid and software mode CHG_BUCK_ON | no whenever plugged in, even while the guard holds charging off |
+| Guard inhibiting (mode 4) | Discharging (current about 0 or slightly negative); charger `status` Discharging too | online 1 | no |
+| B4a+ unplugged | Discharging (current <0) | `max77759-charger` 0, `tcpm-source-psy-0-0025` 0 | yes |
+| D4c (link added) | Discharging at once when the charger is offline; Full when FullCAP≈RepCap while supplied; else from the current | as above | as above |
+
+Residual risk: at a critical level with the guard inhibiting, the battery
+reads Discharging, and upower's critical action could suspend a plugged-in
+phone, as on 2026-10-18. That needs both a hot or cold battery and about
+2 %. A later gauge change could report Not charging when supplied with no
+current flowing.
+
+---
+
+### To build
+
+| Item | Where | State |
+|---|---|---|
+| Kernel for B3g/B4a/B4b | `omamobile-int` @ `cbd727f42` | **done, running** |
+| Overlays B4a/B4b | `device/cheetah/overlays/usbc-{tcpm,role}-test.dtso` | done; apply to today's overlaid DTB (checked) |
+| P1: device-cheetah 0.1.32 (D1) | blacklist, options, softdep, test flip | **to write** |
+| P2: `omamobile-typec-start` + unit, rescue as fallback watcher (D2) | device-cheetah | **to write** |
+| K1 (only if G0 shows SDP above 500 mA): set `NO_AUTOIBUS` with the limit, as Google does | `max77759_charger.c` `set_input_current_limit()` | to write if needed; changes the charge rate on CDP ports (1.5 A to 0.5 A), so the human decides |
+| K2 (nice to have): round the guard's current down; charger `status` "Not charging" while inhibited | `max77759_charger.c` | not needed for safety |
+| K3 (D4b/c): fold overlays into the DTS; gauge `power-supplies` | `gs201-cheetah.dts` | after B4b/D3 |
+| Tool: `usbc-deadman` uses `out-usbc` nowhere; only the plan text does | `USB-C-PLAN.md` section 6 | replace with this |
