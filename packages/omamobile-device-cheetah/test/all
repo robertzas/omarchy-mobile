@@ -54,6 +54,18 @@ done
   || fail "the Wi-Fi unit is enabled by a vendor wants link"
 grep -q 'mode=' bin/omamobile-wifi-start && fail "omamobile-wifi-start never loads the SysMMU firewall"
 grep -qx 'blacklist pcie_gs201' vendor/modprobe.d/omamobile-wifi.conf || fail "pcie_gs201 only loads through the guarded service"
-grep -qE '^options max77759_charger' vendor/modprobe.d/omamobile-charger.conf && fail "the charge guard stays off until USB-C-PLAN gate B3g passes"
-grep -qx 'blacklist max77759_charger' vendor/modprobe.d/omamobile-max77759.conf || fail "the charger stays blacklisted"
+# The charger loads at boot (USB-C-PLAN D1) only with both options: without
+# default_ilim_ua it turns charging off at probe, without temp_guard it
+# charges with no temperature bands.
+if ! grep -qx 'blacklist max77759_charger' vendor/modprobe.d/omamobile-max77759.conf; then
+  grep -qx 'options max77759_charger default_ilim_ua=500000 temp_guard=1' vendor/modprobe.d/omamobile-charger.conf \
+    || fail "a charger that loads at boot has its input limit and the temperature guard"
+  grep -qx 'softdep max77759_charger pre: max17042_battery' vendor/modprobe.d/omamobile-charger.conf \
+    || fail "the gauge loads before the charger, so the guard's first reading works"
+fi
+if grep -qE '^options max77759_charger' vendor/modprobe.d/omamobile-charger.conf; then
+  opts=$(grep -E '^options max77759_charger' vendor/modprobe.d/omamobile-charger.conf)
+  [[ $opts == *default_ilim_ua=* && $opts == *temp_guard=1* ]] || fail "never one charger option without the other"
+fi
+grep -qx 'blacklist tcpci_maxim' vendor/modprobe.d/omamobile-max77759.conf || fail "tcpci_maxim stays blacklisted until gate B4"
 pass "install stages the package"
