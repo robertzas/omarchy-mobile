@@ -17,7 +17,7 @@ Statuses: **works** (on by default, verified on the phone), **partial** (works, 
 | Display | works | Our flip-only KMS driver at 120 Hz, brightness, DPMS, the panel really off with the screen | [DISPLAY-PLAN](../device/cheetah/DISPLAY-PLAN.md) |
 | GPU | works | Mali-G710 on Panthor and patched Mesa, DVFS through ACPM | [GPU-PLAN](../device/cheetah/GPU-PLAN.md), [ACPM-PLAN](../device/cheetah/ACPM-PLAN.md) |
 | Touch, buttons | works | Our Synaptics TouchComm driver; `gpio-keys` | [NOTES](../device/cheetah/NOTES.md) |
-| Wi-Fi | works | brcmfmac behind a restricted DMA pool. The D3 handshake keeps it up across s2idle (S5b-3 passed); the long soak (S5c) is next | [WIFI-BATTERY-PLAN](../device/cheetah/WIFI-BATTERY-PLAN.md), [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md) S5 |
+| Wi-Fi | works | brcmfmac behind a restricted DMA pool. The D3 handshake keeps it up across s2idle (S5b-3; the S5c soak passed 31 of 31 freezes, 2026-10-19) | [WIFI-BATTERY-PLAN](../device/cheetah/WIFI-BATTERY-PLAN.md), [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md) S5 |
 | Bluetooth | works | Pairing and A2DP audio; headset calls (HFP) need the chip's SCO routing changed, not yet done | [BLUETOOTH-PLAN](../device/cheetah/BLUETOOTH-PLAN.md), [AUDIO-PLAN](../device/cheetah/AUDIO-PLAN.md) |
 | Battery | works | MAX77759 fuel gauge with the stock battery model; it reads Charging and Full on the cable since our max17042 status fix (2026-10-18), now sent upstream | [WIFI-BATTERY-PLAN](../device/cheetah/WIFI-BATTERY-PLAN.md) |
 | Charging | works | The charger driver and its temperature guard load at boot (device-cheetah 0.1.33; G1, G2 and D1 passed, replug included, 2026-10-19). Type-C (B4a, B4b) not yet run | [USB-C-PLAN](../device/cheetah/USB-C-PLAN.md) |
@@ -26,7 +26,7 @@ Statuses: **works** (on by default, verified on the phone), **partial** (works, 
 | Sensors | works | Accelerometer, light, proximity and compass at every boot; auto-rotate | [AOC-PLAN](../device/cheetah/AOC-PLAN.md) C6, [USF-PROTOCOL](../device/cheetah/USF-PROTOCOL.md) |
 | Speakers, microphones | partial | Both speakers in stereo under Google's speaker protection, mics at stock gain. The everyday level (stage `media`, 737/10) is about 17 dB below stock and sounds thin; stock's 817/17 still trips the coil temperature (C9d-3..6). Next: a measured speaker filter (C9g), the V/I feedback and impedance work (C9d-7/8), and stock's Waves processing on the AoC (T3b/T4) | [AOC-PLAN](../device/cheetah/AOC-PLAN.md) C8-C10, [AOC-TUNING-RESEARCH](../device/cheetah/AOC-TUNING-RESEARCH.md) |
 | CPU idle, power | partial | C2 idle on all cores is in the default DTB; battery-drain numbers off the cable not yet measured | [POWER-PLAN](../device/cheetah/POWER-PLAN.md) |
-| Suspend | in progress | s2idle freezes and wakes cleanly (S1-S4), now with Wi-Fi up across sleep (S5b-3). Not on by default: the S5c soak, AoC and sensors across sleep (S6), battery numbers (S7) and the screen-off policy (S8) first. Deep sleep (SYS_SLEEP), which stock's standby drain needs, not started | [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md) |
+| Suspend | in progress | s2idle freezes and wakes cleanly (S1-S4), now with Wi-Fi up across sleep (S5b-3, S5c soak passed). Not on by default: AoC and sensors across sleep (S6), battery numbers (S7) and the screen-off policy (S8) first. Deep sleep (SYS_SLEEP), which stock's standby drain needs, not started | [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md) |
 | GNSS | works | Google's GNSS stack in a chroot behind GeoClue, on demand from the Location tile; first outdoor fix (G4b), GNOME Maps through GeoClue (G5-2) | [GNSS-PLAN](../device/cheetah/GNSS-PLAN.md) |
 | NFC | works | ST54J through st-nci with our plain-NCI link, loaded at boot; neard reads and writes tags, and a tag with a web link opens it. Card emulation and payments are out of scope | [RADIOS-CAMERA-PLAN](../device/cheetah/RADIOS-CAMERA-PLAN.md) §3 |
 | Fingerprint | works | Google's HAL and Trusty TA on mainline (F3-F9), fprintd and our libfprint driver; the lock screen unlocks with a finger, PIN or password is the user's choice, enrollment from the shell (F10-F18); a verify survives system sleep and an enrollment interrupted by sleep fails cleanly (libfprint 1.6) | [FINGERPRINT-PLAN](../device/cheetah/FINGERPRINT-PLAN.md) |
@@ -47,7 +47,7 @@ In priority order: the first four make it a phone, the rest make it a good one.
 | **Calls** | no | The modem chain (M3.4 first CP boot, M4 registration), a front end (oFono or ModemManager), IMS (VoLTE: most networks have no 2G/3G left), the AoC voice path and an earpiece mode under the speaker protection. Then a dialer: GNOME Calls is already an optional app |
 | **SMS** | no | M4 (`omamobile-sitd`), the front end, then Chatty (optional app today) |
 | **Mobile data** | no | M4's data call (`rmnet`), the front end, then suspend with the modem online (M6) |
-| **Standby and battery life** | unmeasured | s2idle on screen-off (S5c-S8), then measured drain (S7, `power-ab`). s2idle alone won't reach Android's standby (the plan quotes about 274-286 mA in s2idle against 32-50 mA in deep sleep): deep sleep (SYS_SLEEP) is the real fix |
+| **Standby and battery life** | unmeasured | s2idle on screen-off (S6-S8), then measured drain (S7, `power-ab`). s2idle alone won't reach Android's standby (the plan quotes about 274-286 mA in s2idle against 32-50 mA in deep sleep): deep sleep (SYS_SLEEP) is the real fix |
 | **A phone home screen** | pages, apps, built-in widgets | Touch testing, folders, user-built widgets (in progress) |
 | **Notifications** | desktop-style | Phone-shaped banners, a shade with actions, heads-up on the lock screen, do-not-disturb; incoming calls and SMS once the modem works |
 | **Quick settings** | 19 tiles, editable | On-phone checks of airplane, hotspot and mobile data; mobile data needs the modem's M4 |
@@ -94,7 +94,7 @@ The modem's NV is never written from Linux: the chroot works on checksum-verifie
 
 [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md), [POWER-PLAN](../device/cheetah/POWER-PLAN.md), [USB-C-PLAN](../device/cheetah/USB-C-PLAN.md):
 
-1. **S5c** (Wi-Fi across sleep, soaked), **S6** (AoC and sensors across sleep), **S7** (battery numbers), **S8** (screen-off sleep on by default; the sleep hook is already in `omamobile-device-cheetah`). Next: S5c.
+1. **S5c** (Wi-Fi across sleep, soaked: passed 2026-10-19, 31 of 31), **S6** (AoC and sensors across sleep), **S7** (battery numbers), **S8** (screen-off sleep on by default; the sleep hook is already in `omamobile-device-cheetah`). Next: S6.
 2. **Measure drain** off the cable: POWER-PLAN's B0 baseline and `power-ab c2`.
 3. **Deep sleep (SYS_SLEEP)**: the gs201 SoC sleep sequence through the PMU and ACPM, as stock does. Researched in SUSPEND-PLAN §5, no estimate yet. This is what gets standby near Android's, and the single biggest battery item.
 4. **Safe charging by default**: the temperature guard (B3g) and the charger at boot (D1) are done. Next: G3-G6 (optional, attended), then Type-C with role switching (B4a, B4b), under the dead-man switch.

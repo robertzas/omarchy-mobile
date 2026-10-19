@@ -1,7 +1,11 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Suspend plan: s2idle first, then SYS_SLEEP (cheetah / gs201)
 
-Status (2026-10-12, evening): **S0, S1 and S2 passed on the phone** (section 8).
+Status (2026-10-19): **S0-S5 passed: Wi-Fi stays up across s2idle (S5c, 31
+of 31 freezes, 2026-10-19).** Next: S6 (the AoC and sensors across sleep),
+then S7 (battery numbers) and S8 (sleep on screen-off by default).
+
+Earlier status (2026-10-12, evening): **S0, S1 and S2 passed on the phone** (section 8).
 S3 is next. Kernel branch `omamobile-suspend` in `~/android/mainline/wt-suspend`
 (off `omamobile`, with `omamobile-acpm` merged in, because the RTC sits on
 ACPM), built into `~/android/mainline/out-suspend`; head `a7e5e1d95` adds the
@@ -1041,6 +1045,30 @@ right after. Next: S5c.
   frequent one means more driver work.
 - **After passing:** `touch /etc/omamobile/wifi-keep-across-sleep` (the hook
   then keeps Wi-Fi loaded).
+
+**S5c result (2026-10-19, 7.3.0-rc6-omamobile-push1-00558-gcbd727f42785,
+device-cheetah 0.1.33): passed.** Wi-Fi connected throughout, the AoC,
+sensor proxy and the charger driver with its temperature guard loaded, on
+the cable. One freeze first (`freeze_cmd s5c0 30`), because the charger
+driver is new since S5b-3: `rc=0`, "D3 ACK by control message after
+13650 us", hot resume, ping over Wi-Fi right after. Then 10 cycles and 20
+cycles of `rtcwake -m freeze -s 30` with 15 s awake, logging
+`nmcli -t -f STATE general` 15 s after each wake:
+
+- 31 of 31 freezes `rc=0` (`suspend_stats`: success 31, fail 0), Wi-Fi
+  `connected` after every one, ping working at the end.
+- Every D3 inform ACKed by control message, in 13.0-15.8 ms. No D3 timeout,
+  commonring error or "device unresponsive"; no UFS error handler or I/O
+  error.
+- Every wake on IRQ 140, `s2mpg12-pmic` (the RTC alarm's parent; S4's 128,
+  renumbered since). Cycle 2 of the 10 and cycles 12, 13 and 17 of the 20
+  woke after 16 s instead of 30 s, also on the PMIC interrupt, as S4's
+  cycles 8 and 12 did: another PMIC event, still to be read from the PMIC's
+  interrupt status.
+- The only other brcmfmac lines are "Country code iovar returned err = -5"
+  on suspend entry, while the bus is already down: harmless.
+
+`/etc/omamobile/wifi-keep-across-sleep` is set on the phone. Next: S6.
 
 ### S6: the AoC and sensors across sleep (no flash)
 
