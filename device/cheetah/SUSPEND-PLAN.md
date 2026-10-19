@@ -1,9 +1,13 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Suspend plan: s2idle first, then SYS_SLEEP (cheetah / gs201)
 
-Status (2026-10-19): **S0-S5 passed: Wi-Fi stays up across s2idle (S5c, 31
-of 31 freezes, 2026-10-19).** Next: S6 (the AoC and sensors across sleep),
-then S7 (battery numbers) and S8 (sleep on screen-off by default).
+Status (2026-10-19): **S0-S6 passed and S7 is measured.**
+- Wi-Fi stays up across s2idle (S5c, 31 of 31 freezes).
+- The AoC and sensors work across sleep (S6).
+- Screen off, the phone draws 434 mA awake and 312 mA in s2idle (S7).
+
+Next: S8 (sleep on screen-off by default). After that comes SYS_SLEEP, the
+real standby fix.
 
 Earlier status (2026-10-12, evening): **S0, S1 and S2 passed on the phone** (section 8).
 S3 is next. Kernel branch `omamobile-suspend` in `~/android/mainline/wt-suspend`
@@ -1109,6 +1113,43 @@ Cable out, as POWER-PLAN section 4 (`power-ab`): A = screen off and awake,
 B = screen off in s2idle (one long `rtcwake -m freeze` per phase). Wi-Fi and
 BT as they would be in use. This gives the honest s2idle number to set
 against SYS_SLEEP.
+
+`tools/power-ab s2idle` (2026-10-19) does this. Nothing samples while the
+phone is frozen, so both phases are measured from the gauge's charge
+counter (QH) and, as a cross-check, its reported charge (RepCap), taken as
+each phase starts and ends; phase A is also sampled once a second.
+
+**S6 result (2026-10-19, 00558): passed.** S6a is covered by S5c: its 31
+freezes ran with the AoC and sensor proxy up and the sensors idle (autorotate
+is off unless the rotation tile turns it on), and every wake was the PMIC's
+RTC interrupt, never the AoC mailbox. S6b, one `freeze_cmd s6b 60` with
+`omamobile-autorotate` holding the accelerometer stream:
+- it slept the full 61 s and woke on the PMIC (IRQ 140), not early;
+- the AoC mailbox IRQ (`18300000.mailbox`) rose by 47 around the freeze
+  without waking the phone;
+- no AoC offline, crash, watchdog or ramdump;
+- after the wake all four sensors answered through the proxy (accelerometer
+  tilt face-up, light 77 lux, proximity far, compass 350°), and a system
+  sound played through PipeWire with every AoC command accepted.
+
+**S7 result (2026-10-19, 00558, device-cheetah 0.1.33): measured.**
+`power-ab --phase 600 --settle 30 --rounds 3 s2idle`, cable out, screen off,
+Wi-Fi connected and kept across sleep, the AoC and sensor proxy up, battery
+from 99% down to the low 90s:
+
+| Phase | Charge counter | Reported charge | Sampled (A only) |
+| --- | --- | --- | --- |
+| A, screen off and awake | 206 mAh over 1707 s: **434 mA** | 439 mA | 426 mA, 1.84 W |
+| B, screen off in s2idle | 156 mAh over 1801 s: **312 mA** | 304 mA | (frozen) |
+
+- All three B phases froze for the whole 10 minutes. `suspend_stats`
+  reports no failures, and there were no UFS errors.
+- s2idle saves about 28% over awake. External measurements quoted in
+  section 2 put s2idle at 274-286 mA with Wi-Fi unloaded; ours keeps Wi-Fi
+  connected. The battery holds 4986 mAh (`charge_full`), so that is about
+  16 hours of standby.
+- Stock's SYS_SLEEP standby is 32-50 mA. **Battery life now depends on deep
+  sleep (SYS_SLEEP), not on more s2idle work.**
 
 ### S8: userspace on (package release)
 

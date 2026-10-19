@@ -47,7 +47,7 @@ In priority order: the first four make it a phone, the rest make it a good one.
 | **Calls** | no | The modem chain (M3.4 first CP boot, M4 registration), a front end (oFono or ModemManager), IMS (VoLTE: most networks have no 2G/3G left), the AoC voice path and an earpiece mode under the speaker protection. Then a dialer: GNOME Calls is already an optional app |
 | **SMS** | no | M4 (`omamobile-sitd`), the front end, then Chatty (optional app today) |
 | **Mobile data** | no | M4's data call (`rmnet`), the front end, then suspend with the modem online (M6) |
-| **Standby and battery life** | unmeasured | s2idle on screen-off (S6-S8), then measured drain (S7, `power-ab`). s2idle alone won't reach Android's standby (the plan quotes about 274-286 mA in s2idle against 32-50 mA in deep sleep): deep sleep (SYS_SLEEP) is the real fix |
+| **Standby and battery life** | 312 mA in s2idle (S7), about 16 h | s2idle on screen-off (S6-S8), then measured drain (S7, `power-ab`). s2idle alone won't reach Android's standby (the plan quotes about 274-286 mA in s2idle against 32-50 mA in deep sleep): deep sleep (SYS_SLEEP) is the real fix |
 | **A phone home screen** | pages, apps, built-in widgets | Touch testing, folders, user-built widgets (in progress) |
 | **Notifications** | desktop-style | Phone-shaped banners, a shade with actions, heads-up on the lock screen, do-not-disturb; incoming calls and SMS once the modem works |
 | **Quick settings** | 19 tiles, editable | On-phone checks of airplane, hotspot and mobile data; mobile data needs the modem's M4 |
@@ -94,7 +94,7 @@ The modem's NV is never written from Linux: the chroot works on checksum-verifie
 
 [SUSPEND-PLAN](../device/cheetah/SUSPEND-PLAN.md), [POWER-PLAN](../device/cheetah/POWER-PLAN.md), [USB-C-PLAN](../device/cheetah/USB-C-PLAN.md):
 
-1. **S5c** (Wi-Fi across sleep, soaked: passed 2026-10-19, 31 of 31), **S6** (AoC and sensors across sleep), **S7** (battery numbers), **S8** (screen-off sleep on by default; the sleep hook is already in `omamobile-device-cheetah`). Next: S6.
+1. **S5c** (Wi-Fi across sleep, soaked: passed 2026-10-19, 31 of 31), **S6** (AoC and sensors across sleep: passed), **S7** (battery numbers: 434 mA awake, 312 mA in s2idle, screen off), **S8** (screen-off sleep on by default; the sleep hook is already in `omamobile-device-cheetah`). Next: S8.
 2. **Measure drain** off the cable: POWER-PLAN's B0 baseline and `power-ab c2`.
 3. **Deep sleep (SYS_SLEEP)**: the gs201 SoC sleep sequence through the PMU and ACPM, as stock does. Researched in SUSPEND-PLAN §5, no estimate yet. This is what gets standby near Android's, and the single biggest battery item.
 4. **Safe charging by default**: the temperature guard (B3g) and the charger at boot (D1) are done. Next: G3-G6 (optional, attended), then Type-C with role switching (B4a, B4b), under the dead-man switch.
