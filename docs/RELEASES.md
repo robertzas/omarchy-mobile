@@ -33,7 +33,7 @@ The audit behind this design (2026-10-13). "Step" names the roadmap step that re
 | `bin/omamobile initramfs` | the splash size comes from `PANEL_SIZE`; C sources from the device package when it has them. The init path and the trigger write come from the descriptor | 1 (done) |
 | `bin/omamobile capture` | the default capture name `cheetah-<date>` | 1 (done) |
 | `bin/omamobile push`, `flash` | the partition lookup assumes the main LUN is `sda` | 1 (allowlist check and `BOOT_IMAGES` layouts done; the Pixel 6 has no `init_boot` or `vendor_kernel_boot`, [oriole NOTES](../device/oriole/NOTES.md)), 3 |
-| `initramfs/init` | `probe()` when `BRINGUP_PROBE=1` and the board matches `COMPATIBLE` (watchdog and DPP reads); the USB product string "Pixel 7 Pro (M1)"; the main LUN `sda`. The TRIG_CON write is `SIMPLEFB_TRIG_CON` and the storage-guard allowlist is `UFS_RW`, both packed from the descriptor into that device's initramfs only | 2 (trigger and allowlist done; the rest still step 2) |
+| `initramfs/init` | `probe()` when `BRINGUP_PROBE=1` and the board matches `COMPATIBLE` (watchdog and DPP reads); the main LUN `sda`. The TRIG_CON write is `SIMPLEFB_TRIG_CON`, the storage-guard allowlist `UFS_RW` and the USB product string `USB_PRODUCT`, all packed from the descriptor into that device's initramfs only | 2 (trigger, allowlist and USB name done; the rest still step 2) |
 | `bin/omamobile initramfs` | the developer's `~/.ssh/*.pub` baked in as `authorized_keys` (fine for development, never for a release) | 2 |
 | `tools/extract-vendor-firmware` | `BOARD="google,gs201-cheetah"`, `DEVICE="cheetah"`, the firmware `MAP` | 4 |
 | `tools/extract-vendor-chroot`, `extract-fingerprint-vendor` | `DEVICE="cheetah"`, cheetah's file lists | 4 |
@@ -59,7 +59,8 @@ Bring-up tools (`*-stage`, `display-hz`, `usbc-deadman`) stay per plan: they pok
 | Key | cheetah | Meaning |
 | --- | --- | --- |
 | `CODENAME` | `cheetah` | Must equal the directory name and `DEVICE` |
-| `NAME` | `Pixel 7 Pro` | Marketing name, for messages and bundle READMEs |
+| `NAME` | `Pixel 7 Pro` | Marketing name, for messages and bundle READMEs, and the USB product string when `USB_PRODUCT` is unset |
+| `USB_PRODUCT` | `Pixel 7 Pro (M1)` | Optional. The USB gadget's product string, packed into the initramfs as `/etc/omamobile-usb-product`; defaults to `NAME`. Printable ASCII, at most 126 characters. With neither key the init says `Omarchy Mobile` |
 | `SOC` | `gs201` | SoC family |
 | `COMPATIBLE` | `google,gs201-cheetah` | First DT root compatible; firmware names and the device check at install time use it |
 | `PACKAGE` | `omamobile-device-cheetah` | The device's package (and, for now, where the initramfs C helpers' sources live) |
@@ -83,7 +84,6 @@ A descriptor directory may also hold `kernel.config`, a config fragment that `om
 
 | Key | Step | Meaning |
 | --- | --- | --- |
-| `USB_PRODUCT` | 2 | The USB gadget product string. The shared init still says "Pixel 7 Pro (M1)" |
 | `MAIN_LUN` | 2 | The UFS LUN holding the partition table with slot B and `userdata` (`sda`) |
 | `FIRMWARE_MAP` | 4 | A file beside the descriptor (`firmware.map`: `source-in-vendor|destination` lines), replacing the arrays in `tools/extract-vendor-firmware` |
 | `FACTORY_PRODUCT` | 4 | The `board=` value in the factory image's `android-info.txt`, and `fastboot getvar product`, checked before extraction and before flashing |
@@ -150,7 +150,7 @@ The same Alpine-based initramfs, with release differences:
 
 - **No developer keys.** It ships without `authorized_keys`. The hook appends a second, tiny cpio to the ramdisk that holds the phone's own `/root/.ssh/authorized_keys` (the kernel unpacks concatenated cpio archives in order), so SSH into the initramfs keeps working for the phone's owner and nobody else.
 - **No bring-up probes.** `probe()` and `omamobile.debug` stay in development builds only.
-- **Quirks from the descriptor.** The trigger write is already per device: `bin/omamobile initramfs` packs `SIMPLEFB_TRIG_CON` into `/etc/omamobile-simplefb-trig` and `COMPATIBLE` beside it. The init writes the pair only when the board's first compatible string matches. A device without the trigger key gets no register write. The storage guard's allowlist is packed the same way, from `UFS_RW` into `/etc/omamobile-ufs-rw`, and the init leaves every partition read-only without a valid one. Step 2 still turns the remaining quirks (`MAIN_LUN`, `USB_PRODUCT`) into a generated `/etc/omamobile/device.conf` the shared init reads at boot. That remaining step changes what boots, so it gets its own runbook and a test boot from `bin/omamobile push`; it is not a refactor.
+- **Quirks from the descriptor.** The trigger write is already per device: `bin/omamobile initramfs` packs `SIMPLEFB_TRIG_CON` into `/etc/omamobile-simplefb-trig` and `COMPATIBLE` beside it. The init writes the pair only when the board's first compatible string matches. A device without the trigger key gets no register write. The storage guard's allowlist is packed the same way, from `UFS_RW` into `/etc/omamobile-ufs-rw`, and the init leaves every partition read-only without a valid one. So is the USB product string (`USB_PRODUCT`, else `NAME`). Step 2 still turns the remaining quirk (`MAIN_LUN`) into a generated `/etc/omamobile/device.conf` the shared init reads at boot. That remaining step changes what boots, so it gets its own runbook and a test boot from `bin/omamobile push`; it is not a refactor.
 - **Reproducible:** fixed mtimes (`SOURCE_DATE_EPOCH`), sorted file list, `cpio --reproducible`.
 
 ### 5.3 What `omamobile-boot-update` does

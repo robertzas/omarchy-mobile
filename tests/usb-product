@@ -1,0 +1,50 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The USB gadget's product string (no phone): bin/omamobile packs the
+# descriptor's USB_PRODUCT, else its NAME, into /etc/omamobile-usb-product,
+# and initramfs/init's usb_product prints it, or "Omarchy Mobile" without one.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
+
+# --- Pack time ---
+for d in "cheetah:Pixel 7 Pro (M1)" "felix:Pixel Fold" "oriole:Pixel 6"; do
+  dev=${d%%:*} want=${d#*:}
+  DEVICE=$dev bin/omamobile initramfs-config "$t/etc-$dev" > "$t/log" 2>&1 || { cat "$t/log"; fail "$dev: initramfs-config"; }
+  [[ $(cat "$t/etc-$dev/omamobile-usb-product") == "$want" ]] || fail "$dev packs '$want' (got $(cat "$t/etc-$dev/omamobile-usb-product"))"
+done
+pass "cheetah keeps 'Pixel 7 Pro (M1)'; felix and oriole use their NAME"
+
+R=$t/repo
+mkdir -p "$R/bin" "$R/device/six"
+cp bin/omamobile "$R/bin/omamobile"
+printf 'DEVICE="${DEVICE:-six}"\nSRC_DIR=%s\n' "$t/nosrc" > "$R/omamobile.conf"
+sed -e 's/^CODENAME=.*/CODENAME=six/' -e '/^NAME=/d' device/oriole/device.conf > "$R/device/six/device.conf"
+cp "$R/device/six/device.conf" "$t/good.conf"
+om() { (cd "$R" && DEVICE=six bin/omamobile "$@") > "$t/log" 2>&1; }
+om initramfs-config "$t/etc-none" || { cat "$t/log"; fail "a descriptor without NAME packs"; }
+[[ ! -e $t/etc-none/omamobile-usb-product ]] || fail "no NAME and no USB_PRODUCT: no product file"
+pass "a descriptor without NAME or USB_PRODUCT packs no product string"
+printf 'USB_PRODUCT="%s"\n' "$(printf 'x%.0s' {1..127})" >> "$R/device/six/device.conf"
+if om initramfs-config "$t/etc-long"; then fail "refuses a 127-character product string"; fi
+grep -c 'at most 126 characters' "$t/log" >/dev/null || { cat "$t/log"; fail "says why"; }
+cp "$t/good.conf" "$R/device/six/device.conf"
+printf 'USB_PRODUCT="Pixel \xc3\xa9"\n' >> "$R/device/six/device.conf"
+if om initramfs-config "$t/etc-utf8"; then fail "refuses a non-ASCII product string"; fi
+pass "refuses a product string that is too long or not ASCII"
+
+# --- Boot time: initramfs/init's usb_product ---
+grep -q '^usb_product > \$g/strings/0x409/product$' initramfs/init || fail "the gadget takes its product string from usb_product"
+sed -n '/^usb_product() {$/,/^}$/p' initramfs/init | sed "s|/etc/omamobile-|$t/etc/omamobile-|g" > "$t/fn.sh"
+grep -q '^usb_product() {$' "$t/fn.sh" || fail "usb_product found in initramfs/init"
+mkdir -p "$t/etc"
+run() { sh -c ". '$t/fn.sh'; usb_product"; }
+cp "$t/etc-cheetah/omamobile-usb-product" "$t/etc/"
+[[ $(run) == "Pixel 7 Pro (M1)" ]] || fail "prints the packed string (got $(run))"
+: > "$t/etc/omamobile-usb-product"
+[[ $(run) == "Omarchy Mobile" ]] || fail "an empty file falls back (got $(run))"
+rm "$t/etc/omamobile-usb-product"
+[[ $(run) == "Omarchy Mobile" ]] || fail "no file falls back (got $(run))"
+pass "the init prints the packed string, or Omarchy Mobile without one"

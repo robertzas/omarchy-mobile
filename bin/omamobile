@@ -245,6 +245,15 @@ initramfs_config() {
   # load_device has checked UFS_RW (names, slot B boot images, userdata);
   # pack it as one line with single spaces, the form the init accepts
   read -ra rw <<<"$DEV_UFS_RW"
+  # The USB gadget's product string: USB_PRODUCT, else NAME. Neither: no
+  # file, and the init says "Omarchy Mobile". A USB string descriptor holds
+  # at most 126 characters; printable ASCII keeps it one plain line.
+  local product=${DEV_USB_PRODUCT:-${DEV_NAME:-}}
+  if [[ -n $product ]]; then
+    if (( ${#product} > 126 )) || LC_ALL=C grep -q '[^ -~]' <<<"$product"; then
+      die "USB_PRODUCT (or NAME) must be printable ASCII, at most 126 characters"
+    fi
+  fi
   [[ -n $etc ]] || return 0
   mkdir -p "$etc"
 
@@ -266,6 +275,9 @@ initramfs_config() {
   # The storage guard's allowlist. Without this file the init leaves every
   # partition read-only.
   printf '%s\n' "${rw[*]}" > "$etc/omamobile-ufs-rw"
+  if [[ -n $product ]]; then
+    printf '%s\n' "$product" > "$etc/omamobile-usb-product"
+  fi
 }
 
 cmd_initramfs_config() {

@@ -180,13 +180,21 @@ maybe_probe() {
 maybe_probe
 say "first light on $(cat /proc/sys/kernel/osrelease)"
 
+# The gadget's product string: the descriptor's USB_PRODUCT, or its NAME,
+# which bin/omamobile initramfs packs into /etc/omamobile-usb-product.
+usb_product() {
+  local product=""
+  [ -s /etc/omamobile-usb-product ] && read -r product < /etc/omamobile-usb-product
+  echo "${product:-Omarchy Mobile}"
+}
+
 # USB gadget: CDC NCM network + ACM serial console
 g=/sys/kernel/config/usb_gadget/g1
 mkdir -p $g/strings/0x409 $g/configs/c.1/strings/0x409
 echo 0x1d6b > $g/idVendor          # Linux Foundation
 echo 0x0104 > $g/idProduct         # Multifunction composite gadget
 echo "Omarchy Mobile" > $g/strings/0x409/manufacturer
-echo "Pixel 7 Pro (M1)" > $g/strings/0x409/product
+usb_product > $g/strings/0x409/product
 echo "omamobile" > $g/strings/0x409/serialnumber
 echo "NCM + ACM" > $g/configs/c.1/strings/0x409/configuration
 mkdir -p $g/functions/ncm.usb0 $g/functions/acm.GS0
