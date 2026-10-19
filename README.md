@@ -9,8 +9,6 @@ Native Omarchy on Google Pixel phones: Arch Linux ARM, Hyprland and Omarchy's ow
 - **In progress:** the modem boots Google's firmware and answers our IPC (SIM and radio state), but registration, SMS, data and calls need a SIM test that hasn't happened yet. Sleep on screen-off: s2idle cycles pass with Wi-Fi unloaded, and the Wi-Fi fix for sleep is still being soaked.
 - **New on 2026-10-13:** home screens with 47 built-in widgets (Simon Schubert's MIT-licensed omarchy-widgets, his OWL originals run by our own OWL runtime since 2026-10-14, plus an OWL widget Store tab with an approval sheet for what each widget may run) and your own widgets made with "Create with AI" through Omarchy's default agent, behind a crash guard; 19 quick-settings tiles with an editor; one app per screen, with a "Show with…" action; the phone's screen and input on a computer over USB (`omamobile-mirror`, `tools/phone-mirror`); a device descriptor (`device.conf`) for more than one phone; and a first installer (below), new and going through its first clean reinstall now.
 
-Plan: https://claude.ai/code/artifact/060038bc-beff-497e-9643-4f322318b2be
-
 ## Quick start
 
 The installer is new: expect rough edges. You need a Pixel 7 Pro with an unlocked bootloader, an Omarchy (Arch) laptop with Docker, `android-tools` and `e2fsprogs`, and Google's factory image for the phone. Stock Android stays on slot A as the way back; installing erases `userdata`.
