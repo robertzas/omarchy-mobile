@@ -1,9 +1,11 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Camera picture quality plan
 
-**Status (2026-10-19):** started. Q1 (chroma noise reduction) is built
-offline as libcamera 0.7.2-4.19 and not yet run on the phone. Q2 is designed
-below. Nothing else has started.
+**Status (2026-10-19):** Q1 (chroma noise reduction) runs on the phone as
+libcamera 0.7.2-4.19. Q2's CPU merge (omacam-merge) runs on the phone too: a
+12-frame Night burst merged cleanly propped and handheld, in 10-11 s. Next:
+the merge on the GPU, a Night/HDR switch in the app, and hot-pixel removal.
+Q3-Q5 have not started.
 
 The cameras work end to end ([CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md),
 [CAMERA-APP-PLAN](CAMERA-APP-PLAN.md)), and the pictures are decent but far
@@ -169,3 +171,6 @@ It needs a physical chart. Nothing from Google's tuning is used.
 | Step | Date | Version | Result |
 | --- | --- | --- | --- |
 | Q1 offline | 2026-10-19 | libcamera 4.19 (0053) | shader port on a synthetic chart: chroma noise halved at gains 4 and 16, edge colour within 1-2 levels |
+| Q1 on the phone | 2026-10-19 | libcamera 4.19 | installed; preview at 30 fps |
+| Q2 propped, dim room | 2026-10-19 | omacam test build | 12 frames, weights 0.94 each, merged in 11.3 s, 2.4 GB peak; at 100% the wall's grain is gone and text stays sharp, no ghosts; shadows lifted (mean 112 vs 98). A hot pixel survives (it doesn't move between frames) |
+| Q2 handheld, dim room | 2026-10-19 | omacam test build | 12 frames at 66 ms, weights 0.92 each, merged in 9.8 s; sharp at 100%, no ghosts or doubled edges |
