@@ -1,11 +1,13 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Camera picture quality plan
 
-**Status (2026-10-19):** Q1 (chroma noise reduction) runs on the phone as
-libcamera 0.7.2-4.19. Q2's CPU merge (omacam-merge) runs on the phone too: a
-12-frame Night burst merged cleanly propped and handheld, in 10-11 s. Next:
-the merge on the GPU, a Night/HDR switch in the app, and hot-pixel removal.
-Q3-Q5 have not started.
+**Status (2026-10-19, late):** Q1 (chroma noise reduction) and Q6 (defective
+pixel correction) run on the phone in libcamera 0.7.2-4.21. Q2's CPU merge
+runs in omacam: Night is a mode beside Photo, HDR a chip, and a 12-frame Night
+burst merges in about 5.5 s on the phone (from 10-11 s), propped or handheld.
+HDR protects highlights but loses deep shadows the ISP's tone curve already
+crushed (Q5 is the fix). Next: the merge on the GPU (Vulkan works on the
+phone: PanVK, Mali-G710 MC7, a compute queue). Q3-Q5 have not started.
 
 The cameras work end to end ([CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md),
 [CAMERA-APP-PLAN](CAMERA-APP-PLAN.md)), and the pictures are decent but far
@@ -51,6 +53,7 @@ but much closer than one frame from a software ISP.
 | **Q2** | Burst merge: Night and HDR modes | omacam: `omacam-merge` (CPU reference, then GPU) | burst captures from the phone |
 | **Q3** | Measured colour | each camera's `ccm` in the tuning files | a colour chart (24-patch), photographed by each camera under 2-3 lights |
 | **Q4** | Better single-frame detail | libcamera: a better demosaic, wider denoise | raw captures to compare against |
+| **Q6** | Defective pixel correction | libcamera 0055 (a GPU pass before the debayer) | nothing; done |
 | **Q5** | Raw-domain merge | omacam: merge Bayer frames before the ISP, then our own finishing pass | Q2 working; the finishing pass must match the libcamera look |
 
 Q1 and Q2 come first. Q3 waits on a chart. Q5 is the HDR+ way and the best
@@ -174,3 +177,7 @@ It needs a physical chart. Nothing from Google's tuning is used.
 | Q1 on the phone | 2026-10-19 | libcamera 4.19 | installed; preview at 30 fps |
 | Q2 propped, dim room | 2026-10-19 | omacam test build | 12 frames, weights 0.94 each, merged in 11.3 s, 2.4 GB peak; at 100% the wall's grain is gone and text stays sharp, no ghosts; shadows lifted (mean 112 vs 98). A hot pixel survives (it doesn't move between frames) |
 | Q2 handheld, dim room | 2026-10-19 | omacam test build | 12 frames at 66 ms, weights 0.92 each, merged in 9.8 s; sharp at 100%, no ghosts or doubled edges |
+| Q2 HDR | 2026-10-19 | omacam 697fd46 | 8 frames 1.5 stops under; fused at 0/+1/+2 stops it came out darker than a plain shot (mean 80 vs 100); at 0/+1.5/+2.5, 91 vs 99, the lamp less bloomed, but 4.6% of the picture black against 1%: shadows the ISP's curve crushed in the 8-bit frames stay crushed |
+| Q2 speed | 2026-10-19 | omacam e4a26a4, f87c6ba | Night merge on the phone 8.9 s with the serial loops parallel, then 5.4-5.6 s with tiles inside the frame read as slices (alignment 2.5 s, merge 1.7 s, fusion 0.8 s); the preview keeps 10-15 fps meanwhile (merge threads one core short, nice 10) |
+| Q2 preview after a burst | 2026-10-19 | omacam c857488, libcamera 4.20 (0054) | the preview kept the burst's manual exposure (66 ms, 15 fps): the simple pipeline dropped Camera::start()'s controls. Fixed on both sides; each alone brings back 33 ms and 30 fps |
+| Q6 hot pixel | 2026-10-19 | libcamera 4.21 (0055) | the main camera's magenta spot (one red sensor pixel, about 5 px wide in the JPEG) is gone; a green one in a dark area too; `LIBCAMERA_SOFTISP_NO_DPC=1` brings both back. Only 12 pixels of the 12.5 MP differ by more than 30% between the two. One small bright spot on a red object was dimmed: a hot pixel or a real glint, to watch |
