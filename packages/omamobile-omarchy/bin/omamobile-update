@@ -176,9 +176,12 @@ def repository_order(path=PACMAN_CONF):
         # carry release candidates they may not apply to (edge had 4.5.0rc1).
         section = re.search(r"^\s*\[omarchy\][^\n]*\n(.*?)(?=^\s*\[|\Z)", text, re.M | re.S).group(1)
         channel = re.search(r"^\s*Server\s*=\s*https://pkgs\.omarchy\.org/(edge|rc)/", section, re.M)
+        # The old channel's database goes too: it is newer than stable's, so
+        # pacman's If-Modified-Since refresh would keep it.
         if channel:
             return ("%s takes [omarchy] from Omarchy's %s channel; the phone follows stable: "
-                    "sudo sed -i 's|pkgs.omarchy.org/%s/|pkgs.omarchy.org/stable/|' %s" % (
+                    "sudo sed -i 's|pkgs.omarchy.org/%s/|pkgs.omarchy.org/stable/|' %s && "
+                    "sudo rm -f /var/lib/pacman/sync/omarchy.db* /tmp/checkup-db-*/sync/omarchy.db*" % (
                         path, channel.group(1), channel.group(1), path))
     return ""
 
