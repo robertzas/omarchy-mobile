@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Mon, 19 Oct 2026 21:01:18 -0400
+Subject: [PATCH] pipeline: simple: Pass the start controls to the software ISP
+
+SimplePipelineHandler::start() ignored the controls Camera::start() is
+given, and the software ISP's IPA takes controls only with requests. An
+application restarting the camera with its exposure back on auto (after
+a burst at a manual exposure, say) kept the previous session's manual
+mode, which the IPA carries across a reconfiguration of the same
+sensor: the preview stayed at the burst's long exposure, at half the
+frame rate.
+
+Keep the start controls and hand them to the IPA with the first
+request, under that request's own controls.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/libcamera/pipeline/simple/simple.cpp | 27 ++++++++++++++++++++++--
+ 1 file changed, 25 insertions(+), 2 deletions(-)
+
+diff --git a/src/libcamera/pipeline/simple/simple.cpp b/src/libcamera/pipeline/simple/simple.cpp
+index b24a704..bfadaf9 100644
+--- a/src/libcamera/pipeline/simple/simple.cpp
++++ b/src/libcamera/pipeline/simple/simple.cpp
+@@ -361,6 +361,11 @@ public:
+ 
+ 	std::unique_ptr<Converter> converter_;
+ 	std::unique_ptr<SoftwareIsp> swIsp_;
++	/*
++	 * The controls Camera::start() was given, for the software ISP's IPA
++	 * with the first request: the IPA takes controls only per request.
++	 */
++	std::optional<ControlList> startControls_;
+ 	SimpleFrames frameInfo_;
+ 
+ private:
+@@ -1681,13 +1686,17 @@ int SimplePipelineHandler::exportFrameBuffers(Camera *camera, Stream *stream,
+ 		return data->video_->exportBuffers(count, buffers);
+ }
+ 
+-int SimplePipelineHandler::start(Camera *camera, [[maybe_unused]] const ControlList *controls)
++int SimplePipelineHandler::start(Camera *camera, const ControlList *controls)
+ {
+ 	SimpleCameraData *data = cameraData(camera);
+ 	V4L2VideoDevice *video = data->video_;
+ 	V4L2Subdevice *frameStartEmitter = data->frameStartEmitter_;
+ 	int ret;
+ 
++	data->startControls_.reset();
++	if (controls && !controls->empty())
++		data->startControls_ = *controls;
++
+ 	const MediaPad *pad = acquirePipeline(data);
+ 	if (pad) {
+ 		LOG(SimplePipeline, Info)
+@@ -1815,8 +1824,22 @@ int SimplePipelineHandler::queueRequestDevice(Camera *camera, Request *request)
+ 	data->frameInfo_.create(request, metadataRequired);
+ 	if (data->useConversion_) {
+ 		data->conversionQueue_.push({ request, std::move(buffers) });
+-		if (data->swIsp_)
++		if (data->swIsp_ && data->startControls_) {
++			/*
++			 * The start controls go with the first request, under
++			 * its own: an application that started the camera with
++			 * the exposure back on auto otherwise kept the mode of
++			 * the previous session, which the IPA carries across a
++			 * reconfiguration.
++			 */
++			ControlList controls = std::move(*data->startControls_);
++			data->startControls_.reset();
++			controls.merge(request->controls(),
++				       ControlList::MergePolicy::OverwriteExisting);
++			data->swIsp_->queueRequest(request->sequence(), controls);
++		} else if (data->swIsp_) {
+ 			data->swIsp_->queueRequest(request->sequence(), request->controls());
++		}
+ 	}
+ 
+ 	return 0;
+-- 
+2.56.0
+

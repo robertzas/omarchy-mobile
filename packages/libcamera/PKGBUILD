@@ -173,7 +173,13 @@
 #    Look algorithm, tuned for the four cameras on paired daylight shots.
 #  - 0053-software_isp-debayer_egl-Smooth-the-chroma.patch: luma-guided
 #    chroma noise reduction over a 9x9 footprint in the GPU's second pass.
-#  - pkgrel 4.19, so it sorts above Arch Linux ARM's 0.7.2-4.
+#  - 0054-pipeline-simple-Pass-the-start-controls-to-the-softw.patch: the simple pipeline hands
+#    the controls Camera::start() gets to the software ISP's IPA with the
+#    first request (the preview kept a burst's manual exposure).
+#  - 0055-software_isp-debayer_egl-Correct-defective-pixels-be.patch: defective
+#    pixel correction before the debayer, on the packed bytes (a hot pixel
+#    on the main camera showed as a magenta spot in every photo).
+#  - pkgrel 4.21, so it sorts above Arch Linux ARM's 0.7.2-4.
 #
 # Maintainers of the original: David Runge, Carl Smedstad.
 
@@ -186,7 +192,7 @@ pkgname=(
   python-libcamera
 )
 pkgver=0.7.2
-pkgrel=4.19
+pkgrel=4.21
 pkgdesc="A complex camera support library for Linux, Android, and ChromeOS (Omarchy Mobile: gs201 CSIS)"
 arch=(aarch64)
 url="https://libcamera.org/"
@@ -272,6 +278,8 @@ source=(
   0051-software_isp-debayer_egl-Add-hue-vibrance-and-a-tone.patch
   0052-ipa-simple-Add-the-Look-algorithm-and-tune-it-on-the.patch
   0053-software_isp-debayer_egl-Smooth-the-chroma.patch
+  0054-pipeline-simple-Pass-the-start-controls-to-the-softw.patch
+  0055-software_isp-debayer_egl-Correct-defective-pixels-be.patch
 )
 sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd8847f7bec755c753c72f6b065df76de53c15f9af2e5901e83e7a144a2ddcd'
             '8b54cbdf6ed767ae8d52a14480a4653f4f3a1c2187c4ccf7ceb65eaa60c819cce514122591d6e0c2dfc39d7482739f8fdd4090dbaf63701445510eefc88fb19f'
@@ -327,7 +335,9 @@ sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd
             '3c7cb02dffdddf161d89b01846d4c98f24afa0308c857c78c8a22269f17361b75951f35ccb69c0dd6ed7bc8621331f225380086ad0565feea28407b37ea99803'
             'fdb295c9018524f25fc500df9459e98014b0bf8d9edbb31d9eee9bfffd1ed6b34362410d28bb1d37af14b74f7773edf9191515621a109b03bac68b25b193970f'
             '6ca74dcf19b1df3899ba73b1926bb0de3e5ca37c410233f88dea433b14f7dc1c2ced1bbb2245c3bf7ad34de3f2fab6855b0a0fe2fd7c832ccb3b136aaefd3260'
-            '6717f9f27c9822d5b21fb132b363227d72929ed9e4aa4e0d5521dac1039c101de318672cb25918b963c4b7394bd8a58d85edf418afa61bda7ee3358d482371e4')
+            '6717f9f27c9822d5b21fb132b363227d72929ed9e4aa4e0d5521dac1039c101de318672cb25918b963c4b7394bd8a58d85edf418afa61bda7ee3358d482371e4'
+            '8a80d2c8aa85f15c2fde64cbcb1fb9a55f257bb4414007672583e3602dc3897cce82e829ede22de928245b2f142e4aad09deeb06b9d2b6990a45c840e948e898'
+            '4f618bd8f45eb5499dce75be70f62f7091fa61f3121a8067fcb38fcdb9eb778cc1d8f2c94daed0f5f9815bb8da1712f0515e2332544273595df18b1a422a0706')
 b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc58494400e69feeec99a77894252d582f0d8f183508e5d1b8220e70f3d5'
         '4a0e24feed22d32b83b0ec49c9a7616b77deb26cae82c17a38b54a81a0468e982852147bc2d5e3b611ba014ddbd7647acfe2e68591542420da73945ba1c0d6c2'
         'cba8b638543a16bf80c2ae7dc0737f3874476fd1ff694639b459184725848e193518778d0336eef3d55ba4329d9bc63981d0aa8d8d9b5507c9ade4f17f7f407d'
@@ -382,7 +392,9 @@ b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc5
         '98d6b5ea44d55bb437ed27ba1d89cdb325e35f11df9636006513c1792cf613ef33864132e1ee519c250ae38bf8e2a1407d0fca11c844acf626cfbd70c7406719'
         '5ada67dd76bfd218684084ed6091102c92a31103bcd111704eb92b42f6b42ffa560c96450d4a3127f6c46ca14a5a56e8d39079640ac2c0109e546ee078dc3a3a'
         '98b3ed491c6fe02c20bc5bcc8f0801a91ad8b257f93ccf1ca620552764f0c11006696d37d624b5f5679a1e69ad2c69f216c2454b6cc0082cce72ed15d6273a4f'
-        'b27b0e12bd345b8590d26cc1401f9cff8fd0777ba40a2d186e3db5e98edae84c8eb54fdf9c9bccd5c301d170907272a77cfd66bc40387a5bf5aaf15c8faad69b')
+        'b27b0e12bd345b8590d26cc1401f9cff8fd0777ba40a2d186e3db5e98edae84c8eb54fdf9c9bccd5c301d170907272a77cfd66bc40387a5bf5aaf15c8faad69b'
+        '63c4bc9556ee28ea34f246ebe2c87a59f5dd50e56218ed5a9e2bb95af16d06672561b0981e3e0475cd885a7b7b8c4112cf203710e7e126cbf9de62e28b6a567f'
+        'd58a82be4991c6b4d46be10d0c2c21e7c4a5898c0f997bf64bc2b21702c5071e8e04020faf1389e7091b2f9060a71f41f3f15d8d7b491a167fef650588ecf889')
 
 _pick() {
   local p="$1" f d; shift
@@ -450,6 +462,8 @@ prepare() {
   patch -Np1 < ../0051-software_isp-debayer_egl-Add-hue-vibrance-and-a-tone.patch
   patch -Np1 < ../0052-ipa-simple-Add-the-Look-algorithm-and-tune-it-on-the.patch
   patch -Np1 < ../0053-software_isp-debayer_egl-Smooth-the-chroma.patch
+  patch -Np1 < ../0054-pipeline-simple-Pass-the-start-controls-to-the-softw.patch
+  patch -Np1 < ../0055-software_isp-debayer_egl-Correct-defective-pixels-be.patch
 
   # add version, so that utils/gen-version.sh may rely on it
   printf "%s\n" "$pkgver" > .tarball-version

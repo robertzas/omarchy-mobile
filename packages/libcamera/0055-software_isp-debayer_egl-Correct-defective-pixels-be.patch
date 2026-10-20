@@ -1,0 +1,355 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Derek Ross <derekross@gmail.com>
+Date: Mon, 19 Oct 2026 21:07:45 -0400
+Subject: [PATCH] software_isp: debayer_egl: Correct defective pixels before
+ the debayer
+
+A hot pixel on the main camera's sensor showed in every photo as a
+magenta spot about five pixels wide: the debayer spreads one bright
+sample over its 3x3 neighbourhood, and the sharpening and chroma passes
+widen it. A burst merge can't remove it either, as it doesn't move
+between frames.
+
+Add a pass before the debayer for packed raw formats. It writes a copy
+of the frame with the input's layout, in which each sample beyond the
+range of the eight samples of its colour two pixels away (by more than
+0.08 of full scale, and more than the brightest neighbour's level for a
+hot pixel or half the darkest's for a dead one) is clamped to that
+range. Only the byte with the top bits is corrected, as it is all the
+debayer reads; the low bits pass through. The debayer then samples the
+copy as it would the frame.
+
+A lens spreads even a point of light over more than one pixel, so real
+detail keeps a same-colour neighbour near its level, and lines one
+pixel wide keep theirs along the line.
+
+LIBCAMERA_SOFTISP_NO_DPC turns the pass off, for comparisons.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/libcamera/shaders/dpc_packed.frag      | 102 +++++++++++++++++++
+ src/libcamera/shaders/meson.build          |   1 +
+ src/libcamera/software_isp/debayer_egl.cpp | 113 ++++++++++++++++++++-
+ src/libcamera/software_isp/debayer_egl.h   |  15 +++
+ 4 files changed, 230 insertions(+), 1 deletion(-)
+ create mode 100644 src/libcamera/shaders/dpc_packed.frag
+
+diff --git a/src/libcamera/shaders/dpc_packed.frag b/src/libcamera/shaders/dpc_packed.frag
+new file mode 100644
+index 0000000..97d3542
+--- /dev/null
++++ b/src/libcamera/shaders/dpc_packed.frag
+@@ -0,0 +1,102 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/*
++ * dpc_packed.frag - Defective pixel correction on packed raw Bayer
++ *
++ * A pass before the debayer, over the packed bytes themselves: each sample
++ * far brighter (a hot pixel) or darker (a dead one) than all eight samples
++ * of its colour two pixels away is clamped to their range. The output has
++ * the input's layout, so the debayer reads it as it would the frame.
++ *
++ * Only the byte holding a sample's most significant bits is corrected: it
++ * is all the debayer reads. The byte of least significant bits passes
++ * through.
++ *
++ * A lens spreads even a point of light over more than one pixel, so real
++ * detail keeps a neighbour of its colour near its own level; one sensor
++ * pixel stuck bright doesn't, and without this the debayer and the
++ * sharpening smear it into a coloured spot several pixels wide.
++ */
++
++#ifdef GL_ES
++precision highp float;
++#endif
++
++#if defined(RAW10P)
++#define PIXELS_PER_GROUP	4.0
++#define BYTES_PER_GROUP		5.0
++#elif defined(RAW12P)
++#define PIXELS_PER_GROUP	2.0
++#define BYTES_PER_GROUP		3.0
++#else
++#error Invalid raw format
++#endif
++
++/*
++ * A sample is corrected when it is beyond its neighbours' range by more
++ * than this (on the 0..1 scale of the top 8 bits), and by more than its
++ * brightest neighbour's own level (a hot pixel) or half the darkest's (a
++ * dead one).
++ */
++#define DPC_MIN_EXCESS	0.08
++
++varying vec2 textureOut;
++
++uniform sampler2D tex_y;
++/* The texture's size: bytes per row (the stride), rows */
++uniform vec2 tex_bytes;
++/* Pixels per row */
++uniform float tex_width;
++
++float fetch_pixel(float px, float y)
++{
++	float group = floor(px / PIXELS_PER_GROUP);
++	float byte_x = group * BYTES_PER_GROUP + (px - group * PIXELS_PER_GROUP);
++	return texture2D(tex_y, vec2((byte_x + 0.5) / tex_bytes.x,
++				     (y + 0.5) / tex_bytes.y)).r;
++}
++
++/* Two pixels away, mirrored back in at the edges: the same colour. */
++float step2(float v, float d, float size)
++{
++	float n = v + d;
++	return (n < 0.0 || n > size - 1.0) ? v - d : n;
++}
++
++void main(void)
++{
++	vec2 pos = floor(textureOut * tex_bytes);
++	float group = floor(pos.x / BYTES_PER_GROUP);
++	float k = pos.x - group * BYTES_PER_GROUP;
++	float px = group * PIXELS_PER_GROUP + k;
++	float c = texture2D(tex_y, (pos + 0.5) / tex_bytes).r;
++
++	/* The low bits' byte, or padding past the last pixel */
++	if (k >= PIXELS_PER_GROUP || px >= tex_width) {
++		gl_FragColor = vec4(c, 0.0, 0.0, 1.0);
++		return;
++	}
++
++	float xl = step2(px, -2.0, tex_width);
++	float xr = step2(px, 2.0, tex_width);
++	float yu = step2(pos.y, -2.0, tex_bytes.y);
++	float yd = step2(pos.y, 2.0, tex_bytes.y);
++
++	float n0 = fetch_pixel(xl, yu);
++	float n1 = fetch_pixel(px, yu);
++	float n2 = fetch_pixel(xr, yu);
++	float n3 = fetch_pixel(xl, pos.y);
++	float n4 = fetch_pixel(xr, pos.y);
++	float n5 = fetch_pixel(xl, yd);
++	float n6 = fetch_pixel(px, yd);
++	float n7 = fetch_pixel(xr, yd);
++
++	float hi = max(max(max(n0, n1), max(n2, n3)), max(max(n4, n5), max(n6, n7)));
++	float lo = min(min(min(n0, n1), min(n2, n3)), min(min(n4, n5), min(n6, n7)));
++
++	if (c - hi > max(DPC_MIN_EXCESS, hi))
++		c = hi;
++	else if (lo - c > max(DPC_MIN_EXCESS, 0.5 * lo))
++		c = lo;
++
++	gl_FragColor = vec4(c, 0.0, 0.0, 1.0);
++}
+diff --git a/src/libcamera/shaders/meson.build b/src/libcamera/shaders/meson.build
+index 2c39c48..ec0e840 100644
+--- a/src/libcamera/shaders/meson.build
++++ b/src/libcamera/shaders/meson.build
+@@ -6,6 +6,7 @@ shader_files = files([
+     'bayer_1x_packed.frag',
+     'bayer_unpacked.frag',
+     'bayer_unpacked.vert',
++    'dpc_packed.frag',
+     'identity.vert',
+     'postfilter.frag',
+ ])
+diff --git a/src/libcamera/software_isp/debayer_egl.cpp b/src/libcamera/software_isp/debayer_egl.cpp
+index c24b6cd..f821d5b 100644
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -158,6 +158,8 @@ int DebayerEGL::initBayerShaders(PixelFormat inputFormat, PixelFormat outputForm
+ 	Span<const unsigned char> vertexShaderData;
+ 	GLenum err;
+ 
++	dpcFormat_ = nullptr;
++
+ 	/* Target gles 100 glsl requires "#version x" as first directive in shader */
+ 	egl_.pushEnv(shaderEnv, "#version 100");
+ 
+@@ -240,6 +242,7 @@ int DebayerEGL::initBayerShaders(PixelFormat inputFormat, PixelFormat outputForm
+ 			fragmentShaderData = bayer_1x_packed_frag;
+ 			vertexShaderData = identity_vert;
+ 			shaderStridePixels_ = width_;
++			dpcFormat_ = "#define RAW10P";
+ 		}
+ 		break;
+ 	case libcamera::formats::SBGGR12_CSI2P:
+@@ -256,6 +259,7 @@ int DebayerEGL::initBayerShaders(PixelFormat inputFormat, PixelFormat outputForm
+ 			fragmentShaderData = bayer_1x_packed_frag;
+ 			vertexShaderData = identity_vert;
+ 			shaderStridePixels_ = width_;
++			dpcFormat_ = "#define RAW12P";
+ 		}
+ 		break;
+ 	};
+@@ -626,6 +630,98 @@ eGLImage *DebayerEGL::getCachedOutputFrameBuffer(FrameBuffer *output)
+ 	return eglImageOut;
+ }
+ 
++/*
++ * Defective pixel correction runs before the debayer on packed raw frames
++ * and writes dpcImage_, which has the input's layout (one texel per byte,
++ * the byte in red), so the debayer samples it as it would the frame.
++ * Without it (a compile failure, an unpacked format, or
++ * LIBCAMERA_SOFTISP_NO_DPC set) the debayer reads the frame itself.
++ */
++int DebayerEGL::initDpcShaders()
++{
++	std::vector<std::string> shaderEnv;
++	GLuint vertexShaderId = 0;
++	GLuint fragmentShaderId = 0;
++
++	if (!dpcFormat_ || utils::secure_getenv("LIBCAMERA_SOFTISP_NO_DPC"))
++		return -ENOTSUP;
++
++	egl_.pushEnv(shaderEnv, "#version 100");
++	egl_.pushEnv(shaderEnv, dpcFormat_);
++
++	if (egl_.compileVertexShader(vertexShaderId, identity_vert, shaderEnv))
++		return -ENODEV;
++	utils::scope_exit vShaderGuard([&] { glDeleteShader(vertexShaderId); });
++
++	if (egl_.compileFragmentShader(fragmentShaderId, dpc_packed_frag, shaderEnv))
++		return -ENODEV;
++	utils::scope_exit fShaderGuard([&] { glDeleteShader(fragmentShaderId); });
++
++	if (egl_.linkProgram(dpcProgramId_, vertexShaderId, fragmentShaderId))
++		return -ENODEV;
++
++	dpcAttributeVertex_ = glGetAttribLocation(dpcProgramId_, "vertexIn");
++	dpcAttributeTexture_ = glGetAttribLocation(dpcProgramId_, "textureIn");
++	dpcUniformTexture_ = glGetUniformLocation(dpcProgramId_, "tex_y");
++	dpcUniformBytes_ = glGetUniformLocation(dpcProgramId_, "tex_bytes");
++	dpcUniformWidth_ = glGetUniformLocation(dpcProgramId_, "tex_width");
++	dpcUniformProjMatrix_ = glGetUniformLocation(dpcProgramId_, "proj_matrix");
++	dpcUniformStrideFactor_ = glGetUniformLocation(dpcProgramId_, "stride_factor");
++
++	const uint32_t texWidth = inputConfig_.stride / bytesPerPixel_;
++	dpcImage_ = std::make_unique<eGLImage>(GL_RGBA, texWidth, height_,
++					       texWidth * 4, GL_TEXTURE3, 3);
++	egl_.createOutputTexture2D(*dpcImage_);
++
++	return 0;
++}
++
++int DebayerEGL::correctDefects(eGLImage &eglImageIn)
++{
++	static const GLfloat vcoordinates[4][2] = {
++		{ -1.0f, -1.0f },
++		{ -1.0f, +1.0f },
++		{ +1.0f, +1.0f },
++		{ +1.0f, -1.0f },
++	};
++	static const GLfloat tcoordinates[4][2] = {
++		{ 0.0f, 0.0f },
++		{ 0.0f, 1.0f },
++		{ 1.0f, 1.0f },
++		{ 1.0f, 0.0f },
++	};
++	static const GLfloat identity[] = {
++		1, 0, 0, 0,
++		0, 1, 0, 0,
++		0, 0, 1, 0,
++		0, 0, 0, 1
++	};
++
++	if (egl_.attachTextureToFBO(*dpcImage_))
++		return -ENODEV;
++
++	egl_.useProgram(dpcProgramId_);
++
++	glEnableVertexAttribArray(dpcAttributeVertex_);
++	glVertexAttribPointer(dpcAttributeVertex_, 2, GL_FLOAT, GL_TRUE,
++			      2 * sizeof(GLfloat), vcoordinates);
++	glEnableVertexAttribArray(dpcAttributeTexture_);
++	glVertexAttribPointer(dpcAttributeTexture_, 2, GL_FLOAT, GL_TRUE,
++			      2 * sizeof(GLfloat), tcoordinates);
++
++	egl_.activateBindTexture(eglImageIn);
++	glUniform1i(dpcUniformTexture_, eglImageIn.texture_unit_uniform_id_);
++	glUniform2f(dpcUniformBytes_, dpcImage_->width_, dpcImage_->height_);
++	glUniform1f(dpcUniformWidth_, width_);
++	glUniformMatrix4fv(dpcUniformProjMatrix_, 1, GL_FALSE, identity);
++	glUniform1f(dpcUniformStrideFactor_, 1.0f);
++
++	glViewport(0, 0, dpcImage_->width_, dpcImage_->height_);
++	glDrawArrays(GL_TRIANGLE_FAN, 0, DEBAYER_OPENGL_COORDS);
++
++	return 0;
++}
++
+ /*
+  * The second pass, noise reduction and sharpening on the luma, takes the
+  * debayered picture from postImage_. Without it (a compile failure, say) the
+@@ -735,11 +831,16 @@ int DebayerEGL::debayerGPU(FrameBuffer *input, FrameBuffer *output, const Debaye
+ 	if (!eglImageOut)
+ 		return -ENOMEM;
+ 
++	eGLImage *bayer = eglImageIn;
++	if (dpcImage_ && !correctDefects(*eglImageIn))
++		bayer = dpcImage_.get();
++
+ 	const bool post = postImage_ && (params.sharpen > 0.0f || params.denoise > 0.0f ||
+ 					  params.chromaDenoise > 0.0f);
+ 
+ 	egl_.attachTextureToFBO(post ? *postImage_ : *eglImageOut);
+-	setShaderVariableValues(*eglImageIn, params);
++	setShaderVariableValues(*bayer, params);
++	egl_.activateBindTexture(*bayer);
+ 	glUniform1f(swapBlueUniformDataIn_, !post && swapBlue_ ? 1.0f : 0.0f);
+ 
+ 	glViewport(0, 0, width_, height_);
+@@ -833,6 +934,11 @@ int DebayerEGL::start()
+ 		postImage_.reset();
+ 	}
+ 
++	if (dpcFormat_ && initDpcShaders()) {
++		LOG(Debayer, Info) << "No defective pixel correction";
++		dpcImage_.reset();
++	}
++
+ 	return 0;
+ }
+ 
+@@ -850,6 +956,11 @@ void DebayerEGL::stop()
+ 		glDeleteProgram(postProgramId_);
+ 	postProgramId_ = 0;
+ 
++	dpcImage_.reset();
++	if (dpcProgramId_)
++		glDeleteProgram(dpcProgramId_);
++	dpcProgramId_ = 0;
++
+ 	/*
+ 	 * start() creates a new context every time. Destroy this one: left
+ 	 * alive, it kept the last buffers it had bound imported, so a
+diff --git a/src/libcamera/software_isp/debayer_egl.h b/src/libcamera/software_isp/debayer_egl.h
+index b5f5028..edd5a94 100644
+--- a/src/libcamera/software_isp/debayer_egl.h
++++ b/src/libcamera/software_isp/debayer_egl.h
+@@ -115,6 +115,21 @@ private:
+ 	GLint swapBlueUniformDataIn_;
+ 	bool swapBlue_ = false;
+ 
++	/* A pass before the debayer: defective pixel correction (packed raw) */
++	int initDpcShaders();
++	int correctDefects(eGLImage &eglImageIn);
++	/* The packed format's shader define, or nullptr: no correction */
++	const char *dpcFormat_ = nullptr;
++	GLuint dpcProgramId_ = 0;
++	std::unique_ptr<eGLImage> dpcImage_;
++	GLint dpcAttributeVertex_;
++	GLint dpcAttributeTexture_;
++	GLint dpcUniformTexture_;
++	GLint dpcUniformBytes_;
++	GLint dpcUniformWidth_;
++	GLint dpcUniformProjMatrix_;
++	GLint dpcUniformStrideFactor_;
++
+ 	/* The second pass: noise reduction and sharpening */
+ 	int initPostShaders();
+ 	int postFilter(eGLImage &eglImageOut, const DebayerParams &params);
+-- 
+2.56.0
+
