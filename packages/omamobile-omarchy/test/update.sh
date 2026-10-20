@@ -118,6 +118,14 @@ ok "repository order: [omarchy] before [omamobile] blocks" 'python3 -c "import j
 printf '[options]\n[omamobile]\n[core]\n[omarchy]\n' >"$t/pacman.conf"
 out=$(python3 -I "$U" check --json --offline)
 ok "repository order: [core] before [omarchy] blocks" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert \"[core]\" in d[\"repositories\"]" "$out"'
+for ch in edge rc; do
+  printf '[options]\n[omamobile]\nInclude = x\n\n[omarchy]\nSigLevel = Optional TrustAll\nServer = https://pkgs.omarchy.org/%s/$arch\n\n[core]\n' "$ch" >"$t/pacman.conf"
+  out=$(python3 -I "$U" check --json --offline)
+  ok "channel: [omarchy] on $ch blocks, with the fix" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"ok\"] and \"pkgs.omarchy.org/stable/\" in d[\"repositories\"] and sys.argv[2] + \" channel\" in d[\"repositories\"]" "$out" "$ch"'
+done
+printf '[options]\n[omamobile]\nInclude = x\nServer = https://pkgs.omarchy.org/edge/$arch\n\n[omarchy]\nServer = https://pkgs.omarchy.org/stable/$arch\n\n[core]\n' >"$t/pacman.conf"
+out=$(python3 -I "$U" check --json --offline)
+ok "channel: stable passes, whatever another section points at" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"repositories_ok\"]" "$out"'
 good_conf
 
 battery 20 Discharging 0

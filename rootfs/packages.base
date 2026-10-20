@@ -22,7 +22,7 @@ linux-firmware-other
 wireless-regdb
 # Arch Linux ARM's package signing keys (base pulls only Arch's)
 archlinuxarm-keyring
-# Omarchy itself, from [omarchy] (edge: Omarchy's aarch64 builds)
+# Omarchy itself, from [omarchy] (Omarchy's stable channel)
 omarchy-keyring
 omarchy
 omarchy-settings

@@ -34,7 +34,8 @@ directory of stand-ins first on PATH (/usr/lib/omamobile-omarchy/update-bin):
 
 Before anything is downloaded it refuses: below 30% battery unless charging,
 when /etc/pacman.conf doesn't list [omamobile] first and [omarchy] before
-Arch Linux ARM's repositories, and when the update would install a kernel,
+Arch Linux ARM's repositories, when [omarchy] isn't Omarchy's stable
+channel, and when the update would install a kernel,
 bootloader or boot-image tool (--allow-boot-packages overrides). The kernel
 itself still goes to the phone through bin/omamobile push.
 
@@ -171,6 +172,14 @@ def repository_order(path=PACMAN_CONF):
         later = [r for r in ("core", "extra", "alarm", "aur") if r in repos and repos.index(r) < repos.index("omarchy")]
         if later:
             return "%s must list [omarchy] before [%s]" % (path, later[0])
+        # The phone's patches follow Omarchy's stable releases; edge and rc
+        # carry release candidates they may not apply to (edge had 4.5.0rc1).
+        section = re.search(r"^\s*\[omarchy\][^\n]*\n(.*?)(?=^\s*\[|\Z)", text, re.M | re.S).group(1)
+        channel = re.search(r"^\s*Server\s*=\s*https://pkgs\.omarchy\.org/(edge|rc)/", section, re.M)
+        if channel:
+            return ("%s takes [omarchy] from Omarchy's %s channel; the phone follows stable: "
+                    "sudo sed -i 's|pkgs.omarchy.org/%s/|pkgs.omarchy.org/stable/|' %s" % (
+                        path, channel.group(1), channel.group(1), path))
     return ""
 
 

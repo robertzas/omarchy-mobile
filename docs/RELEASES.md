@@ -202,6 +202,8 @@ The same Alpine-based initramfs, with release differences:
 
 The kernel is not touched: it still reaches the phone through `bin/omamobile push` until the boot hook above exists. `OMAMOBILE_UPDATE=1 omarchy-update` runs Omarchy's flow unwrapped (an escape hatch, not for normal use); `pacman -Syu` stays blocked by Omarchy's guard.
 
+**The phone follows Omarchy's stable channel.** Phones installed before 2026-10-20 take `[omarchy]` from edge, which then carried 4.5.0rc1, a release candidate the phone's patches don't apply to. Switch before the next update, because the update would fetch the candidate in the same transaction as the fixed patches: `sudo sed -i 's|pkgs.omarchy.org/edge/|pkgs.omarchy.org/stable/|' /etc/pacman.conf`. `omamobile-omarchy` 0.1.2's `omamobile-update` refuses an edge or rc `[omarchy]` and prints that line. Don't use Omarchy's own `omarchy-channel-set` or `omarchy-refresh-pacman` on the phone: they copy Omarchy's x86 `pacman.conf` and mirrorlist over the phone's (no `[omamobile]`, no Arch Linux ARM) and then upgrade everything.
+
 **Recovering a phone that took Omarchy 4.0.6 with `omamobile-omarchy` 0.1.0.** Its migration 1791403252 ran: `[omarchy]` sits above `[omamobile]`, Omarchy's Hyprland replaced the phone's, and no phone patch applies (no PIN pad on the lock screen, `omarchy update` no longer handed over). `omamobile-update` then refuses on the repository order, so the fix goes in by hand, over SSH or in a terminal on the phone:
 
 1. Put `[omamobile]` back first: `sudo cp /etc/pacman.conf.bak /etc/pacman.conf` (the migration's copy from before the move; check with `grep '^\[' /etc/pacman.conf` that `[omamobile]` comes first), or move the `[omamobile]` section and its `Include` line above `[omarchy]` by hand.
@@ -227,7 +229,7 @@ For a first install, or to recover a phone that won't boot. One bundle per devic
 | The bundle | `tools/make-bundle` | `out/bundle/omamobile-<codename>-<date>/` as below, `SHA256SUMS.sig` from `keys/` |
 | Per-phone data | `tools/phone-provision` | the extract tools on the user's factory image, pushed over USB SSH, plus the phone's own backup (modem board id and NV checksums, camera data, settings, home screens, fingerprint state only with `--fingerprint`) |
 
-Decisions taken in building it: the device packages are **installed** in the image, not only cached (one device so far; a first boot without a package step has one less way to fail; §12 decision 6 stays open for the second device); the image's `[omarchy]` is Omarchy's **edge** channel, the only one with aarch64 builds of `omarchy`, `omarchy-settings` and `quickshell`; the image is per device (its `MANIFEST` names the device, and the installer refuses a mismatch).
+Decisions taken in building it: the device packages are **installed** in the image, not only cached (one device so far; a first boot without a package step has one less way to fail; §12 decision 6 stays open for the second device); the image's `[omarchy]` is Omarchy's **stable** channel (from 2026-10-20; before that edge was the only one with aarch64 builds of `omarchy`, `omarchy-settings` and `quickshell`, and edge then moved to 4.5.0rc1, which the phone's patches don't apply to); the image is per device (its `MANIFEST` names the device, and the installer refuses a mismatch).
 
 The design:
 

@@ -25,8 +25,9 @@ ALARM_KEYSERVER=${ALARM_KEYSERVER:-hkps://keyserver.ubuntu.com}
 ALARM_CACHE=${ALARM_CACHE:-$HOME/.cache/omamobile-rootfs}
 ALARM_TARBALL=$ALARM_CACHE/ArchLinuxARM-aarch64-latest.tar.gz
 # Omarchy's aarch64 packages (omarchy, omarchy-settings, quickshell, its
-# hyprland) are published in the edge channel only.
-OMARCHY_CHANNEL=${OMARCHY_CHANNEL:-edge}
+# hyprland). Stable, the release the phone's Omarchy patches follow; edge
+# carries release candidates (4.5.0rc1 on 2026-10-20) they may not apply to.
+OMARCHY_CHANNEL=${OMARCHY_CHANNEL:-stable}
 # The keyring that signs [omarchy], taken from this (Omarchy) laptop, which
 # already trusts it: the container can't bootstrap that trust on its own.
 OMARCHY_KEYRING_DIR=${OMARCHY_KEYRING_DIR:-/usr/share/pacman/keyrings}
