@@ -6,8 +6,10 @@ pixel correction) run on the phone in libcamera 0.7.2-4.21. Q2's CPU merge
 runs in omacam: Night is a mode beside Photo, HDR a chip, and a 12-frame Night
 burst merges in about 5.5 s on the phone (from 10-11 s), propped or handheld.
 HDR protects highlights but loses deep shadows the ISP's tone curve already
-crushed (Q5 is the fix). Next: the merge on the GPU (Vulkan works on the
-phone: PanVK, Mali-G710 MC7, a compute queue). Q3-Q5 have not started.
+crushed (Q5 is the fix). The GPU merge waits: a first stage through wgpu
+on PanVK was correct but slower than the CPU (results below). Next for it:
+the same kernel through GLES 3.1 compute on panfrost. Q3-Q5 have not
+started.
 
 The cameras work end to end ([CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md),
 [CAMERA-APP-PLAN](CAMERA-APP-PLAN.md)), and the pictures are decent but far
@@ -181,3 +183,4 @@ It needs a physical chart. Nothing from Google's tuning is used.
 | Q2 speed | 2026-10-19 | omacam e4a26a4, f87c6ba | Night merge on the phone 8.9 s with the serial loops parallel, then 5.4-5.6 s with tiles inside the frame read as slices (alignment 2.5 s, merge 1.7 s, fusion 0.8 s); the preview keeps 10-15 fps meanwhile (merge threads one core short, nice 10) |
 | Q2 preview after a burst | 2026-10-19 | omacam c857488, libcamera 4.20 (0054) | the preview kept the burst's manual exposure (66 ms, 15 fps): the simple pipeline dropped Camera::start()'s controls. Fixed on both sides; each alone brings back 33 ms and 30 fps |
 | Q6 hot pixel | 2026-10-19 | libcamera 4.21 (0055) | the main camera's magenta spot (one red sensor pixel, about 5 px wide in the JPEG) is gone; a green one in a dark area too; `LIBCAMERA_SOFTISP_NO_DPC=1` brings both back. Only 12 pixels of the 12.5 MP differ by more than 30% between the two. One small bright spot on a red object was dimmed: a hot pixel or a real glint, to watch |
+| Q2 GPU spike | 2026-10-19 | omacam branch gpu-spike (b4e62b7) | the full-resolution alignment step as a WGSL compute shader through wgpu on Vulkan (PanVK, Mesa 26.2.4, Mali-G710 MC7 at 572 MHz): agrees with the CPU on 99.99% of 48514 tiles, but 295 ms (a workgroup per tile), 749 ms (shared tiles) and 1367 ms (an invocation per tile) against the phone CPU's 145-150 ms; on the laptop's Intel GPU 37-113 ms. 60-100x short of the hardware and in the reverse order Mali usually rewards: PanVK's compute, not the kernels, is the suspect. GLES 3.1 compute on panfrost next |
