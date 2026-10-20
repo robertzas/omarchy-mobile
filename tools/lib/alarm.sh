@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: MIT
 # Shared by tools/build-packages and tools/build-rootfs (sourced, not run):
 # an Arch Linux ARM aarch64 container on this x86 laptop, through Docker and
-# the laptop's qemu-aarch64 binfmt handler (qemu-user-static-binfmt).
+# the laptop's aarch64 binfmt handler. Debian and Arch register it as
+# qemu-aarch64 (qemu-user-static-binfmt). NixOS registers it as aarch64-linux.
+# That node has to be enabled and carry the F (fix-binary) flag: without F
+# its interpreter is a /run/binfmt wrapper that does not exist in the
+# container. boot.binfmt.preferStaticEmulators turns the flag on.
 #
 # The container starts from Arch Linux ARM's official root tarball, checked
 # against its MD5 file and its detached signature from the Arch Linux ARM
@@ -30,13 +34,25 @@ OMARCHY_KEYRING_DIR=${OMARCHY_KEYRING_DIR:-/usr/share/pacman/keyrings}
 alarm_say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 alarm_die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 
+# Debian/Arch: the qemu-aarch64 node is enough. NixOS: aarch64-linux must be
+# enabled and its flags: line must contain F, or the container cannot run it.
+alarm_require_binfmt() {
+  local node=/proc/sys/fs/binfmt_misc/aarch64-linux
+  if [[ -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ]]; then
+    return 0
+  fi
+  if [[ -e $node ]] && grep -qx enabled "$node" && grep -q '^flags:.*F' "$node"; then
+    return 0
+  fi
+  alarm_die "no usable aarch64 binfmt handler: install qemu-user-static-binfmt, or enable boot.binfmt.emulatedSystems with boot.binfmt.preferStaticEmulators so aarch64-linux is enabled and its flags: line contains F"
+}
+
 # Download (once) and verify the tarball. ALARM_REFRESH=1 fetches the newest.
 alarm_fetch() {
   local gnupg status
   mkdir -p "$ALARM_CACHE/pkg" "$ALARM_CACHE/src"
   command -v docker >/dev/null || alarm_die "docker is needed"
-  [[ -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ]] ||
-    alarm_die "no qemu-aarch64 binfmt handler: install qemu-user-static-binfmt"
+  alarm_require_binfmt
   if [[ ! -f $ALARM_TARBALL || ${ALARM_REFRESH:-} == 1 ]]; then
     alarm_say "Downloading the Arch Linux ARM aarch64 root tarball"
     curl -fsSL -o "$ALARM_TARBALL.part" "$ALARM_URL"
