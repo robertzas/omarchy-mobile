@@ -299,7 +299,7 @@ def synthetic(t):
     empty = os.path.join(t, "empty")
     os.makedirs(empty)
     pats, digest = mod.load_series(SERIES, empty)
-    ok(len(pats) >= 12 and all(p.files for p in pats), "the shipped series parses (%d patches)" % len(pats))
+    ok(len(pats) == len(glob.glob(os.path.join(SERIES, "*.patch"))) and all(p.files for p in pats), "the shipped series parses (%d patches)" % len(pats))
     ok(all(f.startswith("usr/share/omarchy/") for p in pats for f in p.files), "shipped series: paths land in /usr/share/omarchy")
 
 
@@ -346,10 +346,16 @@ def real_package(t):
     rc, _ = run(root, "verify")
     ok(rc == 0, "real omarchy: verify")
 
-    # An Omarchy that already contains 0000 (b83d3df): the package as shipped
-    # plus 0000, with an mtree to match
+    # An Omarchy that already contains one of the series (the first that
+    # touches no symlinks): the package as shipped plus that patch, with an
+    # mtree to match
     root2, entry = make_root("real-upstream", None)
-    patch0000 = sorted(glob.glob(os.path.join(SERIES, "0000-*.patch")))[0]
+
+    def touches_no_links(path):
+        names = [l[6:].split("\t")[0].rstrip("\n") for l in open(path) if l.startswith("+++ w/")]
+        return names and not any(os.path.islink(os.path.join(root2, "usr/share/omarchy", n)) for n in names)
+
+    patch0000 = next(p for p in sorted(glob.glob(os.path.join(SERIES, "*.patch"))) if touches_no_links(p))
     p = mod_patch(root2, patch0000)
     subprocess.run(["patch", "-s", "-p1", "-d", root2, "-i", p], check=True)
     lines = ["#mtree", "/set type=file uid=0 gid=0 mode=644"]
@@ -366,12 +372,12 @@ def real_package(t):
     rc, out = run(root2, "apply", series=SERIES)
     status = json.load(open(os.path.join(root2, STATE, "status.json")))
     ok(rc == 0 and status["upstream"] == [os.path.basename(patch0000)],
-       "real omarchy with b83d3df upstream: 0000 skipped and reported, the rest applied")
-    ok(len(status["applied"]) == len(glob.glob(os.path.join(SERIES, "*.patch"))) - 1, "real omarchy with b83d3df: the others apply on it")
+       "real omarchy with %s upstream: skipped and reported, the rest applied" % os.path.basename(patch0000))
+    ok(len(status["applied"]) == len(glob.glob(os.path.join(SERIES, "*.patch"))) - 1, "real omarchy with one patch upstream: the others apply on it")
 
 
 def mod_patch(root, path):
-    """0000 rewritten to real paths, for patch -d root (it touches no links)."""
+    """A patch rewritten to real paths, for patch -d root (it touches no links)."""
     with open(path) as src, open(os.path.join(root, "p0000"), "w") as dst:
         for line in src:
             if line.startswith(("--- i/", "+++ w/", "--- a/", "+++ b/")):

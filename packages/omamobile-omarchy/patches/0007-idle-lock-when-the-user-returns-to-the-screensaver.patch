@@ -1,13 +1,13 @@
 # Lock as soon as the user returns to the screensaver (lock-after-screensaver).
-# Refreshed against Omarchy 4.0.4 (edge 4.0.4-2) so it applies without fuzz;
+# Refreshed against Omarchy 4.0.6 (edge 4.0.6-1) so it applies without fuzz;
 # the hunk lands where the fuzzed one did, before the main idle monitor.
 diff --git i/shell/plugins/services/idle/Service.qml w/shell/plugins/services/idle/Service.qml
-index d0ed8a2..f287ce6 100644
+index 8fb45a6..d694ab9 100644
 --- i/shell/plugins/services/idle/Service.qml
 +++ w/shell/plugins/services/idle/Service.qml
-@@ -248,6 +248,32 @@
-     return applyStayAwake(!value, true, "ipc")
-   }
+@@ -266,6 +266,32 @@ Item {
+   // With both timeouts at 0 the monitor stops reporting, so nothing else would end a running cycle.
+   onIdleTimersEnabledChanged: if (!idleTimersEnabled) cancelIdleCycle("idle-timers-disabled")
  
 +  // Devices that lock on wake (the lock-after-screensaver toggle, e.g. phones)
 +  // lock as soon as the user comes back to the screensaver. Starting the
@@ -37,4 +37,4 @@ index d0ed8a2..f287ce6 100644
 +
    IdleMonitor {
      id: idleMonitor
-     enabled: root.idleEnabled
+     enabled: root.idleEnabled && root.idleTimersEnabled

@@ -192,7 +192,7 @@ The same Alpine-based initramfs, with release differences:
 | stay-awake inhibitor | kept (the screen stays on during the update) |
 | `omarchy-update-dev`, keyrings | kept |
 | `pacman -Syu` with Omarchy's guard, `--overwrite /usr/share/omarchy/*` and conflict handler | kept; `[omamobile]` first, so its Mesa, Hyprland and libcamera win; the patch hook runs at the end of the transaction |
-| `omarchy-migrate` | kept, but migrations that mention Limine, mkinitcpio, UKIs, efibootmgr, sbctl, Snapper, GRUB, `/boot/`, fwupd, x86 kernels or NVIDIA, or ask with gum, are held: marked done for Omarchy, listed in `~/.local/state/omamobile/update/held-migrations`, and run after a review with `omamobile-update run-migration <name>` |
+| `omarchy-migrate` | kept, but migrations that mention Limine, mkinitcpio, UKIs, efibootmgr, sbctl, Snapper, GRUB, `/boot/`, fwupd, x86 kernels or NVIDIA, ask with gum, or replace `/etc/pacman.conf`, are held: marked done for Omarchy, listed in `~/.local/state/omamobile/update/held-migrations`, and run after a review with `omamobile-update run-migration <name>` (never a `pacman.conf` one: 1791403252 puts `[omarchy]` above `[omamobile]`). If a migration still reorders the repositories some other way, `[omamobile]` is moved back to the top when Omarchy's migrate returns |
 | `omarchy-hook post-update`, `omarchy-update-mise` | kept |
 | `omarchy-update-aur-pkgs` (yay) | skipped: foreign packages are listed, never rebuilt on the phone |
 | `omarchy-update-orphan-pkgs` (gum) | orphans listed, never removed |
@@ -201,6 +201,13 @@ The same Alpine-based initramfs, with release differences:
 | Update > Firmware (fwupd), Update > Config > Plymouth | hidden from the phone's menu (not part of the update) |
 
 The kernel is not touched: it still reaches the phone through `bin/omamobile push` until the boot hook above exists. `OMAMOBILE_UPDATE=1 omarchy-update` runs Omarchy's flow unwrapped (an escape hatch, not for normal use); `pacman -Syu` stays blocked by Omarchy's guard.
+
+**Recovering a phone that took Omarchy 4.0.6 with `omamobile-omarchy` 0.1.0.** Its migration 1791403252 ran: `[omarchy]` sits above `[omamobile]`, Omarchy's Hyprland replaced the phone's, and no phone patch applies (no PIN pad on the lock screen, `omarchy update` no longer handed over). `omamobile-update` then refuses on the repository order, so the fix goes in by hand, over SSH or in a terminal on the phone:
+
+1. Put `[omamobile]` back first: `sudo cp /etc/pacman.conf.bak /etc/pacman.conf` (the migration's copy from before the move; check with `grep '^\[' /etc/pacman.conf` that `[omamobile]` comes first), or move the `[omamobile]` section and its `Include` line above `[omarchy]` by hand.
+2. Install the fixed series: `sudo pacman -Sy omamobile/omamobile-omarchy`. Its hook re-applies the patches; `omamobile-omarchy-patches status` should list them all applied.
+3. Put back the phone's own builds that Omarchy's replaced: `sudo pacman -S $(pacman -Sl omamobile | awk '/\[installed: /{print "omamobile/" $2}')` (Hyprland at least; pacman reports a downgrade, which is expected: Omarchy's build has the higher release number).
+4. Reboot, for Hyprland and the patched shell.
 
 **The phone's update UI** is `omamobile-shell`'s `omamobile.update` sheet: a toast when Omarchy has a release (tap to open) and Update > Omarchy in the menu open it; it shows what's new, the battery and the phone patches, asks for the PIN, shows progress with the output under Details, and ends on the result. The run is a systemd user unit, so it survives the shell restart at its end.
 

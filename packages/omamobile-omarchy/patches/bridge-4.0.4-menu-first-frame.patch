@@ -1,5 +1,6 @@
-# Phone bridge for Omarchy 4.0.4 only: upstream fixed this in shell/Ui/OverlayWindow.qml
-# (overlays stay transparent until sized and scaled). Drop with the next Omarchy release.
+# Phone bridge: upstream fixed this in shell/Ui/OverlayWindow.qml (overlays stay
+# transparent until sized and scaled), but no release has it yet: 4.0.6's menu is
+# still a plain PanelWindow. Drop it once a release's menu uses OverlayWindow.
 --- a/shell/plugins/menu/Menu.qml
 +++ b/shell/plugins/menu/Menu.qml
 @@ -1041,7 +1041,16 @@

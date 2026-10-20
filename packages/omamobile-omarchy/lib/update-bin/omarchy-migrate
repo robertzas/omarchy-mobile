@@ -4,6 +4,12 @@
 # minus the ones that touch what a phone doesn't have or must not change: the
 # bootloader and boot entries (Limine, mkinitcpio, UKIs, efibootmgr, sbctl),
 # Snapper, x86 kernels and drivers, fwupd, or that ask questions with gum.
+# Also held: one that replaces /etc/pacman.conf wholesale (install, cp or mv
+# onto it, or omarchy-refresh-pacman). 1791403252 moved [omarchy] above every
+# other repository, [omamobile] included, then upgraded, so Omarchy's Hyprland
+# replaced the phone's. Never run such a one by hand. Edits made some other
+# way (sed, tee, a redirect) are caught after Omarchy's migrate returns: if
+# [omamobile] is no longer the first repository, it is moved back to the top.
 # A held migration is marked done in Omarchy's state (so Omarchy's login
 # notice doesn't keep offering it) and listed in
 # ~/.local/state/omamobile/update/held-migrations; after a review,
@@ -14,7 +20,7 @@ case ${1:-} in
   --pending | --check | -h | --help) exec "$real" "$@" ;;
 esac
 
-pattern='limine|mkinitcpio|initcpio|efibootmgr|sbctl|snapper|grub-|bootctl|fwupd|/boot/|plymouth-set-default-theme|dracut|linux-omarchy|nvidia|gum (confirm|choose|input|write|filter|file)'
+pattern='limine|mkinitcpio|initcpio|efibootmgr|sbctl|snapper|grub-|bootctl|fwupd|/boot/|plymouth-set-default-theme|dracut|linux-omarchy|nvidia|gum (confirm|choose|input|write|filter|file)|(install|cp|mv) [^|;&]*[[:space:]]"?/etc/pacman\.conf"?[[:space:]]*($|[;&|])|omarchy-refresh-pacman'
 if [[ ${OMAMOBILE_HOLD_MIGRATIONS:-1} == 1 ]]; then
   omarchy_path=${OMARCHY_PATH:-/usr/share/omarchy}
   state=${OMARCHY_MIGRATION_STATE:-$HOME/.local/state/omarchy/migrations}
@@ -32,7 +38,39 @@ if [[ ${OMAMOBILE_HOLD_MIGRATIONS:-1} == 1 ]]; then
     printf '%s\t%s\t%s\n' "$name" "$match" "${title:-}" >>"$held"
     [[ -n ${OMAMOBILE_UPDATE_DIR:-} ]] && printf '%s\t%s\t%s\n' "$name" "$match" "${title:-}" >>"$OMAMOBILE_UPDATE_DIR/held"
     echo "Holding migration ${name%.sh}${title:+ ($title)}: it mentions $match."
-    echo "  Review it, then: omamobile-update run-migration $name"
+    if [[ $match == *pacman* ]]; then
+      echo "  Don't run it by hand: it would put [omarchy] above [omamobile] again."
+    else
+      echo "  Review it, then: omamobile-update run-migration $name"
+    fi
   done
 fi
-exec "$real" "$@"
+rc=0
+"$real" "$@" || rc=$?
+
+conf=${OMAMOBILE_PACMAN_CONF:-/etc/pacman.conf}
+first=$(sed -n 's/^[[:space:]]*\[\([^]]*\)\].*/\1/p' "$conf" 2>/dev/null | grep -vx options | head -1)
+if [[ -n $first && $first != omamobile ]] && grep -c '^[[:space:]]*\[omamobile\]' "$conf" >/dev/null; then
+  fixed=$(mktemp)
+  awk '
+    /^[[:space:]]*\[[^]]+\]/ {
+      section = $0
+      sub(/^[[:space:]]*\[/, "", section)
+      sub(/\].*$/, "", section)
+      if (section != "options") repositories = 1
+    }
+    !repositories { prefix = prefix $0 "\n"; next }
+    section == "omamobile" { omamobile = omamobile $0 "\n"; next }
+    { others = others $0 "\n" }
+    END { printf "%s%s%s", prefix, omamobile, others }
+  ' "$conf" >"$fixed"
+  if sudo tee "$conf" <"$fixed" >/dev/null; then
+    echo "A migration put [$first] above [omamobile] in $conf: moved [omamobile] back to the top."
+    echo "  Packages installed since may be Omarchy's builds of the phone's own (hyprland, mesa): see docs/RELEASES.md 5.4."
+  else
+    echo "A migration put [$first] above [omamobile] in $conf, and it could not be moved back: see docs/RELEASES.md 5.4." >&2
+    rc=1
+  fi
+  rm -f "$fixed"
+fi
+exit "$rc"
