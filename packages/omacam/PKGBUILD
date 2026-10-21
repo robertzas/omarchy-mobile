@@ -15,7 +15,7 @@
 # developer iterating on omacam cross-compiles instead (omacam's
 # bin/cross, about 3 minutes cold, seconds after).
 pkgname=omacam
-pkgver=0.1.9
+pkgver=0.3.2
 pkgrel=1
 pkgdesc="Camera: a phone camera with lens switching by zoom, on libcamera"
 arch=(aarch64)
@@ -39,10 +39,11 @@ depends=(
   libjpeg-turbo
 )
 makedepends=(cargo clang pkgconf)
-optdepends=('loupe: open the last photo from the gallery button')
+optdepends=('loupe: open the last photo from the gallery button'
+            'geoclue: location tags')
 options=('!debug' '!lto')
 source=("omacam-$pkgver.tar.gz::https://github.com/derekross/omacam/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('442f234eddfeeb37e927c2dd815b2c91c4c38c68edb509a5ccaa89ceca54d736')
+sha256sums=('4f07ca4abe3f517cc7868fbb8e7b5105715c748c631cddfe2e536c524bf737e9')
 
 prepare() {
   cd "omacam-$pkgver"
@@ -68,5 +69,6 @@ package() {
   install -Dm644 NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
   install -Dm644 pkgbuild/omacam.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/omacam.svg"
   install -Dm644 pkgbuild/omacam.desktop "$pkgdir/usr/share/applications/omacam.desktop"
+  install -Dm644 data/geoclue/omacam.conf "$pkgdir/etc/geoclue/conf.d/91-omacam.conf"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
 }
