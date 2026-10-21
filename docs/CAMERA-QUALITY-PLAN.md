@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Camera picture quality plan
 
-**Status (2026-10-19, late):** Q1 (chroma noise reduction) and Q6 (defective
+**Status (2026-10-21):** Q1 (chroma noise reduction) and Q6 (defective
 pixel correction) run on the phone in libcamera 0.7.2-4.21. Q2's CPU merge
 runs in omacam: Night is a mode beside Photo, HDR a chip, and a 12-frame Night
 burst merges in about 5.5 s on the phone (from 10-11 s), propped or handheld.
@@ -11,8 +11,9 @@ full-resolution step) runs 2.3x faster than the CPU through GLES 3.1 compute
 on panfrost, reading the lumas as textures; storage buffers were slower than
 the CPU through GLES and Vulkan alike. Next for it: the whole merge on the
 GPU, with the frames kept there. Q5 (section 4a): the phone gives raw and
-processed frames together at full rate; next is Q5.1, finishing a raw frame
-with libcamera's own shader. Q3 and Q4 have not started.
+processed frames together at full rate, and Q5.1 passed: libcamera's
+finishing shaders ported to the CPU reproduce the ISP's own frame to 0.05
+levels. Next is Q5.2, a raw burst merge. Q3 and Q4 have not started.
 
 The cameras work end to end ([CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md),
 [CAMERA-APP-PLAN](CAMERA-APP-PLAN.md)), and the pictures are decent but far
@@ -218,6 +219,15 @@ Captures for Q5.1 and Q5.2 are taken with `cam` (both streams, `--file`),
 read-only, and stay in the scratch directory: they show the user's home and
 are never committed.
 
+Two things Q5.1 found, which Q5.3 has to follow:
+- **The ISP finishes frame N with frame N-1's white balance.** The
+  `ColourGains` in frame N's metadata are the gains computed from its
+  statistics, applied from the next frame on. With N-1's gains the port
+  matches; with N's own it misses by 1.5 levels (92% within ΔE 2).
+- **The last frame before `stop()` can be unpaired:** in one capture the
+  final raw buffer was 28% darker than its processed twin and matched
+  nothing. A burst drops its last frame or checks the pair.
+
 ## 5. Q3: measured colour
 
 The colour matrices for the Samsung sensors are hand-tuned without a chart
@@ -244,3 +254,4 @@ It needs a physical chart. Nothing from Google's tuning is used.
 | Q6 hot pixel | 2026-10-19 | libcamera 4.21 (0055) | the main camera's magenta spot (one red sensor pixel, about 5 px wide in the JPEG) is gone; a green one in a dark area too; `LIBCAMERA_SOFTISP_NO_DPC=1` brings both back. Only 12 pixels of the 12.5 MP differ by more than 30% between the two. One small bright spot on a red object was dimmed: a hot pixel or a real glint, to watch |
 | Q2 GPU spike | 2026-10-19 | omacam branch gpu-spike (b4e62b7) | the full-resolution alignment step as a WGSL compute shader through wgpu on Vulkan (PanVK, Mesa 26.2.4, Mali-G710 MC7 at 572 MHz): agrees with the CPU on 99.99% of 48514 tiles, but 295 ms (a workgroup per tile), 749 ms (shared tiles) and 1367 ms (an invocation per tile) against the phone CPU's 145-150 ms; on the laptop's Intel GPU 37-113 ms. 60-100x short of the hardware |
 | Q2 GPU, GLES | 2026-10-19 | omacam branch gpu-spike (14ac2ae) | the same step through GLES 3.1 compute on panfrost: storage buffers as slow as Vulkan (294-313 ms a workgroup per tile, 1318-1432 ms an invocation per tile), so the API wasn't the cause. Reading the lumas as R32F textures: **64 ms** a workgroup per tile, against the CPU's 141-157 ms; 159 ms with shared tiles, 801-812 ms an invocation per tile. 99.99% agreement in all. Uploading two R32F frames took 63-68 ms per call: a GPU pipeline keeps the frames there |
+| Q5.1 | 2026-10-21 | libcamera 4.21 | main camera, 4080x3072, gain 14-16, a lit indoor scene; a 1024 px crop of three frames finished on the laptop (DPC, debayer, the finishing pass, the post-filter) against the ISP's output: **mean 0.05 levels, 100% within ΔE 2** with the previous frame's white balance. High-pass correlation 0.97-0.98 for the matching raw frame and under 0.04 for the others, so processed N is raw N |
