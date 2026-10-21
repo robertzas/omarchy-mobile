@@ -15,8 +15,11 @@ processed frames together at full rate, and Q5.1 passed: libcamera's
 finishing shaders ported to the CPU reproduce the ISP's own frame to 0.05
 levels. Q5.2 passed on the laptop: merging raw frames before the finish is
 cleaner than merging finished ones (Q2's order), and an underexposed burst
-brightened after a raw merge keeps the shadows Q2's order crushes. Next is
-Q5.3, the merge in omacam, with a highlight-aware gain for HDR. Q3 and Q4 have not started.
+brightened after a raw merge keeps the shadows Q2's order crushes. Q5.3
+passed on the phone (omacam branch `raw-merge`): Night and HDR bursts now
+merge the raw frames, Night in 4.6 s (5.4 s for Q2's merge), with HDR's
+colors kept and its shadows open. Next is releasing it, then Q5.4 (the
+finish on the GPU). Q3 and Q4 have not started.
 
 The cameras work end to end ([CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md),
 [CAMERA-APP-PLAN](CAMERA-APP-PLAN.md)), and the pictures are decent but far
@@ -231,6 +234,12 @@ Two things Q5.1 found, which Q5.3 has to follow:
   final raw buffer was 28% darker than its processed twin and matched
   nothing. A burst drops its last frame or checks the pair.
 
+Neither binds the raw path in omacam as built: it chooses its own white
+balance (the reference frame's newest estimate) rather than matching the
+ISP's frame, and it uses the processed twin only for its size and
+metadata, never its pixels. Both matter again for any step that compares
+the two streams.
+
 ## 5. Q3: measured colour
 
 The colour matrices for the Samsung sensors are hand-tuned without a chart
@@ -260,3 +269,5 @@ It needs a physical chart. Nothing from Google's tuning is used.
 | Q5.1 | 2026-10-21 | libcamera 4.21 | main camera, 4080x3072, gain 14-16, a lit indoor scene; a 1024 px crop of three frames finished on the laptop (DPC, debayer, the finishing pass, the post-filter) against the ISP's output: **mean 0.05 levels, 100% within ΔE 2** with the previous frame's white balance. High-pass correlation 0.97-0.98 for the matching raw frame and under 0.04 for the others, so processed N is raw N |
 | Q5.2, first burst | 2026-10-21 | laptop prototype | main camera, 12 raw frames at a locked 107 ms and gain 14.3, a lit indoor scene, propped (it moved 6 quad pixels between frames 8 and 9). Alignment on the 2x2 quad image (global, then 32x32 raw tiles within 2), weights from a fitted noise model (var = 0.090 (Q-black) + 1.28), 8.4 effective frames. Two 1536 px crops, the same alignment and weights for both orders. Luma noise on flat areas (std of a 5x5 high-pass): single 1.41-1.49, merged after finishing (Q2's order) 0.56-0.60, **merged raw then finished 0.50-0.56**; chroma noise in dark flat areas 4.0-4.8, 1.86-1.87, **1.30-1.52**. With the post-filter set for the merge's lower noise (gain/8.4) the merged raw comes out sharper at about Q2's noise. No ghosts. No black pixels in either crop, so the shadow pass is untested: it needs a burst exposed under, as HDR takes it |
 | Q5.2, underexposed | 2026-10-21 | laptop prototype | the same office, two locked bursts at 107 ms: gain 3.56 (1.65 stops under) brightened x3, and gain 1.0 (about 3.3 stops under, medians 11 levels above black at 10 bits) brightened x10; 9.2 and 10.4 effective frames. At x10 the plain frame has 9% black pixels on the dark crop. Q2's order (finish, merge in 8 bits, brighten) comes out a fifth darker (luma 106 against 129), more saturated, and flat in the deep shadows: those levels were gone in the 8-bit frames. The raw merge keeps them, at luma noise 1.10 against Q2's 1.32 (single frame 5.2); its chroma noise in the dark is higher (4.9 against 3.2), partly because it is brighter. Two prototype faults found: a flat gain clipped channel by channel turns bright orange pale pink (HDR needs a highlight-aware gain), and a plain border clamp in the tile warp broke the Bayer phase (magenta edge; fixed by clamping whole quads) |
+| Q5.3 | 2026-10-21 | omacam `raw-merge` (2941663), libcamera 4.21 | main camera, the same office, propped. libcamera gives the raw stream at 4080x3072 beside a 4072x3072 processed one (the raw frame's left 4072 columns); the first build refused that as a size mismatch and fell back, fixed by accepting a raw frame up to 16 columns wider and cropping the merge. Night (12 frames, 43.8 ms, gain 16): raw merge 4.56 s (align 0.58, merge 0.50, finish 2.55, fusion 0.79) against 5.42 s for Q2's (align 2.56); peak RSS 2.1 GB against 2.5 GB. Flat-area luma noise 1.00 against Q2's 0.94 at 10% more brightness, chroma noise in the dark 1.43 against 1.61 (a single photo: 1.54 and 5.07) |
+| Q5.3 HDR | 2026-10-21 | omacam `raw-merge` (2941663) | 8 frames at 15.5 ms, gain 16. Brightened x2.8 in the raw before the finish (the first build), an orange plush came out pale pink, as in a normal photo: its raw red sat at 210-280 of 1023, nowhere near clipping, and the look pushed it past display red, where the gamut step whitens along constant luma. A highlight knee on the white-balanced level barely changed it and tinted the clipped lamp. Finishing the burst at its own exposure and fusing at 0/+1.5/+2.5 stops, as Q2's HDR does, keeps the orange: luma 95.5 (normal photo 97.2, Q2's HDR 76.1), 5th percentile 27.7 against Q2's 6.0, luma noise 1.18 against 1.34, chroma noise in the dark 1.79 against 2.74. 4.6 s on the phone (fusion 1.19 s) |
