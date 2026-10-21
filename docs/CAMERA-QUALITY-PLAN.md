@@ -10,7 +10,9 @@ crushed (Q5 is the fix). GPU merge: the first stage (alignment's
 full-resolution step) runs 2.3x faster than the CPU through GLES 3.1 compute
 on panfrost, reading the lumas as textures; storage buffers were slower than
 the CPU through GLES and Vulkan alike. Next for it: the whole merge on the
-GPU, with the frames kept there. Q3-Q5 have not started.
+GPU, with the frames kept there. Q5 (section 4a): the phone gives raw and
+processed frames together at full rate; next is Q5.1, finishing a raw frame
+with libcamera's own shader. Q3 and Q4 have not started.
 
 The cameras work end to end ([CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md),
 [CAMERA-APP-PLAN](CAMERA-APP-PLAN.md)), and the pictures are decent but far
@@ -159,6 +161,62 @@ recovers precision, because the noise dithers.
 photography for high dynamic range and low-light imaging on mobile cameras",
 SIGGRAPH Asia 2016; Mertens et al., "Exposure Fusion", 2007). We write our own
 code from the papers and copy no Google code.
+
+## 4a. Q5: raw-domain merge
+
+**Why:** Q2 merges the ISP's 8-bit output, after its tone curve. Shadows the
+curve crushed to 0 stay at 0 however many frames are averaged, so HDR keeps the
+highlights but loses the deep shadows (Results, "Q2 HDR"). Merged before the
+ISP, the frames are linear 10-bit: averaging N of them gains about
+log2(sqrt(N)) bits, and the tone curve then sees shadows with real values.
+
+**What the phone offers (2026-10-20, libcamera 4.21, main camera):**
+- a `raw` stream, SGRBG10_CSI2P (10-bit packed, stride 5120, 15.7 MB a frame)
+  at 2016x1136, 2032x1536, 4080x2288 and 4080x3072;
+- **a raw and a processed stream together at full rate** (9.36 fps at
+  4080x3072): every frame comes out both ways, so the ISP's statistics, AGC
+  and AWB keep running during a burst, and each processed frame is an exact
+  reference for its raw twin;
+- the processed frame's metadata: `ColourCorrectionMatrix`, `ColourGains`,
+  `SensorBlackLevels` (4096 at 16 bits, so 64 at 10), `Gamma`, `Contrast`,
+  `Saturation`, `ColourTemperature`. A raw-only stream reports no exposure
+  metadata. The rest of the processing (radial lens shading, denoise,
+  sharpening, defective pixels, the look) is per-camera tuning, read from the
+  tuning file.
+
+**The pipeline:**
+1. **Capture:** Q2's burst with a raw stream added beside the still stream;
+   the raw frames are kept, the processed ones give the metadata. HDR can go
+   2-3 stops under now, not 1.5.
+2. **Unpack and normalise:** CSI-2 packed 10-bit to 16-bit, black level
+   subtracted.
+3. **Align:** omacam-merge's pyramid on a half-resolution grey image (each 2x2
+   Bayer quad summed), offsets doubled to even pixels at full resolution so
+   the colour pattern stays in phase (as HDR+ does).
+4. **Merge:** each Bayer channel apart, with the robustness weights from a
+   noise model of the raw (shot and read noise: σ² = a·x + b, fitted from the
+   burst).
+5. **Tone:** a gain map in the linear domain (exposure fusion of the merge at
+   0, +1, +2 stops, as Q2 does now, but before the curve), so the shadows the
+   curve would crush are lifted first.
+6. **Finish:** libcamera's own software ISP shader (`debayer_egl`, LGPL-2.1+,
+   which GPL-3 omacam may use) run over the merged Bayer frame through GLES,
+   with the uniforms worked out the way the software ISP does, from the burst's
+   metadata and the tuning file. That keeps the libcamera look exactly instead
+   of copying it by hand.
+
+**Order:**
+
+| Step | What | Pass | Stop if |
+| --- | --- | --- | --- |
+| Q5.1 | Finish one raw frame on the laptop with the ported shader, and compare it with its processed twin | ΔE under 2 on 99% of pixels | the shader's uniforms can't be rebuilt from metadata and tuning |
+| Q5.2 | Merge a raw burst on the laptop (CPU), finish it as in Q5.1 | shadows: the black share no higher than a single frame's; noise on flat areas at least as low as Q2's | worse than Q2 on the same scene |
+| Q5.3 | In omacam: raw stream in the burst, merge and finish on the phone | Night and HDR saved as before; time within 1.5x of Q2's | memory: 12 raw frames are 190 MB packed, 300 MB unpacked |
+| Q5.4 | The finish on the GPU (the gpu-spike's GLES path) | the same picture within 1 level; faster | |
+
+Captures for Q5.1 and Q5.2 are taken with `cam` (both streams, `--file`),
+read-only, and stay in the scratch directory: they show the user's home and
+are never committed.
 
 ## 5. Q3: measured colour
 
