@@ -132,6 +132,17 @@ test("a widget that loops hits the step budget, as an error in that value only",
   eq(tree.children[0].c[1].p.text, "still here")
   assert.ok(reports.some((m) => /too much work/.test(m)), reports.join("|"))
 })
+test("a Canvas animated by a let that reads time keeps its budget frame after frame", () => {
+  // Only the Canvas reads `time`, so nothing re-renders the tile and the
+  // lets are worked out while drawing, every frame, on the main budget.
+  const { inst, reports } = instance('widget "w" {\n  let xs = range(500).map(i => sin(time + i))\n  Canvas { rect(xs[0], 0, 1, 1) }\n}')
+  const node = inst.render(false).children[0]
+  for (let f = 0; f < 600; f++) {
+    inst.frame(f / 30)
+    eq(node.draw(100, 100).length, 1)
+  }
+  eq(reports, [])
+})
 test("501 nodes are refused, 500 are fine; a screen has its own 1000", () => {
   const many = (n) => 'widget "w" {\n  Column {\n' + Array.from({ length: n - 1 }, () => '    Text { text: "x" }\n').join("") + "  }\n}"
   C.compile(many(500))

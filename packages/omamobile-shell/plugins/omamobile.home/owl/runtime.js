@@ -435,8 +435,13 @@ Instance.prototype = {
     var frame = { time: false }
     this.timeFrames.push(frame)
     try {
-      this.drawBudget.run(function() {
-        self.drawList(list, new C.Env(self.drawCtx, env, [width, height]), out, count)
+      // A frame is one update for the widget's lets too: those it reads are
+      // worked out on the main budget, which nothing else resets while only
+      // the Canvas animates (the koi pond ran out after 8 s).
+      this.budget.run(function() {
+        self.drawBudget.run(function() {
+          self.drawList(list, new C.Env(self.drawCtx, env, [width, height]), out, count)
+        })
       })
     } catch (e) {
       this.host.report("Canvas: " + C.messageOf(e))
