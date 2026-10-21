@@ -13,7 +13,9 @@ the CPU through GLES and Vulkan alike. Next for it: the whole merge on the
 GPU, with the frames kept there. Q5 (section 4a): the phone gives raw and
 processed frames together at full rate, and Q5.1 passed: libcamera's
 finishing shaders ported to the CPU reproduce the ISP's own frame to 0.05
-levels. Next is Q5.2, a raw burst merge. Q3 and Q4 have not started.
+levels. Q5.2's first burst: merging raw frames before the finish is cleaner
+than merging finished ones (Q2's order) at the same detail settings; the
+shadow test still needs an underexposed burst. Q3 and Q4 have not started.
 
 The cameras work end to end ([CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md),
 [CAMERA-APP-PLAN](CAMERA-APP-PLAN.md)), and the pictures are decent but far
@@ -255,3 +257,4 @@ It needs a physical chart. Nothing from Google's tuning is used.
 | Q2 GPU spike | 2026-10-19 | omacam branch gpu-spike (b4e62b7) | the full-resolution alignment step as a WGSL compute shader through wgpu on Vulkan (PanVK, Mesa 26.2.4, Mali-G710 MC7 at 572 MHz): agrees with the CPU on 99.99% of 48514 tiles, but 295 ms (a workgroup per tile), 749 ms (shared tiles) and 1367 ms (an invocation per tile) against the phone CPU's 145-150 ms; on the laptop's Intel GPU 37-113 ms. 60-100x short of the hardware |
 | Q2 GPU, GLES | 2026-10-19 | omacam branch gpu-spike (14ac2ae) | the same step through GLES 3.1 compute on panfrost: storage buffers as slow as Vulkan (294-313 ms a workgroup per tile, 1318-1432 ms an invocation per tile), so the API wasn't the cause. Reading the lumas as R32F textures: **64 ms** a workgroup per tile, against the CPU's 141-157 ms; 159 ms with shared tiles, 801-812 ms an invocation per tile. 99.99% agreement in all. Uploading two R32F frames took 63-68 ms per call: a GPU pipeline keeps the frames there |
 | Q5.1 | 2026-10-21 | libcamera 4.21 | main camera, 4080x3072, gain 14-16, a lit indoor scene; a 1024 px crop of three frames finished on the laptop (DPC, debayer, the finishing pass, the post-filter) against the ISP's output: **mean 0.05 levels, 100% within ΔE 2** with the previous frame's white balance. High-pass correlation 0.97-0.98 for the matching raw frame and under 0.04 for the others, so processed N is raw N |
+| Q5.2, first burst | 2026-10-21 | laptop prototype | main camera, 12 raw frames at a locked 107 ms and gain 14.3, a lit indoor scene, propped (it moved 6 quad pixels between frames 8 and 9). Alignment on the 2x2 quad image (global, then 32x32 raw tiles within 2), weights from a fitted noise model (var = 0.090 (Q-black) + 1.28), 8.4 effective frames. Two 1536 px crops, the same alignment and weights for both orders. Luma noise on flat areas (std of a 5x5 high-pass): single 1.41-1.49, merged after finishing (Q2's order) 0.56-0.60, **merged raw then finished 0.50-0.56**; chroma noise in dark flat areas 4.0-4.8, 1.86-1.87, **1.30-1.52**. With the post-filter set for the merge's lower noise (gain/8.4) the merged raw comes out sharper at about Q2's noise. No ghosts. No black pixels in either crop, so the shadow pass is untested: it needs a burst exposed under, as HDR takes it |
