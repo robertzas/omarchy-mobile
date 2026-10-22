@@ -247,7 +247,10 @@ pass "update sheet"
 # model, and the wiring that makes the portal pick it under Hyprland.
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-portal-access || fail "omamobile-portal-access parses"
 if command -v dbus-run-session >/dev/null; then
-  dbus-run-session -- python3 -B test/portal-access.py >/dev/null 2>&1 || { dbus-run-session -- python3 -B test/portal-access.py | grep -v '^ok'; fail "omamobile-portal-access"; }
+  if ! out=$(dbus-run-session -- python3 -B test/portal-access.py 2>&1); then
+    grep -v '^ok' <<<"$out" || true
+    fail "omamobile-portal-access"
+  fi
 else
   python3 -B test/portal-access.py >/dev/null || fail "omamobile-portal-access helpers"
 fi

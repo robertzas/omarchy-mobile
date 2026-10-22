@@ -149,11 +149,28 @@ esac
         return bool(sheet.Answer(request_id, what, dbus_interface=pa.SHEET_IFACE))
 
     def logged():
+        # Move the log aside, then read it: the fake shell opens the log by
+        # name for every line, so nothing it writes meanwhile is lost (a
+        # read followed by a truncate dropped a line written in between).
+        taken = log + ".taken"
         try:
-            with open(log) as f:
-                return f.read()
-        finally:
-            open(log, "w").close()
+            os.rename(log, taken)
+        except FileNotFoundError:
+            return ""
+        with open(taken) as f:
+            text = f.read()
+        os.remove(taken)
+        return text
+
+    def logged_soon(text, timeout=3.0):
+        # The service tells the fake shell after it has answered the
+        # caller, so the line can land a moment after the call returns.
+        seen, deadline = "", time.monotonic() + timeout
+        while True:
+            seen += logged()
+            if text in seen or time.monotonic() > deadline:
+                return seen
+            time.sleep(0.05)
 
     proc = start()
     try:
@@ -187,14 +204,14 @@ esac
         took = time.monotonic() - started
         check("no answer times out with an error, not a response",
               call.returncode != 0 and pa.ERROR in err and 1.5 < took < 6, "%s %s %.1fs" % (out, err, took))
-        check("a timed-out sheet is taken back", '"id": "%s"' % request["id"] in logged())
+        check("a timed-out sheet is taken back", '"id": "%s"' % request["id"] in logged_soon('"id": "%s"' % request["id"]))
 
         call, handle = ask("t5")
         request = wait_request()
         dbus.SessionBus().get_object(pa.BUS_NAME, handle).Close(dbus_interface=pa.REQUEST_IFACE)
         out, err = call.communicate(timeout=10)
         check("the app closing its request ends it with an error", call.returncode != 0 and pa.ERROR in err, out + err)
-        check("a closed request's sheet is taken back", "dismiss" in logged())
+        check("a closed request's sheet is taken back", "dismiss" in logged_soon("dismiss"))
         check("an unknown id is refused", not answer("0123456789abcdef", "allow"))
     finally:
         stop(proc)
