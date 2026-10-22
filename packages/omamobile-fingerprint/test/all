@@ -9,6 +9,12 @@ for f in lib/omamobile-fp-chroot install; do bash -n "$f" || fail "syntax: $f"; 
 for f in lib/omamobile-tipc-probe lib/omamobile-fp-ctl; do
   python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$f" || fail "python: $f"
 done
+# The bionic prebuilts are built on the computer with the Android toolchain
+# and never committed; a checkout without them (CI) checks the rest only.
+if [[ ! -f prebuilt/omamobile-fp-shim.so ]]; then
+  echo "ok - the rest # SKIP no bionic prebuilts in this checkout (built on the computer)"
+  exit 0
+fi
 for f in prebuilt/omamobile-fp-shim.so prebuilt/omamobile-fp-bridge; do
   [[ -f $f ]] || fail "$f missing: build it on the computer first (fingerprint/Makefile)"
   [[ $(head -c 20 "$f" | od -An -tx1 | tr -d ' \n') == 7f454c46020101* ]] || fail "$f is not a 64-bit ELF"

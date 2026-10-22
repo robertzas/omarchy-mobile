@@ -1,0 +1,69 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/kernel-pr-check's commit checks against a stand-in kernel tree (a
+# git repository with a fake scripts/checkpatch.pl): sign-offs, prefixes and
+# checkpatch errors. The --build half needs a real tree and is run by hand.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+fail() { echo "not ok - $*" >&2; exit 1; }
+
+k=$t/linux
+mkdir -p "$k/scripts" "$k/drivers"
+# checkpatch's stand-in: an ERROR for any added line with "BADSTYLE".
+cat > "$k/scripts/checkpatch.pl" <<'EOF'
+#!/usr/bin/perl
+while (<STDIN>) { print "-:1: ERROR:CODE_STYLE: bad style\n" if /^\+.*BADSTYLE/; }
+EOF
+chmod +x "$k/scripts/checkpatch.pl"
+cd "$k"
+git init -q -b omamobile
+git config user.name "A Human"
+git config user.email human@example.org
+echo base > drivers/a.c
+git add -A && git commit -q -m "base"
+
+run() { # name expect pattern
+  local out status=0
+  out=$("$here/tools/kernel-pr-check" -C "$k" omamobile HEAD 2>&1) || status=$?
+  [[ $status == "$2" ]] || { echo "$out"; fail "$1: exit $status, expected $2"; }
+  [[ -z ${3:-} ]] || grep -c -- "$3" <<<"$out" >/dev/null || { echo "$out"; fail "$1: says '$3'"; }
+}
+branch() { git checkout -q omamobile && git checkout -q -b "$1"; }
+
+branch good
+echo good >> drivers/a.c
+git commit -q -am "drivers: a: a good change" -m "Signed-off-by: A Human <human@example.org>" -m "Assisted-by: Claude:claude-opus-5-5"
+run "a good commit" 0
+echo "ok - a signed-off, prefixed, clean commit passes (Assisted-by is fine)"
+
+branch nosob
+echo x >> drivers/a.c
+git commit -q -am "drivers: a: unsigned"
+run "no sign-off" 1 "no human Signed-off-by"
+echo "ok - a commit without a sign-off fails"
+
+branch other
+echo x >> drivers/a.c
+git commit -q -am "drivers: a: someone else signs" -m "Signed-off-by: Someone Else <else@example.org>"
+run "not the author's sign-off" 1 "no Signed-off-by from the author"
+echo "ok - a sign-off that isn't the author's fails"
+
+branch aisob
+echo x >> drivers/a.c
+git commit -q -am "drivers: a: AI signs" -m "Signed-off-by: A Human <human@example.org>" -m "Signed-off-by: Claude <noreply@anthropic.com>"
+run "an AI sign-off" 1 "from an AI agent"
+echo "ok - an AI Signed-off-by fails"
+
+branch noprefix
+echo x >> drivers/a.c
+git commit -q -am "Fix the thing" -m "Signed-off-by: A Human <human@example.org>"
+run "no prefix" 1 "without a subsystem prefix"
+echo "ok - a subject without a subsystem prefix fails"
+
+branch style
+echo "BADSTYLE" >> drivers/a.c
+git commit -q -am "drivers: a: style" -m "Signed-off-by: A Human <human@example.org>"
+run "a checkpatch error" 1 "checkpatch --strict errors"
+echo "ok - a checkpatch error fails"

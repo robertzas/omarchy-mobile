@@ -1,0 +1,172 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The checks a linux-omarchy-mobile pull request must pass before review
+# (CONTRIBUTING.md section 6.2), on the commits between BASE and HEAD of a
+# kernel tree:
+#
+#   - every commit has a human Signed-off-by, one of them the author's (the
+#     DCO), and none from an AI agent (an Assisted-by tag credits it);
+#   - every subject has a subsystem prefix ("clk: samsung: ...");
+#   - scripts/checkpatch.pl --strict on each commit: errors fail, warnings
+#     are listed;
+#   - tools/pr-check's policy checks: identifiers, blobs;
+#   - with --build OUT: each touched C file builds with W=1 (arm64, LLVM,
+#     defconfig plus kernel/configs/omamobile.config), every touched
+#     device tree builds with W=1 and passes dtbs_check with no warning the
+#     base didn't have, and touched bindings pass dt_binding_check. Needs
+#     clang, ld.lld and, for the schema checks, dtschema (`pip install
+#     dtschema`); a missing tool skips its check and says so.
+#
+#   tools/kernel-pr-check [-C KERNEL] [--build OUT] BASE [HEAD]
+#
+# KERNEL defaults to ~/android/mainline/linux, HEAD to HEAD. It reads git and
+# builds in OUT (and OUT-base, for the base's device trees); it never
+# touches the tree's checkout or anything else.
+set -uo pipefail
+self=$(readlink -f "${BASH_SOURCE[0]}")
+repo=$(cd -- "$(dirname -- "$self")/.." && pwd)
+kernel=$HOME/android/mainline/linux
+out=""
+while (($#)); do
+  case $1 in
+    -C) kernel=${2:?-C needs a kernel tree}; shift 2 ;;
+    --build) out=${2:?--build needs an output directory}; shift 2 ;;
+    -h|--help) sed -n '3,30p' "$self"; exit 0 ;;
+    -*) echo "kernel-pr-check: unknown option $1" >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+base=${1:?Usage: kernel-pr-check [-C KERNEL] [--build OUT] BASE [HEAD]}
+head=${2:-HEAD}
+cd -- "$kernel" || exit 2
+[[ -x scripts/checkpatch.pl ]] || { echo "kernel-pr-check: $kernel is not a kernel tree" >&2; exit 2; }
+mb=$(git merge-base "$base" "$head") || { echo "kernel-pr-check: $base and $head share no history" >&2; exit 2; }
+range="$mb..$head"
+commits=$(git rev-list --reverse --no-merges "$range")
+[[ -n $commits ]] || { echo "ok - no commits to check"; exit 0; }
+
+fails=0
+fail() { echo "not ok - $*"; fails=$((fails + 1)); }
+pass() { echo "ok - $*"; }
+skip() { echo "ok - $* # SKIP"; }
+ai='claude|anthropic|openai|chatgpt|codex|copilot|gemini|cursor|llm|\[bot\]'
+
+# ---------------------------------------------------------------- commits
+sob_bad="" prefix_bad=""
+for c in $commits; do
+  short=$(git log -1 --format='%h %s' "$c")
+  author=$(git log -1 --format='%ae' "$c")
+  sobs=$(git log -1 --format=%B "$c" | grep -E '^Signed-off-by: ' || true)
+  human=$(grep -viE "$ai" <<<"$sobs" || true)
+  if [[ -z $human ]]; then
+    sob_bad+="  $short: no human Signed-off-by"$'\n'
+  elif ! grep -qiF "<$author>" <<<"$human"; then
+    sob_bad+="  $short: no Signed-off-by from the author <$author>"$'\n'
+  fi
+  grep -qiE "$ai" <<<"$sobs" && sob_bad+="  $short: a Signed-off-by from an AI agent"$'\n'
+  subject=$(git log -1 --format=%s "$c")
+  [[ $subject =~ ^[A-Za-z0-9_./,+-]+(:[[:space:]][A-Za-z0-9_./,+-]+)*:[[:space:]] ]] || prefix_bad+="  $short"$'\n'
+done
+n=$(wc -w <<<"$commits")
+[[ -z $sob_bad ]] && pass "$n commits signed off by their authors, none by an AI" || fail "sign-offs (Documentation/process/submitting-patches.rst, coding-assistants.rst):
+${sob_bad%$'\n'}"
+[[ -z $prefix_bad ]] && pass "subjects have subsystem prefixes" || fail "subjects without a subsystem prefix (see git log --oneline <file>):
+${prefix_bad%$'\n'}"
+
+# ---------------------------------------------------------------- checkpatch
+cp_errors="" cp_warnings=0
+for c in $commits; do
+  report=$(git format-patch -1 --stdout "$c" | perl scripts/checkpatch.pl --strict --no-signoff --terse --show-types - 2>/dev/null)
+  errors=$(grep -E ': ERROR:' <<<"$report" || true)
+  [[ -n $errors ]] && cp_errors+="  $(git log -1 --format='%h %s' "$c")"$'\n'"$(sed 's/^/    /' <<<"$errors")"$'\n'
+  cp_warnings=$((cp_warnings + $(grep -cE ': (WARNING|CHECK):' <<<"$report" || true)))
+done
+[[ -z $cp_errors ]] && pass "checkpatch --strict: no errors ($cp_warnings warnings and checks to read)" || fail "checkpatch --strict errors:
+${cp_errors%$'\n'}"
+
+# ---------------------------------------------------------------- policy
+policy=$("$repo/tools/pr-check" -C "$kernel" "$base" "$head" 2>&1); status=$?
+grep -E '^not ok' <<<"$policy" || true
+((status == 0)) && pass "policy (tools/pr-check): identifiers, blobs" || fails=$((fails + 1))
+
+# ---------------------------------------------------------------- builds
+if [[ -n $out ]]; then
+  changed=$(git diff --name-only --diff-filter=AM "$range")
+  cfiles=$(grep -E '\.c$' <<<"$changed" || true)
+  dts=$(grep -E '^arch/arm64/boot/dts/.*\.(dts|dtsi|dtso)$' <<<"$changed" || true)
+  yamls=$(grep -E '^Documentation/devicetree/bindings/.*\.yaml$' <<<"$changed" || true)
+  if ! command -v clang >/dev/null || ! command -v ld.lld >/dev/null; then
+    skip "builds: no clang or ld.lld"
+  else
+    # A clean export of HEAD and BASE, so the tree's own checkout is never touched.
+    src=$out/src srcb=$out/src-base
+    rm -rf "$src" "$srcb"; mkdir -p "$src" "$srcb"
+    git archive "$head" | tar -x -C "$src"
+    k=(make -s -C "$src" O="$out/build" ARCH=arm64 LLVM=1 -j"$(nproc)")
+    if "${k[@]}" defconfig >/dev/null 2>&1 \
+       && (cd "$src" && KCONFIG_CONFIG="$out/build/.config" scripts/kconfig/merge_config.sh -m -O "$out/build" "$out/build/.config" "$repo/kernel/configs/omamobile.config" >/dev/null 2>&1) \
+       && "${k[@]}" olddefconfig >/dev/null 2>&1; then
+      bad=""
+      for f in $cfiles; do
+        log=$("${k[@]}" W=1 "${f%.c}.o" 2>&1) || { bad+="  $f"$'\n'"$(tail -5 <<<"$log" | sed 's/^/    /')"$'\n'; continue; }
+        w=$(grep -E 'warning:' <<<"$log" || true)
+        [[ -n $w ]] && bad+="  $f (W=1 warnings)"$'\n'"$(head -5 <<<"$w" | sed 's/^/    /')"$'\n'
+      done
+      if [[ -z $cfiles ]]; then skip "C builds: no C files touched"
+      elif [[ -z $bad ]]; then pass "W=1 builds of $(wc -w <<<"$cfiles") touched C files"
+      else fail "W=1 builds:
+${bad%$'\n'}"; fi
+
+      if [[ -n $dts ]]; then
+        # The boards whose DTBs the touched files reach: every .dts in the
+        # touched directories (a dtsi reaches its whole SoC family).
+        dirs=$(xargs -n1 dirname <<<"$dts" | sort -u | sed 's|^arch/arm64/boot/dts/||')
+        targets=$(for d in $dirs; do (cd "$src/arch/arm64/boot/dts" && ls "$d"/*.dts 2>/dev/null) | sed 's/\.dts$/.dtb/'; done | sort -u)
+        check=""
+        command -v dt-validate >/dev/null && check="CHECK_DTBS=y"
+        # git archive stamps files with the commit's time: drop earlier
+        # outputs so make rebuilds, and prints, every warning.
+        rm -rf "$out/build/arch/arm64/boot/dts" "$out/build-base/arch/arm64/boot/dts"
+        log=$("${k[@]}" W=1 $check $targets 2>&1); st=$?
+        if ((st)); then
+          fail "device trees don't build:
+$(tail -8 <<<"$log" | sed 's/^/    /')"
+        else
+          git archive "$mb" | tar -x -C "$srcb"
+          kb=(make -s -C "$srcb" O="$out/build-base" ARCH=arm64 LLVM=1 -j"$(nproc)")
+          cp "$out/build/.config" "$out/build-base/.config" 2>/dev/null || { mkdir -p "$out/build-base"; cp "$out/build/.config" "$out/build-base/.config"; }
+          "${kb[@]}" olddefconfig >/dev/null 2>&1
+          blog=$("${kb[@]}" W=1 $check $targets 2>&1 || true)
+          norm() { grep -E 'warning|Warning|error' | sed -E -e 's,^[^ ]*/arch/arm64/boot/dts/,,' -e 's,/[^ ]*/(src|src-base)/,,g' | sort -u; }
+          new=$(comm -13 <(norm <<<"$blog") <(norm <<<"$log"))
+          what="W=1${check:+ and dtbs_check}"
+          [[ -z $check ]] && echo "# no dt-validate (pip install dtschema): dtbs_check skipped"
+          if [[ -z $new ]]; then pass "$(wc -w <<<"$targets") device trees build with $what, no new warnings"
+          else fail "new device-tree warnings ($what):
+$(head -15 <<<"$new" | sed 's/^/    /')"; fi
+        fi
+      else
+        skip "device trees: none touched"
+      fi
+
+      if [[ -n $yamls ]]; then
+        if command -v dt-doc-validate >/dev/null; then
+          schemas=$(sed 's|^Documentation/devicetree/bindings/||' <<<"$yamls" | paste -sd:)
+          log=$("${k[@]}" dt_binding_check DT_SCHEMA_FILES="$schemas" 2>&1); st=$?
+          w=$(grep -E 'warning|error' <<<"$log" || true)
+          ((st == 0)) && [[ -z $w ]] && pass "dt_binding_check on $(wc -w <<<"$yamls") bindings" || fail "dt_binding_check:
+$(head -10 <<<"${w:-$log}" | sed 's/^/    /')"
+        else
+          skip "dt_binding_check: no dtschema (pip install dtschema)"
+        fi
+      fi
+    else
+      fail "the kernel config doesn't configure (defconfig plus omamobile.config)"
+    fi
+  fi
+fi
+
+if ((fails)); then
+  echo "kernel-pr-check: $fails check(s) failed" >&2
+  exit 1
+fi

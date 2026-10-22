@@ -12,15 +12,28 @@
 #     Co-Authored-By or Assisted-by trailer is fine);
 #   - every shell script the commits touch still parses.
 #
-#   tools/pr-check [BASE]        (default: origin/main)
+#   tools/pr-check [-C REPO] [BASE [HEAD]]   (default: this repository, origin/main, HEAD)
+#
+# -C checks another repository's commits the same way (tools/kernel-pr-check
+# uses it for the kernel).
 #
 # CI runs it on every pull request (.github/workflows/checks.yml). Run it
 # before you push; it reads git only and changes nothing.
 set -euo pipefail
-cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+self=$(readlink -f "${BASH_SOURCE[0]}")
+repo=$(dirname -- "$self")/..
+if [[ ${1:-} == -C ]]; then
+  repo=${2:?pr-check: -C needs a repository}
+  shift 2
+fi
+cd -- "$repo"
 base=${1:-origin/main}
-git rev-parse --verify -q "$base^{commit}" >/dev/null || { echo "pr-check: no such base $base (git fetch first?)" >&2; exit 2; }
-range="$(git merge-base "$base" HEAD)..HEAD"
+head=${2:-HEAD}
+for r in "$base" "$head"; do
+  git rev-parse --verify -q "$r^{commit}" >/dev/null || { echo "pr-check: no such commit $r (git fetch first?)" >&2; exit 2; }
+done
+mb=$(git merge-base "$base" "$head") || { echo "pr-check: $base and $head share no history" >&2; exit 2; }
+range="$mb..$head"
 fails=0
 fail() { echo "not ok - $*"; fails=$((fails + 1)); }
 pass() { echo "ok - $*"; }
@@ -79,14 +92,16 @@ $(sed 's/^/    /' <<<"${bad_sob%$'\n'}")"
 
 # ---------------------------------------------------------------- scripts
 broken=""
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
 while IFS= read -r f; do
-  [[ -f $f ]] || continue
-  first=$(head -c 64 "$f" | head -1)
+  git show "$head:$f" > "$tmp" 2>/dev/null || continue
+  first=$(head -c 64 "$tmp" | head -1)
   case $first in
-    '#!/bin/bash'*|'#!/usr/bin/env bash'*) bash -n "$f" 2>/dev/null || broken+="$f"$'\n' ;;
-    '#!/bin/sh'*|'#!/bin/busybox sh'*) sh -n "$f" 2>/dev/null || broken+="$f"$'\n' ;;
+    '#!/bin/bash'*|'#!/usr/bin/env bash'*) bash -n "$tmp" 2>/dev/null || broken+="$f"$'\n' ;;
+    '#!/bin/sh'*|'#!/bin/busybox sh'*) sh -n "$tmp" 2>/dev/null || broken+="$f"$'\n' ;;
     '#!/usr/bin/env python3'*|'#!/usr/bin/python3'*)
-      python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$f" 2>/dev/null || broken+="$f"$'\n' ;;
+      python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$tmp" 2>/dev/null || broken+="$f"$'\n' ;;
   esac
 done < <(git diff --name-only --diff-filter=AM "$range")
 [[ -z $broken ]] && pass "touched scripts parse" || fail "scripts that don't parse:

@@ -275,7 +275,7 @@ Findings that matter beyond one subsystem go into `device/<codename>/NOTES.md`, 
   - `make dt_binding_check DT_SCHEMA_FILES=<your schemas>`;
   - `make CHECK_DTBS=y W=1 exynos/google/<soc>-<codename>.dtb` (or `dt-validate`), with no new warnings, also with your bring-up overlays applied.
 
-  The plans record these results (for example [HAPTICS-TORCH-PLAN.md](device/cheetah/HAPTICS-TORCH-PLAN.md)).
+  The plans record these results (for example [HAPTICS-TORCH-PLAN.md](device/cheetah/HAPTICS-TORCH-PLAN.md)). `tools/kernel-pr-check --build OUT BASE` in this repository runs the sign-off, prefix, checkpatch and identifier checks and the `W=1`, `dtbs_check` and `dt_binding_check` builds on your branch's commits, comparing device-tree warnings against the base, and the review runs it too.
 - **New hardware is `disabled` by default.** A separate, later commit turns it on once it has passed on the phone.
 - **Code imported from Google's GPL tree** keeps its copyright and is marked as such. Port it to upstream APIs and style before proposing it for `omamobile`.
 - **Sending upstream:** the published `omamobile` branch sits on one squashed commit that holds the tree of the upstream tag (see [`tools/publish-kernel`](tools/publish-kernel)). Rebase your commits onto the real tag (`git rebase --onto v7.3-rc6 <squashed base>`), run `scripts/get_maintainer.pl`, and follow `Documentation/process/submitting-patches.rst`.
