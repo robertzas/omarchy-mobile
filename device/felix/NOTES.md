@@ -3,6 +3,12 @@
 
 Findings from real hardware, newest first. [BRINGUP-M1.md](BRINGUP-M1.md) is the first-light record.
 
+## 2026-10-22: volume keys and the hinge hall
+
+- **Volume keys.** Volume down is `gpa10-1` with a pull-up. Volume up is `gpa8-5` with no pull. Both are active-low. The factory groups are `key-voldown` and `key-volup`, and they are the Pixel 7 Pro's key pins. Each reported a press and a release on slot B.
+- **Power key.** Factory `key-power` is `gpa10-0`, the S2MPG12 PWRONB line, active-low with a pull-up, the same line as the Pixel 7 Pro. It is not described. On the running image a short press does nothing, and logind's power-key action is still poweroff, so describing the key now would power the phone off.
+- **Hinge hall.** Factory `hall_sensor` (`hall,drv5032`) is `gpa2-3`, active-low, with no pull. The factory pin group is `hall_sensor_pinctrl`. Closed reads as shut and open reads as open. `gpa2` is an alive bank, so the mainline group sets no sleep pin config. logind treats `SW_LID` as a closed lid. `omamobile-device-felix` ignores that switch, so a folded phone does not suspend and the USB gadget stays up.
+
 ## 2026-10-20: stock panels and touch
 
 The stock capture's build is `google/felix/felix:17/CP3A.261005.002.A1/2026100601`. That factory image's bootloader is `felix-17.0-15902555` and its radio is `g5300q-260604-260807-B-16036236`, the same strings `fastboot getvar` returned on this phone. Dtbo entry 10 is board id `0x30606`, rev `0x10000`, which matches `ro.boot.cdt_hwid` and `ro.boot.dtbo_idx`. The wiring below is from that overlay. Our board file still has neither panel node and neither touch node. The firmware names stay in the factory image.

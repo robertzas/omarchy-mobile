@@ -52,6 +52,7 @@ pass "reboot-to compiles"
 for f in usr/bin/reboot-to \
          usr/lib/udev/rules.d/10-omamobile-storage.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
+         usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-felix/version \
@@ -65,6 +66,15 @@ grep -q 'ID_PART_ENTRY_NAME}!="userdata"' "$tmp/root/usr/lib/udev/rules.d/10-oma
   || fail "userdata is the only partition desktop tools may see"
 grep -q 'Address=172.16.42.1/24' "$tmp/root/usr/lib/systemd/network/20-usb-gadget.network" \
   || fail "usb0 keeps the initramfs address"
+lid="$tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf"
+grep -qx '\[Login\]' "$lid" \
+  || fail "the logind drop-in needs a [Login] header"
+grep -q '^HandleLidSwitch=ignore$' "$lid" \
+  || fail "a closed fold must not suspend"
+grep -q '^HandleLidSwitchDocked=ignore$' "$lid" \
+  || fail "a docked closed fold must not suspend"
+grep -q '^HandleLidSwitchExternalPower=ignore$' "$lid" \
+  || fail "external power must not suspend a closed fold"
 grep -q '^PACKAGE=omamobile-device-felix$' "$tmp/root/usr/share/omamobile/device.conf" \
   || fail "the installed descriptor is felix"
 for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
