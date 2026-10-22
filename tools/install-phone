@@ -112,6 +112,16 @@ CODENAME=${D[CODENAME]:-}
 # Refuse before image preparation or any fastboot query/write.
 BOOT_METHOD=${D[BOOT_METHOD]-android-v4}
 [[ $BOOT_METHOD == android-v4 ]] || die "$conf: unsupported BOOT_METHOD=$BOOT_METHOD; install-phone supports only android-v4"
+# A staged descriptor leaves SOC_IDS out (zuma's ABL picks its DTB another
+# way): bin/omamobile refuses it, and so must the installer.
+[[ -n ${D[SOC_IDS]:-} ]] || die "$conf: SOC_IDS is missing; this device can't be installed yet"
+# Images record the device they were built for, as flash and push check:
+# out-int/images holds whichever device was built last.
+if [[ $mode == repository ]]; then
+  built_for=$(cat "$images/DEVICE" 2>/dev/null || true)
+  [[ $built_for == "$CODENAME" ]] \
+    || die "$images holds images for '${built_for:-an unknown device}', not $CODENAME (run: DEVICE=$CODENAME bin/omamobile images)"
+fi
 [[ -n $rootfs && -f $rootfs ]] || die "no root image (tools/build-rootfs makes one; or --rootfs FILE)"
 for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd openssl sha256sum; do
   command -v "$tool" >/dev/null || die "$tool not found (fastboot: android-tools; debugfs: e2fsprogs)"

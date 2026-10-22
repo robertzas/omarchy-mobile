@@ -23,12 +23,14 @@ descriptor() {
 # test device
 CODENAME=testdev
 NAME="Test Phone"
+SOC_IDS="a0:0x9845"
 BOOT_IMAGES="boot init_boot vendor_boot vendor_kernel_boot dtbo"
 UFS_RW="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
 EOF
 }
 descriptor > "$R/device/testdev/device.conf"
 for p in boot init_boot vendor_boot vendor_kernel_boot dtbo vbmeta; do echo "$p image" > "$t/images/$p.img"; done
+echo testdev > "$t/images/DEVICE"
 echo 'root:x:0:0::/root:/bin/bash' > "$t/rootdir/etc/passwd"
 mkfs.ext4 -q -L omamobile-root -d "$t/rootdir" "$t/root.img" 16M
 img=$R/out/omamobile-rootfs-2026.10.13-aarch64.img.zst
@@ -162,7 +164,14 @@ descriptor | sed 's/^UFS_RW=.*/UFS_RW="boot_b init_boot_b vendor_boot_b vendor_k
 refuse "userdata off the allowlist"
 descriptor | sed 's/^NAME=.*/NAME="$(touch x)"/' > "$R/device/testdev/device.conf"
 refuse "a descriptor with shell in it"
+descriptor | sed '/^SOC_IDS=/d' > "$R/device/testdev/device.conf"
+refuse "a staged descriptor without SOC_IDS"; grep -q 'SOC_IDS is missing' "$t/out" || fail "names SOC_IDS"
 descriptor > "$R/device/testdev/device.conf"
+echo cheetah > "$t/images/DEVICE"
+refuse "images built for another device"; grep -q "holds images for 'cheetah', not testdev" "$t/out" || fail "names both devices"
+rm "$t/images/DEVICE"
+refuse "images that don't say which device they're for"
+echo testdev > "$t/images/DEVICE"
 cp "$R/out/$(basename "$img").sha256" "$t/sum"; echo "0000  $(basename "$img")" > "$R/out/$(basename "$img").sha256"
 refuse "a root image that doesn't match its checksum"
 cp "$t/sum" "$R/out/$(basename "$img").sha256"
@@ -174,7 +183,7 @@ echo 'kernel modules: 7.3.0-test-2 (tarball sha256 0)' >> "$R/out/omamobile-root
 refuse "a root image whose modules don't match the boot images' kernel"; grep -q 'modules for 7.3.0-test-2' "$t/out" || fail "names both kernels"
 sed -i 's/^kernel modules: .*/kernel modules: 7.3.0-test-1 (tarball sha256 0)/' "$R/out/omamobile-rootfs-2026.10.13-aarch64.MANIFEST"
 install --dry-run || { cat "$t/out"; fail "matching kernel and modules pass"; }
-pass "refuses partitions outside the allowlist, a non-data descriptor, a bad or foreign root image, mismatched modules"
+pass "refuses partitions outside the allowlist, a non-data descriptor, a staged descriptor, another device's images, a bad or foreign root image, mismatched modules"
 
 # Explicit android-v4 is equivalent to the legacy descriptor (omitted method).
 printf '\nBOOT_METHOD=android-v4\n' >> "$R/device/testdev/device.conf"
