@@ -45,7 +45,16 @@ if [[ ! -d $kernel ]]; then
   echo "kernel-pr-check: no such tree $kernel" >&2
   exit 2
 fi
-kernel=$(cd -- "$kernel" && pwd)
+kernel=$(CDPATH='' cd -- "$kernel" && pwd)
+# --build too: the builds run after the cd, and they delete and re-extract
+# directories under OUT, so OUT must never resolve inside the kernel tree.
+if [[ -n $out ]]; then
+  out=$(realpath -m -- "$out")
+  case $out/ in
+    "$kernel"/*) echo "kernel-pr-check: --build $out is inside the kernel tree; use a directory outside it" >&2; exit 2 ;;
+  esac
+  mkdir -p -- "$out" || { echo "kernel-pr-check: can't create $out" >&2; exit 2; }
+fi
 cd -- "$kernel" || exit 2
 [[ -x scripts/checkpatch.pl ]] || { echo "kernel-pr-check: $kernel is not a kernel tree" >&2; exit 2; }
 mb=$(git merge-base "$base" "$head") || { echo "kernel-pr-check: $base and $head share no history" >&2; exit 2; }

@@ -81,3 +81,12 @@ miss_out=$("$here/tools/kernel-pr-check" -C "$t/no-such-tree" omamobile HEAD 2>&
 [[ $miss_status == 2 ]] || { echo "$miss_out"; fail "missing tree: exit $miss_status, expected 2"; }
 grep -q 'no such tree' <<<"$miss_out" || { echo "$miss_out"; fail "missing tree: silent"; }
 echo "ok - a missing -C is reported"
+
+in_status=0
+in_out=$("$here/tools/kernel-pr-check" -C "$k" --build "$k/out" omamobile HEAD 2>&1) || in_status=$?
+[[ $in_status == 2 ]] || { echo "$in_out"; fail "--build inside the tree: exit $in_status, expected 2"; }
+grep -q 'inside the kernel tree' <<<"$in_out" || { echo "$in_out"; fail "--build inside the tree: silent"; }
+rel_build_status=0
+rel_build_out=$(cd "$k" && "$here/tools/kernel-pr-check" -C . --build out omamobile HEAD 2>&1) || rel_build_status=$?
+[[ $rel_build_status == 2 ]] || { echo "$rel_build_out"; fail "a relative --build inside the tree: exit $rel_build_status, expected 2"; }
+echo "ok - --build is refused inside the kernel tree, relative or not"
