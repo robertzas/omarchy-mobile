@@ -89,7 +89,7 @@ When a PR was reviewed before, read every earlier review and the
 contributor's replies (`gh pr view N --json reviews,comments`, and the
 inline comments through `gh api .../pulls/N/comments`), check each point
 was addressed or answered, and list them one by one. Re-run the gates on the
-new head. Check that our earlier requests agree with CONTRIBUTING: if
+new head. Check that our earlier requests agree with CONTRIBUTING (L-31): if
 we asked for something our own rules contradict, say so and drop it.
 
 ## Stacked pull requests and merge style

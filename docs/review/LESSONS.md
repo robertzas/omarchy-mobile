@@ -62,6 +62,22 @@ never change, so reviews can cite them.
   default. *Check:* new build scripts write under `out/<device>/` and
   `keys/<device>/`. *From:* #25.
 
+- **L-35. A changed `vbmeta` flags byte on slot A means slot A was
+  written.** The flags field starts at offset 120 of the vbmeta header;
+  byte 123 = 3 is what `fastboot --disable-verity --disable-verification`
+  writes, and it also breaks the signature. Treat it as a CONTRIBUTING §3.1
+  event: record it, correct any "no verification-state change" claim, and
+  have the OTA-twice equalisation restore flags 0 on both slots, then a
+  read-only check and a fresh backup. *From:* #24, round 2.
+- **L-36. Evidence that a `devinfo` layout matches comes from ABL's own
+  reads and writes.** The version (3.15) alone doesn't prove the slot bytes
+  mean the same on another SoC. *Check:* `fastboot getvar slot-successful`,
+  `slot-unbootable` and `slot-retry-count` for both slots next to
+  `omamobile-bootctl dump`'s bytes 0x30-0x37 for the same state, then again
+  across a change ABL makes itself (a retry spent on an unmarked boot). Ask
+  for those eight bytes and the version only, never a full dump. *From:* #24,
+  round 2.
+
 ## Shared code and the reference device
 
 - **L-8. "Nothing changes for cheetah" is checked by building it.** For any
@@ -91,6 +107,19 @@ never change, so reviews can cite them.
   unless another ran first must enforce that order (a per-boot marker).
   *From:* #22.
 
+- **L-32. Know what Omarchy already sets before claiming a userspace
+  default.** `omarchy-settings` ships `/etc/systemd/logind.conf.d` drop-ins
+  (`HandlePowerKey=ignore`), and Omarchy's Hyprland config binds the
+  `switch:` named "Lid Switch" to its clamshell logic. *Check:* `pacman -Ql
+  omarchy omarchy-settings | grep -E 'logind|lid'`, and on the phone
+  `busctl get-property org.freedesktop.login1 /org/freedesktop/login1
+  org.freedesktop.login1.Manager Handle…`. *From:* #29.
+- **L-37. A kernel change that needs a userspace companion merges after
+  it.** A new `SW_LID`, wakeup source, or any node whose default userspace
+  policy is harmful (logind suspending a folded phone) waits for the
+  omarchy-mobile change that handles it, so no build ever has one without
+  the other. *From:* kernel #12 with #29.
+
 ## Shell and scripts
 
 - **L-14. `$(ls … | tail)` at the top level under `set -euo pipefail`
@@ -107,6 +136,11 @@ never change, so reviews can cite them.
   into the initramfs and written to `/dev/fb0` needs a build-time check
   (`gzip -t`, exact size W×H×4) and a logged sha256, so the image can be
   reproduced. *From:* #21.
+
+- **L-33. A test that greps a systemd config's keys also greps its section
+  header.** Keys under a misspelt section (`[Logind]`) are ignored with only a
+  log warning, and a keys-only test still passes. *Check:* rename the
+  section and run the package's `test/all`. *From:* #29.
 
 ## Kernel (linux-omarchy-mobile)
 
@@ -162,6 +196,31 @@ never change, so reviews can cite them.
   (fixed 2026-10-22: positions are stripped). *Check:* reproduce any gate
   failure by hand before blaming the PR, and report a tool fault as a
   finding for the maintainer. *From:* kernel #11, round 2.
+
+- **L-38. "No checks reported" is not a pass.** A pull request pushed
+  before a CI workflow reached its base branch never ran it. *Check:*
+  compare the push time with the workflow commit; until CI runs, call its
+  checks (`dtbs_check`, the package suites) unchecked. *From:* kernel #10,
+  #12.
+
+## Reviews and merging
+
+- **L-31. Our review requests must agree with CONTRIBUTING.** Round one of
+  kernel #11 asked for a squash that §6.2's "disabled, then a separate
+  enabling commit" rule contradicted. Since 2026-10-22 §6.2 allows a board
+  node already proven on a same-SoC phone to be added enabled in one
+  commit; otherwise, when a request and a rule disagree, fix one of them.
+  *From:* kernel #11.
+- **L-34. Before a second round, check the head moved.** Compare the PR's
+  head with the `commit_id` of our last review and read the timeline:
+  comments and cross-references also change the "updated" time. Answers
+  given only in comments must still land in the files. *From:* #24,
+  round 2.
+- **L-39. A rebase or squash merge gives new commit ids, so a stacked PR
+  must be rebased before it merges.** After #11 was rebase-merged, #12 still
+  carried #11's old commit underneath and couldn't merge as it stood. *Check:*
+  when merging a PR another one is stacked on, ask the second one's author to
+  rebase onto the branch, and merge in order. *From:* kernel #11 and #12.
 
 ## Claims and evidence
 
