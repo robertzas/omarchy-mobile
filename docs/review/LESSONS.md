@@ -203,6 +203,23 @@ never change, so reviews can cite them.
   checks (`dtbs_check`, the package suites) unchecked. *From:* kernel #10,
   #12.
 
+- **L-40. Tools resolve their path arguments before they `cd`.** Our own
+  `kernel-pr-check` changed into `-C` and then passed the same relative path
+  on, so CI's `-C linux` looked for `linux/linux` and failed every kernel
+  PR; a relative `--build` would have built, and deleted, inside the kernel
+  checkout. *Check:* call a tool from another directory with relative
+  arguments, as CI does, and test that once. *From:* #30, kernel #12.
+- **L-41. A gate that wraps another tool must show why that tool failed.**
+  Filtering a sub-tool's output to its `not ok` lines hid a `cd` error, so
+  CI failed with no reason. *Check:* when a CI failure has no `not ok` line,
+  reproduce it the way the workflow runs it before blaming the PR (L-30).
+  *From:* #30, kernel #12.
+- **L-42. A package test that fails on a PR that doesn't touch the package
+  is reproduced on main first.** #24's red CI was a race in
+  `omamobile-shell`'s portal test (a log read then truncated, losing a line
+  written between), and a retry block that exited silently. *From:* #24,
+  round 3.
+
 ## Reviews and merging
 
 - **L-31. Our review requests must agree with CONTRIBUTING.** Round one of
@@ -222,6 +239,17 @@ never change, so reviews can cite them.
   when merging a PR another one is stacked on, ask the second one's author to
   rebase onto the branch, and merge in order. *From:* kernel #11 and #12.
 
+- **L-43. Parallel reviewers use unique ref names.** They share the kernel
+  clone, and one deleted another's `review/pr12` mid-review. *Check:* name
+  refs `review/prN-<round>` and pass commit ids to the gates. *From:* kernel
+  #12, round 3.
+- **L-44. A staged descriptor's refusal depends on the tooling PRs in
+  flight.** Tegu added `SOC_COMPATIBLE` while #27 was about to make either
+  key acceptable, so merging both would have made tegu installable without
+  the AVB footers its bootloader needs. *Check:* test a staged descriptor
+  against the heads of open PRs that touch `bin/omamobile` or
+  `tools/install-phone`. *From:* #24 with #27.
+
 ## Claims and evidence
 
 - **L-28. "Works" needs merged notes and the phone it ran on.** A matrix row
@@ -231,6 +259,17 @@ never change, so reviews can cite them.
 - **L-29. PR bodies written with an AI over-claim.** "checkpatch clean",
   "dtbs_check clean", "tested" were each untrue at least once this week.
   Re-run the claim; never quote it. *From:* kernel #10-#12, #27.
+
+- **L-45. A rebased companion's evidence still counts if the tested commit
+  and the new head don't differ.** *Check:* `git diff <tested> <head> --
+  <files the test exercised>`; empty means the test stands, otherwise ask
+  for a re-test. *From:* #29, round 2 (994dd90 against d773f62: identical).
+- **L-46. A phone's settings reflect that phone's image, not the one we
+  build.** A contributor's `busctl` value (`HandlePowerKey=suspend`) came from
+  a local drop-in, while our image's `omarchy-settings` sets `ignore`.
+  *Check:* compare reported values with what `rootfs/packages.base`
+  installs before accepting or correcting a note about a default (with
+  L-32). *From:* #29, round 2.
 
 ## Corrections (where a review was wrong)
 
