@@ -687,6 +687,56 @@ choices, timeout, Close, locked, no shell), `test/access-model.js`, and
 header; `test/all` runs it when `OMAMOBILE_ACCESS_RENDER` names an output
 directory).
 
+## omamobile.call
+
+Calls in the shell (TELEPHONY-APPS-PLAN §7.1), from omatel's agent
+(`omatel-agent`, `org.omamobile.Phone1`) when it runs; without it the plugin
+shows nothing. Modelled on Android's call screens in the Omarchy theme:
+
+* **A ringing call on a locked phone** fills the screen over the lock: the
+  state ("Incoming call"), the caller's initials pulsing in a ring, the name
+  large with the number under it, and at the bottom a handle that **answers
+  when swiped up and declines when swiped down**: a swipe, not a tap, so a
+  pocket can't answer. "Reply" declines with one of omatel's canned
+  messages (`quick_replies` in `~/.config/omatel/settings.toml`).
+* **A ringing call on an unlocked phone**, or a second call waiting during
+  one, is a heads-up card at the top with Decline and Answer; answering
+  opens the Phone app's in-call screen, and a tap on the caller opens its
+  answer page.
+* **A call in progress on a locked phone** shows the elapsed time, mute and
+  speaker toggles and a wide end button over the lock. The chevron folds it
+  to a strip at the top (time and end button), so the lock's own PIN pad is
+  reachable; a tap on the strip unfolds it. Unlocked, the call is the Phone
+  app's.
+
+Over the lock the plugin offers call actions only: it never opens an app
+there, never dials (only the Phone app dials, with its emergency checks),
+and the lock stays in place. Its windows are `omamobile-call` (full screen)
+and `omamobile-call-top` (the strip), on the overlay layer, with
+`above_lock = 2` in `hypr/phone.lua`.
+
+* **Data:** `omamobile-call-watch` prints the agent's whole state (calls,
+  mute, route, the replies) as a JSON line per change, lights the screen
+  when a call rings (`omarchy-shell lock wake`, as the power key), and owns
+  `org.omamobile.CallCard` while it runs, so the agent can tell the shell
+  shows ringing calls itself. The plugin asks `omarchy-shell lock isLocked`
+  once a second while a call exists.
+* **Requests:** `busctl --user call org.omamobile.Phone1 … Answer|Decline|
+  Hangup|SetMute|SetRoute` and `org.omamobile.Messages1 … Send` for a reply,
+  never a shell (`CallModel.js`).
+* **Ringing** is the agent's: feedbackd plays the sound theme's
+  `phone-incoming-call` and drives the vibration motor (omatel-agent
+  depends on both).
+
+IPC: `omarchy-shell shell call omamobile.call state ''` (modes and states,
+no numbers or names).
+
+Tests: `test/call-model.js` (modes, labels, requests, the swipe),
+`test/call-watch.py` (the watcher against a fake agent on a private bus),
+and `test/call-render`, offscreen shots of every state in a dark and a light
+theme in the OWL container (`test/all` runs it when `OMAMOBILE_CALL_RENDER`
+names an output directory).
+
 ## Testing in the desktop harness
 
 `phone/dev/run-desktop` copies the shell and runs it in a nested Hyprland, so

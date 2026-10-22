@@ -73,3 +73,8 @@ hl.layer_rule({ match = { namespace = "^omamobile-fingerprint$" }, above_lock = 
 hl.layer_rule({ match = { namespace = "^osk$" }, above_lock = 2 })
 -- ...and its hide button (omamobile.keyboard) with it.
 hl.layer_rule({ match = { namespace = "^omamobile-osk-hide$" }, above_lock = 2, no_anim = true })
+
+-- Calls (omamobile.call) above the lock too, taking touches (2): a ringing
+-- call is answered from the lock screen, and the in-call controls stay
+-- reachable while it's locked. The card offers call actions only.
+hl.layer_rule({ match = { namespace = "^omamobile-call(-top)?$" }, above_lock = 2 })

@@ -37,6 +37,9 @@
     },
     {
       "id": "omamobile.access"
+    },
+    {
+      "id": "omamobile.call"
     }
   ]
 }

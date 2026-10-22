@@ -1,0 +1,89 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Offscreen review shots of the call card (omamobile.call) in a dark and a
+# light Omarchy theme, with checks on the controls' size and place. Runs
+# inside the OWL conformance container (tests/owl/Dockerfile: Qt,
+# Quickshell, the fonts), never on a desktop:
+#
+#   docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src" \
+#     -v /usr/share/omarchy/themes:/themes:ro -v /usr/share/omarchy/shell:/omarchy-shell:ro \
+#     omamobile-owl-conformance:p1 bash /src/packages/omamobile-shell/test/call-render /src/logs/call-render
+#
+# test/all runs it when OMAMOBILE_CALL_RENDER names an output directory.
+set -euo pipefail
+out=${1:?Usage: call-render OUTDIR}
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+plugin=$here/../plugins/omamobile.call
+[[ -d /omarchy-shell && -d /themes ]] || { echo "call-render: needs /omarchy-shell and /themes (the container's mounts)" >&2; exit 2; }
+command -v quickshell >/dev/null || { echo "call-render: no quickshell" >&2; exit 2; }
+mkdir -p "$out" /tmp/xdg
+export XDG_RUNTIME_DIR=/tmp/xdg QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+
+h=/tmp/call-harness
+rm -rf "$h"; mkdir -p "$h"
+# Omarchy's Commons and Ui, with its palette qualified as on the phone
+# (Qt 6.12's QtQuick Color shadows a bare `Color.`; AGENTS.md, Userspace).
+for m in Commons Ui services; do cp -r "/omarchy-shell/$m" "$h/$m"; done
+find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
+  -e 's/(^|[^.[:alnum:]_])Color\./\1Commons.Color./g' \
+  -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
+for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
+cp -r "$plugin" "$h/call"
+cp "$here/call-render.qml" "$h/"
+
+status=0
+for theme in tokyo-night catppuccin-latte; do
+  home=/tmp/call-home-$theme
+  mkdir -p "$home/.local/state/omarchy/current"
+  ln -sfn "/themes/$theme" "$home/.local/state/omarchy/current/theme"
+  python3 - "$out" "$theme" > "$h/job-$theme.json" <<'PY'
+import json, sys
+out, theme = sys.argv[1:]
+now = 1760000000000
+ada = {"id": "/c/1", "number": "+15551234567", "name": "Ada Lovelace", "direction": "incoming", "state": "ringing-in", "startedMs": now - 4000, "answeredMs": 0}
+bare = dict(ada, name="", number="+447700900123")
+live = dict(ada, state="active", answeredMs=now - 754000)
+waiting = dict(ada, id="/c/2", name="Grace Hopper", state="waiting")
+replies = ["Can't talk now. Call you later?", "I'll call you back.", "I'm on my way.", "Can you text me instead?"]
+def shot(name, mode, call, **extra):
+    s = {"name": name, "png": "%s/call-%s-%s.png" % (out, name, theme), "mode": mode, "call": call}
+    s.update(extra)
+    return s
+print(json.dumps({"shots": [
+    shot("incoming", "incoming", ada, replies=replies),
+    shot("incoming-number", "incoming", bare, replies=replies),
+    shot("replies", "incoming", ada, replies=replies, showReplies=True),
+    shot("in-call", "in-call", live, muted=True, route="speaker"),
+    shot("heads-up", "heads-up", ada, under="app"),
+    shot("waiting", "heads-up", waiting, under="app"),
+    shot("mini", "mini", live),
+]}))
+PY
+  HOME=$home QT_SCALE_FACTOR=3 CALL_JOB="$h/job-$theme.json" timeout 120 quickshell -p "$h/call-render.qml" > "$h/log-$theme" 2>&1 || true
+  grep -E "shot |geometry |Error|TypeError|ReferenceError" "$h/log-$theme" | sed -E 's/^.*(shot |geometry |Error|TypeError|ReferenceError)/\1/' | tee -a "$out/call-render.txt"
+  python3 - "$h/log-$theme" "$theme" <<'PY' || status=1
+import json, re, sys
+log, theme = sys.argv[1:]
+text = open(log).read()
+bad = [l for l in text.splitlines() if re.search(r"(TypeError|ReferenceError|is not a type|Error:)", l)]
+geo = dict((n, json.loads(g)) for n, g in re.findall(r"geometry (\S+) (\{.*\})", text))
+def on_screen(r): return r["x"] >= 0 and r["y"] >= 0 and r["x"] + r["w"] <= 480 and r["y"] + r["h"] <= 1040
+expect = {
+    "incoming": ["answerHandle"], "incoming-number": ["answerHandle"], "replies": ["answerHandle"],
+    "in-call": ["muteToggle", "speakerToggle", "endButton", "foldButton"],
+    "heads-up": ["declineButton", "answerButton"], "waiting": ["declineButton", "answerButton"], "mini": ["endSmall"],
+}
+ok = len(geo) == len(expect) and not bad
+for name, controls in expect.items():
+    g = geo.get(name, {})
+    good = all(c in g and on_screen(g[c]) and min(g[c]["w"], g[c]["h"]) >= 48 for c in controls)
+    if name == "heads-up" and good:
+        good = g["declineButton"]["x"] < g["answerButton"]["x"]
+    print("%s - %s %s: %s on screen, at least 48 px" % ("ok" if good else "not ok", theme, name, ", ".join(controls)))
+    ok = ok and good
+for l in bad:
+    print("  " + l)
+sys.exit(0 if ok else 1)
+PY
+done
+exit $status

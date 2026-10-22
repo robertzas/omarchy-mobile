@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Follow omatel's agent for the shell's call card (omamobile.call).
+
+The agent (`omatel-agent`, org.omamobile.Phone1 on the session bus) owns
+the calls; this prints its whole state as one JSON line whenever anything
+changes, which the plugin reads:
+
+    {"agent": true, "calls": [{"id": ..., "number": ..., "name": ...,
+     "direction": ..., "state": ..., "startedMs": ..., "answeredMs": ...}],
+     "muted": false, "route": "earpiece", "audioRouting": false,
+     "replies": ["I'll call you back.", ...]}
+
+When a call starts ringing it also lights the screen, as the power key does
+(`omarchy-shell lock wake`, or `omarchy-brightness-display on` when the
+phone isn't locked), unless --no-wake.
+
+While it runs it owns org.omamobile.CallCard, so the agent knows the shell
+shows ringing calls itself and needn't open the Phone app's answer page.
+
+Numbers and names travel to the plugin on stdout only; nothing is logged.
+It exits when stdout closes.
+"""
+
+import json
+import os
+import subprocess
+import sys
+
+PHONE = "org.omamobile.Phone1"
+PHONE_PATH = "/org/omamobile/Phone1"
+PROPS = "org.freedesktop.DBus.Properties"
+CARD_NAME = "org.omamobile.CallCard"
+
+# omatel's defaults (crates/omatel-api/src/settings.rs), used until the
+# user has a settings file of their own.
+DEFAULT_REPLIES = [
+    "Can't talk now. Call you later?",
+    "I'll call you back.",
+    "I'm on my way.",
+    "Can you text me instead?",
+]
+
+
+def settings_path():
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, "omatel", "settings.toml")
+
+
+def quick_replies(path=None):
+    """The user's canned replies from omatel's settings, or the defaults."""
+    try:
+        import tomllib
+        with open(path or settings_path(), "rb") as f:
+            value = tomllib.load(f).get("quick_replies")
+    except (OSError, ValueError, ImportError):
+        return list(DEFAULT_REPLIES)
+    if not isinstance(value, list):
+        return list(DEFAULT_REPLIES)
+    return [r for r in value if isinstance(r, str) and r.strip()][:6]
+
+
+def call_dict(c):
+    """One (sssssxx) CallInfo from the agent as the plugin reads it."""
+    id_, number, name, direction, state, started, answered = c
+    return {"id": str(id_), "number": str(number), "name": str(name),
+            "direction": str(direction), "state": str(state),
+            "startedMs": int(started), "answeredMs": int(answered)}
+
+
+def state_line(agent, calls, props, replies):
+    return json.dumps({
+        "agent": bool(agent),
+        "calls": [call_dict(c) for c in calls] if agent else [],
+        "muted": bool(props.get("Muted", False)),
+        "route": str(props.get("Route", "earpiece") or "earpiece"),
+        "audioRouting": bool(props.get("AudioRouting", False)),
+        "replies": replies,
+    }, separators=(",", ":"))
+
+
+def wake():
+    """Light the display like the power key (omamobile-keys' wake_locked)."""
+    try:
+        out = subprocess.run(["omarchy-shell", "lock", "wake"], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    if out != "ok":
+        try:
+            subprocess.run(["omarchy-brightness-display", "on"], capture_output=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
+def main(argv):
+    import dbus
+    import dbus.mainloop.glib
+    import dbus.service
+    from gi.repository import GLib
+
+    do_wake = "--no-wake" not in argv
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    bus = dbus.SessionBus()
+    loop = GLib.MainLoop()
+    # Held for the life of the process; the agent watches for its owner.
+    # Another card holding it already (a second shell) still gets reports.
+    try:
+        card_name = dbus.service.BusName(CARD_NAME, bus, do_not_queue=True)  # noqa: F841
+    except dbus.DBusException:
+        card_name = None  # noqa: F841
+    last = [None]
+
+    def emit():
+        agent = bus.name_has_owner(PHONE)
+        calls, props = [], {}
+        if agent:
+            try:
+                obj = bus.get_object(PHONE, PHONE_PATH, introspect=False)
+                calls = obj.ListCalls(dbus_interface=PHONE, timeout=5)
+                props = obj.GetAll(PHONE, dbus_interface=PROPS, timeout=5)
+            except dbus.DBusException:
+                agent, calls, props = False, [], {}
+        line = state_line(agent, calls, props, quick_replies())
+        if line == last[0]:
+            return
+        last[0] = line
+        try:
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+        except (BrokenPipeError, OSError):
+            loop.quit()
+
+    def incoming(*_args):
+        if do_wake:
+            wake()
+        emit()
+
+    bus.add_signal_receiver(incoming, signal_name="IncomingCall", dbus_interface=PHONE, path=PHONE_PATH)
+    bus.add_signal_receiver(lambda *_a: emit(), signal_name="CallStateChanged", dbus_interface=PHONE, path=PHONE_PATH)
+    bus.add_signal_receiver(lambda *_a: emit(), signal_name="PropertiesChanged", dbus_interface=PROPS, path=PHONE_PATH)
+    bus.add_signal_receiver(lambda name, old, new: emit(), signal_name="NameOwnerChanged",
+                            dbus_interface="org.freedesktop.DBus", arg0=PHONE)
+    # A call's elapsed time is the plugin's job; this only re-reads the
+    # agent now and then in case a signal was missed.
+    GLib.timeout_add_seconds(30, lambda: (emit(), True)[1])
+    emit()
+    loop.run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

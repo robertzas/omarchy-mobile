@@ -257,6 +257,11 @@ fi
 if omarchy-done ensure omamobile-access-plugin; then
   add_plugin omamobile.access
 fi
+# Calls (omamobile.call): incoming calls over the lock, a heads-up card when
+# unlocked and the in-call controls, from omatel's agent when it runs.
+if omarchy-done ensure omamobile-call-plugin; then
+  add_plugin omamobile.call
+fi
 if omarchy-done ensure omamobile-menu-update; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
   mkdir -p "$(dirname "$extension")"

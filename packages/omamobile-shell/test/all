@@ -257,6 +257,29 @@ fi
 if command -v node >/dev/null; then
   node test/access-model.js >/dev/null || fail "permission sheet model"
 fi
+# Calls: the model, the watcher against a fake agent on a private bus, the
+# wiring, and (in the OWL container) offscreen shots.
+if command -v node >/dev/null; then
+  node test/call-model.js >/dev/null || { node test/call-model.js; fail "call card model"; }
+fi
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-call-watch || fail "omamobile-call-watch parses"
+if command -v dbus-run-session >/dev/null; then
+  if ! out=$(dbus-run-session -- python3 -B test/call-watch.py 2>&1); then
+    grep -v '^ok' <<<"$out" || true
+    fail "omamobile-call-watch"
+  fi
+fi
+python3 -c 'import json; assert {"id": "omamobile.call"} in json.load(open("profile/shell.json"))["plugins"]' \
+  || fail "the profile turns calls on"
+grep -c 'add_plugin omamobile.call' bin/omamobile-setup-user >/dev/null || fail "existing users get calls"
+grep -c 'namespace = "\^omamobile-call(-top)?\$" }, above_lock = 2' hypr/phone.lua >/dev/null || fail "the call card works over the lock"
+if grep -nE 'Dial|execDetached\(\["(sh|bash)' plugins/omamobile.call/*.qml plugins/omamobile.call/*.js | grep -v '^.*://' | grep -c . >/dev/null; then
+  fail "the call card never dials or runs a shell"
+fi
+if [[ -n ${OMAMOBILE_CALL_RENDER:-} ]]; then
+  bash test/call-render "$OMAMOBILE_CALL_RENDER" >/dev/null || fail "call card render"
+fi
+pass "calls: model, watcher, wiring"
 python3 -c 'import json; assert {"id": "omamobile.access"} in json.load(open("profile/shell.json"))["plugins"]' \
   || fail "the phone profile enables the permission sheet"
 grep -c 'add_plugin omamobile.access' bin/omamobile-setup-user >/dev/null || fail "existing users get the permission sheet"
