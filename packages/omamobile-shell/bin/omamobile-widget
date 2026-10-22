@@ -337,6 +337,10 @@ def run_qmllint(files):
     tool = qmllint_path()
     if not tool:
         return {"ran": False, "tool": "", "errors": [], "warnings": ["qmllint is not installed (qt6-declarative); not linted"]}
+    # Without Omarchy's shell every `qs.` import fails, which says nothing
+    # about the widget (a build host, CI).
+    if not os.path.isdir(os.path.join(OMARCHY_PATH, "shell")):
+        return {"ran": False, "tool": tool, "errors": [], "warnings": ["Omarchy's shell is not installed; not linted"]}
     with tempfile.TemporaryDirectory(prefix="omamobile-widget-lint-") as imports:
         # Quickshell's `qs.` imports are the shell's own folder.
         os.symlink(os.path.join(OMARCHY_PATH, "shell"), os.path.join(imports, "qs"))
