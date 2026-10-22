@@ -38,6 +38,14 @@ while (($#)); do
 done
 base=${1:?Usage: kernel-pr-check [-C KERNEL] [--build OUT] BASE [HEAD]}
 head=${2:-HEAD}
+# -C may be relative to the caller's directory. This script changes into
+# the tree and then runs pr-check with the same path, so resolve it first.
+# Otherwise `kernel-pr-check -C linux` looks for linux/linux.
+if [[ ! -d $kernel ]]; then
+  echo "kernel-pr-check: no such tree $kernel" >&2
+  exit 2
+fi
+kernel=$(cd -- "$kernel" && pwd)
 cd -- "$kernel" || exit 2
 [[ -x scripts/checkpatch.pl ]] || { echo "kernel-pr-check: $kernel is not a kernel tree" >&2; exit 2; }
 mb=$(git merge-base "$base" "$head") || { echo "kernel-pr-check: $base and $head share no history" >&2; exit 2; }
@@ -91,8 +99,14 @@ ${cp_errors%$'\n'}"
 
 # ---------------------------------------------------------------- policy
 policy=$("$repo/tools/pr-check" -C "$kernel" "$base" "$head" 2>&1); status=$?
-grep -E '^not ok' <<<"$policy" || true
-((status == 0)) && pass "policy (tools/pr-check): identifiers, blobs" || fails=$((fails + 1))
+if ((status == 0)); then
+  pass "policy (tools/pr-check): identifiers, blobs"
+else
+  # pr-check's own "not ok" lines, and anything else it printed. A cd
+  # failure does not start with "not ok", and dropping it hides the cause.
+  printf '%s\n' "$policy"
+  fails=$((fails + 1))
+fi
 
 # ---------------------------------------------------------------- builds
 if [[ -n $out ]]; then
