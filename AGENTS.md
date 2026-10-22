@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # AGENTS.md: working on Omarchy Mobile as an AI coding agent
 
-Omarchy Mobile runs native Omarchy (Arch Linux ARM, Hyprland, Omarchy's packages) on Google Pixel phones with a mainline kernel and no Android. The reference device is the Pixel 7 Pro (`cheetah`, gs201). Read [CONTRIBUTING.md](CONTRIBUTING.md) for the project, the safety model and the bring-up order. This file holds the rules and gotchas for agents, each with the reason behind it.
+Omarchy Mobile runs native Omarchy (Arch Linux ARM, Hyprland, Omarchy's packages) on mobile devices with a mainline kernel and no Android. The reference device is the Pixel 7 Pro (`cheetah`, gs201). Read [CONTRIBUTING.md](CONTRIBUTING.md) for the project, the safety model and the bring-up order. This file holds the rules and gotchas for agents, each with the reason behind it.
 
 **The repositories are public.** Anything you commit, push, or write into a plan, a log excerpt or a screenshot is published.
 

@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Contributing to Omarchy Mobile
 
-Omarchy Mobile runs native Omarchy on Google Pixel phones: Arch Linux ARM, Hyprland and Omarchy's own packages on a mainline Linux kernel, with no Android underneath. It works today on the Pixel 7 Pro (`cheetah`, Google Tensor G2 / `gs201`). We want help with two things: bringing up more Pixels, and getting our device-tree and driver work merged upstream.
+Omarchy Mobile runs native Omarchy on mobile devices: Arch Linux ARM, Hyprland and Omarchy's own packages on a mainline Linux kernel, with no Android underneath. It works today on the Pixel 7 Pro (`cheetah`, Google Tensor G2 / `gs201`). We want help with two things: bringing up more devices (other Pixels first, since they share the most with it), and getting our device-tree and driver work merged upstream.
 
 - **Supported devices and their status:** [docs/DEVICES.md](docs/DEVICES.md)
 - **What's missing and the order we plan to tackle it:** [docs/ROADMAP.md](docs/ROADMAP.md)

@@ -16,10 +16,9 @@ finishing shaders ported to the CPU reproduce the ISP's own frame to 0.05
 levels. Q5.2 passed on the laptop: merging raw frames before the finish is
 cleaner than merging finished ones (Q2's order), and an underexposed burst
 brightened after a raw merge keeps the shadows Q2's order crushes. Q5.3
-passed on the phone (omacam branch `raw-merge`): Night and HDR bursts now
+passed on the phone and shipped in omacam 0.3.3: Night and HDR bursts
 merge the raw frames, Night in 4.6 s (5.4 s for Q2's merge), with HDR's
-colors kept and its shadows open. Next is releasing it, then Q5.4 (the
-finish on the GPU). Q3 and Q4 have not started.
+colors kept and its shadows open. Next is Q5.4 (the finish on the GPU). Q3 and Q4 have not started.
 
 The cameras work end to end ([CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md),
 [CAMERA-APP-PLAN](CAMERA-APP-PLAN.md)), and the pictures are decent but far
