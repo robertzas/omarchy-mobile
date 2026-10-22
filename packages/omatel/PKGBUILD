@@ -16,16 +16,18 @@
 # cross-compiles instead (omatel's bin/cross).
 pkgname=omatel-agent
 pkgver=0.2.1
-pkgrel=1
+pkgrel=2
 pkgdesc="Phone and Messages background service: rings, call log, SMS storage, notifications"
 arch=(aarch64)
 url="https://github.com/derekross/omatel"
 license=('GPL-3.0-or-later' 'MIT')
-depends=(gcc-libs glibc sqlite dbus systemd)
+# feedbackd rings and vibrates (the sound theme's phone-incoming-call, the
+# vibration motor through the device package's udev rule): calls ring by
+# default since 0.2.1-2, with the shell's call card (omamobile-shell 0.2.12).
+depends=(gcc-libs glibc sqlite dbus systemd feedbackd sound-theme-freedesktop)
 optdepends=('omaphone: the Phone app'
             'omamessages: the Messages app'
             'omamobile-mmd: the modem (ModemManager API) on Omarchy Mobile phones'
-            'feedbackd: ring and vibrate for incoming calls'
             'callaudiod: call audio routing (speaker, mute), with call audio (T4)')
 makedepends=(cargo pkgconf sqlite)
 checkdepends=(dbus)
