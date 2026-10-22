@@ -15,15 +15,16 @@
 # prepare() and builds offline. A developer iterating on omatel
 # cross-compiles instead (omatel's bin/cross).
 pkgname=omatel-agent
-pkgver=0.2.1
-pkgrel=2
+pkgver=0.2.2
+pkgrel=1
 pkgdesc="Phone and Messages background service: rings, call log, SMS storage, notifications"
 arch=(aarch64)
 url="https://github.com/derekross/omatel"
 license=('GPL-3.0-or-later' 'MIT')
 # feedbackd rings and vibrates (the sound theme's phone-incoming-call, the
 # vibration motor through the device package's udev rule): calls ring by
-# default since 0.2.1-2, with the shell's call card (omamobile-shell 0.2.12).
+# default since 0.2.1-2. From 0.2.2 the agent leaves ringing calls to the
+# shell's call card when it runs (omamobile-shell 0.2.12).
 depends=(gcc-libs glibc sqlite dbus systemd feedbackd sound-theme-freedesktop)
 optdepends=('omaphone: the Phone app'
             'omamessages: the Messages app'
@@ -34,7 +35,7 @@ checkdepends=(dbus)
 install=omatel-agent.install
 options=('!debug' '!lto')
 source=("omatel-$pkgver.tar.gz::https://github.com/derekross/omatel/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('e4ed0e8c7f44660b44b6536ab8e55ca8ee3cfffde9a7294ecd55ad10930c78e1')
+sha256sums=('ec5b48cbf87c30d4a5de4055406fc9efd20227716ad1a272945d1bed91c2b07d')
 
 prepare() {
   cd "omatel-$pkgver"
