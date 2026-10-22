@@ -5,8 +5,8 @@ const assert = require("assert")
 const path = require("path")
 const M = require(path.join(__dirname, "../plugins/omamobile.call/CallModel.js"))
 
-const ring = { id: "/c/1", number: "+15551234567", name: "Ada Lovelace", direction: "incoming", state: "ringing-in", startedMs: 1000, answeredMs: 0 }
-const active = { id: "/c/2", number: "5559876543", name: "", direction: "outgoing", state: "active", startedMs: 500, answeredMs: 2000 }
+const ring = { id: "/c/1", number: "+12025550123", name: "Ada Lovelace", direction: "incoming", state: "ringing-in", startedMs: 1000, answeredMs: 0 }
+const active = { id: "/c/2", number: "2025550147", name: "", direction: "outgoing", state: "active", startedMs: 500, answeredMs: 2000 }
 const line = (calls, extra) => JSON.stringify(Object.assign({ agent: true, calls: calls, muted: false, route: "earpiece", replies: ["I'll call you back."] }, extra || {}))
 
 // Parsing
@@ -34,8 +34,8 @@ console.log("ok - call model: incoming over the lock, heads-up when unlocked or 
 
 // Labels
 assert.strictEqual(M.title(ring), "Ada Lovelace")
-assert.strictEqual(M.subtitle(ring), "+1 555-123-4567")
-assert.strictEqual(M.title(active), "555-987-6543")
+assert.strictEqual(M.subtitle(ring), "+1 202-555-0123")
+assert.strictEqual(M.title(active), "202-555-0147")
 assert.strictEqual(M.subtitle(active), "")
 assert.strictEqual(M.title({ id: "x", number: "", name: "" }), "Unknown caller")
 assert.strictEqual(M.formatNumber("+447700900123"), "+447700900123", "other numbers as given")
@@ -57,7 +57,7 @@ assert.deepStrictEqual(M.hangupArgv().slice(-2), ["s", ""], "an empty id ends ev
 assert.deepStrictEqual(M.muteArgv(true).slice(-2), ["b", "true"])
 assert.deepStrictEqual(M.routeArgv("speaker").slice(-1), ["speaker"])
 assert.deepStrictEqual(M.routeArgv("bluetooth").slice(-1), ["earpiece"], "the card toggles earpiece and speaker only")
-assert.deepStrictEqual(M.replyArgv("+15551234567", "On my way").slice(3, 10), ["org.omamobile.Messages1", "/org/omamobile/Messages1", "org.omamobile.Messages1", "Send", "ss", "+15551234567", "On my way"])
+assert.deepStrictEqual(M.replyArgv("+12025550123", "On my way").slice(3, 10), ["org.omamobile.Messages1", "/org/omamobile/Messages1", "org.omamobile.Messages1", "Send", "ss", "+12025550123", "On my way"])
 assert.deepStrictEqual(M.openPhoneArgv(ring), ["omaphone", "--incoming", "/c/1"])
 assert.deepStrictEqual(M.openPhoneArgv(active), ["omaphone", "--in-call"])
 assert.ok(M.answerArgv("x; rm -rf ~").every((a) => typeof a === "string"), "arguments stay argv entries")

@@ -45,10 +45,10 @@ with tempfile.TemporaryDirectory() as d:
         f.write("quick_replies = 3\n")
     check("a malformed setting: the defaults", cw.quick_replies(p) == cw.DEFAULT_REPLIES)
 
-line = json.loads(cw.state_line(True, [("/c/1", "+15551234567", "Ada", "incoming", "ringing-in", 10, 0)],
+line = json.loads(cw.state_line(True, [("/c/1", "+12025550123", "Ada", "incoming", "ringing-in", 10, 0)],
                                 {"Muted": True, "Route": "speaker"}, ["x"]))
 check("a state line carries the calls, mute, route and replies",
-      line["calls"][0]["number"] == "+15551234567" and line["muted"] and line["route"] == "speaker" and line["replies"] == ["x"], line)
+      line["calls"][0]["number"] == "+12025550123" and line["muted"] and line["route"] == "speaker" and line["replies"] == ["x"], line)
 check("no agent, no calls", json.loads(cw.state_line(False, [("a", "", "", "", "", 0, 0)], {}, []))["calls"] == [])
 
 # ---------------------------------------------------------------- on a bus
@@ -86,15 +86,15 @@ class Phone(dbus.service.Object):
     @dbus.service.method("org.test.Control", in_signature="s")
     def Do(self, what):
         if what == "ring":
-            c = ("/c/1", "+15551234567", "Ada Lovelace", "incoming", "ringing-in", 1000, 0)
+            c = ("/c/1", "+12025550123", "Ada Lovelace", "incoming", "ringing-in", 1000, 0)
             self.calls = [c]; self.IncomingCall(c[0], c[1], c[2]); self.CallStateChanged(c)
         elif what == "answer":
-            c = ("/c/1", "+15551234567", "Ada Lovelace", "incoming", "active", 1000, 2000)
+            c = ("/c/1", "+12025550123", "Ada Lovelace", "incoming", "active", 1000, 2000)
             self.calls = [c]; self.CallStateChanged(c)
         elif what == "mute":
             self.muted = True; self.PropertiesChanged(IFACE, {"Muted": dbus.Boolean(True)}, [])
         elif what == "end":
-            c = ("/c/1", "+15551234567", "Ada Lovelace", "incoming", "terminated", 1000, 2000)
+            c = ("/c/1", "+12025550123", "Ada Lovelace", "incoming", "terminated", 1000, 2000)
             self.calls = []; self.CallStateChanged(c)
 bus = dbus.SessionBus()
 name = dbus.service.BusName(IFACE, bus)
