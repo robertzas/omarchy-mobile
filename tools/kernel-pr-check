@@ -142,7 +142,10 @@ $(tail -8 <<<"$log" | sed 's/^/    /')"
           cp "$out/build/.config" "$out/build-base/.config" 2>/dev/null || { mkdir -p "$out/build-base"; cp "$out/build/.config" "$out/build-base/.config"; }
           "${kb[@]}" olddefconfig >/dev/null 2>&1
           blog=$("${kb[@]}" W=1 $check $targets 2>&1 || true)
-          norm() { grep -E 'warning|Warning|error' | sed -E -e 's,^[^ ]*/arch/arm64/boot/dts/,,' -e 's,/[^ ]*/(src|src-base)/,,g' | sort -u; }
+          # Positions go too: a pull request that adds lines above an
+          # existing warning moves it without making it new.
+          norm() { grep -E 'warning|Warning|error' | sed -E -e 's,^[^ ]*/arch/arm64/boot/dts/,,' -e 's,/[^ ]*/(src|src-base)/,,g' \
+            -e 's/:[0-9]+(\.[0-9]+)?(-[0-9]+(\.[0-9]+)?)?:/:/' | sort -u; }
           new=$(comm -13 <(norm <<<"$blog") <(norm <<<"$log"))
           what="W=1${check:+ and dtbs_check}"
           [[ -z $check ]] && echo "# no dt-validate (pip install dtschema): dtbs_check skipped"

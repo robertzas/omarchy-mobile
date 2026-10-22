@@ -154,6 +154,15 @@ never change, so reviews can cite them.
   stock's node (USI6 on gs201: GIC SPI 679, `0x1014`). *From:* kernel #10
   (correct).
 
+## The gates themselves
+
+- **L-30. A gate failure can be the tool's own.** `tools/kernel-pr-check`
+  compared device-tree warnings with their line numbers, so a PR that added
+  two comment lines above an existing warning failed as if it were new
+  (fixed 2026-10-22: positions are stripped). *Check:* reproduce any gate
+  failure by hand before blaming the PR, and report a tool fault as a
+  finding for the maintainer. *From:* kernel #11, round 2.
+
 ## Claims and evidence
 
 - **L-28. "Works" needs merged notes and the phone it ran on.** A matrix row

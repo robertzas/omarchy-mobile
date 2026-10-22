@@ -55,13 +55,50 @@ never fooled by a confident PR description.
   suites the PR touches.
 - **linux-omarchy-mobile:** `tools/kernel-pr-check -C ~/android/mainline/linux
   <base> <head>` for sign-offs, prefixes, checkpatch and identifiers. For
-  builds, run it with `--build OUT` inside the project container with the
-  Android clang on PATH (see the tool's header and AGENTS.md), so touched C
+  builds, run it with `--build OUT` in the project container, so touched C
   files, device trees and bindings build with W=1 and new device-tree
-  warnings show against the base.
+  warnings show against the base:
+
+  ```sh
+  cd /home/raven/Projects/omarchy-mobile
+  git -C ~/android/mainline/linux fetch github pull/N/head:review/prN
+  clang=$(ls -d ~/android/omamobile/prebuilts/clang/host/linux-x86/clang-r* | sort | tail -1)
+  out=~/android/mainline/out-review-<topic>; mkdir -p "$out"
+  docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/repo:ro" \
+    -v "$HOME/android/mainline/linux:/linux:ro" -v "$clang:/clang:ro" -v "$out:/out" \
+    omamobile-build:24.04 bash -c 'export PATH=/clang/bin:$PATH
+      git config --global --add safe.directory "*"
+      /repo/tools/kernel-pr-check -C /linux --build /out github/omamobile review/prN'
+  ```
+
+  The container has no dtschema, so `dtbs_check` and `dt_binding_check`
+  are skipped locally; the kernel repository's CI runs them (read
+  `gh pr checks N -R derekross/linux-omarchy-mobile`). If CI hasn't run and
+  bindings changed, say they're unchecked.
+- **A failed gate can be the tool's fault.** Before reporting a gate failure
+  as the PR's, reproduce it by hand (build the base's DTB too, rerun the
+  command). If the tool is wrong, say so plainly as a finding for the
+  maintainer, and don't hold the PR to it (L-30).
 - **The PR template:** is the smoke report (`tools/phone-smoke`) there for a
   change that runs on a phone, with the phone named, `uname -r`, the runbook
   steps and what wasn't tested? Missing evidence is a finding.
+
+## Second and later rounds
+
+When a PR was reviewed before, read every earlier review and the
+contributor's replies (`gh pr view N --json reviews,comments`, and the
+inline comments through `gh api .../pulls/N/comments`), check each point
+was addressed or answered, and list them one by one. Re-run the gates on the
+new head. Check that our earlier requests agree with CONTRIBUTING: if
+we asked for something our own rules contradict, say so and drop it.
+
+## Stacked pull requests and merge style
+
+A PR built on another PR (its base commit is the other PR's head) merges
+after it, and its review says so. Kernel PRs are merged with rebase, so each
+commit's own subject lands; omarchy-mobile PRs are squash-merged, so the
+PR title becomes the subject and must have the area prefix. Note a title
+that would land wrong.
 
 ## What to check, by area
 
