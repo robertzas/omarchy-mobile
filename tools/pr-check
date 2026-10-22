@@ -1,0 +1,98 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The policy checks a pull request must pass (AGENTS.md section 1, and
+# CONTRIBUTING.md section 6), on the commits between BASE and HEAD:
+#
+#   - no identifiers in added lines: MAC and Bluetooth addresses (locally
+#     administered ones, like 02:..., are allowed: they're made up), a
+#     `getprop` dump, a serial number assignment, an IMEI;
+#   - no vendor blobs: firmware, partition images, archives, compiled
+#     modules and libraries, APKs;
+#   - no Signed-off-by from an AI agent (the human signs off; a
+#     Co-Authored-By or Assisted-by trailer is fine);
+#   - every shell script the commits touch still parses.
+#
+#   tools/pr-check [BASE]        (default: origin/main)
+#
+# CI runs it on every pull request (.github/workflows/checks.yml). Run it
+# before you push; it reads git only and changes nothing.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+base=${1:-origin/main}
+git rev-parse --verify -q "$base^{commit}" >/dev/null || { echo "pr-check: no such base $base (git fetch first?)" >&2; exit 2; }
+range="$(git merge-base "$base" HEAD)..HEAD"
+fails=0
+fail() { echo "not ok - $*"; fails=$((fails + 1)); }
+pass() { echo "ok - $*"; }
+
+commits=$(git rev-list --no-merges "$range")
+if [[ -z $commits ]]; then
+  pass "no commits to check against $base"
+  exit 0
+fi
+
+# ---------------------------------------------------------------- identifiers
+# Added lines only, with the file each came from; this file's own patterns
+# are skipped.
+added=$(git diff --unified=0 --no-color "$range" -- . ':(exclude)tools/pr-check' ':(exclude)tests/pr-check' \
+  | awk '/^\+\+\+ /{f=substr($0, 7); next} /^\+/{print f ": " substr($0, 2)}')
+
+# A MAC whose first octet has the locally administered bit set (x2, x6,
+# xA, xE) is made up; so are all zeros and all ones.
+macs=$(grep -iE '(^|[^0-9a-f:])[0-9a-f]{2}(:[0-9a-f]{2}){5}([^0-9a-f:]|$)' <<<"$added" \
+  | grep -viE '(^|[^0-9a-f:])[0-9a-f][26ae](:[0-9a-f]{2}){5}([^0-9a-f:]|$)' \
+  | grep -viE '00(:00){5}|ff(:ff){5}' || true)
+[[ -z $macs ]] && pass "no MAC or Bluetooth addresses" || fail "MAC or Bluetooth addresses (use a placeholder such as <MAC>):
+$(sed 's/^/    /' <<<"$macs" | head -10)"
+
+dumps=$(grep -E '\[(ro|persist|vendor|sys)\.[a-z0-9_.]+\]: \[' <<<"$added" || true)
+[[ -z $dumps ]] && pass "no getprop dumps" || fail "getprop output (quote single facts, never a dump):
+$(sed 's/^/    /' <<<"$dumps" | head -5)"
+
+serials=$(grep -iE '(serialno|ro\.serialno|androidboot\.serialno|serial[ _-]?(number)?)[[:space:]]*[:=][[:space:]]*["'\'']?[0-9A-Z]{8,}' <<<"$added" \
+  | grep -viE '<serial>|SERIAL_PLACEHOLDER|FAKE[0-9A-Z]*|\$\{?[a-z_]+' || true)
+[[ -z $serials ]] && pass "no serial numbers" || fail "serial numbers (use <SERIAL>):
+$(sed 's/^/    /' <<<"$serials" | head -5)"
+
+imeis=$(grep -iE 'imei[^0-9]{0,12}[0-9]{15}([^0-9]|$)' <<<"$added" || true)
+[[ -z $imeis ]] && pass "no IMEIs" || fail "IMEIs:
+$(sed 's/^/    /' <<<"$imeis" | head -5)"
+
+# ---------------------------------------------------------------- blobs
+blob_ext='\.(bin|img|fw|mbn|hcd|elf|ko|so|so\.[0-9.]+|apk|zip|tar|tgz|tar\.[a-z0-9]+|zst|xz|lz4|gz|7z|ftb|wmfw|bmp|tlv)$'
+blobs=$(git diff --numstat --no-renames "$range" | awk -F'\t' '$1 == "-" || $2 == "-" {print $3}' | grep -vE '\.(png|jpe?g|svg|webp|ico|woff2?|ttf|otf)$' || true)
+named=$(git diff --name-only --diff-filter=A "$range" | grep -iE "$blob_ext" || true)
+all_blobs=$(printf '%s\n%s\n' "$blobs" "$named" | sed '/^$/d' | sort -u)
+[[ -z $all_blobs ]] && pass "no vendor blobs or binaries" || fail "binaries or vendor files (our scripts extract firmware from the user's own factory image; nothing is committed):
+$(sed 's/^/    /' <<<"$all_blobs" | head -10)"
+
+# ---------------------------------------------------------------- trailers
+ai='claude|anthropic|openai|chatgpt|codex|copilot|gemini|cursor|llm|noreply@github\.com.*bot|\[bot\]'
+bad_sob=""
+for c in $commits; do
+  while IFS= read -r line; do
+    [[ -n $line ]] && bad_sob+="$(git log -1 --format=%h "$c") $line"$'\n'
+  done < <(git log -1 --format=%B "$c" | grep -iE "^Signed-off-by:.*($ai)" || true)
+done
+[[ -z $bad_sob ]] && pass "no Signed-off-by from an AI agent" || fail "Signed-off-by from an AI agent (the human signs off; keep the agent in Co-Authored-By or Assisted-by):
+$(sed 's/^/    /' <<<"${bad_sob%$'\n'}")"
+
+# ---------------------------------------------------------------- scripts
+broken=""
+while IFS= read -r f; do
+  [[ -f $f ]] || continue
+  first=$(head -c 64 "$f" | head -1)
+  case $first in
+    '#!/bin/bash'*|'#!/usr/bin/env bash'*) bash -n "$f" 2>/dev/null || broken+="$f"$'\n' ;;
+    '#!/bin/sh'*|'#!/bin/busybox sh'*) sh -n "$f" 2>/dev/null || broken+="$f"$'\n' ;;
+    '#!/usr/bin/env python3'*|'#!/usr/bin/python3'*)
+      python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$f" 2>/dev/null || broken+="$f"$'\n' ;;
+  esac
+done < <(git diff --name-only --diff-filter=AM "$range")
+[[ -z $broken ]] && pass "touched scripts parse" || fail "scripts that don't parse:
+$(sed 's/^/    /' <<<"${broken%$'\n'}")"
+
+if ((fails)); then
+  echo "pr-check: $fails check(s) failed" >&2
+  exit 1
+fi

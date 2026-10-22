@@ -1,0 +1,246 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The smoke test a contributor runs on their own phone before a pull request
+# (CONTRIBUTING.md section 6, the pull request template): a read-only pass
+# over what a running phone should have, with a report to paste into the
+# pull request.
+#
+#   tools/phone-smoke              from the laptop, over tools/phone-ssh
+#   tools/phone-smoke --here       on the phone itself, as root
+#   tools/phone-smoke --json       the same report as JSON
+#
+# Read-only, and safe on a phone in use: it reads sysfs, procfs, systemd,
+# pacman and D-Bus properties only. No register reads, no writes, no sound,
+# no vibration, no torch, no display changes, no radio changes. The report
+# names no phone: no serial, MAC, IMEI, SSID, Bluetooth address, account or
+# kernel command line (only the slot suffix is taken from it).
+#
+# Each check is ok, not ok, or skip (the hardware or its software isn't
+# there). The required checks (boot, storage guard, root, kernel health, USB,
+# session) make the exit status non-zero when they fail; the rest are
+# evidence for the pull request.
+set -uo pipefail
+
+here=0 json=0
+for a in "$@"; do
+  case $a in
+    --here) here=1 ;;
+    --json) json=1 ;;
+    -h|--help) sed -n '3,21p' "$0"; exit 0 ;;
+    *) echo "phone-smoke: unknown option $a" >&2; exit 2 ;;
+  esac
+done
+
+if ((!here)); then
+  repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+  # The device: the phone's first compatible against the descriptors.
+  compat=$("$repo/tools/phone-ssh" "tr '\\0' '\\n' < /proc/device-tree/compatible | head -1") \
+    || { echo "phone-smoke: the phone doesn't answer over tools/phone-ssh" >&2; exit 2; }
+  device=unknown
+  for conf in "$repo"/device/*/device.conf; do
+    want=$(sed -n 's/^COMPATIBLE="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$conf" | awk '{print $1}')
+    [[ -n $want && $want == "$compat" ]] && device=$(basename "$(dirname "$conf")")
+  done
+  rev=$(git -C "$repo" rev-parse --short HEAD 2>/dev/null || echo unknown)
+  args="--here"; ((json)) && args+=" --json"
+  "$repo/tools/phone-ssh" "SMOKE_DEVICE=$device SMOKE_REPO=$rev bash -s -- $args" < "$0"
+  exit $?
+fi
+
+# ======================================================== on the phone ====
+
+results=()   # "status|required|name|detail"
+check() { results+=("$1|$2|$3|${4:-}"); }
+
+# The desktop user (uid 1000 on our images) for user units and the session bus.
+user=$(loginctl list-users --no-legend 2>/dev/null | awk '$2 != "root" {print $2; exit}')
+uid=$(id -u "$user" 2>/dev/null || true)
+as_user() { runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@"; }
+
+# ---------------------------------------------------------------- boot
+release=$(uname -r)
+slot=$(grep -oE 'androidboot\.slot_suffix=_[ab]' /proc/cmdline 2>/dev/null | cut -d= -f2)
+up=$(cut -d. -f1 /proc/uptime)
+case $slot in
+  _b) check ok 1 "boot" "kernel $release, slot b, up ${up}s" ;;
+  "") check skip 1 "boot" "kernel $release, no slot on the command line" ;;
+  *) check "not ok" 1 "boot" "kernel $release on slot ${slot#_}: our builds boot from slot b" ;;
+esac
+
+# ---------------------------------------------------------------- storage
+# Every UFS partition is read-only except userdata and slot B's boot images.
+allowed=" userdata boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b "
+rw=() total=0
+for s in /sys/class/block/sd*; do
+  [[ -r $s/partition && -r $s/uevent ]] || continue
+  name=$(sed -n 's/^PARTNAME=//p' "$s/uevent")
+  [[ -n $name ]] || continue
+  total=$((total + 1))
+  [[ $(<"$s/ro") == 0 && $allowed != *" $name "* ]] && rw+=("$name")
+done
+if ((total == 0)); then
+  check skip 1 "storage guard" "no named UFS partitions"
+elif ((${#rw[@]})); then
+  check "not ok" 1 "storage guard" "writable outside the allowlist: ${rw[*]}"
+else
+  check ok 1 "storage guard" "$total partitions; only userdata and slot B's boot images writable"
+fi
+
+rootdev=$(findmnt -no SOURCE / 2>/dev/null)
+rootpart=$(sed -n 's/^PARTNAME=//p' "/sys/class/block/${rootdev#/dev/}/uevent" 2>/dev/null)
+if [[ $rootpart == userdata ]]; then
+  check ok 1 "root" "$(findmnt -no FSTYPE /) on userdata, $(df -h --output=avail / | tail -1 | tr -d ' ') free"
+else
+  check "not ok" 1 "root" "root is on ${rootpart:-$rootdev}, not userdata"
+fi
+
+# ---------------------------------------------------------------- kernel health
+oops=$(dmesg 2>/dev/null | grep -cE 'Oops|BUG:|Kernel panic|Unable to handle kernel' || true)
+warns=$(dmesg 2>/dev/null | grep -cE 'WARNING: CPU' || true)
+errs=$(dmesg --level=emerg,alert,crit,err 2>/dev/null | wc -l)
+if ((oops)); then
+  check "not ok" 1 "kernel health" "$oops oops/BUG, $warns WARN, $errs error lines in dmesg"
+else
+  check ok 1 "kernel health" "no oops or BUG; $warns WARN, $errs error lines in dmesg"
+fi
+
+failed=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | xargs)
+ufailed=""
+[[ -n $uid && -S /run/user/$uid/bus ]] && ufailed=$(as_user systemctl --user --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | xargs)
+if [[ -z $failed && -z $ufailed ]]; then
+  check ok 0 "systemd units" "none failed"
+else
+  check "not ok" 0 "systemd units" "failed: ${failed:-none}${ufailed:+; user: $ufailed}"
+fi
+
+# ---------------------------------------------------------------- USB
+udc=""
+for g in /sys/kernel/config/usb_gadget/*/UDC; do [[ -s $g ]] && udc=$(<"$g"); done
+if [[ -n $udc ]]; then check ok 1 "USB gadget" "bound to $udc"; else check "not ok" 1 "USB gadget" "no gadget bound"; fi
+
+# ---------------------------------------------------------------- display, GPU, session
+connected=""
+for c in /sys/class/drm/card*-*; do
+  [[ -r $c/status && $(<"$c/status") == connected ]] && connected+="${c##*/} "
+done
+if [[ -n $connected ]]; then
+  first=${connected%% *}
+  check ok 0 "display" "${connected% } connected, $(head -1 "/sys/class/drm/$first/modes" 2>/dev/null)"
+else
+  check "not ok" 0 "display" "no connected DRM connector"
+fi
+gpu=""
+for r in /sys/class/drm/renderD*; do [[ -e $r/device/driver ]] && gpu=$(basename "$(readlink -f "$r/device/driver")"); done
+if [[ -n $gpu ]]; then check ok 0 "GPU" "render node on $gpu"; else check "not ok" 0 "GPU" "no render node"; fi
+
+if pgrep -x Hyprland >/dev/null && pgrep -f quickshell >/dev/null; then
+  check ok 1 "session" "Hyprland and the Omarchy shell running"
+else
+  check "not ok" 1 "session" "Hyprland $(pgrep -x Hyprland >/dev/null && echo runs || echo "isn't running"), the shell $(pgrep -f quickshell >/dev/null && echo runs || echo "isn't running")"
+fi
+
+# ---------------------------------------------------------------- input
+# /proc/bus/input/devices: one name and capability set per device.
+inputs=$(awk '/^N: Name=/{sub(/^N: Name="/, ""); sub(/"$/, ""); name=$0}
+              /^B: ABS=/{abs=substr($0, index($0, "=") + 1)}
+              /^B: KEY=/{key=substr($0, index($0, "=") + 1)}
+              /^$/{print name "\x1f" abs "\x1f" key; name=abs=key=""}
+              END{if (name != "") print name "\x1f" abs "\x1f" key}' /proc/bus/input/devices 2>/dev/null)
+touch_names="" key_names=""
+while IFS=$'\x1f' read -r name abs key; do
+  [[ -n $name ]] || continue
+  # ABS_MT_POSITION_X is bit 53 of the lowest 64-bit word (printed last).
+  low=${abs##* }
+  if [[ -n $low ]] && (( (16#$low >> 53) & 1 )); then touch_names+="$name, "; fi
+  [[ $name == *gpio-keys* || $name == *[Kk]eys* || $name == *[Bb]utton* ]] && key_names+="$name, "
+done <<<"$inputs"
+if [[ -n $touch_names ]]; then check ok 0 "touch" "${touch_names%, }"; else check "not ok" 0 "touch" "no multitouch input device"; fi
+if [[ -n $key_names ]]; then check ok 0 "buttons" "${key_names%, }"; else check skip 0 "buttons" "no key input device found by name"; fi
+
+# ---------------------------------------------------------------- radios
+wifi=""
+for n in /sys/class/net/*; do [[ -d $n/wireless ]] && wifi=${n##*/}; done
+if [[ -n $wifi ]]; then
+  state=$(<"/sys/class/net/$wifi/operstate")
+  drv=$(basename "$(readlink -f "/sys/class/net/$wifi/device/driver")" 2>/dev/null)
+  check ok 0 "Wi-Fi" "$wifi on ${drv:-?}, link $state"
+else
+  check skip 0 "Wi-Fi" "no wireless interface"
+fi
+if [[ -d /sys/class/bluetooth/hci0 ]]; then
+  powered=$(busctl get-property org.bluez /org/bluez/hci0 org.bluez.Adapter1 Powered 2>/dev/null | awk '{print $2}')
+  check ok 0 "Bluetooth" "hci0, powered ${powered:-unknown}"
+else
+  check skip 0 "Bluetooth" "no controller"
+fi
+
+# ---------------------------------------------------------------- power, sound, sensors, cameras
+bat=""
+for p in /sys/class/power_supply/*; do
+  [[ $(cat "$p/type" 2>/dev/null) == Battery ]] || continue
+  bat="$(cat "$p/capacity" 2>/dev/null)% $(cat "$p/status" 2>/dev/null)"
+  t=$(cat "$p/temp" 2>/dev/null) && [[ -n $t ]] && bat+=", $((t / 10)) °C"
+done
+if [[ -n $bat ]]; then check ok 0 "battery" "$bat"; else check skip 0 "battery" "no battery power supply"; fi
+
+cards=$(sed -n 's/^ *[0-9]* \[\([^]]*\)\].*/\1/p' /proc/asound/cards 2>/dev/null | xargs)
+if [[ -n $cards ]]; then check ok 0 "sound cards" "$cards"; else check skip 0 "sound cards" "none"; fi
+
+if busctl status net.hadess.SensorProxy >/dev/null 2>&1; then
+  sensors=""
+  for s in Accelerometer AmbientLight Proximity Compass; do
+    [[ $(busctl get-property net.hadess.SensorProxy /net/hadess/SensorProxy net.hadess.SensorProxy "Has$s" 2>/dev/null) == "b true" ]] && sensors+="$s "
+  done
+  if [[ -n $sensors ]]; then check ok 0 "sensors" "${sensors% }"; else check "not ok" 0 "sensors" "the sensor proxy runs with no sensors"; fi
+else
+  check skip 0 "sensors" "no sensor proxy"
+fi
+
+if command -v cam >/dev/null 2>&1 && [[ -n $uid ]]; then
+  ncam=$(as_user timeout 20 cam -l 2>/dev/null | grep -cE '^[0-9]+: ' || true)
+  if ((ncam > 0)); then check ok 0 "cameras" "$ncam listed by libcamera"; else check "not ok" 0 "cameras" "libcamera lists none (or a camera app holds them)"; fi
+else
+  check skip 0 "cameras" "no libcamera tools"
+fi
+
+hot=$(for z in /sys/class/thermal/thermal_zone*/temp; do cat "$z" 2>/dev/null; done | sort -n | tail -1)
+[[ -n $hot ]] && check ok 0 "thermal" "hottest zone $((hot / 1000)) °C"
+
+# ---------------------------------------------------------------- versions
+pkgs=$(pacman -Q 2>/dev/null | grep -E '^(omamobile[-a-z]*|omacam|omatel[-a-z]*|omaphone|omamessages|omarchy|mesa|libcamera|hyprland|quickshell) ' | tr '\n' ',' | sed 's/,$//; s/,/, /g')
+
+# ---------------------------------------------------------------- report
+device=${SMOKE_DEVICE:-unknown}
+reqfail=0
+for r in "${results[@]}"; do
+  IFS='|' read -r status req _ _ <<<"$r"
+  [[ $status == "not ok" && $req == 1 ]] && reqfail=1
+done
+
+if ((json)); then
+  python3 - "$device" "${SMOKE_REPO:-unknown}" "$release" "$pkgs" "${results[@]}" <<'PY'
+import json, sys
+device, repo, release, pkgs, *rows = sys.argv[1:]
+checks = []
+for r in rows:
+    status, req, name, detail = r.split("|", 3)
+    checks.append({"name": name, "status": status, "required": req == "1", "detail": detail})
+print(json.dumps({"device": device, "repo": repo, "kernel": release,
+                  "packages": [p for p in pkgs.split(", ") if p], "checks": checks}, indent=2))
+PY
+else
+  echo "### phone-smoke: $device"
+  echo
+  echo "Kernel \`$release\`, tools at \`${SMOKE_REPO:-unknown}\`, $(date -u +%Y-%m-%dT%H:%MZ)."
+  echo
+  echo "| Check | Result | Detail |"
+  echo "| --- | --- | --- |"
+  for r in "${results[@]}"; do
+    IFS='|' read -r status req name detail <<<"$r"
+    ((req)) && name="$name (required)"
+    echo "| $name | $status | ${detail//|//} |"
+  done
+  echo
+  echo "Packages: ${pkgs:-none found}"
+fi
+exit $reqfail

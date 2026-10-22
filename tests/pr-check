@@ -1,0 +1,90 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/pr-check against a throwaway repository: a clean change passes, and
+# each kind of problem fails on its own and is named.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+fail() { echo "not ok - $*" >&2; exit 1; }
+
+r=$t/repo
+mkdir -p "$r/tools"
+cp "$here/tools/pr-check" "$r/tools/pr-check"
+cd "$r"
+git init -q -b main
+git config user.name Tester
+git config user.email tester@example.org
+echo "# readme" > README.md
+git add -A && git commit -q -m "base"
+
+# One branch per case, each one commit on main; pr-check runs from the
+# branch's checkout against main.
+check() { # name expect(0|1) pattern
+  local out status=0
+  out=$(tools/pr-check main 2>&1) || status=$?
+  [[ $status == "$2" ]] || { echo "$out"; fail "$1: exit $status, expected $2"; }
+  [[ -z ${3:-} ]] || grep -c -- "$3" <<<"$out" >/dev/null || { echo "$out"; fail "$1: says '$3'"; }
+}
+case_branch() { git checkout -q main && git checkout -q -b "$1"; }
+
+case_branch clean
+printf '#!/bin/bash\necho hi\n' > tools/hello && chmod +x tools/hello
+echo "made-up address 02:10:42:00:00:01 and <MAC>" > notes.md
+git add -A && git commit -q -m "tools: hello" -m "Signed-off-by: A Human <a@example.org>" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+check "a clean change" 0
+echo "ok - a clean change passes, with a made-up MAC and an AI Co-Authored-By"
+
+case_branch mac
+echo "wlan0 at 3c:28:6d:aa:bb:cc" > notes.md
+git add -A && git commit -q -m "notes"
+check "a real MAC" 1 "MAC or Bluetooth addresses"
+echo "ok - a real MAC fails"
+
+case_branch getprop
+echo "[ro.boot.hardware.revision]: [MP1.0]" > notes.md
+git add -A && git commit -q -m "notes"
+check "a getprop dump" 1 "getprop output"
+echo "ok - getprop output fails"
+
+case_branch serial
+echo 'androidboot.serialno=27141FDH2001AB' > notes.md
+git add -A && git commit -q -m "notes"
+check "a serial" 1 "serial numbers"
+git checkout -q main && git checkout -q -b serial-placeholder
+echo 'androidboot.serialno=<SERIAL>; SERIAL=${serial}' > notes.md
+git add -A && git commit -q -m "notes"
+check "a serial placeholder" 0
+echo "ok - a serial fails, a placeholder passes"
+
+case_branch imei
+echo "IMEI: 356938035643809" > notes.md
+git add -A && git commit -q -m "notes"
+check "an IMEI" 1 "IMEIs"
+echo "ok - an IMEI fails"
+
+case_branch blob
+head -c 4096 /dev/urandom > modem.bin
+git add -A && git commit -q -m "firmware"
+check "a blob" 1 "modem.bin"
+git checkout -q main && git checkout -q -b image
+head -c 4096 /dev/urandom > shot.png
+git add -A && git commit -q -m "a screenshot"
+check "a screenshot" 0
+echo "ok - a firmware blob fails, an image passes"
+
+case_branch sob
+echo change > notes.md
+git add -A && git commit -q -m "notes" -m "Signed-off-by: Claude <noreply@anthropic.com>"
+check "an AI sign-off" 1 "Signed-off-by from an AI agent"
+echo "ok - an AI Signed-off-by fails"
+
+case_branch script
+printf '#!/bin/bash\nif then\n' > tools/broken && chmod +x tools/broken
+git add -A && git commit -q -m "tools: broken"
+check "a broken script" 1 "tools/broken"
+echo "ok - a script that doesn't parse fails"
+
+git checkout -q main
+check "nothing to check" 0 "no commits"
+echo "ok - no commits, nothing to check"

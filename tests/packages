@@ -1,0 +1,25 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Every package's own tests (packages/*/test/all), one after another, with a
+# summary at the end; CI runs it on every pull request. Each suite skips
+# what its machine can't run (no qmllint, no Docker, no phone) by itself.
+#
+#   tests/packages [NAME...]     (default: every package with test/all)
+set -uo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+if (($#)); then names=("$@"); else
+  names=()
+  for t in packages/*/test/all; do names+=("$(basename "$(dirname "$(dirname "$t")")")"); done
+fi
+failed=()
+for n in "${names[@]}"; do
+  t=packages/$n/test/all
+  [[ -x $t ]] || { echo "not ok - $n has no test/all"; failed+=("$n"); continue; }
+  echo "# $n"
+  if "$t"; then echo "ok - $n"; else echo "not ok - $n"; failed+=("$n"); fi
+done
+if ((${#failed[@]})); then
+  echo "failed: ${failed[*]}" >&2
+  exit 1
+fi
+echo "ok - all ${#names[@]} package suites"

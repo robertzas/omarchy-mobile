@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: MIT
+# The checks every pull request must pass before review (CONTRIBUTING.md
+# section 6): the policy checks (tools/pr-check: identifiers, blobs, AI
+# sign-offs, scripts that parse), then every offline test suite in an Arch
+# Linux container, as the project's own build hosts run them. Nothing here
+# builds images or touches a phone; on-phone evidence is the pull request
+# template's job (tools/phone-smoke).
+name: checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Policy (identifiers, blobs, sign-offs)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: tools/pr-check
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -z $BASE || $BASE =~ ^0+$ ]]; then
+            echo "no base commit (a new branch): checking the last commit"
+            BASE=HEAD~1
+          fi
+          tools/pr-check "$BASE"
+
+  tests:
+    name: Tests (tests/all, every package)
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    timeout-minutes: 45
+    steps:
+      - name: Packages the tests use
+        run: |
+          pacman -Syu --noconfirm --needed git base-devel e2fsprogs zstd openssl \
+            python python-dbus python-gobject dbus nodejs dtc cpio file jq busybox \
+            xz gzip qt6-declarative shellcheck
+      - uses: actions/checkout@v4
+      - name: A normal user (some tests check what a user may not do)
+        run: |
+          useradd -m ci
+          chown -R ci: "$GITHUB_WORKSPACE"
+          runuser -u ci -- git config --global --add safe.directory '*'
+      - name: tests/all
+        run: runuser -u ci -- tests/all
+      - name: tests/packages
+        run: runuser -u ci -- tests/packages
