@@ -15,7 +15,7 @@
 # developer iterating on omacam cross-compiles instead (omacam's
 # bin/cross, about 3 minutes cold, seconds after).
 pkgname=omacam
-pkgver=0.3.2
+pkgver=0.3.3
 pkgrel=1
 pkgdesc="Camera: a phone camera with lens switching by zoom, on libcamera"
 arch=(aarch64)
@@ -43,7 +43,7 @@ optdepends=('loupe: open the last photo from the gallery button'
             'geoclue: location tags')
 options=('!debug' '!lto')
 source=("omacam-$pkgver.tar.gz::https://github.com/derekross/omacam/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('4f07ca4abe3f517cc7868fbb8e7b5105715c748c631cddfe2e536c524bf737e9')
+sha256sums=('76d7ac24adbf13b502d4b4ee174c4b48e7b937f036b45561bf4abdd9118f9ff8')
 
 prepare() {
   cd "omacam-$pkgver"
