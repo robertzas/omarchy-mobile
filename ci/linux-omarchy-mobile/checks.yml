@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: MIT
+# The pull-request gate for derekross/linux-omarchy-mobile, kept here with
+# the tool it runs (tools/kernel-pr-check). It belongs at
+# .github/workflows/checks.yml on the kernel repository's omamobile branch;
+# see CONTRIBUTING.md section 6.2. It checks out the pull request's commits
+# and this repository's tools, then runs the sign-off, prefix, checkpatch
+# and identifier checks and the W=1, dtbs_check and dt_binding_check
+# builds, comparing device-tree warnings with the base.
+name: checks
+
+on:
+  pull_request:
+    branches: [omamobile]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kernel:
+    name: Kernel (sign-offs, checkpatch, W=1, dtbs_check)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: linux
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: The base
+        run: git -C linux fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
+      - uses: actions/checkout@v5
+        with:
+          repository: derekross/omarchy-mobile
+          path: omarchy-mobile
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld llvm bc bison flex libssl-dev libelf-dev python3-pip yamllint
+          pip install --break-system-packages dtschema
+      - name: tools/kernel-pr-check
+        run: |
+          omarchy-mobile/tools/kernel-pr-check -C linux --build "$RUNNER_TEMP/kbuild" \
+            "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"

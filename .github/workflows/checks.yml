@@ -24,7 +24,7 @@ jobs:
     name: Policy (identifiers, blobs, sign-offs)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: tools/pr-check
@@ -48,7 +48,7 @@ jobs:
           pacman -Syu --noconfirm --needed git base-devel e2fsprogs zstd openssl \
             python python-dbus python-gobject dbus nodejs dtc cpio file jq busybox \
             xz gzip qt6-declarative shellcheck
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: A normal user (some tests check what a user may not do)
         run: |
           useradd -m ci

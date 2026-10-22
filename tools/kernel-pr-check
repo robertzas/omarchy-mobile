@@ -74,9 +74,14 @@ ${sob_bad%$'\n'}"
 ${prefix_bad%$'\n'}"
 
 # ---------------------------------------------------------------- checkpatch
+# checkpatch as the base has it: a pull request can't change its own checker.
+cpdir=$(mktemp -d)
+trap 'rm -rf "$cpdir"' EXIT
+git archive "$mb" scripts/checkpatch.pl scripts/spelling.txt scripts/const_structs.checkpatch 2>/dev/null | tar -x -C "$cpdir" \
+  || git archive "$mb" scripts/checkpatch.pl | tar -x -C "$cpdir"
 cp_errors="" cp_warnings=0
 for c in $commits; do
-  report=$(git format-patch -1 --stdout "$c" | perl scripts/checkpatch.pl --strict --no-signoff --terse --show-types - 2>/dev/null)
+  report=$(git format-patch -1 --stdout "$c" | perl "$cpdir/scripts/checkpatch.pl" --strict --no-signoff --terse --show-types - 2>/dev/null)
   errors=$(grep -E ': ERROR:' <<<"$report" || true)
   [[ -n $errors ]] && cp_errors+="  $(git log -1 --format='%h %s' "$c")"$'\n'"$(sed 's/^/    /' <<<"$errors")"$'\n'
   cp_warnings=$((cp_warnings + $(grep -cE ': (WARNING|CHECK):' <<<"$report" || true)))
