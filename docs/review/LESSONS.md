@@ -146,6 +146,11 @@ never change, so reviews can cite them.
   boot, reset and resume. *Check:* list which callbacks can now fail, grep
   cheetah's logs for those errors, and boot it once. *From:* kernel #19,
   #22.
+- **L-67. A rail a PR touches on another phone may feed something on
+  cheetah.** felix's cover-touch LDO25M/LDO26M are cheetah's main touch
+  rails (and LDO27M/LDO28M its display rails). *Check:* look the rail up in
+  NOTES and the plans, and name those peripherals in the read-only cheetah
+  boot's Expect line. *From:* kernel #27, round 3.
 
 ## Shell and scripts
 
@@ -168,6 +173,12 @@ never change, so reviews can cite them.
   header.** Keys under a misspelt section (`[Logind]`) are ignored with only a
   log warning, and a keys-only test still passes. *Check:* rename the
   section and run the package's `test/all`. *From:* #29.
+- **L-63. logind ranks drop-ins by file name, not by directory.** Every
+  `logind.conf.d/*.conf` in `/usr/lib`, `/run` and `/etc` is sorted by name
+  and the last one wins; `/etc` only replaces a file of the same name. So a
+  local `/etc` file "outranks" a package's only if its name sorts later.
+  *Check:* `systemd-analyze cat-config systemd/logind.conf`, or compare the
+  names. *From:* #33.
 
 ## Kernel (linux-omarchy-mobile)
 
@@ -243,6 +254,16 @@ never change, so reviews can cite them.
   citation for a G4 block can be right; and work out a PLL table entry
   before accepting a 26 MHz input (the real oscillator is 24.576 MHz).
   *From:* kernel #19, #23.
+- **L-68. Narrowing a regulator to min = max writes nothing if the rail is
+  already there.** `of_regulator` sets `apply_uV` for any range, but the
+  core only moves a rail that is out of range, so a test made with the wider
+  range still stands. *Check:* the measured voltage is an exact selector
+  (min + n × step, n < n_voltages). *From:* kernel #27, round 3.
+- **L-72. A chip id the vendor driver checks belongs in the compatible's
+  match data, not in a DT property.** Google keeps `st,dchip_id` because one
+  `st,fts` compatible serves two parts (`36 40` SALIXP, `36 48` ALIX).
+  *Check:* grep the vendor header for every value the property takes; name
+  the part (L-21). *From:* kernel #32.
 
 ## The gates themselves
 
@@ -284,6 +305,20 @@ never change, so reviews can cite them.
   no package test, so CI's green says nothing about it: run `gen_pack.py` on
   each touched `vN.xml` before and after, and grep every caller of a changed
   builder. *From:* #32.
+- **L-64. A package file `cmp`-tested against cheetah's copy can carry
+  checks the original lacks.** felix's test caught `HandlePowerKey=poweroff`;
+  cheetah's own test passed with it. *Check:* mutation-test the original too,
+  and give both packages the content checks. *From:* #33.
+- **L-69. Compare a renumbered or reworded patch series by the source it
+  produces.** Apply the old and the new series to two fresh copies of the
+  release and `diff -r` the trees: empty means the earlier review (and any
+  test of the earlier build) still applies (L-45 for package patches).
+  *From:* #32, round 2.
+- **L-70. A gate's "N device trees" can leave out a new overlay.** Neither
+  `kernel-pr-check` nor CI built `.dtso` files until kernel #32. *Check:*
+  compile every touched overlay with `-@`, apply it to its base with
+  `fdtoverlay`, and `dt-validate` the result (`kernel-pr-check --build` now
+  does this). *From:* kernel #32.
 
 ## Reviews and merging
 
@@ -314,6 +349,9 @@ never change, so reviews can cite them.
   the AVB footers its bootloader needs. *Check:* test a staged descriptor
   against the heads of open PRs that touch `bin/omamobile` or
   `tools/install-phone`. *From:* #24 with #27.
+- **L-71. Our requests say which repository each piece goes in.** "A kernel
+  PR … with an overlay that enables it" put a bring-up overlay in the kernel,
+  against CONTRIBUTING §6.1 (extends L-31). *From:* issue #3 and kernel #32.
 
 ## Claims and evidence
 
@@ -343,6 +381,14 @@ never change, so reviews can cite them.
   `.patch`,** and list the file's later commits to find where any extra
   lines came from; authorship and trailers must survive. *From:* #32
   (0005 was two upstream commits with no `From:` line).
+- **L-65. A `-dirty` release means the tested code is in no commit.** Look
+  up its hash (`git log -1 <sha>`); if it predates the PR's code, the notes
+  must say the evidence came from an unpublished tree and name the
+  differences the PR admits. Hardware facts stand; claims about the PR's
+  code path don't (extends L-45). *From:* #34 with kernel #32.
+- **L-66. A matrix cell's word needs the qualifier its neighbours use and a
+  link to the notes entry.** "Touch: WIP" for a chip-id read reads as touch
+  input. *From:* #34.
 
 ## Corrections (where a review was wrong)
 
