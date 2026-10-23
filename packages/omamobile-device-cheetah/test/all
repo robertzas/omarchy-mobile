@@ -68,4 +68,10 @@ if grep -qE '^options max77759_charger' vendor/modprobe.d/omamobile-charger.conf
   [[ $opts == *default_ilim_ua=* && $opts == *temp_guard=1* ]] || fail "never one charger option without the other"
 fi
 grep -qx 'blacklist tcpci_maxim' vendor/modprobe.d/omamobile-max77759.conf || fail "tcpci_maxim stays blacklisted until gate B4"
+# The power key, now described, must not power the phone off. felix's test
+# compares its copy with this file, so these checks guard both (L-64).
+power="$tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
+grep -qx '\[Login\]' "$power" || fail "the power-key drop-in needs a [Login] header"
+grep -qx 'HandlePowerKey=ignore' "$power" || fail "a short press must not power the phone off"
+grep -qx 'HandlePowerKeyLongPress=ignore' "$power" || fail "the long press stays the PMIC reset"
 pass "install stages the package"
