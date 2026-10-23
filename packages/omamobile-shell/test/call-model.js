@@ -30,7 +30,10 @@ assert.strictEqual(M.mode(M.parseLine(line([active, waiting])), true, false), "h
 assert.strictEqual(M.mode(M.parseLine(line([Object.assign({}, ring, { state: "terminated" })])), true, false), "none")
 assert.strictEqual(M.mode(M.parseLine(JSON.stringify({ agent: false, calls: [ring] })), true, false), "none", "no agent, no card")
 assert.strictEqual(M.mode(null, true, false), "none")
-console.log("ok - call model: incoming over the lock, heads-up when unlocked or waiting, in-call over the lock, a chip otherwise")
+const quiet = Object.assign({}, ring, { silenced: true })
+assert.strictEqual(M.mode(M.parseLine(line([quiet])), true, false), "none", "a silenced call gets no card")
+assert.strictEqual(M.mode(M.parseLine(line([active, Object.assign({}, quiet, { state: "waiting" })])), true, false), "in-call", "nor a silenced waiting call")
+console.log("ok - call model: incoming over the lock, heads-up when unlocked or waiting, in-call over the lock, a chip otherwise; silenced calls get none")
 
 // Labels
 assert.strictEqual(M.title(ring), "Ada Lovelace")

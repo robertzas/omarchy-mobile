@@ -44,7 +44,8 @@ function parseLine(line) {
         direction: c.direction === "outgoing" ? "outgoing" : "incoming",
         state: typeof c.state === "string" ? c.state : "unknown",
         startedMs: Number(c.startedMs) || 0,
-        answeredMs: Number(c.answeredMs) || 0
+        answeredMs: Number(c.answeredMs) || 0,
+        silenced: c.silenced === true
       }
     })
   }
@@ -54,11 +55,13 @@ function parseLine(line) {
 function isRinging(call) { return !!call && RINGING.indexOf(call.state) !== -1 }
 function isLive(call) { return !!call && LIVE.indexOf(call.state) !== -1 }
 
-// The call that rings (the newest), or null.
+// The call that rings (the newest), or null. A call the agent silenced
+// (Do Not Disturb, or an unknown caller) gets no card: it keeps its quiet
+// notification, as on Android.
 function ringing(calls) {
   var r = null
   for (var i = 0; i < calls.length; i++)
-    if (isRinging(calls[i]) && (!r || calls[i].startedMs >= r.startedMs)) r = calls[i]
+    if (isRinging(calls[i]) && !calls[i].silenced && (!r || calls[i].startedMs >= r.startedMs)) r = calls[i]
   return r
 }
 

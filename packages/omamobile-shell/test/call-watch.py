@@ -69,13 +69,14 @@ IFACE = "org.omamobile.Phone1"
 class Phone(dbus.service.Object):
     def __init__(self, bus):
         super().__init__(bus, "/org/omamobile/Phone1")
-        self.calls, self.muted = [], False
+        self.calls, self.muted, self.silenced = [], False, []
     @dbus.service.method(IFACE, out_signature="a(sssssxx)")
     def ListCalls(self):
         return dbus.Array(self.calls, signature="(sssssxx)")
     @dbus.service.method(dbus.PROPERTIES_IFACE, in_signature="s", out_signature="a{sv}")
     def GetAll(self, iface):
-        return {"Muted": dbus.Boolean(self.muted), "Route": "earpiece", "AudioRouting": dbus.Boolean(False)}
+        return {"Muted": dbus.Boolean(self.muted), "Route": "earpiece", "AudioRouting": dbus.Boolean(False),
+                "SilencedCalls": dbus.Array(self.silenced, signature="s")}
     @dbus.service.signal(IFACE, signature="sss")
     def IncomingCall(self, i, n, m): pass
     @dbus.service.signal(IFACE, signature="(sssssxx)")
@@ -93,6 +94,9 @@ class Phone(dbus.service.Object):
             self.calls = [c]; self.CallStateChanged(c)
         elif what == "mute":
             self.muted = True; self.PropertiesChanged(IFACE, {"Muted": dbus.Boolean(True)}, [])
+        elif what == "quiet":
+            c = ("/c/9", "+12025550199", "", "incoming", "ringing-in", 3000, 0)
+            self.calls = [c]; self.silenced = ["/c/9"]; self.IncomingCall(c[0], c[1], c[2]); self.CallStateChanged(c)
         elif what == "end":
             c = ("/c/1", "+12025550123", "Ada Lovelace", "incoming", "terminated", 1000, 2000)
             self.calls = []; self.CallStateChanged(c)
@@ -158,6 +162,9 @@ GLib.MainLoop().run()
                 control("end")
                 ended = until(lambda v: v["calls"] == [])
                 check("the ended call goes away", ended is not None)
+                control("quiet")
+                quiet = until(lambda v: v["calls"] and v["calls"][0]["id"] == "/c/9")
+                check("a silenced call is marked silenced", quiet is not None and quiet["calls"][0]["silenced"] is True, quiet)
             finally:
                 agent.terminate()
                 agent.wait(timeout=5)
@@ -173,8 +180,22 @@ GLib.MainLoop().run()
             watcher.wait(timeout=5)
 
 
+def observe_test():
+    import dbus
+    w = subprocess.Popen([sys.executable, "-B", TOOL, "--observe"], stdout=subprocess.PIPE, text=True)
+    try:
+        r, _, _ = select.select([w.stdout], [], [], 5)
+        first = json.loads(w.stdout.readline()) if r else None
+        check("--observe still reports", first is not None and "calls" in first, first)
+        check("--observe never takes the card's name", not dbus.SessionBus().name_has_owner("org.omamobile.CallCard"))
+    finally:
+        w.terminate()
+        w.wait(timeout=5)
+
+
 if os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
     bus_tests()
+    observe_test()
 else:
     print("ok - call watch: on a bus # SKIP no session bus (run under dbus-run-session)")
 

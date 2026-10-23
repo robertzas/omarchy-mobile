@@ -18,6 +18,9 @@ phone isn't locked), unless --no-wake.
 While it runs it owns org.omamobile.CallCard, so the agent knows the shell
 shows ringing calls itself and needn't open the Phone app's answer page.
 
+--observe only reports: no wake, no name. The status bar's call chip runs
+it that way beside the call card's own copy.
+
 Numbers and names travel to the plugin on stdout only; nothing is logged.
 It exits when stdout closes.
 """
@@ -60,18 +63,21 @@ def quick_replies(path=None):
     return [r for r in value if isinstance(r, str) and r.strip()][:6]
 
 
-def call_dict(c):
-    """One (sssssxx) CallInfo from the agent as the plugin reads it."""
+def call_dict(c, silenced=()):
+    """One (sssssxx) CallInfo from the agent as the plugin reads it.
+    `silenced`: the agent's SilencedCalls (not rung: Do Not Disturb, or an
+    unknown caller when the user asked)."""
     id_, number, name, direction, state, started, answered = c
     return {"id": str(id_), "number": str(number), "name": str(name),
             "direction": str(direction), "state": str(state),
-            "startedMs": int(started), "answeredMs": int(answered)}
+            "startedMs": int(started), "answeredMs": int(answered),
+            "silenced": str(id_) in silenced}
 
 
 def state_line(agent, calls, props, replies):
     return json.dumps({
         "agent": bool(agent),
-        "calls": [call_dict(c) for c in calls] if agent else [],
+        "calls": [call_dict(c, [str(s) for s in props.get("SilencedCalls", [])]) for c in calls] if agent else [],
         "muted": bool(props.get("Muted", False)),
         "route": str(props.get("Route", "earpiece") or "earpiece"),
         "audioRouting": bool(props.get("AudioRouting", False)),
@@ -98,19 +104,23 @@ def main(argv):
     import dbus.service
     from gi.repository import GLib
 
-    do_wake = "--no-wake" not in argv
+    observe = "--observe" in argv
+    do_wake = "--no-wake" not in argv and not observe
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SessionBus()
     loop = GLib.MainLoop()
     # Held for the life of the process; the agent watches for its owner.
     # Another card holding it already (a second shell) still gets reports.
-    try:
-        card_name = dbus.service.BusName(CARD_NAME, bus, do_not_queue=True)  # noqa: F841
-    except dbus.DBusException:
-        card_name = None  # noqa: F841
+    card_name = None
+    if not observe:
+        try:
+            card_name = dbus.service.BusName(CARD_NAME, bus, do_not_queue=True)  # noqa: F841
+        except dbus.DBusException:
+            pass
     last = [None]
 
     def emit():
+        """Report the agent's state; returns it, written or not."""
         agent = bus.name_has_owner(PHONE)
         calls, props = [], {}
         if agent:
@@ -122,18 +132,21 @@ def main(argv):
                 agent, calls, props = False, [], {}
         line = state_line(agent, calls, props, quick_replies())
         if line == last[0]:
-            return
+            return line
         last[0] = line
         try:
             sys.stdout.write(line + "\n")
             sys.stdout.flush()
         except (BrokenPipeError, OSError):
             loop.quit()
+        return line
 
     def incoming(*_args):
-        if do_wake:
+        # The agent decides whether a call is silenced before it signals;
+        # a silenced call doesn't light the screen.
+        state = json.loads(emit())
+        if do_wake and any(c["state"] in ("ringing-in", "waiting") and not c["silenced"] for c in state["calls"]):
             wake()
-        emit()
 
     bus.add_signal_receiver(incoming, signal_name="IncomingCall", dbus_interface=PHONE, path=PHONE_PATH)
     bus.add_signal_receiver(lambda *_a: emit(), signal_name="CallStateChanged", dbus_interface=PHONE, path=PHONE_PATH)

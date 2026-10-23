@@ -279,7 +279,17 @@ fi
 if [[ -n ${OMAMOBILE_CALL_RENDER:-} ]]; then
   bash test/call-render "$OMAMOBILE_CALL_RENDER" >/dev/null || fail "call card render"
 fi
-pass "calls: model, watcher, wiring"
+if command -v node >/dev/null; then
+  node test/status-model.js >/dev/null || { node test/status-model.js; fail "status bar model"; }
+fi
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-cell-watch || fail "omamobile-cell-watch parses"
+if command -v dbus-run-session >/dev/null; then
+  if ! out=$(dbus-run-session -- python3 -B test/cell-watch.py 2>&1); then
+    grep -v '^ok' <<<"$out" || true
+    fail "omamobile-cell-watch"
+  fi
+fi
+pass "calls: model, watcher, wiring; the bar's network and call chip"
 python3 -c 'import json; assert {"id": "omamobile.access"} in json.load(open("profile/shell.json"))["plugins"]' \
   || fail "the phone profile enables the permission sheet"
 grep -c 'add_plugin omamobile.access' bin/omamobile-setup-user >/dev/null || fail "existing users get the permission sheet"

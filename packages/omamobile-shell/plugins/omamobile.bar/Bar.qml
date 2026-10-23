@@ -76,13 +76,47 @@ Item {
   readonly property string networkIcon: StatusModel.networkIcon(networkKind,
     wifiNetwork ? Math.round((wifiNetwork.signalStrength || 0) * 100) : -1)
 
-  // Cellular signal. STUB: Quickshell.Networking has no modem backend and the
-  // Pixel 7 Pro's modem has no mainline driver yet, so there is nothing to read.
-  // When a ModemManager-backed source exists, set `available` and `strength`
-  // (0-100) from it and the icon appears; until then it renders nothing.
-  readonly property QtObject cellular: QtObject {
-    readonly property bool available: false
-    readonly property int strength: -1
+  // The mobile network, from ModemManager's API through
+  // bin/omamobile-cell-watch (omamobile-mmd serves it on the Pixel 7 Pro).
+  // No modem, no icon.
+  property var cell: null
+  readonly property string cellGlyph: StatusModel.cellGlyph(cell)
+  readonly property string cellText: StatusModel.cellText(cell)
+
+  Process {
+    id: cellWatch
+    command: ["omamobile-cell-watch"]
+    running: true
+    stdout: SplitParser {
+      onRead: function(line) {
+        var c = StatusModel.parseCell(line)
+        if (c) root.cell = c
+      }
+    }
+    onExited: { root.cell = null; cellRestart.restart() }
+  }
+  Timer { id: cellRestart; interval: 5000; onTriggered: cellWatch.running = true }
+
+  // A call in progress: a chip with its time beside the clock. omatel's
+  // agent through bin/omamobile-call-watch --observe (the call card runs
+  // the waking, name-holding copy).
+  property string callLine: ""
+  property double nowMs: Date.now()
+  readonly property string callChip: StatusModel.callChip(callLine, nowMs) || ""
+
+  Process {
+    id: callWatch
+    command: ["omamobile-call-watch", "--observe"]
+    running: true
+    stdout: SplitParser { onRead: function(line) { root.callLine = String(line) } }
+    onExited: { root.callLine = ""; callRestart.restart() }
+  }
+  Timer { id: callRestart; interval: 5000; onTriggered: callWatch.running = true }
+  Timer {
+    interval: 1000
+    repeat: true
+    running: root.callChip !== ""
+    onTriggered: root.nowMs = Date.now()
   }
 
   readonly property var btAdapter: Bluetooth.defaultAdapter
@@ -154,7 +188,11 @@ Item {
       WlrLayershell.namespace: "omarchy-bar"
       WlrLayershell.layer: WlrLayer.Top
 
+      // Above the strip's touch area (below), so the call chip takes its
+      // own taps; nothing else in here handles touches, so the rest still
+      // reaches the pull-down.
       Item {
+        z: 1
         anchors.fill: parent
         anchors.leftMargin: Style.spacing.huge
         anchors.rightMargin: Style.spacing.huge
@@ -169,6 +207,36 @@ Item {
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
           font.bold: true
+        }
+
+        // The call in progress, beside the clock; a tap opens the Phone
+        // app's in-call screen (the bar is never shown over the lock).
+        Rectangle {
+          id: callChipPill
+          objectName: "callChip"
+          visible: root.callChip !== ""
+          z: 2
+          anchors.left: clockText.right
+          anchors.leftMargin: Style.spacing.lg
+          anchors.verticalCenter: parent.verticalCenter
+          height: Math.round(root.barSize * 0.66)
+          width: chipRow.implicitWidth + Style.spacing.lg * 2
+          radius: height / 2
+          color: chipTap.pressed ? Qt.darker("#1e9e53", 1.2) : "#1e9e53"
+
+          Row {
+            id: chipRow
+            anchors.centerIn: parent
+            spacing: Style.spacing.xs
+            Text { anchors.verticalCenter: parent.verticalCenter; textFormat: Text.PlainText; text: String.fromCodePoint(0xF03F2); color: "white"; font.family: root.fontFamily; font.pixelSize: Style.font.body }
+            Text { anchors.verticalCenter: parent.verticalCenter; textFormat: Text.PlainText; text: root.callChip; color: "white"; font.family: root.fontFamily; font.pixelSize: Style.font.body; font.bold: true }
+          }
+
+          MouseArea {
+            id: chipTap
+            anchors.fill: parent
+            onClicked: Quickshell.execDetached(["omaphone", "--in-call"])
+          }
         }
 
         Row {
@@ -187,9 +255,23 @@ Item {
             text: root.bluetoothConnected ? "󰂱" : "󰂯"
           }
 
-          StatusGlyph {
-            visible: root.cellular.available
-            text: StatusModel.cellularIcon(root.cellular.strength)
+          Row {
+            visible: root.cellGlyph !== ""
+            spacing: Style.spacing.xs
+            anchors.verticalCenter: parent.verticalCenter
+            opacity: root.cell && root.cell.state === "searching" ? 0.55 : 1
+
+            StatusGlyph { text: root.cellGlyph }
+            Text {
+              visible: text !== ""
+              anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.PlainText
+              text: root.cellText
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
           }
 
           StatusGlyph {

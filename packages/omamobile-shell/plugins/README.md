@@ -67,9 +67,9 @@ Settings live on the `bar` object in `shell.json`:
 | `showBatteryPercent` | `true` | |
 | `quickSettings` | `"omamobile.quicksettings"` | Plugin id the bar opens |
 
-**Stubbed:** cellular signal. `Quickshell.Networking` has no modem backend and
-the Pixel 7 Pro modem has no mainline driver, so `cellular.available` is
-hard-wired to `false` and the icon never renders.
+**Mobile network and calls:** the cellular icon and the call chip come from
+`omamobile-cell-watch` and `omamobile-call-watch --observe` (see
+omamobile.call below); without a modem or omatel's agent they don't show.
 
 IPC (`omarchy-shell omamobile.bar <method>`), for edge-swipe gestures or
 hardware keys:
@@ -726,7 +726,19 @@ and `omamobile-call-top` (the strip), on the overlay layer, with
   never a shell (`CallModel.js`).
 * **Ringing** is the agent's: feedbackd plays the sound theme's
   `phone-incoming-call` and drives the vibration motor (omatel-agent
-  depends on both).
+  depends on both). During Omarchy's Do Not Disturb only starred contacts
+  ring; the agent lists every other ringing call in `SilencedCalls`
+  (omatel 0.2.3), and the card leaves those alone: no card, no wake, just
+  the agent's quiet notification.
+
+The status bar (`omamobile.bar`) shows the call in progress as a green chip
+with its time beside the clock (a tap opens the Phone app's in-call screen),
+from `omamobile-call-watch --observe` (no wake, no name), and the mobile
+network from `omamobile-cell-watch`: ModemManager's API (omamobile-mmd on
+the Pixel 7 Pro), as bars and the network type ("LTE", "5G", "R" when
+roaming), "No SIM", "SIM locked", the airplane when the radio is off, and
+nothing without a modem. Signal strength shows as empty bars until the
+modem reports a reading (SIT signal strength is TELEPHONY-APPS-PLAN T8).
 
 IPC: `omarchy-shell shell call omamobile.call state ''` (modes and states,
 no numbers or names).

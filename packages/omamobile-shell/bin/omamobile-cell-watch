@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Report the mobile network for the status bar (omamobile.bar).
+
+Reads ModemManager's D-Bus API on the system bus (org.freedesktop.
+ModemManager1: on Omarchy Mobile phones omamobile-mmd serves it; any phone
+with ModemManager works the same) and prints one JSON line per change:
+
+    {"modem": true, "state": "registered", "strength": 75, "tech": "LTE",
+     "roaming": false}
+
+state: "none" (no modem), "off", "no-sim", "locked" (SIM PIN), "searching",
+"registered", "connected" (mobile data up), "failed".
+strength: 0-100 when the modem reports a recent signal quality, else -1.
+tech: "5G", "LTE", "H+", "H", "3G", "E", "G", "2G" or "".
+
+It names no operator, number, IMEI or SIM. It exits when stdout closes.
+"""
+
+import json
+import sys
+
+MM = "org.freedesktop.ModemManager1"
+MM_PATH = "/org/freedesktop/ModemManager1"
+MODEM = MM + ".Modem"
+MODEM3GPP = MODEM + ".Modem3gpp"
+OM = "org.freedesktop.DBus.ObjectManager"
+PROPS = "org.freedesktop.DBus.Properties"
+
+# MMModemState
+STATES = {-1: "failed", 0: "searching", 1: "searching", 2: "locked", 3: "off", 4: "off",
+          5: "searching", 6: "searching", 7: "searching", 8: "registered", 9: "registered",
+          10: "registered", 11: "connected"}
+# MMModemStateFailedReason
+FAILED_SIM = {2, 3}  # sim-missing, sim-error
+# MMModem3gppRegistrationState: roaming, roaming-sms-only, roaming-csfb-not-preferred
+ROAMING = {5, 7, 10}
+# MMModemAccessTechnology bits, best first
+TECH = [(1 << 15, "5G"), ((1 << 14) | (1 << 16) | (1 << 17), "LTE"), (1 << 9, "H+"),
+        ((1 << 6) | (1 << 7) | (1 << 8), "H"), (1 << 5, "3G"), (1 << 4, "E"), (1 << 3, "G"),
+        ((1 << 1) | (1 << 2), "2G")]
+
+
+def tech_label(bits):
+    for mask, label in TECH:
+        if int(bits) & mask:
+            return label
+    return ""
+
+
+def describe(modem, gpp):
+    """A ModemManager modem's properties (and its 3GPP ones) as the bar reads them."""
+    if modem is None:
+        return {"modem": False, "state": "none", "strength": -1, "tech": "", "roaming": False}
+    raw = int(modem.get("State", 0))
+    state = STATES.get(raw, "searching")
+    if raw == -1 and int(modem.get("StateFailedReason", 0)) in FAILED_SIM:
+        state = "no-sim"
+    quality = modem.get("SignalQuality", (0, False))
+    try:
+        percent, recent = int(quality[0]), bool(quality[1])
+    except (TypeError, ValueError, IndexError):
+        percent, recent = 0, False
+    registered = state in ("registered", "connected")
+    return {
+        "modem": True,
+        "state": state,
+        "strength": max(0, min(100, percent)) if (recent and registered) else -1,
+        "tech": tech_label(modem.get("AccessTechnologies", 0)) if registered else "",
+        "roaming": registered and int((gpp or {}).get("RegistrationState", 0)) in ROAMING,
+    }
+
+
+def main(argv):
+    import dbus
+    import dbus.mainloop.glib
+    from gi.repository import GLib
+
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    bus = dbus.SessionBus() if "--session" in argv else dbus.SystemBus()
+    loop = GLib.MainLoop()
+    last = [None]
+
+    def first_modem():
+        if not bus.name_has_owner(MM):
+            return None, None
+        try:
+            objects = bus.get_object(MM, MM_PATH, introspect=False).GetManagedObjects(dbus_interface=OM, timeout=5)
+        except dbus.DBusException:
+            return None, None
+        for path in sorted(objects):
+            ifaces = objects[path]
+            if MODEM in ifaces:
+                return dict(ifaces[MODEM]), dict(ifaces.get(MODEM3GPP, {}))
+        return None, None
+
+    def emit(*_args):
+        line = json.dumps(describe(*first_modem()), separators=(",", ":"))
+        if line == last[0]:
+            return
+        last[0] = line
+        try:
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+        except (BrokenPipeError, OSError):
+            loop.quit()
+
+    bus.add_signal_receiver(emit, signal_name="PropertiesChanged", dbus_interface=PROPS, bus_name=MM)
+    bus.add_signal_receiver(emit, signal_name="InterfacesAdded", dbus_interface=OM, bus_name=MM)
+    bus.add_signal_receiver(emit, signal_name="InterfacesRemoved", dbus_interface=OM, bus_name=MM)
+    bus.add_signal_receiver(emit, signal_name="NameOwnerChanged", dbus_interface="org.freedesktop.DBus", arg0=MM)
+    # Signal quality can change without a signal on some modems; read again now and then.
+    GLib.timeout_add_seconds(20, lambda: (emit(), True)[1])
+    emit()
+    loop.run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
