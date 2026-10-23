@@ -264,6 +264,31 @@ never change, so reviews can cite them.
   `st,fts` compatible serves two parts (`36 40` SALIXP, `36 48` ALIX).
   *Check:* grep the vendor header for every value the property takes; name
   the part (L-21). *From:* kernel #32.
+- **L-74. A Tensor PMU binding without `syscon` is a safety property.**
+  With `syscon`, a consumer that probes before the PMU driver gets a plain
+  MMIO regmap, where PMU writes are silently ignored (AGENTS.md section 1);
+  without it, the lookup defers until the SMC-backed regmap exists. *Check:*
+  new Tensor PMU bindings and board nodes leave `syscon` out, even though
+  stock DTs have it. *From:* kernel #31, round 2 (for #22).
+- **L-75. Map every property of a cited vendor block to its upstream
+  equivalent.** Stock tegu's touch `controller-data` also has
+  `cs-clock-delay = <2>`, a 2 µs CS-to-clock wait, which upstream spells
+  `spi-cs-setup-delay-ns`. *Check:* read the whole block, not only the
+  property the PR cites, and say why each one is or isn't needed. *From:*
+  kernel #21, round 2.
+- **L-77. A vendor CAL's version switch is narrower than the function it
+  sits in.** Google's eUSB2 init gates only the charge-pump bias clear on
+  the revision; the rest runs for every version, so "0x701's sequence"
+  overstated it. *Check:* list which writes are actually inside the version
+  test before accepting a per-revision claim. *From:* kernel #33.
+- **L-78. Balancing a shared PHY child's init count turns a once-per-boot
+  init into one that runs every cycle.** *Check:* list every board that
+  binds the wrapper, open DT PRs included, and ask for one boot with an
+  unbind/bind on one of them (L-51). *From:* kernel #33 (Pixel 8 Pro).
+- **L-79. Check linux-next for the same function before accepting a fix to
+  a shared driver.** It showed #33's coming conflict, and an upstream change
+  to cheetah's PIPE3 path that our next base move will bring (an L-51
+  event). *From:* kernel #33.
 
 ## The gates themselves
 
@@ -319,6 +344,18 @@ never change, so reviews can cite them.
   compile every touched overlay with `-@`, apply it to its base with
   `fdtoverlay`, and `dt-validate` the result (`kernel-pr-check --build` now
   does this). *From:* kernel #32.
+- **L-73. Gate a PR on its merge, not only on its head, when another PR
+  landed in the same files after it branched.** CI checks out the PR head,
+  so #20 was never built with #27's S2MPG12 changes. *Check:* `git
+  merge-tree --write-tree`, `git commit-tree`, then `kernel-pr-check
+  --build` on that commit; after a batch of merges, gate the whole new
+  range once. *From:* kernel #20, round 2.
+- **L-80. checkpatch reported every compatible a PR documents itself as
+  undocumented, and showed warnings only as a count.** It read bindings
+  from the clone's checked-out tree, not the commit under test. Fixed:
+  `kernel-pr-check` now gives checkpatch each commit's own bindings and
+  MAINTAINERS, and prints the warnings (extends L-30). *From:* kernel #21,
+  #28, #33, rounds 1 and 2.
 
 ## Reviews and merging
 
@@ -389,6 +426,10 @@ never change, so reviews can cite them.
 - **L-66. A matrix cell's word needs the qualifier its neighbours use and a
   link to the notes entry.** "Touch: WIP" for a chip-id read reads as touch
   input. *From:* #34.
+- **L-76. Fetch each `Link:` anchor and read the line it points at.**
+  *Check:* `curl -s '<url>?format=TEXT' | base64 -d | sed -n Np`. #29's was
+  two lines off: cosmetic there, but a wrong commit or file wouldn't be.
+  *From:* kernel #29, round 2.
 
 ## Corrections (where a review was wrong)
 
