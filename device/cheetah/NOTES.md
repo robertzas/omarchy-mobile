@@ -2,7 +2,22 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
-## 2026-10-23: the S2MPG12 regulator driver binds read-only (kernel #27)
+## 2026-10-23: the S2MPG12 regulator driver binds read-only (kernel #27); UFS and touch PRs boot
+
+- **Kernel #19 + #22 (Tensor G4 UFS host and PHY, with error propagation
+  in the shared gs101/gs201 paths).** One boot on top of the #27 kernel
+  (7.3.0-rc6-omamobile-push1-00569-ga147e30b96e3, DTB unchanged): UFS at
+  `FAST series_B G_4 L_2` as before, root mounted, no UFS/PHY error or
+  timeout and no `ufshcd_err_handler` at 25, 54 and 94 s with uncached
+  reads in between; the link cycled through hibern8 with clock gating.
+  Host reset and resume take the same path and were not exercised.
+- **Kernel #26 (synaptics-tcm: avdd before vdd, 200 ms power-on wait).**
+  One boot on top of that (…-00570-g8cd00dcfc564): the supplies (dummies
+  here) are taken avdd first, the controller identifies 268 ms after them
+  (88 ms with the old 20 ms wait), same S3908 firmware and config, touch
+  worked (808 interrupts in use).
+- `ak7375_vcm_resume I2C failure: -6` (camera VCMs) and `wc-mbox … Try
+  increasing MBOX_TX_QUEUE_LEN` show on every recent boot, old kernels too.
 
 - **Kernel #27's S2MPG12 LDO driver, read-only boot.** The integration
   kernel plus #27's three driver commits
