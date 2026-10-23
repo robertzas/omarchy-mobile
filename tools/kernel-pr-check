@@ -13,7 +13,9 @@
 #   - with --build OUT: each touched C file builds with W=1 (arm64, LLVM,
 #     defconfig plus kernel/configs/omamobile.config), every touched
 #     device tree builds with W=1 and passes dtbs_check with no warning the
-#     base didn't have, and touched bindings pass dt_binding_check. Needs
+#     base didn't have, each touched overlay (.dtso) builds and applies to
+#     its board with no new dt-validate warning, and touched bindings pass
+#     dt_binding_check. Needs
 #     clang, ld.lld and, for the schema checks, dtschema (`pip install
 #     dtschema`); a missing tool skips its check and says so.
 #
@@ -179,6 +181,43 @@ $(head -15 <<<"$new" | sed 's/^/    /')"; fi
       else
         skip "device trees: none touched"
       fi
+
+      # A touched overlay is in no board's DTB, so the build above never
+      # compiles it (kernel #32's went unbuilt by every gate, L-70). Each
+      # is built and applied to its base: the board in its directory whose
+      # name begins its own (gs201-felix-cover-touch.dtso on gs201-felix),
+      # built with -@ so the overlay's labels resolve. With dt-validate the
+      # result may add no warning its base doesn't have.
+      for ov in $(grep -E '\.dtso$' <<<"$dts" || true); do
+        d=${ov#arch/arm64/boot/dts/}; dir=$(dirname "$d"); stem=$(basename "$d" .dtso)
+        board=""
+        for b in "$src/arch/arm64/boot/dts/$dir"/*.dts; do
+          b=$(basename "$b" .dts)
+          [[ $stem == "$b"-* && ${#b} -gt ${#board} ]] && board=$b
+        done
+        if [[ -z $board ]]; then
+          skip "overlay $d: no board in $dir whose name begins $stem"
+          continue
+        fi
+        log=$("${k[@]}" W=1 "DTC_FLAGS_$board=-@" "$dir/$board.dtb" "$dir/$stem.dtbo" 2>&1) \
+          || { fail "overlay $d doesn't build:
+$(tail -8 <<<"$log" | sed 's/^/    /')"; continue; }
+        dtbs=$out/build/arch/arm64/boot/dts/$dir
+        log=$("$out/build/scripts/dtc/fdtoverlay" -i "$dtbs/$board.dtb" -o "$dtbs/$stem-applied.dtb" "$dtbs/$stem.dtbo" 2>&1) \
+          || { fail "overlay $d doesn't apply to $board.dtb:
+$(sed -e '/^$/d' -e 's/^/    /' <<<"$log")"; continue; }
+        schema=$out/build/Documentation/devicetree/bindings/processed-schema.json
+        if [[ -n $check && -f $schema ]]; then
+          vnorm() { sed -E 's,^[^ ]*/,,; s,^[^:]*: ,,' | sort -u; }
+          new=$(comm -13 <(dt-validate -s "$schema" "$dtbs/$board.dtb" 2>&1 | vnorm) \
+                         <(dt-validate -s "$schema" "$dtbs/$stem-applied.dtb" 2>&1 | vnorm))
+          if [[ -z $new ]]; then pass "overlay $d builds and applies to $board.dtb, no new dt-validate warnings"
+          else fail "overlay $d on $board.dtb: new dt-validate warnings:
+$(head -15 <<<"$new" | sed 's/^/    /')"; fi
+        else
+          pass "overlay $d builds and applies to $board.dtb (no dt-validate: not validated)"
+        fi
+      done
 
       if [[ -n $yamls ]]; then
         if command -v dt-doc-validate >/dev/null; then

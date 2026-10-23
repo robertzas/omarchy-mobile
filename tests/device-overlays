@@ -1,0 +1,36 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The bring-up overlays in device/<codename>/overlays (CONTRIBUTING.md
+# section 6.1): each compiles with dtc -@, as bin/omamobile images compiles
+# it, and every name a descriptor's DTB_OVERLAYS lists is an overlay of that
+# device. Applying them needs the device's built DTB, so that half is
+# bin/omamobile images' job; this catches an overlay that doesn't parse
+# before anyone builds a kernel (L-70). DTC= picks the dtc; without one the
+# compile check is skipped.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { echo "not ok - $*" >&2; exit 1; }
+shopt -s nullglob
+
+dtc=${DTC:-$(command -v dtc || true)}
+overlays=(device/*/overlays/*.dtso)
+if [[ -z $dtc ]]; then
+  echo "ok - # skip: no dtc (DTC=path/to/dtc) to compile ${#overlays[@]} overlays"
+else
+  t=$(mktemp -d)
+  trap 'rm -rf "$t"' EXIT
+  for f in "${overlays[@]}"; do
+    log=$("$dtc" -q -@ -I dts -O dtb -o "$t/out.dtbo" "$f" 2>&1) || { echo "$log" >&2; fail "$f compiles"; }
+  done
+  echo "ok - ${#overlays[@]} overlays compile with dtc -@"
+fi
+
+for conf in device/*/device.conf; do
+  dev=$(basename "$(dirname "$conf")")
+  list=$(DTB_OVERLAYS="" && . "$conf" && echo "${DTB_OVERLAYS:-}")
+  for ov in $list; do
+    [[ $ov =~ ^[a-z0-9-]+$ ]] || fail "$conf: bad overlay name '$ov'"
+    [[ -f device/$dev/overlays/$ov.dtso ]] || fail "$conf lists $ov, but device/$dev/overlays/$ov.dtso doesn't exist"
+  done
+done
+echo "ok - every DTB_OVERLAYS name is an overlay of its device"
