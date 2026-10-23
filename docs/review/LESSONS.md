@@ -78,6 +78,18 @@ never change, so reviews can cite them.
   for those eight bytes and the version only, never a full dump. *From:* #24,
   round 2.
 
+- **L-47. Every tool that talks to fastboot pins the serial, ours too.**
+  L-5 covered installers; `bin/omamobile flash` and `capture` didn't pin
+  either (fixed in c202b6d: one phone or `FASTBOOT_SERIAL`). *Check:* every
+  `fastboot` call passes `-s`, and several phones are refused. *From:* #24,
+  round 4.
+- **L-48. When a PMU readback surprises, ask which write path ran and
+  whether the restore was masked.** Mainline writes through atomic
+  set/clear aliases (offset | 0xc000 / 0x8000), Google through a
+  read-modify-write SMC; only a masked restore tells hardware status bits
+  from stored ones. *Check:* the probe's call, the restore's mask, and
+  Google's own users of that `pmu-offset`. *From:* issue #28.
+
 ## Shared code and the reference device
 
 - **L-8. "Nothing changes for cheetah" is checked by building it.** For any
@@ -119,6 +131,21 @@ never change, so reviews can cite them.
   policy is harmful (logind suspending a folded phone) waits for the
   omarchy-mobile change that handles it, so no build ever has one without
   the other. *From:* kernel #12 with #29.
+
+- **L-49. "Disabled" means disabled in the DTB the phone runs: the DTS plus
+  its `DTB_OVERLAYS`.** Cheetah's DTS has `pmic-1` disabled, but its
+  `suspend-pmic-test` overlay enables it, so a new S2MPG12 cell binds on
+  the reference phone. *Check:* grep the device's `DTB_OVERLAYS` for every
+  node a PR's code binds to. *From:* kernel #27 (correction C-2).
+- **L-50. A new MFD cell binds wherever an overlay enables its parent;
+  for cheetah, ask for a read-only boot first.** Code reading said the
+  S2MPG12 regulator driver only reads; one boot with `regulator_summary`,
+  dmesg and `tools/phone-smoke` proves it. *From:* kernel #27.
+- **L-51. Error-propagation fixes in shared drivers change the reference
+  phone's failure modes.** A UFS PHY error ignored before became fatal at
+  boot, reset and resume. *Check:* list which callbacks can now fail, grep
+  cheetah's logs for those errors, and boot it once. *From:* kernel #19,
+  #22.
 
 ## Shell and scripts
 
@@ -188,6 +215,35 @@ never change, so reviews can cite them.
   stock's node (USI6 on gs201: GIC SPI 679, `0x1014`). *From:* kernel #10
   (correct).
 
+- **L-52. Regulator nodes use the stock board's voltage, min = max.** A full
+  selector range lets any consumer set any voltage; min = max also means
+  registering writes nothing when the rail is already there. *Check:* the
+  stock board dtsi's `regulator-min/max-microvolt`. *From:* kernel #27.
+- **L-53. Identical driver data calls for a binding fallback, not a driver
+  match.** A new SoC whose block is the same as an older one's gets
+  `items: [new, old]` in the binding and no driver change; upstream expects
+  it, and stock zumapro itself uses the zuma compatibles. *From:* kernel
+  #29, #30, #31.
+- **L-54. Diff a new SoC's stock dtsi against the file it includes.** That
+  is where its overrides hide (zumapro's `phy_eusb_version` 0x701 over
+  zuma's 0x700). *From:* kernel #29.
+- **L-55. When a driver hands chip select to the SPI core, its own transfer
+  path must stop driving it.** Otherwise it re-asserts on every transfer and
+  overrides the core's `cs_off`. *From:* kernel #21.
+- **L-56. Google sometimes ships more than one driver for the same chip;
+  check which one the board builds** (`BUILD.bazel` under
+  `kernel/devices/google/<board>`). Cheetah's and tegu's S3908 drivers
+  power the supplies in opposite orders. *From:* kernel #26.
+- **L-57. On arm64 a divide-by-zero guard changes nothing observable.**
+  UDIV by zero returns 0 without trapping; disassemble before and after
+  before calling such a patch a behaviour change or a hidden bug. *From:*
+  kernel #25.
+- **L-58. Google's `soc/gs` tree is one tree for every Pixel, and CMUCAL's
+  `OSCCLK_* = 26 MHz` is nominal.** G4 builds from zuma sources, so a zuma
+  citation for a G4 block can be right; and work out a PLL table entry
+  before accepting a 26 MHz input (the real oscillator is 24.576 MHz).
+  *From:* kernel #19, #23.
+
 ## The gates themselves
 
 - **L-30. A gate failure can be the tool's own.** `tools/kernel-pr-check`
@@ -219,6 +275,15 @@ never change, so reviews can cite them.
   `omamobile-shell`'s portal test (a log read then truncated, losing a line
   written between), and a retry block that exited silently. *From:* #24,
   round 3.
+
+- **L-59. "No checks reported" can mean CI is waiting for approval.** A
+  first-time contributor's runs stop at `action_required` until the
+  maintainer approves them (`gh run list --status action_required`). Approve,
+  then judge (extends L-38). *From:* kernel #18-#31.
+- **L-60. Mesa changes are checked through the generated packers.** Mesa has
+  no package test, so CI's green says nothing about it: run `gen_pack.py` on
+  each touched `vN.xml` before and after, and grep every caller of a changed
+  builder. *From:* #32.
 
 ## Reviews and merging
 
@@ -271,6 +336,14 @@ never change, so reviews can cite them.
   installs before accepting or correcting a note about a default (with
   L-32). *From:* #29, round 2.
 
+- **L-61. "Private kernel" evidence isn't evidence.** Ask for the public
+  source (Google's GPL tree, the stock DT lines, upstream) behind each value.
+  *From:* kernel #28-#31.
+- **L-62. Check a claimed upstream backport against that commit's own
+  `.patch`,** and list the file's later commits to find where any extra
+  lines came from; authorship and trailers must survive. *From:* #32
+  (0005 was two upstream commits with no `From:` line).
+
 ## Corrections (where a review was wrong)
 
 - **C-1 (2026-10-22). We blamed the 30 s unused-regulator cleanup for the
@@ -280,3 +353,8 @@ never change, so reviews can cite them.
   are off as ABL left them. *Lesson:* before blaming a kernel mechanism,
   check the driver for it is actually bound on that device
   (`/sys/kernel/debug/regulator/regulator_summary`, the DT node's status).
+- **C-2 (2026-10-23). C-1 said cheetah's `s2mpg12-pmic` node is disabled;
+  that is true of the DTS, but the `suspend-pmic-test` overlay in cheetah's
+  `DTB_OVERLAYS` enables it.** C-1's conclusion (no regulator driver, so no
+  Linux cleanup of those LDOs) still stood then. *Lesson:* L-49. *From:*
+  kernel #27.
