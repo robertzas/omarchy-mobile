@@ -1,0 +1,191 @@
+From 9ff413aa28e7d91b8b88a97adf439f252df72496 Mon Sep 17 00:00:00 2001
+From: Erik Faye-Lund <erik.faye-lund@collabora.com>
+Date: Fri, 22 May 2026 15:21:54 +0200
+Subject: [PATCH] panfrost: build v11 support
+
+This wires up v11 support for the shared panfrost code.
+
+Reviewed-by: Lars-Ivar Hesselberg Simonsen <lars-ivar.simonsen@arm.com>
+Reviewed-by: Daniel Stone <daniels@collabora.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/41803>
+---
+ src/panfrost/genxml/decode.h         | 7 +++++++
+ src/panfrost/genxml/decode_common.c  | 3 +++
+ src/panfrost/genxml/gen_macros.h     | 3 +++
+ src/panfrost/genxml/meson.build      | 4 ++--
+ src/panfrost/lib/meson.build         | 4 ++--
+ src/panfrost/lib/pan_format.h        | 5 +++++
+ src/panfrost/libpan/libpan.h         | 2 ++
+ src/panfrost/libpan/libpan_shaders.h | 2 ++
+ src/panfrost/libpan/meson.build      | 2 +-
+ 9 files changed, 27 insertions(+), 5 deletions(-)
+
+diff --git a/src/panfrost/genxml/decode.h b/src/panfrost/genxml/decode.h
+index e5829b06e315..412b2aabb774 100644
+--- a/src/panfrost/genxml/decode.h
++++ b/src/panfrost/genxml/decode.h
+@@ -120,6 +120,13 @@ void pandecode_cs_binary_v10(struct pandecode_context *ctx, uint64_t bin,
+ void pandecode_cs_trace_v10(struct pandecode_context *ctx, uint64_t trace,
+                             uint32_t trace_size, uint64_t gpu_id);
+ 
++void pandecode_interpret_cs_v11(struct pandecode_context *ctx, uint64_t queue,
++                                uint32_t size, uint64_t gpu_id, uint32_t *regs);
++void pandecode_cs_binary_v11(struct pandecode_context *ctx, uint64_t bin,
++                             uint32_t bin_size);
++void pandecode_cs_trace_v11(struct pandecode_context *ctx, uint64_t trace,
++                            uint32_t trace_size, uint64_t gpu_id);
++
+ void pandecode_interpret_cs_v12(struct pandecode_context *ctx, uint64_t queue,
+                                 uint32_t size, uint64_t gpu_id, uint32_t *regs);
+ void pandecode_cs_binary_v12(struct pandecode_context *ctx, uint64_t bin,
+diff --git a/src/panfrost/genxml/decode_common.c b/src/panfrost/genxml/decode_common.c
+index 26a8026379f6..d09ea2156052 100644
+--- a/src/panfrost/genxml/decode_common.c
++++ b/src/panfrost/genxml/decode_common.c
+@@ -417,6 +417,9 @@ pandecode_interpret_cs(struct pandecode_context *ctx, uint64_t queue_gpu_va,
+    case 10:
+       pandecode_interpret_cs_v10(ctx, queue_gpu_va, size, gpu_id, regs);
+       break;
++   case 11:
++      pandecode_interpret_cs_v11(ctx, queue_gpu_va, size, gpu_id, regs);
++      break;
+    case 12:
+       pandecode_interpret_cs_v12(ctx, queue_gpu_va, size, gpu_id, regs);
+       break;
+diff --git a/src/panfrost/genxml/gen_macros.h b/src/panfrost/genxml/gen_macros.h
+index c1e8ab1fbaee..d5d06ed006b8 100644
+--- a/src/panfrost/genxml/gen_macros.h
++++ b/src/panfrost/genxml/gen_macros.h
+@@ -55,6 +55,9 @@
+ #elif (PAN_ARCH == 10)
+ #define GENX(X) X##_v10
+ #include "genxml/v10_pack.h"
++#elif (PAN_ARCH == 11)
++#define GENX(X) X##_v11
++#include "genxml/v11_pack.h"
+ #elif (PAN_ARCH == 12)
+ #define GENX(X) X##_v12
+ #include "genxml/v12_pack.h"
+diff --git a/src/panfrost/genxml/meson.build b/src/panfrost/genxml/meson.build
+index cece290a1cd8..35edc05caecf 100644
+--- a/src/panfrost/genxml/meson.build
++++ b/src/panfrost/genxml/meson.build
+@@ -3,7 +3,7 @@
+ # SPDX-License-Identifier: MIT
+ 
+ pan_packers = []
+-foreach packer : ['common', 'v4', 'v5', 'v6', 'v7', 'v9', 'v10', 'v12', 'v13', 'v14']
++foreach packer : ['common', 'v4', 'v5', 'v6', 'v7', 'v9', 'v10', 'v11', 'v12', 'v13', 'v14']
+   pan_packers += custom_target(
+     packer + '_pack.h',
+     input : ['gen_pack.py', packer + '.xml'],
+@@ -20,7 +20,7 @@ idep_pan_packers = declare_dependency(
+ 
+ libpanfrost_decode_per_arch = []
+ 
+-foreach ver : ['4', '5', '6', '7', '9', '10', '12', '13', '14']
++foreach ver : ['4', '5', '6', '7', '9', '10', '11', '12', '13', '14']
+   libpanfrost_decode_per_arch += static_library(
+     'pandecode-arch-v' + ver,
+     ['decode.c', 'decode_jm.c', 'decode_csf.c', pan_packers],
+diff --git a/src/panfrost/lib/meson.build b/src/panfrost/lib/meson.build
+index 55b67576b5c1..58bd867ca33c 100644
+--- a/src/panfrost/lib/meson.build
++++ b/src/panfrost/lib/meson.build
+@@ -4,7 +4,7 @@
+ 
+ subdir('kmod')
+ 
+-pixel_format_versions = ['5', '6', '7', '9', '10', '12', '13', '14']
++pixel_format_versions = ['5', '6', '7', '9', '10', '11', '12', '13', '14']
+ libpanfrost_pixel_format = []
+ 
+ deps_for_libpanfrost = [dep_libdrm, idep_pan_packers, idep_mesautil, libpanfrost_model_dep]
+@@ -22,7 +22,7 @@ endforeach
+ 
+ libpanfrost_per_arch = []
+ 
+-foreach ver : ['4', '5', '6', '7', '9', '10', '12', '13', '14']
++foreach ver : ['4', '5', '6', '7', '9', '10', '11', '12', '13', '14']
+   libpanfrost_per_arch += static_library(
+     'pan-arch-v' + ver,
+     [
+diff --git a/src/panfrost/lib/pan_format.h b/src/panfrost/lib/pan_format.h
+index f54443230ef3..2b644e64bc8b 100644
+--- a/src/panfrost/lib/pan_format.h
++++ b/src/panfrost/lib/pan_format.h
+@@ -173,6 +173,8 @@ extern const struct pan_blendable_format
+    pan_blendable_formats_v9[PIPE_FORMAT_COUNT];
+ extern const struct pan_blendable_format
+    pan_blendable_formats_v10[PIPE_FORMAT_COUNT];
++extern const struct pan_blendable_format
++   pan_blendable_formats_v11[PIPE_FORMAT_COUNT];
+ extern const struct pan_blendable_format
+    pan_blendable_formats_v12[PIPE_FORMAT_COUNT];
+ extern const struct pan_blendable_format
+@@ -193,6 +195,7 @@ pan_blendable_format_table(unsigned arch)
+    FMT_TABLE(7);
+    FMT_TABLE(9);
+    FMT_TABLE(10);
++   FMT_TABLE(11);
+    FMT_TABLE(12);
+    FMT_TABLE(13);
+    FMT_TABLE(14);
+@@ -209,6 +212,7 @@ extern const struct pan_format pan_pipe_format_v6[PIPE_FORMAT_COUNT];
+ extern const struct pan_format pan_pipe_format_v7[PIPE_FORMAT_COUNT];
+ extern const struct pan_format pan_pipe_format_v9[PIPE_FORMAT_COUNT];
+ extern const struct pan_format pan_pipe_format_v10[PIPE_FORMAT_COUNT];
++extern const struct pan_format pan_pipe_format_v11[PIPE_FORMAT_COUNT];
+ extern const struct pan_format pan_pipe_format_v12[PIPE_FORMAT_COUNT];
+ extern const struct pan_format pan_pipe_format_v13[PIPE_FORMAT_COUNT];
+ extern const struct pan_format pan_pipe_format_v14[PIPE_FORMAT_COUNT];
+@@ -224,6 +228,7 @@ pan_format_table(unsigned arch)
+    FMT_TABLE(7);
+    FMT_TABLE(9);
+    FMT_TABLE(10);
++   FMT_TABLE(11);
+    FMT_TABLE(12);
+    FMT_TABLE(13);
+    FMT_TABLE(14);
+diff --git a/src/panfrost/libpan/libpan.h b/src/panfrost/libpan/libpan.h
+index cc79ea92b744..2cd3b8b27e12 100644
+--- a/src/panfrost/libpan/libpan.h
++++ b/src/panfrost/libpan/libpan.h
+@@ -24,6 +24,8 @@
+ #include "libpan_v9.h"
+ #elif (PAN_ARCH == 10)
+ #include "libpan_v10.h"
++#elif (PAN_ARCH == 11)
++#include "libpan_v11.h"
+ #elif (PAN_ARCH == 12)
+ #include "libpan_v12.h"
+ #elif (PAN_ARCH == 13)
+diff --git a/src/panfrost/libpan/libpan_shaders.h b/src/panfrost/libpan/libpan_shaders.h
+index d51761abf645..61ffbf4c7c1d 100644
+--- a/src/panfrost/libpan/libpan_shaders.h
++++ b/src/panfrost/libpan/libpan_shaders.h
+@@ -22,6 +22,8 @@
+ #include "libpan_shaders_v9.h"
+ #elif (PAN_ARCH == 10)
+ #include "libpan_shaders_v10.h"
++#elif (PAN_ARCH == 11)
++#include "libpan_shaders_v11.h"
+ #elif (PAN_ARCH == 12)
+ #include "libpan_shaders_v12.h"
+ #elif (PAN_ARCH == 13)
+diff --git a/src/panfrost/libpan/meson.build b/src/panfrost/libpan/meson.build
+index cc095a12f6ef..f035f4ad06c4 100644
+--- a/src/panfrost/libpan/meson.build
++++ b/src/panfrost/libpan/meson.build
+@@ -11,7 +11,7 @@ libpan_shader_files = files(
+ 
+ idep_libpan_per_arch = {}
+ 
+-foreach ver : ['4', '5', '6', '7', '9', '10', '12', '13', '14']
++foreach ver : ['4', '5', '6', '7', '9', '10', '11', '12', '13', '14']
+   libpan_spv = custom_target(
+     input : libpan_shader_files,
+     output : 'libpan_v' + ver + '.spv',
+-- 
+GitLab
+

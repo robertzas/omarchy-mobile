@@ -1,0 +1,114 @@
+From c66177bdc90e06aa336357da2e4de0aec6d127d6 Mon Sep 17 00:00:00 2001
+From: Erik Faye-Lund <erik.faye-lund@collabora.com>
+Date: Tue, 26 May 2026 11:27:01 +0200
+Subject: [PATCH] panvk: add v11 support
+
+Reviewed-by: Lars-Ivar Hesselberg Simonsen <lars-ivar.simonsen@arm.com>
+Reviewed-by: Daniel Stone <daniels@collabora.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/41803>
+Backport: adjust the context-only first CSF source filename for26.2.4;
+the upstream architecture11 additions are unchanged.
+---
+ src/panfrost/vulkan/meson.build             | 10 +++++-----
+ src/panfrost/vulkan/panvk_macros.h          |  8 ++++++++
+ src/panfrost/vulkan/panvk_physical_device.c |  2 ++
+ 3 files changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/src/panfrost/vulkan/meson.build b/src/panfrost/vulkan/meson.build
+index 5d76285db159..7c87fe4a101b 100644
+--- a/src/panfrost/vulkan/meson.build
++++ b/src/panfrost/vulkan/meson.build
+@@ -13,8 +13,8 @@ panvk_entrypoints = custom_target(
+     '--out-h', '@OUTPUT0@', '--out-c', '@OUTPUT1@', '--prefix', 'panvk',
+     '--device-prefix', 'panvk_v6', '--device-prefix', 'panvk_v7',
+     '--device-prefix', 'panvk_v9', '--device-prefix', 'panvk_v10',
+-    '--device-prefix', 'panvk_v12', '--device-prefix', 'panvk_v13',
+-    '--device-prefix', 'panvk_v14',
++    '--device-prefix', 'panvk_v11', '--device-prefix', 'panvk_v12',
++    '--device-prefix', 'panvk_v13', '--device-prefix', 'panvk_v14',
+     '--beta', with_vulkan_beta.to_string()
+   ],
+   depend_files : vk_entrypoints_gen_depend_files,
+@@ -78,7 +78,7 @@ bifrost_files = [
+   'bifrost/panvk_vX_meta_desc_copy.c',
+ ]
+ 
+-valhall_archs = [9, 10]
++valhall_archs = [9, 10, 11]
+ valhall_inc_dir = ['valhall']
+ valhall_files = []
+ 
+@@ -99,7 +99,7 @@ jm_files = [
+   'jm/panvk_vX_gpu_queue.c',
+ ]
+ 
+-csf_archs = [10, 12, 13, 14]
++csf_archs = [10, 11, 12, 13, 14]
+ csf_inc_dir = ['csf']
+ csf_files = [
+   'csf/panvk_vX_bind_queue.c',
+@@ -142,7 +142,7 @@ common_per_arch_files = [
+   sha1_h,
+ ]
+ 
+-foreach arch : [6, 7, 10, 12, 13, 14]
++foreach arch : [6, 7, 10, 11, 12, 13, 14]
+   per_arch_files = common_per_arch_files
+   inc_panvk_per_arch = []
+ 
+diff --git a/src/panfrost/vulkan/panvk_macros.h b/src/panfrost/vulkan/panvk_macros.h
+index 09253ffdb933..3052c0c05613 100644
+--- a/src/panfrost/vulkan/panvk_macros.h
++++ b/src/panfrost/vulkan/panvk_macros.h
+@@ -55,6 +55,9 @@ panvk_catch_indirect_alloc_failure(VkResult error)
+       case 10:                                                                 \
+          panvk_arch_name(name, v10)(__VA_ARGS__);                              \
+          break;                                                                \
++      case 11:                                                                 \
++         panvk_arch_name(name, v11)(__VA_ARGS__);                              \
++         break;                                                                \
+       case 12:                                                                 \
+          panvk_arch_name(name, v12)(__VA_ARGS__);                              \
+          break;                                                                \
+@@ -81,6 +84,9 @@ panvk_catch_indirect_alloc_failure(VkResult error)
+       case 10:                                                                 \
+          ret = panvk_arch_name(name, v10)(__VA_ARGS__);                        \
+          break;                                                                \
++      case 11:                                                                 \
++         ret = panvk_arch_name(name, v11)(__VA_ARGS__);                        \
++         break;                                                                \
+       case 12:                                                                 \
+          ret = panvk_arch_name(name, v12)(__VA_ARGS__);                        \
+          break;                                                                \
+@@ -104,6 +110,8 @@ panvk_catch_indirect_alloc_failure(VkResult error)
+ #define panvk_per_arch(name) panvk_arch_name(name, v9)
+ #elif PAN_ARCH == 10
+ #define panvk_per_arch(name) panvk_arch_name(name, v10)
++#elif PAN_ARCH == 11
++#define panvk_per_arch(name) panvk_arch_name(name, v11)
+ #elif PAN_ARCH == 12
+ #define panvk_per_arch(name) panvk_arch_name(name, v12)
+ #elif PAN_ARCH == 13
+diff --git a/src/panfrost/vulkan/panvk_physical_device.c b/src/panfrost/vulkan/panvk_physical_device.c
+index dfb81d859def..83f844c35a2f 100644
+--- a/src/panfrost/vulkan/panvk_physical_device.c
++++ b/src/panfrost/vulkan/panvk_physical_device.c
+@@ -67,6 +67,7 @@
+ PER_ARCH_FUNCS(6);
+ PER_ARCH_FUNCS(7);
+ PER_ARCH_FUNCS(10);
++PER_ARCH_FUNCS(11);
+ PER_ARCH_FUNCS(12);
+ PER_ARCH_FUNCS(13);
+ PER_ARCH_FUNCS(14);
+@@ -403,6 +404,7 @@ panvk_physical_device_init(struct panvk_physical_device *device,
+    switch (arch) {
+    case 6:
+    case 7:
++   case 11:
+    case 14:
+       if (!os_get_option("PAN_I_WANT_A_BROKEN_VULKAN_DRIVER")) {
+          result = panvk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
+-- 
+GitLab
+

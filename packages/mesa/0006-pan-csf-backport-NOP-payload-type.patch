@@ -1,0 +1,134 @@
+From 13b01befb6083f435384ec547d9a8d8994bee741 Mon Sep 17 00:00:00 2001
+From: Aksel Hjerpbakk <aksel.hjerpbakk@arm.com>
+Date: Mon, 27 Jul 2026 16:03:41 +0200
+Subject: [PATCH] panvk: encode cs NOP payload and type
+
+Reviewed-by: Christian Gmeiner <cgmeiner@igalia.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/43264>
+---
+ src/panfrost/genxml/cs_builder.h | 16 ++++++++++++----
+ src/panfrost/genxml/decode_csf.c | 11 ++++++++---
+ src/panfrost/genxml/v10.xml      |  3 ++-
+ src/panfrost/genxml/v12.xml      |  3 ++-
+ src/panfrost/genxml/v13.xml      |  3 ++-
+ src/panfrost/genxml/v14.xml      |  3 ++-
+ 6 files changed, 28 insertions(+), 11 deletions(-)
+
+diff --git a/src/panfrost/genxml/cs_builder.h b/src/panfrost/genxml/cs_builder.h
+index 0fe847322ac6..03bc7da0545f 100644
+--- a/src/panfrost/genxml/cs_builder.h
++++ b/src/panfrost/genxml/cs_builder.h
+@@ -2557,11 +2557,19 @@ cs_match_end(struct cs_builder *b, struct cs_match *match)
+         });                                                                    \
+         !__default_defined; __default_defined = true)
+ 
++enum cs_nop_type {
++   CS_NOP_TYPE_NOP = 0,
++};
++
+ static inline void
+-cs_nop(struct cs_builder *b)
++cs_nop(struct cs_builder *b, enum cs_nop_type type, uint64_t payload)
+ {
+-   cs_emit(b, NOP, I)
+-      ;
++   assert(type != CS_NOP_TYPE_NOP || payload == 0);
++
++   cs_emit(b, NOP, I) {
++      I.metadata_payload = payload;
++      I.metadata_type = type;
++   }
+ }
+ 
+ struct cs_function_ctx {
+@@ -2706,7 +2714,7 @@ cs_function_end(struct cs_builder *b,
+ 
+    /* Fill the rest of the buffer with NOPs. */
+    for (; num_instrs < padded_num_instrs; num_instrs++)
+-      cs_nop(b);
++      cs_nop(b, CS_NOP_TYPE_NOP, 0);
+ 
+    function->length = padded_num_instrs;
+ }
+diff --git a/src/panfrost/genxml/decode_csf.c b/src/panfrost/genxml/decode_csf.c
+index b196c98943a6..662e85ae7cad 100644
+--- a/src/panfrost/genxml/decode_csf.c
++++ b/src/panfrost/genxml/decode_csf.c
+@@ -103,10 +103,15 @@ print_cs_instr(FILE *fp, const uint64_t *instr)
+    switch (base.opcode) {
+    case MALI_CS_OPCODE_NOP: {
+       cs_unpack(instr, CS_NOP, I);
+-      if (I.ignored)
+-         fprintf(fp, "NOP // 0x%" PRIX64, I.ignored);
+-      else
++      switch (I.metadata_type) {
++      case CS_NOP_TYPE_NOP:
+          fprintf(fp, "NOP");
++         break;
++      default:
++         fprintf(fp, "NOP: t%u, 0x%" PRIX64, I.metadata_type,
++                 I.metadata_payload);
++         break;
++      }
+       break;
+    }
+ 
+diff --git a/src/panfrost/genxml/v10.xml b/src/panfrost/genxml/v10.xml
+index a9f237ce07ef..7e9c7663aab4 100644
+--- a/src/panfrost/genxml/v10.xml
++++ b/src/panfrost/genxml/v10.xml
+@@ -568,7 +568,8 @@
+   </struct>
+ 
+   <struct name="CS NOP" size="2">
+-    <field name="Ignored" size="56" start="0" type="hex"/>
++    <field name="Metadata payload" size="48" start="0" type="hex"/>
++    <field name="Metadata type" size="8" start="48" type="hex"/>
+     <field name="Opcode" size="8" start="56" type="CS Opcode" default="NOP"/>
+   </struct>
+ 
+diff --git a/src/panfrost/genxml/v12.xml b/src/panfrost/genxml/v12.xml
+index 771db94e18df..7d934fc84cc1 100644
+--- a/src/panfrost/genxml/v12.xml
++++ b/src/panfrost/genxml/v12.xml
+@@ -695,7 +695,8 @@
+   </struct>
+ 
+   <struct name="CS NOP" size="2">
+-    <field name="Ignored" size="56" start="0" type="hex"/>
++    <field name="Metadata payload" size="48" start="0" type="hex"/>
++    <field name="Metadata type" size="8" start="48" type="hex"/>
+     <field name="Opcode" size="8" start="56" type="CS Opcode" default="NOP"/>
+   </struct>
+ 
+diff --git a/src/panfrost/genxml/v13.xml b/src/panfrost/genxml/v13.xml
+index dadf36dbcafb..43b118d96717 100644
+--- a/src/panfrost/genxml/v13.xml
++++ b/src/panfrost/genxml/v13.xml
+@@ -738,7 +738,8 @@
+   </struct>
+ 
+   <struct name="CS NOP" size="2">
+-    <field name="Ignored" size="56" start="0" type="hex"/>
++    <field name="Metadata payload" size="48" start="0" type="hex"/>
++    <field name="Metadata type" size="8" start="48" type="hex"/>
+     <field name="Opcode" size="8" start="56" type="CS Opcode" default="NOP"/>
+   </struct>
+ 
+diff --git a/src/panfrost/genxml/v14.xml b/src/panfrost/genxml/v14.xml
+index 6a370eb04a3e..856e8e1a6126 100644
+--- a/src/panfrost/genxml/v14.xml
++++ b/src/panfrost/genxml/v14.xml
+@@ -734,7 +734,8 @@
+   </struct>
+ 
+   <struct name="CS NOP" size="2">
+-    <field name="Ignored" size="56" start="0" type="hex"/>
++    <field name="Metadata payload" size="48" start="0" type="hex"/>
++    <field name="Metadata type" size="8" start="48" type="hex"/>
+     <field name="Opcode" size="8" start="56" type="CS Opcode" default="NOP"/>
+   </struct>
+ 
+-- 
+GitLab
+

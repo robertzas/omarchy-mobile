@@ -1,0 +1,65 @@
+From 958205d63ec535eb0ab48aaaea98a193f44389d3 Mon Sep 17 00:00:00 2001
+From: Erik Faye-Lund <erik.faye-lund@collabora.com>
+Date: Tue, 26 May 2026 11:26:49 +0200
+Subject: [PATCH] panfrost: add v11 support
+
+Reviewed-by: Lars-Ivar Hesselberg Simonsen <lars-ivar.simonsen@arm.com>
+Reviewed-by: Daniel Stone <daniels@collabora.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/41803>
+---
+ src/gallium/drivers/panfrost/meson.build  | 4 ++--
+ src/gallium/drivers/panfrost/pan_screen.c | 3 +++
+ src/gallium/drivers/panfrost/pan_screen.h | 1 +
+ 3 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/src/gallium/drivers/panfrost/meson.build b/src/gallium/drivers/panfrost/meson.build
+index 923201661178..54ac313eae71 100644
+--- a/src/gallium/drivers/panfrost/meson.build
++++ b/src/gallium/drivers/panfrost/meson.build
+@@ -83,7 +83,7 @@ if with_perfetto
+   files_panfrost += 'panfrost_perfetto.cc'
+ endif
+ 
+-panfrost_versions = ['4', '5', '6', '7', '9', '10', '12', '13', '14']
++panfrost_versions = ['4', '5', '6', '7', '9', '10', '11', '12', '13', '14']
+ libpanfrost_versions = []
+ 
+ foreach ver : panfrost_versions
+@@ -96,7 +96,7 @@ foreach ver : panfrost_versions
+   ]
+   if ver in ['4', '5', '6', '7', '9']
+     files_panfrost_vx += ['pan_jm.c']
+-  elif ver in ['10', '12', '13', '14']
++  elif ver in ['10', '11', '12', '13', '14']
+     files_panfrost_vx += ['pan_csf.c']
+   endif
+   libpanfrost_versions += static_library(
+diff --git a/src/gallium/drivers/panfrost/pan_screen.c b/src/gallium/drivers/panfrost/pan_screen.c
+index fbee83a752a9..3d3bd3239357 100644
+--- a/src/gallium/drivers/panfrost/pan_screen.c
++++ b/src/gallium/drivers/panfrost/pan_screen.c
+@@ -1177,6 +1177,9 @@ panfrost_create_screen(int fd, const struct pipe_screen_config *config,
+    case 10:
+       panfrost_cmdstream_screen_init_v10(screen);
+       break;
++   case 11:
++      panfrost_cmdstream_screen_init_v11(screen);
++      break;
+    case 12:
+       panfrost_cmdstream_screen_init_v12(screen);
+       break;
+diff --git a/src/gallium/drivers/panfrost/pan_screen.h b/src/gallium/drivers/panfrost/pan_screen.h
+index d1c08d1d7135..b04c607d99f1 100644
+--- a/src/gallium/drivers/panfrost/pan_screen.h
++++ b/src/gallium/drivers/panfrost/pan_screen.h
+@@ -190,6 +190,7 @@ void panfrost_cmdstream_screen_init_v6(struct panfrost_screen *screen);
+ void panfrost_cmdstream_screen_init_v7(struct panfrost_screen *screen);
+ void panfrost_cmdstream_screen_init_v9(struct panfrost_screen *screen);
+ void panfrost_cmdstream_screen_init_v10(struct panfrost_screen *screen);
++void panfrost_cmdstream_screen_init_v11(struct panfrost_screen *screen);
+ void panfrost_cmdstream_screen_init_v12(struct panfrost_screen *screen);
+ void panfrost_cmdstream_screen_init_v13(struct panfrost_screen *screen);
+ void panfrost_cmdstream_screen_init_v14(struct panfrost_screen *screen);
+-- 
+GitLab
+
