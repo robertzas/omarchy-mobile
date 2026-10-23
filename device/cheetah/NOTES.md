@@ -2,6 +2,24 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-10-23: the S2MPG12 regulator driver binds read-only (kernel #27)
+
+- **Kernel #27's S2MPG12 LDO driver, read-only boot.** The integration
+  kernel plus #27's three driver commits
+  (7.3.0-rc6-omamobile-push1-00561-g0f75358341a9); the DTB was
+  byte-identical to the previous build's, and the backup checksums of the
+  six radio and `persist` partitions matched beforehand. The image's
+  `suspend-pmic-test` overlay enables `pmic-1`, so `s2mpg12-regulator`
+  binds next to `s2mpg13-regulator`: all 28 LDOs registered with no users
+  and no constraints, and none was disabled or set, at 165 s and 262 s.
+  The touch rails LDO25M/LDO26M read 1.8 V/3.3 V and the display rails
+  LDO27M/LDO28M 3.025 V/1.2 V, unchanged through a display off/on cycle;
+  touch and display worked (touch IRQs 3 to 567), with no UFS error handler.
+- **`vddio_cam: disabling` (LDO12S, S2MPG13) at about 32 s is a race, not
+  new:** the 30 s unused-regulator cleanup sometimes runs before the camera
+  sensors take the rail, and they enable it again later. It showed on this
+  boot and on one of four earlier boots of the previous kernel.
+
 ## 2026-10-19: the guard's allowlist from the descriptor; the temperature guard on the phone
 
 - **The storage guard's allowlist now comes from `device.conf`**
