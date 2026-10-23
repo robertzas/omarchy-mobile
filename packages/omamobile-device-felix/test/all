@@ -27,6 +27,10 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
   cmp -s etc/omamobile-mirrorlist ../omamobile-device-cheetah/etc/omamobile-mirrorlist \
     || fail "the mirrorlist drifted from the cheetah package"
   pass "the mirrorlist matches the cheetah package"
+  cmp -s vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
+    ../omamobile-device-cheetah/vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
+    || fail "the power-key drop-in drifted from the cheetah package"
+  pass "the power-key drop-in matches the cheetah package"
   cmp -s omamobile-device-felix.install \
     ../omamobile-device-cheetah/omamobile-device-cheetah.install \
     || fail "the pacman install script drifted from the cheetah package"
@@ -53,6 +57,7 @@ for f in usr/bin/reboot-to \
          usr/lib/udev/rules.d/10-omamobile-storage.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf \
+         usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-felix/version \
@@ -75,6 +80,13 @@ grep -q '^HandleLidSwitchDocked=ignore$' "$lid" \
   || fail "a docked closed fold must not suspend"
 grep -q '^HandleLidSwitchExternalPower=ignore$' "$lid" \
   || fail "external power must not suspend a closed fold"
+power="$tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
+grep -qx '\[Login\]' "$power" \
+  || fail "the power-key drop-in needs a [Login] header"
+grep -q '^HandlePowerKey=ignore$' "$power" \
+  || fail "a short press must not power the phone off"
+grep -q '^HandlePowerKeyLongPress=ignore$' "$power" \
+  || fail "the long press stays the PMIC reset"
 grep -q '^PACKAGE=omamobile-device-felix$' "$tmp/root/usr/share/omamobile/device.conf" \
   || fail "the installed descriptor is felix"
 for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \

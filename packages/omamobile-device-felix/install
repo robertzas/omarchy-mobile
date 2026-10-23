@@ -15,6 +15,8 @@ install -Dm644 vendor/systemd/network/20-usb-gadget.network \
   "$destination/usr/lib/systemd/network/20-usb-gadget.network"
 install -Dm644 vendor/systemd/logind.conf.d/10-omamobile-lid.conf \
   "$destination/usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf"
+install -Dm644 vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
+  "$destination/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
 install -Dm644 vendor/NetworkManager/conf.d/10-omamobile-usb.conf \
   "$destination/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
 install -Dm644 device.conf \

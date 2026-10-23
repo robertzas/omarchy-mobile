@@ -6,7 +6,7 @@ Findings from real hardware, newest first. [BRINGUP-M1.md](BRINGUP-M1.md) is the
 ## 2026-10-22: volume keys and the hinge hall
 
 - **Volume keys.** Volume down is `gpa10-1` with a pull-up. Volume up is `gpa8-5` with no pull. Both are active-low. The factory groups are `key-voldown` and `key-volup`, and they are the Pixel 7 Pro's key pins. Each reported a press and a release on slot B.
-- **Power key.** Factory `key-power` is `gpa10-0`, the S2MPG12 PWRONB line, active-low with a pull-up, the same line as the Pixel 7 Pro. It is not described. On the running image a short press does nothing, and logind's power-key action is still poweroff, so describing the key now would power the phone off.
+- **Power key.** Factory `key-power` is `gpa10-0`, the S2MPG12 PWRONB line, active-low with a pull-up, the same line as the Pixel 7 Pro. It is not described. logind's built-in default is poweroff. Omarchy's settings set ignore, and `omamobile-device-felix` ships that same drop-in, so describing the key cannot power the phone off. The long press stays the PMIC reset.
 - **Hinge hall.** Factory `hall_sensor` (`hall,drv5032`) is `gpa2-3`, active-low, with no pull. The factory pin group is `hall_sensor_pinctrl`. Closed reads as shut and open reads as open. `gpa2` is an alive bank, so the mainline group sets no sleep pin config. logind treats `SW_LID` as a closed lid. `omamobile-device-felix` ignores that switch, so a folded phone does not suspend and the USB gadget stays up.
 
 ## 2026-10-20: stock panels and touch
