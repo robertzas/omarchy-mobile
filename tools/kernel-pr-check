@@ -7,7 +7,8 @@
 #   - every commit has a human Signed-off-by, one of them the author's (the
 #     DCO), and none from an AI agent (an Assisted-by tag credits it);
 #   - every subject has a subsystem prefix ("clk: samsung: ...");
-#   - scripts/checkpatch.pl --strict on each commit: errors fail, warnings
+#   - scripts/checkpatch.pl --strict on each commit, against that commit's
+#     bindings and MAINTAINERS: errors fail, warnings
 #     are listed;
 #   - tools/pr-check's policy checks: identifiers, blobs;
 #   - with --build OUT: each touched C file builds with W=1 (arm64, LLVM,
@@ -96,17 +97,40 @@ ${prefix_bad%$'\n'}"
 # checkpatch as the base has it: a pull request can't change its own checker.
 cpdir=$(mktemp -d)
 trap 'rm -rf "$cpdir"' EXIT
-git archive "$mb" scripts/checkpatch.pl scripts/spelling.txt scripts/const_structs.checkpatch 2>/dev/null | tar -x -C "$cpdir" \
-  || git archive "$mb" scripts/checkpatch.pl | tar -x -C "$cpdir"
-cp_errors="" cp_warnings=0
-for c in $commits; do
-  report=$(git format-patch -1 --stdout "$c" | perl "$cpdir/scripts/checkpatch.pl" --strict --no-signoff --terse --show-types - 2>/dev/null)
-  errors=$(grep -E ': ERROR:' <<<"$report" || true)
-  [[ -n $errors ]] && cp_errors+="  $(git log -1 --format='%h %s' "$c")"$'\n'"$(sed 's/^/    /' <<<"$errors")"$'\n'
-  cp_warnings=$((cp_warnings + $(grep -cE ': (WARNING|CHECK):' <<<"$report" || true)))
+mkdir -p "$cpdir/checker" "$cpdir/tree/Documentation"
+git archive "$mb" scripts/checkpatch.pl scripts/spelling.txt scripts/const_structs.checkpatch 2>/dev/null | tar -x -C "$cpdir/checker" \
+  || git archive "$mb" scripts/checkpatch.pl | tar -x -C "$cpdir/checker"
+# Its tree is the kernel's, except for what it checks a patch against: the
+# bindings (an undocumented compatible) and MAINTAINERS come from the commit
+# itself, so a binding added earlier in the same pull request counts. With
+# the checked-out tree, every new compatible read as undocumented (L-30).
+for e in "$kernel"/* "$kernel"/.[!.]*; do
+  [[ -e $e ]] || continue
+  case ${e##*/} in Documentation|MAINTAINERS|.git) continue ;; esac
+  ln -s "$e" "$cpdir/tree/${e##*/}"
 done
-[[ -z $cp_errors ]] && pass "checkpatch --strict: no errors ($cp_warnings warnings and checks to read)" || fail "checkpatch --strict errors:
+for e in "$kernel"/Documentation/*; do
+  [[ ${e##*/} == devicetree ]] || ln -s "$e" "$cpdir/tree/Documentation/${e##*/}"
+done
+cp_errors="" cp_warnings="" cp_count=0
+for c in $commits; do
+  rm -rf "$cpdir/tree/Documentation/devicetree" "$cpdir/tree/MAINTAINERS"
+  docs=$(git ls-tree --name-only "$c" Documentation/devicetree MAINTAINERS)
+  [[ -n $docs ]] && git archive "$c" $docs | tar -x -C "$cpdir/tree"
+  report=$(git format-patch -1 --stdout "$c" | perl "$cpdir/checker/scripts/checkpatch.pl" --root="$cpdir/tree" --strict --no-signoff --terse --show-types - 2>/dev/null)
+  short=$(git log -1 --format='%h %s' "$c")
+  errors=$(grep -E ': ERROR:' <<<"$report" || true)
+  [[ -n $errors ]] && cp_errors+="  $short"$'\n'"$(sed 's/^/    /' <<<"$errors")"$'\n'
+  warnings=$(grep -E ': (WARNING|CHECK):' <<<"$report" || true)
+  if [[ -n $warnings ]]; then
+    cp_count=$((cp_count + $(wc -l <<<"$warnings")))
+    cp_warnings+="#   $short"$'\n'"$(sed -E -e 's/^-:[0-9]+: /#     /' -e "s,$cpdir/tree/,," <<<"$warnings")"$'\n'
+  fi
+done
+[[ -z $cp_errors ]] && pass "checkpatch --strict: no errors ($cp_count warnings and checks to read)" || fail "checkpatch --strict errors:
 ${cp_errors%$'\n'}"
+# The warnings themselves, so a reviewer reads them without rerunning it.
+[[ -n $cp_warnings ]] && printf '%s' "$cp_warnings"
 
 # ---------------------------------------------------------------- policy
 policy=$("$repo/tools/pr-check" -C "$kernel" "$base" "$head" 2>&1); status=$?
