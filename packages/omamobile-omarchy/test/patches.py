@@ -341,6 +341,11 @@ def real_package(t):
        "real omarchy %s: every patch applied, none upstream" % version)
     ok("omamobile-update" in read(root, "usr/bin/omarchy-update"), "real omarchy: omarchy-update hands over (0012)")
     ok(os.path.isfile(os.path.join(root, "usr/share/omarchy/shell/plugins/lock/Keypad.qml")), "real omarchy: the lock's keypad is there (0003)")
+    notif = "usr/share/omarchy/shell/plugins/notifications/"
+    ok("inlineReplySupported: true" in read(root, notif + "Service.qml")
+       and "sendInlineReply" in read(root, notif + "Service.qml")
+       and "notificationReplyField" in read(root, notif + "components/NotificationCard.qml"),
+       "real omarchy: notifications take an inline reply (0015)")
     rc, out = run(root, "apply", series=SERIES)
     ok(rc == 0 and "already applied" in out, "real omarchy: already applied")
     rc, _ = run(root, "verify")

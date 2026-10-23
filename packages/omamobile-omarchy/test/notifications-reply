@@ -1,0 +1,81 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Patch 0015 (inline reply) end to end: Omarchy's notification service with
+# the patch, on a private session bus, offscreen. A notification asking for
+# an inline reply gets the Reply button and a plain one doesn't; opening the
+# field stops the countdown and takes keyboard focus on demand; a blank reply
+# sends nothing; Send emits NotificationReplied and then closes the toast as
+# dismissed, in that order (omatel's agent sends the SMS on the first).
+# Runs inside the OWL conformance container (tests/owl/Dockerfile), never on
+# a desktop:
+#
+#   docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src:ro" \
+#     -v /usr/share/omarchy/themes:/themes:ro -v /usr/share/omarchy/shell:/omarchy-shell:ro \
+#     omamobile-owl-conformance:p1 dbus-run-session -- bash /src/packages/omamobile-omarchy/test/notifications-reply
+#
+# from the repository root (test/all mounts this package as /src instead).
+#
+# test/all runs it when OMAMOBILE_NOTIFY_TEST=1.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+[[ -d /omarchy-shell && -d /themes ]] || { echo "notifications-reply: needs /omarchy-shell and /themes (the container's mounts)" >&2; exit 2; }
+[[ -n ${DBUS_SESSION_BUS_ADDRESS:-} ]] || { echo "notifications-reply: run under dbus-run-session" >&2; exit 2; }
+command -v quickshell >/dev/null || { echo "notifications-reply: no quickshell" >&2; exit 2; }
+t=$(mktemp -d)
+export XDG_RUNTIME_DIR=$t/xdg QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1 HOME=$t/home
+mkdir -p "$XDG_RUNTIME_DIR" "$HOME/.local/state/omarchy/current"
+ln -sfn /themes/tokyo-night "$HOME/.local/state/omarchy/current/theme"
+
+h=$t/shell
+mkdir -p "$h"
+# Omarchy's Commons and Ui, with its palette qualified as on the phone
+# (Qt 6.12's QtQuick Color shadows a bare `Color.`; AGENTS.md, Userspace).
+for m in Commons Ui services; do cp -r "/omarchy-shell/$m" "$h/$m"; done
+find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
+  -e 's/(^|[^.[:alnum:]_])Color\./\1Commons.Color./g' \
+  -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
+for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
+mkdir -p "$t/omarchy/shell/plugins"
+cp -r /omarchy-shell/plugins/notifications "$t/omarchy/shell/plugins/"
+# git apply: the container has no patch(1); no context fuzz either way.
+git -C "$t/omarchy" apply -p1 "$here/../patches/0015-notifications-inline-reply.patch"
+cp -r "$t/omarchy/shell/plugins/notifications" "$h/notifications"
+# Offscreen has no layer shell: a plain window stands in for the toast
+# surface, and its keyboard-focus binding becomes a property to read.
+sed -i -E -e 's/^(\s*)PanelWindow \{/\1FloatingWindow {/' \
+  -e 's/^(\s*)WlrLayershell\.keyboardFocus: /\1property int kbFocus: /' \
+  -e '/^\s*(WlrLayershell\.|exclusionMode:|mask:|screen: modelData|anchors \{ top: true)/d' "$h/notifications/Service.qml"
+cp "$here/notifications-reply.qml" "$h/"
+
+timeout 60 quickshell -p "$h/notifications-reply.qml" > "$t/qs.log" 2>&1 &
+qs=$!
+for _ in $(seq 100); do busctl --user status org.freedesktop.Notifications >/dev/null 2>&1 && break; sleep 0.2; done
+call() { gdbus call --session -d org.freedesktop.Notifications -o /org/freedesktop/Notifications -m "org.freedesktop.Notifications.$1" "${@:2}"; }
+caps=$(call GetCapabilities)
+dbus-monitor --session "type='signal',interface='org.freedesktop.Notifications'" > "$t/signals" 2>/dev/null &
+mon=$!
+sleep 0.5
+call Notify omamessages 0 '' 'Ada Lovelace' 'Are we still on for 6?' "['default', 'Open', 'inline-reply', 'Reply']" '{}' 0 >/dev/null
+sleep 0.3
+call Notify omarchy 0 '' 'Updates' '12 packages can be upgraded' "['default', 'Open']" '{}' 0 >/dev/null
+wait "$qs" || true
+sleep 0.5
+kill "$mon" 2>/dev/null || true
+
+log=$(sed -nE 's/^.* T (.*)$/\1/p' "$t/qs.log")
+signals=$(grep -A2 -E "member=(NotificationReplied|NotificationClosed|ActionInvoked)" "$t/signals" | sed -nE 's/.*member=(\S+).*/\1/p; s/^\s*(uint32|string) (.*)$/  \2/p' | paste -sd' ')
+status=0
+check() { if eval "$2"; then echo "ok - $1"; else echo "not ok - $1"; status=1; fi; }
+check "the server advertises inline-reply" '[[ $caps == *"'"'inline-reply'"'"* ]]'
+check "only the asking notification gets a placeholder" '[[ $log == *"placeholder plain=\"\" asking=\"Reply\""* ]]'
+check "one Reply button, and no keyboard focus while closed" '[[ $log == *"closed buttons=1 focus=0"* ]]'
+check "opening the field takes focus on demand and stops the countdown" '[[ $log == *"open replies=1 focus=2 field=true ticking=false"* ]]'
+check "a blank reply sends nothing and keeps the toast" '[[ $log == *"blank replies=1 count=2"* ]]'
+check "after Send the field is closed, the toast gone and focus released" '[[ $log == *"sent replies=0 count=1 focus=0"* ]]'
+check "NotificationReplied carries the text, then the toast closes as dismissed" '[[ $signals == "NotificationReplied   1   \"On my way\" NotificationClosed   1   2" ]]'
+if ((status)); then
+  echo "# log: $log"; echo "# signals: $signals"
+  grep -E "Error|error" "$t/qs.log" | head -5 | sed 's/^/# /'
+fi
+rm -rf "$t"
+exit $status

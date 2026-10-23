@@ -47,3 +47,13 @@ pass "every patch has a header"
 
 python3 -B test/patches.py || fail "re-patch tool"
 bash test/update.sh || fail "omamobile-update"
+
+# Patch 0015 end to end (inline reply on a private bus), in the OWL
+# conformance container, when asked: OMAMOBILE_NOTIFY_TEST=1.
+if [[ -n ${OMAMOBILE_NOTIFY_TEST:-} ]]; then
+  docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src:ro" \
+    -v /usr/share/omarchy/themes:/themes:ro -v /usr/share/omarchy/shell:/omarchy-shell:ro \
+    omamobile-owl-conformance:p1 dbus-run-session -- bash /src/test/notifications-reply >/dev/null 2>&1 \
+    || fail "inline reply (test/notifications-reply)"
+  pass "inline reply end to end"
+fi
