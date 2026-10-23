@@ -2,3 +2,7 @@
 post_install() {
   echo "Run 'omamobile-setup-user' as each phone user (Omarchy Mobile's first run does this)."
 }
+
+post_upgrade() {
+  echo "New phone shell plugins and settings reach each user at their next login (omamobile-setup-user.service), or now with 'omamobile-setup-user'."
+}

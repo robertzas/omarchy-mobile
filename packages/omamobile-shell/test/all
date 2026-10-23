@@ -317,6 +317,15 @@ if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$tmp/root/usr/share/applications/omamobile-agent.desktop" || fail "AI Agent desktop entry validates"
 fi
 [[ -x $tmp/root/usr/bin/omamobile-launch ]] || fail "install stages omamobile-launch"
+# Updates reach users set up earlier: setup-user reruns at every login, and
+# only for a user whose first run left the marker the unit waits for.
+u=$tmp/root/usr/lib/systemd/user
+[[ -f $u/omamobile-setup-user.service && $(readlink "$u/graphical-session-pre.target.wants/omamobile-setup-user.service") == ../omamobile-setup-user.service ]] \
+  || fail "the setup-user unit is staged and enabled for every user"
+marker=$(sed -n 's|^ConditionPathExists=%h/.local/state/omarchy/done/||p' systemd/user/omamobile-setup-user.service)
+grep -c "omarchy-done ensure $marker\$\|omarchy-done ensure $marker;" bin/omamobile-setup-user >/dev/null || fail "the unit waits for a marker setup-user's first run leaves"
+grep -cx 'ExecStart=/usr/bin/omamobile-setup-user' systemd/user/omamobile-setup-user.service >/dev/null || fail "the unit runs setup-user"
+[[ -x $tmp/root/usr/bin/omamobile-setup-user ]] || fail "setup-user is installed where the unit runs it"
 [[ -x $tmp/root/usr/bin/omamobile-portal-access && -f $tmp/root/usr/share/xdg-desktop-portal/portals/omamobile.portal \
    && -f $tmp/root/etc/xdg/xdg-desktop-portal/hyprland-portals.conf \
    && -f $tmp/root/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.omamobile.service \

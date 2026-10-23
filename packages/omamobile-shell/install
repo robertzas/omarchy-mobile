@@ -32,6 +32,11 @@ install -Dm644 portal/hyprland-portals.conf "$destination/etc/xdg/xdg-desktop-po
 install -Dm644 portal/org.freedesktop.impl.portal.desktop.omamobile.service \
   "$destination/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.omamobile.service"
 install -Dm644 systemd/user/omamobile-portal-access.service "$destination/usr/lib/systemd/user/omamobile-portal-access.service"
+# User setup at every login (new plugins and steps after an update), enabled
+# for every user by a vendor wants link.
+install -Dm644 systemd/user/omamobile-setup-user.service "$destination/usr/lib/systemd/user/omamobile-setup-user.service"
+install -d "$destination/usr/lib/systemd/user/graphical-session-pre.target.wants"
+ln -sfn ../omamobile-setup-user.service "$destination/usr/lib/systemd/user/graphical-session-pre.target.wants/omamobile-setup-user.service"
 # The file chooser: xdg-desktop-portal-gnome on plain Wayland (its drop-in).
 install -Dm644 systemd/user/xdg-desktop-portal-gnome-omamobile.conf \
   "$destination/usr/lib/systemd/user/xdg-desktop-portal-gnome.service.d/omamobile.conf"

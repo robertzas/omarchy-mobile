@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# omamobile-setup-user at every login, before the compositor and the shell
+# start, so what a package update adds reaches users set up earlier: new
+# plugins linked and switched on, new one-time steps run. Each step runs once
+# (Omarchy's omarchy-done markers), so a rerun changes nothing else. Only
+# for a user that firstboot has set up already: the profile marker is its
+# first run's.
+[Unit]
+Description=Omarchy Mobile user setup (what package updates add)
+ConditionPathExists=%h/.local/state/omarchy/done/omamobile-shell-profile
+Before=graphical-session-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-setup-user
+
+[Install]
+WantedBy=graphical-session-pre.target
