@@ -32,6 +32,9 @@ Item {
   property bool folded: false
   property string foldedFor: ""
   property double nowMs: Date.now()
+  // The lock's "Emergency call" button (Omarchy patch 0014) asked for the
+  // warning; a ringing or live call takes the screen over it.
+  property bool showEmergency: false
 
   readonly property string mode: CallModel.mode(callState, locked, folded)
   readonly property var ringingCall: CallModel.ringing(callState.calls)
@@ -48,10 +51,18 @@ Item {
   function open(payloadJson) {}
   function close() {}
 
+  // `shell call omamobile.call emergency ''`: from the lock's "Emergency
+  // call" button. Until emergency calling has passed its test on a carrier
+  // (TELEPHONY-APPS-PLAN §3.3), the warning, never a dialpad.
+  function emergency() {
+    showEmergency = true
+    return "ok"
+  }
+
   // `shell call omamobile.call state ''`, for tests and debugging (no
   // numbers or names: only what's shown and why).
   function state() {
-    return JSON.stringify({ mode: mode, locked: locked, folded: folded, agent: callState.agent,
+    return JSON.stringify({ mode: mode, locked: locked, folded: folded, emergency: showEmergency, agent: callState.agent,
                             calls: callState.calls.map(function(c) { return c.state }), watcher: watch.running })
   }
 
@@ -132,7 +143,7 @@ Item {
 
   PanelWindow {
     id: fullWindow
-    visible: root.mode === "incoming" || root.mode === "in-call"
+    visible: root.mode === "incoming" || root.mode === "in-call" || root.showEmergency
     anchors { top: true; bottom: true; left: true; right: true }
     exclusionMode: ExclusionMode.Ignore
     color: "transparent"
@@ -140,8 +151,15 @@ Item {
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
 
+    EmergencyInfo {
+      anchors.fill: parent
+      visible: root.showEmergency && root.mode !== "incoming" && root.mode !== "in-call"
+      onClosed: root.showEmergency = false
+    }
+
     CallCard {
       anchors.fill: parent
+      visible: root.mode === "incoming" || root.mode === "in-call"
       call: root.shownCall
       mode: root.mode === "in-call" ? "in-call" : "incoming"
       nowMs: root.nowMs

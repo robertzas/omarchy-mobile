@@ -76,6 +76,12 @@ ShellRoot {
         showReplies: !!shell.shot && shell.shot.showReplies === true
       }
 
+      Call.EmergencyInfo {
+        id: emergencyInfo
+        anchors.fill: parent
+        visible: !!shell.shot && shell.shot.mode === "emergency"
+      }
+
       Call.HeadsUp {
         id: top
         width: parent.width
@@ -108,7 +114,7 @@ ShellRoot {
 
   function capture() {
     var s = shell.shot
-    var target = (s.mode === "heads-up" || s.mode === "mini") ? top : full
+    var target = s.mode === "emergency" ? emergencyInfo : (s.mode === "heads-up" || s.mode === "mini") ? top : full
     console.log("geometry " + s.name + " " + JSON.stringify(shell.describe(target, {})))
     screen.grabToImage(function(result) {
       result.saveToFile(s.png)

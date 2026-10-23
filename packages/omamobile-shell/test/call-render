@@ -57,6 +57,7 @@ print(json.dumps({"shots": [
     shot("heads-up", "heads-up", ada, under="app"),
     shot("waiting", "heads-up", waiting, under="app"),
     shot("mini", "mini", live),
+    shot("emergency", "emergency", None),
 ]}))
 PY
   HOME=$home QT_SCALE_FACTOR=3 CALL_JOB="$h/job-$theme.json" timeout 120 quickshell -p "$h/call-render.qml" > "$h/log-$theme" 2>&1 || true
@@ -71,7 +72,7 @@ def on_screen(r): return r["x"] >= 0 and r["y"] >= 0 and r["x"] + r["w"] <= 480 
 expect = {
     "incoming": ["answerHandle"], "incoming-number": ["answerHandle"], "replies": ["answerHandle"],
     "in-call": ["muteToggle", "speakerToggle", "endButton", "foldButton"],
-    "heads-up": ["declineButton", "answerButton"], "waiting": ["declineButton", "answerButton"], "mini": ["endSmall"],
+    "heads-up": ["declineButton", "answerButton"], "waiting": ["declineButton", "answerButton"], "mini": ["endSmall"], "emergency": ["emergencyClose"],
 }
 ok = len(geo) == len(expect) and not bad
 for name, controls in expect.items():

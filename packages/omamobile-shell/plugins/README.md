@@ -740,8 +740,16 @@ roaming), "No SIM", "SIM locked", the airplane when the radio is off, and
 nothing without a modem. Signal strength shows as empty bars until the
 modem reports a reading (SIT signal strength is TELEPHONY-APPS-PLAN T8).
 
+**Emergency call:** the lock screen's "Emergency call" button (Omarchy patch
+0014, under the number pad on touch-only devices) calls `omarchy-shell shell
+call omamobile.call emergency ''`, and the plugin shows, over the lock, the
+warning TELEPHONY-APPS-PLAN §3.2 asks for until emergency calling has passed
+its test on a carrier (§3.3): "Emergency calls (911, 112) don't work on this
+phone yet. Keep another phone for emergencies." Never a dialpad, and only
+Close.
+
 IPC: `omarchy-shell shell call omamobile.call state ''` (modes and states,
-no numbers or names).
+no numbers or names) and `… emergency ''`.
 
 Tests: `test/call-model.js` (modes, labels, requests, the swipe),
 `test/call-watch.py` (the watcher against a fake agent on a private bus),
