@@ -26,6 +26,8 @@
 # builds in OUT (and OUT-base, for the base's device trees); it never
 # touches the tree's checkout or anything else.
 set -uo pipefail
+# sort and comm must agree on the order, whatever the caller's locale.
+export LC_ALL=C
 self=$(readlink -f "${BASH_SOURCE[0]}")
 repo=$(cd -- "$(dirname -- "$self")/.." && pwd)
 kernel=$HOME/android/mainline/linux
@@ -179,8 +181,11 @@ ${bad%$'\n'}"; fi
         check=""
         command -v dt-validate >/dev/null && check="CHECK_DTBS=y"
         # git archive stamps files with the commit's time: drop earlier
-        # outputs so make rebuilds, and prints, every warning.
-        rm -rf "$out/build/arch/arm64/boot/dts" "$out/build-base/arch/arm64/boot/dts"
+        # outputs so make rebuilds, and prints, every warning. The processed
+        # schema goes too, or a reused OUT validates against an earlier
+        # tree's bindings (kernel #32's own binding went unseen that way).
+        rm -rf "$out/build/arch/arm64/boot/dts" "$out/build-base/arch/arm64/boot/dts" \
+          "$out"/build{,-base}/Documentation/devicetree/bindings/processed-schema.json
         log=$("${k[@]}" W=1 $check $targets 2>&1); st=$?
         if ((st)); then
           fail "device trees don't build:
@@ -192,8 +197,10 @@ $(tail -8 <<<"$log" | sed 's/^/    /')"
           "${kb[@]}" olddefconfig >/dev/null 2>&1
           blog=$("${kb[@]}" W=1 $check $targets 2>&1 || true)
           # Positions go too: a pull request that adds lines above an
-          # existing warning moves it without making it new.
-          norm() { grep -E 'warning|Warning|error' | sed -E -e 's,^[^ ]*/arch/arm64/boot/dts/,,' -e 's,/[^ ]*/(src|src-base)/,,g' \
+          # existing warning moves it without making it new. dt-validate's
+          # messages ("x.dtb: /node: ...") say neither warning nor error,
+          # and a filter on those words alone dropped every one of them.
+          norm() { grep -E 'warning|Warning|error|\.dtbo?: ' | sed -E -e 's,^[^ ]*/arch/arm64/boot/dts/,,' -e 's,/[^ ]*/(src|src-base)/,,g' \
             -e 's/:[0-9]+(\.[0-9]+)?(-[0-9]+(\.[0-9]+)?)?:/:/' | sort -u; }
           new=$(comm -13 <(norm <<<"$blog") <(norm <<<"$log"))
           what="W=1${check:+ and dtbs_check}"
