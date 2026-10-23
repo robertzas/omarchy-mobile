@@ -134,14 +134,21 @@ pass "images gives the same bytes on a second run"
 cat > "$t/bin/fastboot" <<'EOF'
 #!/bin/bash
 echo "$*" >> "$T/fastboot.log"
-[[ $1 == devices ]] && printf 'FAKE123\tfastboot\n'
+if [[ $1 == devices ]]; then
+  printf 'FAKE123\tfastboot\n'
+  [[ -n ${SECOND_PHONE:-} ]] && printf 'OTHER456\tfastboot\n'
+  exit 0
+fi
+# Every other call must name the phone.
+[[ $1 == -s && $2 == "${WANT_SERIAL:-FAKE123}" ]] || { echo "unpinned or wrong serial: $*" >&2; exit 64; }
+shift 2
 [[ $1 == flash && ${FAIL_FLASH:-} == "$2" ]] && { echo FAILED; exit 17; }
 [[ $1 == flash ]] && echo OKAY
 exit 0
 EOF
 chmod +x "$t/bin/fastboot"
 export T=$t
-flashed() { grep '^flash ' "$t/fastboot.log" | cut -d' ' -f2 | tr '\n' ' '; }
+flashed() { grep -E '^-s [^ ]+ flash ' "$t/fastboot.log" | cut -d' ' -f4 | tr '\n' ' '; }
 : > "$t/fastboot.log"
 om twelve flash || { cat "$t/log"; fail "flash runs for the gs201-style device"; }
 [[ $(flashed) == "boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b " ]] || fail "gs201 flash writes its five images (got $(flashed))"
@@ -161,9 +168,21 @@ pass "flash writes exactly the gs101-style BOOT_IMAGES"
 : > "$t/fastboot.log"
 if FAIL_FLASH=vendor_boot_b om six flash; then fail "flash propagates a fastboot failure"; fi
 [[ $(flashed) == "boot_b vendor_boot_b " ]] || fail "flash stops at the failed image"
-! grep -Eq '^--set-active|^reboot' "$t/fastboot.log" || fail "a failed flash never activates or reboots"
+! grep -Eq '^-s [^ ]+ (--set-active|reboot)' "$t/fastboot.log" || fail "a failed flash never activates or reboots"
 grep -q 'flashing vendor_boot_b failed (exit 17)' "$t/log" || fail "flash reports the failed image and status"
 pass "a failed fastboot flash stops before later images, activation and reboot"
+
+# Two phones in fastboot: refused unless FASTBOOT_SERIAL picks one, and
+# then every call names that one.
+: > "$t/fastboot.log"
+if SECOND_PHONE=1 om six flash; then fail "flash refuses two phones in fastboot"; fi
+grep -c '2 phones in fastboot' "$t/log" >/dev/null || { cat "$t/log"; fail "flash says why"; }
+[[ -z $(flashed) ]] || fail "flash writes nothing with two phones"
+: > "$t/fastboot.log"
+SECOND_PHONE=1 FASTBOOT_SERIAL=OTHER456 WANT_SERIAL=OTHER456 om six flash || { cat "$t/log"; fail "FASTBOOT_SERIAL picks the phone"; }
+[[ $(flashed) == "boot_b vendor_boot_b dtbo_b " ]] || fail "the picked phone gets the images"
+grep -E -- '--set-active=b' "$t/fastboot.log" | grep -c -- '-s OTHER456' >/dev/null || fail "activation names the picked phone"
+pass "two phones in fastboot: refused, or the one FASTBOOT_SERIAL names, on every call"
 
 mv "$K/images/dtbo.img" "$t/dtbo.img"
 : > "$t/fastboot.log"
