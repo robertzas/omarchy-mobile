@@ -659,15 +659,16 @@ Everything here was built and tested on the laptop, offline, against a scripted 
 - **P3: pass.** "serving org.omamobile.Phone1 and org.omamobile.Messages1"; `ModemState` `no-modem` with the bridge stopped; 8 emergency numbers; no warnings.
 - **P4: pass** (the owner, on the phone). Phone and Messages opened with no service banner.
 - **P5: pass.** The agent logged "emergency number dialled: warning shown, nothing placed", and nothing else mentions a dial. sitd wasn't running, so nothing could reach the modem.
-- **P6: open.** No `~/.config/omatel/settings.toml` anywhere after the switch was toggled, and no "saving settings failed" warning. The code saves on every switch change, so this needs a repeat with the app's log open before it counts as a bug.
+- **P6: pass (the file half).** On the repeat the owner toggled the switch once and `~/.config/omatel/settings.toml` appeared within seconds, with `lockscreen_details = true` and the other defaults. Why the first run left no file is not known: nothing was logged then. The agent half ("reads it at the next message") needs a message, so it moves to C3.
 - **P7: pass.** The server advertises `inline-reply` on the phone; the owner tapped Reply, typed on squeekboard and sent: `NotificationReplied(1, "yo")`, then `NotificationClosed(1, 2)`.
 - **Found on the way:** the phone had only the seven shell plugins of 2026-10-14 linked. `omamobile-setup-user` links new plugins and switches them on, but it ran only at firstboot, so `omamobile.call` (the call card), `omamobile.switcher` and `omamobile.update` never reached this phone. omamobile-shell 0.2.15 adds `omamobile-setup-user.service`, which reruns it at every login before the compositor starts, for users firstboot has set up (every step is guarded by its `omarchy-done` marker).
+- **omamobile-shell 0.2.15 on the phone:** `omamobile-setup-user.service` ran (condition met, `Result=success`), all ten plugins are linked and switched on, and after a shell restart the call card owns `org.omamobile.CallCard` on the session bus.
 
 **After T2 (a SIM, M4.2-M4.5 passed; the radio transmits: announce it):**
 
 - **C1:** an incoming call from the owner's other phone. Answer, then hang up. Check: the answer page shows within about 1 s of the ring (T6's exit criterion), Recents shows the call, and nothing is in the logs.
 - **C2:** an outgoing call to the other phone. Check the timer and hang-up. Add touch tones to a test IVR only if the owner has one.
-- **C3:** SMS both ways. Reply once from the notification (P7's inline reply). Check: Messages shows the message, `mmcli -m 0 --messaging-list-sms` is empty after storage, and there is no duplicate after `systemctl --user restart omatel-agent`.
+- **C3:** SMS both ways. Reply once from the notification (P7's inline reply). Turn "Sender and text on the lock screen" off and check the next message's notification hides them (P6's agent half). Check: Messages shows the message, `mmcli -m 0 --messaging-list-sms` is empty after storage, and there is no duplicate after `systemctl --user restart omatel-agent`.
 - **C4:** block the other phone's number, call in, and check it is hung up and logged as blocked.
 - **C5:** kill the agent mid-receive (`systemctl --user kill omatel-agent` while texts arrive). Check that nothing is lost or duplicated (T7's exit criterion).
 - **Never:** an emergency number. That is §3.3, and the owner's.
