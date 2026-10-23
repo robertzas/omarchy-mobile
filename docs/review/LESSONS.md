@@ -89,6 +89,20 @@ never change, so reviews can cite them.
   read-modify-write SMC; only a masked restore tells hardware status bits
   from stored ones. *Check:* the probe's call, the restore's mask, and
   Google's own users of that `pmu-offset`. *From:* issue #28.
+- **L-81. A request that cycles USB comes with its own way back.** The
+  gadget is the phone's only link, so "unbind and rebind dwc3" ends the
+  session that would rebind it. *Check:* any requested step that touches
+  dwc3, the USB PHY or the gadget gives one detached job (`systemd-run
+  --unit=…`), a dead-man reboot armed first, the configfs `UDC` re-attach, a
+  fresh SSH login to confirm, and a stop condition (AGENTS.md section 1).
+  *From:* kernel #33, round 2 (correcting round 1's bare request).
+- **L-82. A runbook that avoids `bin/omamobile flash|push` needs a reason we
+  can trace to the code.** #34's plan had the operator write slot B by hand,
+  blaming `push` for a slot A fallback that comes from the initramfs USB-host
+  safety net (no host in 45 s, crash, ABL falls back), whatever wrote the
+  images. *Check:* grep plans for "do not use … flash/push" and hand-written
+  `dd` or `fastboot flash` steps; if the tool really is wrong, fix the tool.
+  *From:* #34, round 2.
 
 ## Shared code and the reference device
 
@@ -289,6 +303,16 @@ never change, so reviews can cite them.
   a shared driver.** It showed #33's coming conflict, and an upstream change
   to cheetah's PIPE3 path that our next base move will bring (an L-51
   event). *From:* kernel #33.
+- **L-83. A `Fixes:` id that CI calls `UNKNOWN_COMMIT_ID` may still be
+  right.** CI's clone holds only our squashed base; a clone with the upstream
+  remote resolves it. *Check:* `git log -1 <id>` there (or git.kernel.org),
+  and confirm it introduced the code being fixed (extends L-30). *From:*
+  kernel #33, round 2.
+- **L-84. For a rebased series, compare the preimages as well as the
+  results.** Identical blobs at both heads *and* both bases mean earlier
+  object comparisons (L-8) still hold without a rebuild; matching results on
+  a moved base mean they must be redone (extends L-69). *From:* kernel #33,
+  round 2.
 
 ## The gates themselves
 
@@ -430,6 +454,15 @@ never change, so reviews can cite them.
   *Check:* `curl -s '<url>?format=TEXT' | base64 -d | sed -n Np`. #29's was
   two lines off: cosmetic there, but a wrong commit or file wouldn't be.
   *From:* kernel #29, round 2.
+- **L-85. "Nothing else changed" needs a "before" from the same boot.** A
+  stop condition such as "no other rail changed" with only an after-read of
+  `regulator_summary` can't fail. *Check:* every "X didn't change" condition
+  has a snapshot step before the action and a diff after. *From:* #34,
+  round 2.
+- **L-86. When a revised driver keeps the protocol but changes the power
+  sequence, the earlier boot covers the protocol only.** Compare the trees
+  (L-69): a changed probe or remove order (rails, reset) needs its own boot,
+  even when the read path is identical. *From:* kernel #32, round 4.
 
 ## Corrections (where a review was wrong)
 
