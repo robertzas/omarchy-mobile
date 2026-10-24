@@ -310,3 +310,86 @@ restores it.
 
 Afterwards: `git worktree remove ~/android/mainline/wt-next` and
 `git branch -d omamobile-next` once merged.
+
+## 6. gs201 PMU and watchdog bindings (`omamobile-gs201-bindings`)
+
+Status (2026-10-24): **built, waiting for one boot.** dt-validate on the
+published `omamobile` reported gs201's PMU, its interrupt generator and both
+cluster watchdogs as matching no schema: the drivers had gs201 entries, the
+bindings never did. Branch `omamobile-gs201-bindings` (worktree
+`~/android/mainline/wt-gs201-bindings`, on `github/omamobile` 97a6b87a87cb),
+six commits:
+
+1. `dt-bindings: watchdog: samsung-wdt: add google,gs201-wdt`
+2. `dt-bindings: soc: samsung: exynos-pmu: add google,gs201-pmu`
+3. `dt-bindings: soc: google: gs101-pmu-intr-gen: add google,gs201-pmu-intr-gen`
+4. `arm64: dts: exynos: google: gs201: use the gs101 fallbacks for the PMU and watchdogs`
+5. `watchdog: s3c2410_wdt: drop the gs201 compatible`
+6. `soc: samsung: exynos-pmu: drop the gs201 compatible`
+
+Each gs201 compatible gets its gs101 fallback, since both drivers already
+used gs101's data unchanged. The PMU node also drops `"syscon"`, as gs101's
+did: with it, a consumer that looks the PMU up before `exynos-pmu` probes
+(the UFS and USB PHYs and the watchdogs use
+`syscon_regmap_lookup_by_phandle()`) gets a plain MMIO regmap whose writes
+the PMU ignores, and `exynos-pmu`'s own registration then fails with
+`-EEXIST`. For the watchdogs that would mean ABL's running watchdogs never
+stop, and a reset about a minute in. Without `"syscon"` such a consumer
+defers. On the boots so far `exynos-pmu` came first, so this removes an
+ordering dependency, not a seen failure.
+
+Offline (2026-10-24): `tools/kernel-pr-check --build` passes except the
+sign-offs, which are the human's; checkpatch's only notes are the
+`Co-Authored-By` trailers. The 2 touched C files build with `W=1`;
+`dt_binding_check` passes on the 3 bindings. `dt-validate -m` on cheetah and
+felix: the 8 "failed to match any schema" messages are gone, nothing new.
+The camera branch's `clk-exynos-clkout` also has a `google,gs201-pmu` entry
+with gs101's data; it still matches, and can go when that branch is curated.
+
+The boot test is the phone's running kernel (`omamobile-test-touch`,
+8cd00dcfc564) plus this series: branch `omamobile-test-gs201b`, worktree
+`~/android/mainline/wt-test-gs201b`, output `~/android/mainline/out-test-gs201b`.
+That tree is older than the published one, so the two binding hunks and the
+two driver hunks were applied by hand there (the zuma entries aren't in it);
+the DTS commit applied as it is. Built as `7.3.0-rc6-omamobile-push1-00576-gc545bd509c58`;
+its DTB differs from the running one in the four compatible lines only.
+
+Baseline (read-only, 2026-10-24, `7.3.0-rc6-omamobile-push1-00570-g8cd00dcfc564`):
+both watchdogs bound to `s3c2410-wdt`, the PMU to `exynos-pmu`, `exynos-clkout`
+present, `devices_deferred` empty, the regmaps `pmu_regs` and `pmu_intr_gen`
+only, `/dev/watchdog0` and `watchdog1`, PMU compatible `google,gs201-pmu syscon`.
+
+**6.1 Boot it (risk: medium; the human's go, AGENTS.md section 1).** What
+can go wrong: the watchdogs not taken over (a reset about 60 s after boot,
+then ABL's slot A fallback after repeated failures) or UFS not coming up.
+
+```sh
+cd ~/Projects/omarchy-mobile
+KERNEL_DIR=~/android/mainline/wt-test-gs201b KERNEL_OUT=~/android/mainline/out-test-gs201b bin/omamobile push
+tools/phone-ssh 'uname -r; cut -d" " -f1 /proc/uptime
+  tr "\0" " " < /proc/device-tree/soc@0/system-controller@18060000/compatible; echo
+  for d in 10060000.watchdog 10070000.watchdog 18060000.system-controller; do
+    echo "$d -> $(basename "$(readlink /sys/bus/platform/devices/$d/driver)")"; done
+  ls /sys/bus/platform/devices | grep -c exynos-clkout
+  cat /sys/kernel/debug/devices_deferred; ls /sys/kernel/debug/regmap | grep 18060000
+  dmesg | grep -iE "exynos-pmu|s3c2410|syscon|pmu-syscon|ufs.*(err|fail)"'
+sleep 90; tools/phone-ssh 'cut -d" " -f1 /proc/uptime'   # still the same boot
+```
+
+Expect: the new release; compatible `google,gs201-pmu google,gs101-pmu`; the
+same three drivers bound; `exynos-clkout` present; nothing deferred; only
+`pmu_regs` and `pmu_intr_gen`; no PMU, syscon or UFS errors (a "failed syscon
+remap" from the UFS PHY that then probes is a deferral, not a failure);
+uptime past 150 s on the second read. Then `tools/phone-smoke`.
+
+Stop: no SSH after 3 minutes, an uptime that drops between the reads (the
+watchdog fired), or a missing driver binding. Rollback: push the running
+kernel again (`KERNEL_DIR=~/android/mainline/wt-touch
+KERNEL_OUT=~/android/mainline/out-touch bin/omamobile push`, images still in
+`out-touch/images`); if the phone reset-loops, `bin/omamobile flash` those
+images from fastboot. If it fell back to slot A, take a fresh read-only
+backup before any radio work (AGENTS.md section 1).
+
+**6.2 Publish.** After a passing boot: sign off, then open the six commits
+as a pull request against linux-omarchy-mobile's `omamobile`, so CI gates
+them like any other, and merge with a rebase.
