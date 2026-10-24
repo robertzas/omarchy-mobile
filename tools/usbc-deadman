@@ -47,8 +47,10 @@ die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '/^# Usage:/,/^# 5 refused/p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 # Every call gets its own stdin and a hard time limit, so a stuck SSH can
 # neither eat our terminal nor hang the loop.
-phone() { timeout 30 "$SSH" "$@" < /dev/null; }
-phone_in() { timeout 30 "$SSH" "$@"; }   # with our stdin (file uploads)
+# --fresh: a shared connection (OMAMOBILE_SSH_SHARE) would outlive the very
+# loss of new logins this tool must notice.
+phone() { timeout 30 "$SSH" --fresh "$@" < /dev/null; }
+phone_in() { timeout 30 "$SSH" --fresh "$@"; }   # with our stdin (file uploads)
 
 recovery() {
   cat <<'EOF'
@@ -115,7 +117,7 @@ say "streaming the phone's kernel log to $log"
 export SSH
 setsid bash -c '
   while :; do
-    "$SSH" -T -o ServerAliveInterval=1 -o ServerAliveCountMax=3 \
+    "$SSH" --fresh -T -o ServerAliveInterval=1 -o ServerAliveCountMax=3 \
       "exec cat /dev/kmsg" |
       while IFS= read -r line; do printf "%s %s\n" "$(date +%T.%3N)" "$line"; done
     echo "# $(date +%T.%3N) log stream ended"; sleep 2

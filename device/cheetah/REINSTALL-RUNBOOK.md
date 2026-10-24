@@ -256,7 +256,7 @@ desktop with the phone shell, behind the lock screen's PIN pad.
 ```sh
 tools/phone-ssh 'ufw show added | grep "usb0"'
 tools/phone-ssh 'systemd-run --unit=fw-deadman --on-active=90 /usr/bin/ufw disable && ufw --force enable'
-tools/phone-ssh 'echo fresh login works; ufw status | head -3'      # a NEW connection
+tools/phone-ssh --fresh 'echo fresh login works; ufw status | head -3'   # a NEW connection
 tools/phone-ssh 'systemctl stop fw-deadman.timer'
 tools/phone-ssh '(sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
 tools/phone-ssh 'uptime; ufw status | head -1; systemctl is-active omamobile-firstboot'   # after ~40 s

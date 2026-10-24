@@ -141,6 +141,7 @@ tools/phone-ssh <command>      # root@172.16.42.1 over USB
 tools/phone-mirror             # the phone's screen in a window here, mouse and keyboard included (omamobile-mirror)
 ```
 
+- **An SSH key that needs a touch per connection** (a security key): set `OMAMOBILE_SSH_SHARE=1`, and `tools/phone-ssh` (so `push` too) shares one connection and asks once. Check that SSH still works after a USB or firewall step with `tools/phone-ssh --fresh`, which never shares.
 - **The device** comes from `DEVICE` (default `cheetah`, in [`omamobile.conf`](omamobile.conf)) and its descriptor `device/<codename>/device.conf`: `DEVICE=<codename> bin/omamobile images`. How builds and releases work for several devices: [docs/RELEASES.md](docs/RELEASES.md).
 - **One worktree per subsystem branch.** Each branch gets its own output directory (`KERNEL_DIR=~/android/mainline/wt-gnss KERNEL_OUT=~/android/mainline/out-gnss bin/omamobile kernel`), so builds don't step on each other.
 - **The kernel command line goes in the DTB** (`/chosen/bootargs`), not in `vendor_boot`: the Pixel bootloader (ABL) ignores the vendor_boot cmdline.

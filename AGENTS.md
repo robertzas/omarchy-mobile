@@ -18,7 +18,7 @@ Omarchy Mobile runs native Omarchy (Arch Linux ARM, Hyprland, Omarchy's packages
 - **Read-only steps first, then one change per boot.** New DT nodes stay `disabled` and are enabled by an overlay in [`device/cheetah/overlays/`](device/cheetah/overlays). Blacklist a module before installing a DTB that enables its node. Two new things that fail together tell you nothing.
 - **Arm a safety net before every risky step:**
   - for anything that loads drivers or pokes hardware, a log stream to the laptop first and `--watchdog` (the stage tools do both);
-  - for anything that can cut USB, a dead-man switch: `tools/usbc-deadman`, or `systemd-run --unit=x-deadman --on-active=90 <undo>`, then confirm over a *fresh* SSH login and stop the timer;
+  - for anything that can cut USB, a dead-man switch: `tools/usbc-deadman`, or `systemd-run --unit=x-deadman --on-active=90 <undo>`, then confirm over a *fresh* SSH login (`tools/phone-ssh --fresh`) and stop the timer;
   - for anything at boot, a hang marker.
 
   USB is the only link, so a step that can kill it must be able to undo itself.
@@ -71,6 +71,7 @@ bin/omamobile push     -> modules-push, dd into *_b, sha256 verify, reboot-to om
 bin/omamobile flash    -> the same images through fastboot (first install, recovery)
                                                     omamobile-boot-success marks slot B good
 tools/phone-ssh CMD    -> run anything; stream files with  ssh 'cat > f' < f
+                          (OMAMOBILE_SSH_SHARE=1: one shared connection; --fresh: never)
 ```
 
 | Tool | Use |
@@ -90,6 +91,7 @@ tools/phone-ssh CMD    -> run anything; stream files with  ssh 'cat > f' < f
 | `tools/phone-install-package packages/X` | Build a package on the phone and install it |
 | `tools/pr-check [BASE]`, `tests/packages` | The pull-request gate CI runs (`.github/workflows/checks.yml`): identifiers, blobs, AI sign-offs and scripts that parse, then every package's `test/all`; run both before you push (CONTRIBUTING.md §6.5) |
 | `tools/kernel-pr-check [-C KERNEL] [--build OUT] BASE [HEAD]` | The same gate for linux-omarchy-mobile pull requests: a human Signed-off-by from the author, subsystem prefixes, `checkpatch --strict`, identifiers, and with `--build` the `W=1` builds of touched C files, device trees (new warnings only, against the base) and bindings. Build it in the project container with the Android clang on `PATH` |
+| `tools/phone-ssh [--fresh\|--stop] CMD` | Run a command on the phone. `OMAMOBILE_SSH_SHARE=1` shares one connection (kept 60 s), so a key that needs a touch per connection asks once rather than about 25 times in `push`. A shared connection survives what happens to new ones, so a check that SSH still works after a USB or firewall step uses `--fresh` (`tools/usbc-deadman` always does) |
 | `tools/phone-smoke` | Read-only smoke test of a running phone, with a report for the pull request: boot slot, storage guard, root, kernel health, USB, session, then display, GPU, touch, radios, battery, sound, sensors and cameras as evidence. `--here` on the phone, `--json` for a machine |
 | `omamobile-update` (on the phone; `omamobile-omarchy`) | What `omarchy update` runs on the phone: Omarchy's own update with the phone's stand-ins (docs/RELEASES.md §5.4). `check --json` is read-only; an update changes the phone's packages and restarts the shell, so it is the human's call |
 | `omamobile-omarchy-patches status\|verify\|apply` (on the phone) | The Omarchy patch series: what is applied, already upstream or failed; `apply` re-applies it all or nothing (the pacman hook does this after every Omarchy upgrade). Log: `/var/log/omamobile/omarchy-patches.log` |
@@ -168,7 +170,7 @@ Each entry gives the gotcha, then the reason or the fix. Details are in the link
 
 ### USB
 
-- **The MAX77759 opens the USB2 data switch on unplug, and nothing closes it until a Type-C driver owns the chip:** the phone stays off the bus after a replug. `omamobile-usb-rescue` closes it while VBUS is valid. Tests that need the cable out (`power-ab`) must run detached and must not assume USB comes back. [USB-C-PLAN](device/cheetah/USB-C-PLAN.md)
+- **The MAX77759 opens the USB2 data switch on unplug, and nothing closes it until a Type-C driver owns the chip:** the phone stays off the bus after a replug. `omamobile-usb-rescue` closes it while VBUS is valid. Tegu's MAX77779 does the same (`USBSW_CTRL` 0x09 to 0x00 on unplug, reported on kernel #40), so expect it on every Tensor phone until its Type-C driver lands. Tests that need the cable out (`power-ab`) must run detached and must not assume USB comes back. [USB-C-PLAN](device/cheetah/USB-C-PLAN.md)
 - **USB doesn't come back after `kexec`.**
 - **PID 1 must never exit:** a missing busybox applet once made init exit, and the resulting panic looked like a USB fault because of `console=null`.
 
@@ -187,7 +189,7 @@ Each entry gives the gotcha, then the reason or the fix. Details are in the link
 - **Omarchy upgrades overwrite our Omarchy patches;** `omamobile-omarchy`'s pacman hook puts them back (all or nothing, from Omarchy's own files). Edit the series in `packages/omamobile-omarchy/patches` (`patches/omarchy` links there), bump that package's version, and make every patch apply with `--fuzz=0` on the Omarchy the phone runs: `packages/omamobile-omarchy/test/all` applies it to the real aarch64 package. A patch Omarchy has absorbed is reported as upstream: drop it.
 - **`environment.d` can't unset a variable:** `VAR=` with an empty value is a syntax error, and the generator skips the line silently, so the old value stays. Set an explicit value instead (`omamobile-shell` uses `none`).
 - **GeoClue answers no client until an authorization agent is registered for the caller's user,** and queues the call with no timeout, so every client just times out. `omamobile-gnss` runs GeoClue's demo agent as a user unit; app allow-list entries skip only the agent's question, not the agent.
-- **Firewall changes** (ufw is on): arm `systemd-run --on-active=90 /usr/bin/ufw disable` first, then check with a fresh SSH connection.
+- **Firewall changes** (ufw is on): arm `systemd-run --on-active=90 /usr/bin/ufw disable` first, then check with a fresh SSH connection (`tools/phone-ssh --fresh`).
 
 ## 5. Where things are
 

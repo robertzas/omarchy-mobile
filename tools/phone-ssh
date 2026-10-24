@@ -2,5 +2,25 @@
 # SPDX-License-Identifier: MIT
 # phone-ssh: run a command on the phone over USB networking.
 # The host side needs 172.16.42.2/24 on the gadget link (NetworkManager profile "omamobile-phone").
-exec ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-  -o ConnectTimeout=6 root@172.16.42.1 "$@"
+#
+#   tools/phone-ssh [--fresh | --stop] [COMMAND...]
+#
+# OMAMOBILE_SSH_SHARE=1 makes every call share one connection (OpenSSH
+# ControlMaster, kept 60 s after the last call), so a key that needs a touch
+# per connection asks once instead of once per call: `bin/omamobile push`
+# makes about 25. A shared connection outlives what happens to new ones, so
+# a check that a step left SSH working (a USB or firewall change, AGENTS.md
+# section 1) must use --fresh, which never shares. --stop closes the shared
+# connection.
+opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=6)
+path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-%C"
+case ${1:-} in
+  --fresh) shift; opts+=(-o ControlMaster=no -o ControlPath=none) ;;
+  --stop) exec ssh "${opts[@]}" -o ControlPath="$path" -O exit root@172.16.42.1 2>/dev/null ;;
+  *)
+    # Keepalives end a master whose phone rebooted within about 6 s, so
+    # calls after a reboot don't wait on a dead connection.
+    [[ ${OMAMOBILE_SSH_SHARE:-0} == 1 ]] && opts+=(-o ControlMaster=auto -o ControlPath="$path"
+      -o ControlPersist=60 -o ServerAliveInterval=2 -o ServerAliveCountMax=3) ;;
+esac
+exec ssh "${opts[@]}" root@172.16.42.1 "$@"

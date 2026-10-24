@@ -343,7 +343,7 @@ Firewall, under a dead-man switch (AGENTS.md):
 
 ```sh
 tools/phone-ssh 'systemd-run --unit=x-deadman --on-active=90 /usr/bin/ufw disable && omamobile-waydroid firewall on && ufw status'
-tools/phone-ssh 'systemctl stop x-deadman.timer'   # from a fresh SSH login
+tools/phone-ssh --fresh 'systemctl stop x-deadman.timer'   # a fresh SSH login
 ```
 
 ### W4: the container, no Android UI yet (risk medium)
