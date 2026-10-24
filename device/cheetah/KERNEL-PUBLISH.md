@@ -313,7 +313,8 @@ Afterwards: `git worktree remove ~/android/mainline/wt-next` and
 
 ## 6. gs201 PMU and watchdog bindings (`omamobile-gs201-bindings`)
 
-Status (2026-10-24): **built, waiting for one boot.** dt-validate on the
+Status (2026-10-24): **boot test passed; waiting for the sign-off and the
+pull request (6.2).** dt-validate on the
 published `omamobile` reported gs201's PMU, its interrupt generator and both
 cluster watchdogs as matching no schema: the drivers had gs201 entries, the
 bindings never did. Branch `omamobile-gs201-bindings` (worktree
@@ -389,6 +390,15 @@ KERNEL_OUT=~/android/mainline/out-touch bin/omamobile push`, images still in
 `out-touch/images`); if the phone reset-loops, `bin/omamobile flash` those
 images from fastboot. If it fell back to slot A, take a fresh read-only
 backup before any radio work (AGENTS.md section 1).
+
+Result (2026-10-24, `7.3.0-rc6-omamobile-push1-00576-gc545bd509c58`): **pass.**
+PMU compatible `google,gs201-pmu google,gs101-pmu`; both watchdogs bound to
+`s3c2410-wdt`, the PMU to `exynos-pmu`; `exynos-clkout` present;
+`devices_deferred` empty; the regmaps `pmu_regs` and `pmu_intr_gen` only;
+`/dev/watchdog0` and `watchdog1`; no PMU, syscon or UFS errors (the two
+watchdogs log "inactive, reset disabled" at 0.59 s, their takeover).
+Uptime 87 s, then 180 s on the same boot. `tools/phone-smoke`: every check
+ok, no failed units.
 
 **6.2 Publish.** After a passing boot: sign off, then open the six commits
 as a pull request against linux-omarchy-mobile's `omamobile`, so CI gates
