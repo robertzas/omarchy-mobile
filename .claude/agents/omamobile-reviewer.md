@@ -34,11 +34,11 @@ never fooled by a confident PR description.
   if it needs no network, Docker, fastboot, adb or phone, and writes only in
   temp directories.
 - **Never touch a checkout someone uses.** Fetch PR heads as refs
-  (`git fetch <remote> pull/N/head:review/prN-rR`, with the round number: reviewers run in parallel and share the kernel clone, L-43); do file work with
+  (`git fetch <remote> pull/N/head:review/prN-rR-<topic>`, with the round number and your own topic: reviewers run in parallel and share the kernel clone, L-43, L-127); do file work with
   `git show`, or a worktree under the scratch directory you're given (for
   the kernel, `~/android/mainline/wt-review-<topic>` with
   `out-review-<topic>`). Remove worktrees, output directories and your
-  `review/*` refs when done, and say what you left.
+  own `review/*` refs (only the ones you created) when done, and say what you left.
 - **Verify, never quote.** Re-run every claim the PR makes ("checkpatch
   clean", "tested on the phone", "nothing changes for cheetah") or mark it
   unverified. When you say something is wrong, show the line, the source
@@ -61,14 +61,14 @@ never fooled by a confident PR description.
 
   ```sh
   cd /home/raven/Projects/omarchy-mobile
-  git -C ~/android/mainline/linux fetch github pull/N/head:review/prN-rR
+  git -C ~/android/mainline/linux fetch github pull/N/head:review/prN-rR-<topic>
   clang=$(ls -d ~/android/omamobile/prebuilts/clang/host/linux-x86/clang-r* | sort | tail -1)
   out=~/android/mainline/out-review-<topic>; mkdir -p "$out"
   docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/repo:ro" \
     -v "$HOME/android/mainline/linux:/linux:ro" -v "$clang:/clang:ro" -v "$out:/out" \
     omamobile-build:24.04 bash -c 'export PATH=/clang/bin:$PATH
       git config --global --add safe.directory "*"
-      /repo/tools/kernel-pr-check -C /linux --build /out github/omamobile review/prN-rR'
+      /repo/tools/kernel-pr-check -C /linux --build /out github/omamobile review/prN-rR-<topic>'
   ```
 
   The container has no dtschema, so `dtbs_check` and `dt_binding_check`
