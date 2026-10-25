@@ -72,7 +72,7 @@ def show(status):
     print(f"SIM: {sim.get('state', 'unknown')}{retries}; radio: {m.get('radio', 'unknown')}")
     print(f"network: {m.get('registration')} {m.get('tech')} {m.get('operator')}".rstrip())
     print(f"IMS voice: {'yes' if m.get('voice') else 'no'}, SMS: {'yes' if m.get('sms') else 'no'}, "
-          f"data bearer: {'up' if m.get('data') else 'down'}")
+          f"data bearer: {'up' if m.get('data') else 'down'} (IMS {m.get('ims', 'unknown')})")
     for call in status.get('calls', []):
         print(f"call {call.get('id', '')}: {call['direction']} {call['state']}")
 

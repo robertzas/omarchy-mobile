@@ -13,7 +13,9 @@ owner. This order registered on LTE with IMS voice and SMS on this phone:
      for an IMS registration with voice and SMS.
 
 No retransmission of SMS/calls and no warm CP restart. A failed or uncertain
-step ends start-up; the service exits and the modem stays up for diagnosis.
+step up to the internet bearer ends start-up; the service exits and the
+modem stays up for diagnosis. An IMS step that fails leaves the service
+running with data only, unless [network] ims_required = yes.
 """
 import time
 
@@ -142,13 +144,29 @@ def start(service, settings, stopped=lambda: False):
     activate(client, apn, ip_type=ip_type)
     service.pump()
     if not net.getboolean('ims', True):
+        service.ims_state = 'off'
         print('Startup: registered with data; IMS off ([network] ims = no)', flush=True)
         return
+    service.ims_state = 'pending'
     service.stage('ims')
-    start_stack(client)
-    activate(client, net.get('ims_apn', 'ims'), ims=True)
-    register(client)
-    print('Startup: waiting for IMS voice and SMS registration', flush=True)
-    wait_for(service, lambda: service.registration().get('state') == 2 and
-             service.registration().get('features', 0) & 3 == 3, 120, stopped)
+    try:
+        start_stack(client)
+        activate(client, net.get('ims_apn', 'ims'), ims=True)
+        register(client)
+        print('Startup: waiting for IMS voice and SMS registration', flush=True)
+        wait_for(service, lambda: service.registration().get('state') == 2 and
+                 service.registration().get('features', 0) & 3 == 3,
+                 net.getint('ims_timeout', 120), stopped)
+    except (RuntimeError, TimeoutError, ValueError) as error:
+        # The internet bearer is up and owned: keep serving it. Nothing about
+        # IMS is retried (an uncertain IMS bearer or ADD_PDN is never sent
+        # twice); a registration the modem completes later still shows up
+        # through its indication. ims_required = yes keeps the old rule.
+        service.ims_state = 'failed'
+        if net.getboolean('ims_required', False):
+            raise
+        print('Startup: IMS did not register (' + type(error).__name__ + ': ' + str(error) +
+              '); serving data only, no SMS or calls', flush=True)
+        return
+    service.ims_state = 'registered'
     print('Startup: LTE, IMS voice and SMS registered', flush=True)

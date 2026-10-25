@@ -136,6 +136,8 @@ class Service:
         self.sim = dict(state='unknown')
         self.radio = 'unknown'
         self.current_stage = 'starting'
+        # IMS as start-up left it: unknown (no start-up), off, pending, failed, registered.
+        self.ims_state = 'unknown'
         self.next_poll = 0
         self.published = None
         self.subscribers = []
@@ -387,6 +389,7 @@ class Service:
                      plmn=self.net['plmn'], operator_name=self.net['operator'],
                      voice=voice, sms=sms, data=data, signal=0, audio=True,
                      radio=self.radio, sim=dict(self.sim),
+                     ims='registered' if voice or sms else self.ims_state,
                      emergency_numbers=list(EMERGENCY + (EMERGENCY_NO_SIM if self.sim['state'] == 'absent' else ())))
         calls = [{k: v for k, v in c.items() if k != 'modem_id'} for c in self.calls.values()]
         if public:

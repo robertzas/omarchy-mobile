@@ -239,6 +239,32 @@ class SimulatorTests(unittest.TestCase):
         self.assertNotIn(0x0d08, ids)
         self.assertFalse([e for e in self.transcript_entries() if 'violation' in e])
 
+    def test_ims_failure_keeps_data_without_sms_or_calls(self):
+        (self.dir / 'modem-sit.conf').write_text(
+            '[network]\napn = internet.example\nsim_timeout = 20\nregister_timeout = 30\nims_timeout = 2\n'
+            '[audio]\ncard = none\n')
+        self.start('--no-ims-registration')
+        self.wait_ready()
+        modem = json.loads(self.cli('status', '--json'))['modem']
+        self.assertEqual((modem['stage'], modem['ims'], modem['data'], modem['voice'], modem['sms']),
+                         ('running', 'failed', True, False, False))
+        self.assertIn('IMS failed', self.cli('status'))
+        refused = subprocess.run([sys.executable, str(BIN / 'omamobile-sit'), 'sms', 'send', '+12025550199', 'x'],
+                                 env=self.env, capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn('not registered', refused.stderr)
+        ids = [e['id'] for e in self.transcript_entries() if e.get('type') == 'req']
+        self.assertEqual(ids.count(0x0d08), 1)       # ADD_PDN_INFO never repeated
+        self.assertNotIn(0x0d1b, ids)                # no SMS went out
+        self.assertIn('serving data only', (self.dir / 'daemon.log').read_text())
+
+    def test_ims_required_ends_startup_when_ims_fails(self):
+        (self.dir / 'modem-sit.conf').write_text(
+            '[network]\napn = internet.example\nsim_timeout = 20\nregister_timeout = 30\nims_timeout = 2\n'
+            'ims_required = yes\n[audio]\ncard = none\n')
+        self.start('--no-ims-registration')
+        self.assertNotEqual(self.daemon.wait(40), 0)
+
     def test_no_apn_never_switches_the_radio(self):
         (self.dir / 'modem-sit.conf').write_text('[audio]\ncard = none\n')
         self.start()

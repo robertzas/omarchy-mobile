@@ -23,9 +23,11 @@ announced with IND_RADIO_STATE_CHANGED. Every value is made up: numbers are
 fictional 555-01xx ones, addresses are from the documentation ranges.
 
   tools/sit-sim --ipc PATH --router PATH [--transcript FILE] [--search-polls N]
-                [--incoming-sms] [--no-sim] [--reject-setup CAUSE] [--control PATH]
+                [--incoming-sms] [--no-sim] [--reject-setup CAUSE]
+                [--no-ims-registration] [--control PATH]
 
---control PATH is a datagram socket for tests: "ring" (an incoming IMS call),
+--no-ims-registration accepts ADD_PDN_INFO but never registers IMS (a
+carrier whose IMS values differ). --control PATH is a datagram socket for tests: "ring" (an incoming IMS call),
 "remote-hangup" (the far end ends the current call), "sms" (one text
 message), "wap-push" (one MMS notification: an 8-bit SMS to port 2948).
 
@@ -230,7 +232,8 @@ class Sim:
             self.indicate(0x0d05, struct.pack('<BBIHHH', 2, 3, 3, 0, 0, 0))
             if self.a.incoming_sms:
                 self.after(0.3, self.incoming_sms)
-        self.after(0.1, registered)
+        if not self.a.no_ims_registration:
+            self.after(0.1, registered)
 
     def r_0108(self, mid, token, p):            # GET_SMSC_ADDR
         self.respond(mid, token, 0, bytes([7, 0x91]) + bytes.fromhex('2120550521f3') + bytes(5))
@@ -325,6 +328,7 @@ def main():
     p.add_argument('--incoming-sms', action='store_true')
     p.add_argument('--no-sim', action='store_true')
     p.add_argument('--reject-setup', type=int, default=0)
+    p.add_argument('--no-ims-registration', action='store_true')
     p.add_argument('--control')
     p.add_argument('-v', '--verbose', action='store_true')
     a = p.parse_args()
