@@ -149,6 +149,13 @@ class SimulatorTests(unittest.TestCase):
         log = (self.dir / 'daemon.log').read_text()
         for secret in ('2025550123', '2025550199', 'hello', 'omamobile test'):
             self.assertNotIn(secret, log)
+        # The SIM's AID and label and the IMS identity (an IMSI-based SIP URI
+        # and a number) reach neither the log nor any status, public or not.
+        published = log + public + self.cli('status', '--json') + self.cli('status')
+        for secret in ('001010000000017', '3gppnetwork', '2025550100', 'SIMSIM', 'a0000000871002ff',
+                       '89012600'):
+            self.assertNotIn(secret, published)
+        self.assertIn('"pin_retries": 3', self.cli('status', '--json'))
 
         self.assertEqual(self.cli('radio', 'off').strip(), 'off')
         at = [e['cmd'] for e in self.transcript_entries() if e.get('type') == 'at']
