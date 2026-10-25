@@ -243,7 +243,8 @@ class Registered(BridgeTests):
                                  (mm.CALL_ACTIVE, mm.CALL_TERMINATED, mm.REASON_TERMINATED)])
         self.assertEqual(len(self.client.named('CallAdded')), 1, 'sitd\'s call is the same MM call')
         self.client.call(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,))
-        self.assertEqual(self.sitd.requests[-1], {'action': 'delete-call', 'id': '100'})
+        # The bridge forwards delete-call without waiting for sitd's reply.
+        wait_until(lambda: self.sitd.requests[-1] == {'action': 'delete-call', 'id': '100'}, 5, 'delete-call')
         self.assertEqual(self.client.call(MODEM0, mm.VOICE, 'ListCalls')[0], [])
         spin(.1)
         self.assertEqual(self.client.named('CallDeleted')[-1][3], (path,))
