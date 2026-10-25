@@ -24,8 +24,10 @@ vectors, so the endpoint's MSI domain went with them allocated;
 fixed in `7b2b87cb7`. **M4.1k passed (2026-10-13, 00514):** the same
 reboot with no WARN at all, NV unchanged. That is the second clean
 reboot with the modem up, so a reboot after a modem start no longer
-needs the human at the phone. M4.2 needs a SIM. Section 6.3 lists what our CPIF
-port still lacks for data and suspend.
+needs the human at the phone. T1 (2026-10-14): the ModemManager bridge
+passed without a SIM. **M4.2 needs a SIM: follow "M4.2-M4.7: the first
+SIM test" (end of section 3).** Section 6.3 lists what our CPIF port
+still lacks for data and suspend.
 Kernel branch `omamobile-modem` in `~/android/mainline/wt-modem` (head
 `d34bbbad4`, section 6.3, M3.4.5b and M4.1b-M4.1k), build in `~/android/mainline/out-modem` (last
 full build `7.3.0-rc6-omamobile-push1-00370-gd34bbbad467d`, W=1 clean on
@@ -1446,11 +1448,17 @@ reached by calls and SMS while the RIL runs.
 
 **Preconditions:** M3.4.6 passed and the modem left ONLINE; M3.5 passed.
 A SIM with its PIN lock off (the RIL has no PIN entry: take the lock off in
-another phone). The carrier's APN known. For voice (M4.5):
-`omamobile-audio` running with speaker protection, stage `media` (AGENTS:
-stay under the stage's volume ceilings). The UFS check above after every
+another phone). The carrier's APN known. The UFS check above after every
 step. Check every excerpt for digit runs before quoting it here: numbers,
 IMSI and addresses never go into the plan.
+
+**2026-10-25: M4.0 and M4.2-M4.7 below are superseded by "M4.2-M4.7: the
+first SIM test" at the end of section 3** (`omamobile-modem-sit`
+0.3.3: no call audio by default, the earpiece ceiling, IMS failure keeps
+data). They stay as written for the record; M4.1 is the probe both use.
+M4.5 below routed call audio at stage `media`, which puts the top
+amplifier (the earpiece) at analog 10, above the earpiece ceiling of 6
+(AUDIO-PLAN section 4): don't run it.
 
 ```sh
 # M4.0 install, enable nothing (risk: none). The human writes the APN.
@@ -2322,7 +2330,8 @@ not blocking M4.2: suspend with the modem up (CPIF's PM paths, section
 
 **M4.2 needs a SIM**: registration waits for GET_SIM_STATUS to show a
 ready USIM (`sim_timeout`, 120 s) and fails without one. With no SIM,
-M4.1b is the last M4 step.
+M4.1b is the last M4 step. With one: "M4.2-M4.7: the first SIM test"
+below.
 
 ### T0/T1: the ModemManager bridge (`omamobile-modem-sit` 0.3.0, `omamobile-mmd` 0.1.0)
 
@@ -2436,12 +2445,234 @@ yet. M3.5 after: unchanged. About 12 minutes after ONLINE
 (12:29): still ONLINE, 0 UFS handler passes, no kernel WARN or oops,
 cp2ap_wakeup interrupts counting (the idle link cycling).
 
-**Next (T2) needs the SIM:** with a SIM (PIN lock off) and the APN, M4.2
-(sitd `--bringup`), then the bridge enabled with sitd, and GNOME Calls
-and Chatty on the phone. Before that, nothing more can be learned on
+**Next (T2) needs the SIM:** with a SIM (PIN lock off) and the APN, the
+runbook below (S7 is M4.2, sitd `--bringup`; S11 the bridge and the apps). Before that, nothing more can be learned on
 hardware: registration, calls, SMS and the WAP push path all wait on
 M4.2-M4.4.
 
+
+### M4.2-M4.7: the first SIM test (gated runbook, written 2026-10-25)
+
+**This is the runbook to follow when the SIM arrives.** It replaces the
+M4.0 and M4.2-M4.7 steps in the M4 section above (written for
+`omamobile-modem-sit` 0.2.0, before M4.1-M4.1k). M4.1-M4.1k and T1 passed
+without a SIM; everything below is the first time the radio transmits.
+
+**What is ready (offline, 2026-10-25):** `omamobile-modem` 0.1.4 (on the
+phone since M4.1h), `omamobile-modem-sit` 0.3.3 and `omamobile-mmd` 0.1.0,
+all with their `test/all` green against `tools/sit-sim`. 0.3.1-0.3.3 add,
+for this test: a PIN-, PUK- or network-locked SIM stops start-up within
+10 s with what to do (nothing is ever sent to unlock it); an IMS failure
+keeps data instead of ending start-up (`[network] ims_required = no`);
+**no call audio by default** (`[audio] card = none`), and with a card,
+audio is refused unless the top amplifier (the earpiece) is at analog 6 or
+less and both are within the media stage; the simulator now carries a
+SIM AID, label and IMS identity, and the tests prove none reaches a log or
+a status.
+
+**What to expect, honestly:**
+
+| Step | Expectation | Why |
+|---|---|---|
+| SIM detection (M4.2a) | likely | GET_SIM_STATUS answered `error=0` on every probe since M4.1h |
+| LTE registration (M4.2) | likely on a T-Mobile-network SIM; unverified elsewhere | the start-up order is the one that registered this phone model, on a T-Mobile-network MVNO (MODEM-CLIENT 1.3) |
+| Data (M4.3) | likely if the bearer has IPv4 | rmnet0 is configured IPv4 only (MODEM-CLIENT 1.3); an IPv6-only bearer (`PDP type 2` in the journal) can't pass yet |
+| IMS registration, SMS (M4.2, M4.4) | possible on a T-Mobile-network SIM; unlikely elsewhere | the IMS values were proven on that one network; on any other, IMS is the likeliest step to fail (data stays up since 0.3.2) |
+| Calls (M4.5) | may ring and connect, **with no audio** either way | call audio is M5: the AoC voice path and an earpiece mode under speaker protection (TELEPHONY-APPS-PLAN T4). Nothing in the call path touches an amplifier while `[audio] card = none` |
+| Emergency calls | **never**: refused by the RIL and the bridge | MODEM-CLIENT 1.3; keep another phone for emergencies |
+| MMS, NR (5G), the eSIM, suspend with the modem on | not part of this test | T3; `nr = off`; the RIL speaks only to the physical slot (`umts_ipc0`); MODEM-PLAN 6.3 |
+
+About one fresh CP start in twenty crashed during registration on this
+phone model (section 4): a crash is recorded, and a reboot recovers it.
+**A second start-up on the same CP is not supported**: after any failed
+step, reboot before the next try. Every reboot with the modem up powers
+it off: one recovered UFS error-handler pass, expected (M2.6, not yet
+attributed to an edge; M4.1j/M4.1k proved the reboot itself clean).
+
+**Never in the repository, a log excerpt or a screenshot:** the phone
+number, the IMSI, the ICCID (it's printed on the SIM card), the IMEI, the
+carrier's name, the APN (TELEPHONY-APPS-PLAN Q8), IP addresses, message
+text, the other phone's number. sitd logs states and codes only; cbd and
+rfsd log through our shim. Before quoting any log, grep it:
+`grep -nE '[0-9]{7,}|\+[0-9]|[0-9a-f]{2}(:[0-9a-f]{2}){5}|@' logs/<file>` must
+show nothing you'd quote.
+
+**Before buying (the human):** a physical nano-SIM, prepaid, ideally on
+the T-Mobile network (section "Which SIM" in MODEM-CLIENT 1.4). Note down
+privately, off the repository: the internet APN exactly as the carrier
+publishes it (and whether it is the same APN for MMS), the IMS APN if the
+carrier names one (most use `ims`), the SIM's default PIN and PUK (on the
+card holder), the phone number, and how to activate it.
+
+```sh
+# S0 laptop, before the SIM (risk: none). Packages and tests.
+packages/omamobile-modem-sit/test/all && packages/omamobile-mmd/test/all && tools/pr-check
+tools/build-packages packages/omamobile-modem-sit     # -> out/repo/aarch64/omamobile-modem-sit-0.3.3-1-aarch64.pkg.tar.zst
+#   pass: all ok. The kernel the phone runs must contain omamobile-modem through d34bbbad4 (M4.1k):
+git -C <int worktree> merge-base --is-ancestor d34bbbad4 <the sha in `tools/phone-ssh uname -r`> && echo has-M4.1k
+#   stop: no "has-M4.1k": push an int build with it first (the modem must not be running on that boot)
+
+# S1 activate and unlock the SIM in ANOTHER phone (the human; risk: none for this phone)
+#   Activate it as the carrier says; make one call or send one SMS from that phone so the line is live;
+#   turn the SIM PIN lock OFF there (the RIL has no PIN entry; 0.3.1 stops with "SIM PIN lock is on").
+#   Don't use this phone's stock Android (slot A) for it: a stock boot rewrites efs, persist and
+#   modem_userdata, and then the profile refuses the stale RAM-copy checksums until a fresh backup
+#   (AGENTS.md section 1; M3.4.4). If slot A is used anyway: fresh read-only backup, new
+#   /etc/omamobile/modem-nv.sha256 (M3.4.1), before S4.
+
+# S2 install and configure, phone still without SIM (asks the human: installs; risk: none)
+tools/phone-ssh 'systemctl is-active omamobile-modem omamobile-sitd omamobile-mmd'
+#   pass: inactive x3 (nothing modem is running this boot). Else: reboot first (M4.1j path)
+tools/phone-ssh 'cat > /tmp/s.pkg.tar.zst' < out/repo/aarch64/omamobile-modem-sit-0.3.3-1-aarch64.pkg.tar.zst
+tools/phone-ssh 'OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U --noconfirm /tmp/s.pkg.tar.zst; pacman -Q omamobile-modem
+  omamobile-modem-sit omamobile-mmd; systemctl is-enabled omamobile-modem omamobile-sitd omamobile-sit-data omamobile-mmd;
+  ls /etc/omamobile/modem-sit.conf.pacnew 2>/dev/null'
+#   pass: 0.1.4, 0.3.3, 0.1.0; "disabled" x4. A .pacnew: merge it (keep card = none, the new ims_* keys)
+# the APN: typed by the human on the phone or through ssh; never pasted into a log
+tools/phone-ssh 'sed -i "s/^apn =.*/apn = <APN>/" /etc/omamobile/modem-sit.conf'
+tools/phone-ssh 'grep -cE "^apn = .+" /etc/omamobile/modem-sit.conf;
+  grep -E "^(ims|ims_apn|ims_required|nr|card) " /etc/omamobile/modem-sit.conf'
+#   pass: 1; ims = yes, ims_apn = ims (or the carrier's IMS APN), ims_required = no, nr = off, card = none
+#   stop: card is anything but none (call audio is M5)
+#   rollback: pacman -U the previous package (0.3.0 is in the phone's pacman cache)
+# Keep the phone on the charger for the whole test: upower's critical action suspends the phone
+# (NOTES 2026-10-18), and suspend with the modem on is untested (section 6.3). Don't toggle airplane
+# mode or `nmcli radio wwan` while the bridge runs: that reaches AT+CFUN=0, and the radio may not
+# register again until a reboot.
+
+# S3 insert the SIM with the phone off (the human; risk: low)
+#   Power-off isn't proven from Linux on this phone (`systemctl poweroff` never ran here). Instead:
+#   hold Volume Down + Power about 20 s (fastboot, AGENTS.md section 1), choose "Power off" in the
+#   bootloader menu (volume keys, Power to confirm). Eject the tray with the SIM tool, nano-SIM in
+#   the tray as its outline shows, tray fully in. Power on with the Power key.
+#   No hot insertion: SIM hot-plug has never run under Linux, and start-up waits only 120 s for the SIM.
+tools/phone-ssh 'uname -r; grep -oE "androidboot.slot_suffix=_[ab]" /proc/cmdline; systemctl --failed --no-legend | wc -l;
+  dmesg | grep -c ufshcd_err_handler'
+#   pass: the expected int release; "_b" (or nothing, as tools/phone-smoke allows); 0; 0
+#   stop: it came up in stock Android (slot A fallback): power off, eject nothing, boot slot B again, and
+#     take a fresh read-only backup before S4 (AGENTS.md section 1)
+
+# S4 M3.5 before (read-only; risk: none): the six partitions against the newest backup, as M3.4.0
+#   into logs/sim-m3.5-before.sha256. pass: no diff, 5x "ro=1 mounted=0". stop: any diff (AGENTS)
+
+# S5 log streams, then the modem to ONLINE (announce: the modem powers on and stays on; risk: medium)
+tools/phone-ssh dmesg -w | tee logs/sim-kmsg.log                       # terminal 2, before anything else
+tools/phone-ssh 'journalctl -f -o short-monotonic -u omamobile-modem -u omamobile-sitd -u omamobile-sit-data
+  -u omamobile-mmd' | tee logs/sim-journal.log                         # terminal 3
+tools/phone-ssh 'systemd-run --unit=x-modem-deadman --on-active=300 systemctl stop omamobile-modem'
+tools/phone-ssh 'rm -f /var/lib/omamobile/modem-bringup-started; sync; systemctl start --no-block omamobile-modem;
+  sleep 60; /usr/lib/omamobile-vendor/omamobile-modem-cp state; dmesg | grep -c ufshcd_err_handler'
+#   pass: ONLINE, as M4.1k (one POWER_ON, ROM link Gen1 x1, main link Gen3 x2, "CP ONLINE (cbd exit 0)");
+#     err_handler unchanged
+tools/phone-ssh 'systemctl stop x-modem-deadman.timer'                 # only once ONLINE was seen
+#   stop: not ONLINE within 5 minutes (the dead-man stops the unit: one UFS pass); collect as M3.4.5, reboot
+#   rollback: reboot
+
+# S6 = M4.1 with the SIM: the read-only probe; the radio stays off (risk: low)
+tools/phone-ssh 'timeout 60 omamobile-sitd --probe' 2>&1 | tee logs/sim-m4.1-probe.log
+#   expect: every request "error=0"; "SIM card state 1 applications [(2, 5), ...]" (a USIM, READY; an ISIM
+#     (5, x) may be listed too); radio state 3 or 1; packet registration state 0; "SMSC present True"
+#   record: the application list (types and states only), radio state, NR mode
+#   stop: card state 0 again (no SIM seen: tray, contacts; power off and reseat; never hot-plug);
+#     the USIM (2, 2) = PIN lock on: back to S1 (power off, the other phone); (2, 3) = PUK: S1, never guess;
+#     (2, 4) = network lock: the carrier; a timeout or a CP crash: collect, reboot
+#   rollback: none (read-only)
+
+# S7 = M4.2 registration and IMS (announce: the radio transmits from now until reboot or `radio off`;
+#   risk: medium: first registration; about 1 in 20 fresh starts crashed the CP here on this model)
+tools/phone-ssh 'systemctl start --no-block omamobile-sitd'
+#   watch terminal 3 until "Calls and SMS service ready" or a failure (allow ~7 minutes: SIM 120 s,
+#   registration 180 s, LTE 120 s, IMS 120 s at most). Expect, in order:
+#   "SIM card state and application type/state: (1, ((2, 5), ...))";
+#   "SIT SET_INITIAL_ATTACH_APN: error=0", "SIT SET_DATA_PROFILE: error=0", "default data profile accepted";
+#   "waiting for packet registration"; "verified NR mode 0";
+#   "data-call status 0 CID 1 active raw 2 PDP type <n>" (record n: 3 IPv4v6, 1 IPv4, 2 IPv6 only);
+#   "SIT AIMS_STACK_START_REQ: error=0"; "data-call status 0 CID 2 ..."; "SIT AIMS_HIDDEN_MENU: error=0";
+#   "SIT AIMS_ADD_PDN_INFO: error=0", "IMS PDN information accepted"; then "Startup: LTE, IMS voice and SMS registered" OR
+#   "Startup: IMS did not register (...); serving data only" (record which); "Calls and SMS service ready"
+tools/phone-ssh 'omamobile-sit status; systemctl is-active omamobile-sitd; /usr/lib/omamobile-vendor/omamobile-modem-cp state;
+  dmesg | grep -c ufshcd_err_handler'
+#   pass: "SIM: ready (...)"; "network: home LTE ..." (or roaming); "data bearer: up"; active; ONLINE;
+#     err_handler unchanged (record any pass with its time against the link lines)
+#   IMS registered: "IMS voice: yes, SMS: yes" -> M4.4 and M4.5 apply. IMS failed: M4.3 only; record the
+#     failing step and status code from the journal, then (offline) the carrier's IMS values are the work
+#   stop: the unit fails before "ready". The journal names the step: "SIM not usable: ..." (S1);
+#     "No ready USIM within 120 s (...)"; "Modem registration deadline exceeded" (no service, the APN, or
+#     the SIM not activated: check coverage and activation in the other phone); "data call did not become
+#     active" with its status (36 = APN refused: check the APN); a CP crash (the watcher writes
+#     /var/log/omamobile/modem-crashes.log). Record step and status, then reboot before another try
+#   rollback: `omamobile-sit radio off` (AT+CFUN=0: deregisters; on again may stall until a reboot), then
+#     `systemctl stop omamobile-sitd`; or reboot (one UFS pass)
+
+# S8 = M4.3 data (risk: low-medium: mobile data use; Wi-Fi keeps the default route)
+tools/phone-ssh 'systemd-run --unit=x-data-deadman --on-active=600 systemctl stop omamobile-sit-data'
+tools/phone-ssh 'omamobile-sit data on; sleep 5; systemctl is-active omamobile-sit-data; ip -br addr show rmnet0 | wc -l;
+  ip route show default | grep -c "dev rmnet0 .*metric 700"; ping -c3 -I rmnet0 9.9.9.9 | tail -2;
+  curl -sS --interface rmnet0 -o /dev/null -w "%{http_code}\n" https://example.org/'
+#   pass: active; 1 (rmnet0 UP with a /32: don't paste it); 1; "3 received"; 200
+#   stop: "An active IPv4 internet bearer is required" (PDP type 2: IPv6-only, a known gap); no replies with the
+#     bearer up (record "Cellular bearer carries nothing"); UFS beyond the expectation
+#   rollback: omamobile-sit data off; systemctl stop x-data-deadman.timer
+#   optional, attended (USB stays: it's the gadget, not Wi-Fi):
+tools/phone-ssh 'nmcli radio wifi off; sleep 60; nmcli radio wifi on'
+#   pass: the journal says "Default internet path cellular", then "Wi-Fi/other"
+
+# S9 = M4.4 SMS (risk: low; sending costs what the plan charges). Needs "SMS: yes" from S7.
+#   receive: the human texts the phone from the other phone
+tools/phone-ssh 'omamobile-sit sms list --json | python3 -c "import json,sys; print(len(json.load(sys.stdin)))"'
+#   pass: the journal says "SMS stored and acknowledged"; the count is 1 (look at the text on the phone only)
+#   send, on the human's explicit go only, to a number of theirs (international form, +1...):
+tools/phone-ssh 'omamobile-sit sms send <NUMBER> "omamobile test"'
+#   pass: "sent", and it arrives. "unknown": never resend blindly; ask the recipient. "failed": record the reason
+#   (with IMS failed, receiving may still work over the network's SMS path; sending is refused by design)
+
+# S10 = M4.5 calls WITHOUT audio (announce: the phone takes and places a call; silence both ways is the
+#   expected result; risk: medium: the first IMS call). Needs "IMS voice: yes". `card = none` stays.
+#   incoming: the human calls the phone from the other phone
+tools/phone-ssh 'sleep 15; omamobile-sit status | grep -E "^call"'
+#   pass: "call <id>: incoming ringing-in"; the journal says "Incoming call ringing"; the caller hears ringback
+tools/phone-ssh 'omamobile-sit answer; sleep 10; omamobile-sit status | grep -E "^call"; omamobile-sit hangup; sleep 3;
+  omamobile-sit status | grep -E "^call"'
+#   pass: "active" (the other phone shows the call connected, silent), then "terminated"; the journal says
+#     "Call audio routing is off ([audio] card = none)" and nothing about "Stopping the modem"
+#   outgoing, to the human's other phone (international form); answer it there, hang up there after ~10 s:
+tools/phone-ssh 'omamobile-sit dial <NUMBER>; sleep 30; omamobile-sit status | grep -E "^call"'
+#   pass: the other phone rings and connects (silent), then "terminated" after the remote hang-up
+#   stop: "Call release was not confirmed; modem stopped" (the RIL powered the CP off by design: one UFS
+#     pass; reboot before anything else); a CP crash; any sound from the phone's speakers (stop at once:
+#     nothing should route audio: record `amixer -c <aoc card> cget name="TDM_0_RX Mixer EP5"`)
+#   rollback: omamobile-sit hangup
+#   Never dial an emergency number to test (refused anyway; TELEPHONY-APPS-PLAN 3.3)
+
+# S11 = T2 the bridge and the apps (risk: low; reads sitd's state, forwards calls and SMS)
+tools/phone-ssh 'systemctl start omamobile-mmd; sleep 3; journalctl -u omamobile-mmd -b -o cat | tail -3;
+  nmcli -f DEVICE,TYPE,STATE device | grep -c gsm'
+tools/phone-ssh python3 - < packages/omamobile-mmd/test/libmm-status.py
+#   pass: "Modem .../Modem/0 exported: state 11" (connected) or 8 (registered), "SIM ready"; libmm-status shows
+#     the same; NM lists the gsm device (it stays unmanaged for data: omamobile-sit-data owns rmnet0, T3)
+#   then on the phone's screen: GNOME Calls or omaphone/omamessages (omatel) see the modem; one SMS each way
+#   and one call each way as S9/S10. Announce: if omatel-agent runs, an incoming call rings through the
+#   loudspeaker at the media stage (PipeWire, inside its ceilings) and vibrates; the call itself stays silent
+#   rollback: systemctl stop omamobile-mmd
+
+# S12 = M4.7 end: radio off, M3.5 after (read-only), and the reboot (asks the human; one UFS pass)
+tools/phone-ssh 'omamobile-sit radio off; systemctl stop omamobile-mmd omamobile-sit-data omamobile-sitd'
+#   M3.5 into logs/sim-m3.5-after.sha256; pass: no diff against S4. stop: any diff: all modem work stops
+tools/phone-ssh 'sync; (sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
+#   the SIM can stay in the tray; nothing starts the modem at boot (units disabled)
+```
+
+**M4.6 (the modem and sitd at boot) waits** until S5-S11 have passed on
+two separate boots: enabling it means every boot powers the modem and
+every reboot costs one UFS pass; the M4 section's M4.6 steps apply then.
+
+**Record** here, one block per run: the date, `uname -r`, the three
+package versions; per step pass/fail, the failing step's journal line
+(states and codes only), the SIM application list (types and states),
+the RAT, the bearer's PDP type, IMS registered or the step it failed
+at, the time from `systemctl start omamobile-sitd` to "ready", the UFS
+handler count at each step, CP crashes. Not the carrier, the APN, the
+PLMN or any number (TELEPHONY-APPS-PLAN Q8).
 
 ## 4. Risks
 

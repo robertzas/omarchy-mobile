@@ -1,9 +1,11 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Modem client: the SIT RIL, its interface, and the user-facing path
 
-Status (2026-10-13): **`omamobile-modem-sit` 0.2.0 replaces the 0.1 client;
-built and tested offline against `tools/sit-sim`; nothing run on our phone
-yet.** The RIL is a port of a SIT stack that registered on LTE, made and
+Status (2026-10-25): **`omamobile-modem-sit` 0.3.3, built and tested
+offline against `tools/sit-sim`.** On our phone, without a SIM: the
+read-only probe (MODEM-PLAN M4.1h-M4.1k) and sitd behind the ModemManager
+bridge (T1, 0.3.0). Nothing with a SIM yet: the first SIM test is
+MODEM-PLAN's "M4.2-M4.7: the first SIM test"; section 1.4 says which SIM. The RIL is a port of a SIT stack that registered on LTE, made and
 answered IMS calls with two-way audio, sent and received SMS and carried
 LTE data **on this phone model** (Pixel 7 Pro, the same stock firmware
 family, the same architecture: stock `cbd`/`rfsd` in a RAM-only chroot plus
@@ -25,7 +27,7 @@ Two packages:
 | Package | What |
 |---|---|
 | `packages/omamobile-modem` 0.1.0 (new) | The runtime: `omamobile-modem.service` loads CPIF and runs the `modem` vendor-chroot profile (rfsd, then a one-shot cbd, on RAM copies of NV); `omamobile-modem-cp` (CP state, crash record, power-off for the unit's stop, the baseband version, the stock NV checksum); the M0.5 read-only udev rule |
-| `packages/omamobile-modem-sit` 0.2.0 | The RIL: `omamobile-sitd` (registration, calls, SMS), `omamobile-sit-data` (the cellular route), `omamobile-sit` (CLI) |
+| `packages/omamobile-modem-sit` 0.3.3 | The RIL: `omamobile-sitd` (registration, calls, SMS), `omamobile-sit-data` (the cellular route), `omamobile-sit` (CLI) |
 
 `omamobile-modem-sit/lib/` (installed to `/usr/lib/omamobile-sit/`):
 
@@ -55,7 +57,9 @@ Units (`systemd/`), none enabled by the package:
 - `/usr/lib/NetworkManager/conf.d/90-omamobile-rmnet.conf`: `rmnet*` unmanaged.
 
 Config: `/etc/omamobile/modem-sit.conf` (`[network] apn` is required; `ims`,
-`ims_apn`, `nr`, timeouts; `[control] group`; `[audio] card`,
+`ims_apn`, `ims_required` (default no: an IMS failure keeps data, 0.3.2),
+`nr`, timeouts including `ims_timeout`; `[control] group`; `[audio] card`
+(default `none` since 0.3.3: calls route no audio until M5),
 `mic_boost_db`).
 
 Tests: `packages/omamobile-modem-sit/test/all` (about 10 s): 53 unit tests
@@ -87,8 +91,12 @@ What registered this phone model, kept as is:
    IMS on LTE-only carriers.
 
 SMS received during start-up are stored and acknowledged; calls are never
-auto-answered. Any failed or uncertain step ends start-up: the service
-exits, the modem stays up, nothing is retried.
+auto-answered. Any failed or uncertain step up to the internet bearer ends
+start-up: the service exits, the modem stays up, nothing is retried. A SIM
+whose PIN, PUK or network lock holds for 10 s ends it at once with what to
+do (0.3.1). From 0.3.2 a failed IMS step leaves the service running with
+data only (status `ims: failed`; calls and SMS refused until a later
+registration indication), unless `ims_required = yes`.
 
 ### 1.2 Safety
 
@@ -115,6 +123,7 @@ exits, the modem stays up, nothing is retried.
 
 | Gap | Effect |
 |---|---|
+| Call audio | Off by default (`[audio] card = none`, 0.3.3): calls connect silent. TDM 0 feeds both amplifiers and the top one is the earpiece; until an earpiece mode exists (TELEPHONY-APPS-PLAN T4, MODEM-PLAN M5) a configured card is refused unless speaker protection runs at stage media or c8, the top amplifier is at analog 6 or less (AUDIO-PLAN section 4) and both are within the media stage |
 | Speakerphone | Not routed; calls use the stock voice path (EP5 to TDM 0) |
 | Call waiting, conference, emergency and short codes, MMS download | Refused or not implemented (emergency numbers are refused by the dialer check: **this phone cannot call emergency services under Linux**) |
 | Signal strength | Reported as 0 |
@@ -123,6 +132,36 @@ exits, the modem stays up, nothing is retried.
 | Warm CP restart | None: about one fresh start in twenty crashed during registration on this phone model; the crash is recorded and the phone needs a reboot |
 | Carrier values | The IMS hidden-menu items and IMS PDN layout are the ones that registered on a T-Mobile-network MVNO; other carriers may need different values |
 | Suspend with the modem on | Not handled (CPIF's suspend refusal, the pull on cp2ap-wakeup, the receive-ring check after link wake: MODEM-PLAN 6) |
+| SIM PIN entry, the eSIM | None: take the PIN lock off in another phone; the RIL speaks only to the physical slot (`umts_ipc0`; `umts_ipc1` is the eSIM's) |
+
+### 1.4 Which SIM for the first test
+
+What the repository can justify, for a temporary US prepaid SIM:
+
+- **A physical nano-SIM on the T-Mobile network** (T-Mobile's own prepaid
+  or an MVNO that uses its network). The IMS values this RIL sends
+  (hidden-menu items, the ADD_PDN_INFO layout) are the ones that
+  registered this phone model, with calls, SMS and data, on a
+  T-Mobile-network MVNO (1.3, "Carrier values"). No other network has
+  been tried with them. Not verified: that T-Mobile's own prepaid
+  behaves as that MVNO did, and which IP type its internet bearer gets.
+- **Why IMS decides it:** on LTE-only networks SMS and voice go over IMS
+  (1.1, step 6), and most networks have no 2G/3G left to fall back to
+  (ROADMAP section 2, "Calls"). Without IMS registration the phone gets
+  data at best. Since 0.3.2 an IMS failure still leaves data running, so
+  another network can still pass SIM detection, registration and data
+  (the attach APN and data profile are the generic 3GPP requests);
+  its IMS, SMS and calls are unverified and likely need other values.
+- **IPv4 on the internet bearer.** rmnet0 is configured IPv4 only (1.3);
+  a bearer that comes back IPv6-only fails MODEM-PLAN S8 until that gap
+  is closed. Prefer a plan whose APN is documented as IPv4 or IPv4v6.
+- **Physical, not eSIM;** PIN lock off (or turned off in another phone);
+  a plan with voice, SMS and data.
+
+Write down, off the repository (TELEPHONY-APPS-PLAN Q8): the internet APN
+exactly as published and its IP type if stated; the MMS APN, MMSC and
+proxy (for T3); the IMS APN if the carrier names one (the default is
+`ims`); the SIM's PIN and PUK; the phone number; the activation steps.
 
 ---
 
