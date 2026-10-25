@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Road map
 
-Where Omarchy Mobile stands, what a good everyday phone still needs, and the order we plan to get there. Last updated 2026-10-22, from the subsystem plans in [`device/cheetah/`](../device/cheetah) and [NOTES.md](../device/cheetah/NOTES.md). The reference device is the Pixel 7 Pro (`cheetah`, gs201); other devices are in [DEVICES.md](DEVICES.md).
+Where Omarchy Mobile stands, what a good everyday phone still needs, and the order we plan to get there. Last updated 2026-10-25, from the subsystem plans in [`device/cheetah/`](../device/cheetah) and [NOTES.md](../device/cheetah/NOTES.md). The reference device is the Pixel 7 Pro (`cheetah`, gs201); other devices are in [DEVICES.md](DEVICES.md).
 
 **In one paragraph:** the Pixel 7 Pro boots mainline Linux and Omarchy from slot B and runs Omarchy on the phone: 120 Hz display with brightness and real screen-off, GPU acceleration, touch, Wi-Fi (now across s2idle), Bluetooth audio, battery level, wired charging under a temperature guard, haptics, torch, sensors with auto-rotate, GPS with an outdoor fix, NFC tags (read, write, tap to open a link), fingerprint unlock with a PIN or password, all four cameras in our own camera app, and the built-in speakers and microphones (working, but quiet and thin next to stock). Calls, SMS and mobile data are next: the modem boots and answers requests without a SIM, and the next step, registration (M4.2), needs one. It doesn't yet sleep by itself when the screen is off. The modem is the long pole, and calls come weeks to months after registration. On the software side the phone still needs its own home screen, more quick settings, notifications that matter, Android apps and over-the-air updates.
 
@@ -30,7 +30,7 @@ Statuses: **works** (on by default, verified on the phone), **partial** (works, 
 | GNSS | works | Google's GNSS stack in a chroot behind GeoClue, on demand from the Location tile; first outdoor fix (G4b), GNOME Maps through GeoClue (G5-2) | [GNSS-PLAN](../device/cheetah/GNSS-PLAN.md) |
 | NFC | works | ST54J through st-nci with our plain-NCI link, loaded at boot; neard reads and writes tags, and a tag with a web link opens it. Card emulation and payments are out of scope | [RADIOS-CAMERA-PLAN](../device/cheetah/RADIOS-CAMERA-PLAN.md) §3 |
 | Fingerprint | works | Google's HAL and Trusty TA on mainline (F3-F9), fprintd and our libfprint driver; the lock screen unlocks with a finger, PIN or password is the user's choice, enrollment from the shell (F10-F18); a verify survives system sleep and an enrollment interrupted by sleep fails cleanly (libfprint 1.6) | [FINGERPRINT-PLAN](../device/cheetah/FINGERPRINT-PLAN.md) |
-| Modem | in progress | The S5300 boots Google's firmware from RAM copies of its NV to ONLINE on a Gen3 x2 link and serves the SIT IPC (SIM state, radio state, AT): M3.4.5b-M4.1i, 2026-10-13. Registration, SMS, data and calls (M4.2+) need a SIM. Without a SIM, `omamobile-mmd` (a ModemManager-compatible bridge) shows the modem to NetworkManager, GNOME Calls and Chatty (T0/T1, 2026-10-14). Our own Phone and Messages apps (omatel) are built and tested offline. A reboot with the modem idle hung once; the fix is built, not yet run | [MODEM-PLAN](../device/cheetah/MODEM-PLAN.md) |
+| Modem | in progress | The S5300 boots Google's firmware from RAM copies of its NV to ONLINE on a Gen3 x2 link and serves the SIT IPC (SIM state, radio state, AT): M3.4.5b-M4.1i, 2026-10-13. Registration, SMS, data and calls (M4.2+) need a SIM. Without a SIM, `omamobile-mmd` (a ModemManager-compatible bridge) shows the modem to NetworkManager, GNOME Calls and Chatty (T0/T1, 2026-10-14). Our own Phone and Messages apps (omatel) are built and tested offline. A reboot with the modem up hung once (M4.1i); the fix passed on the phone (M4.1j, M4.1k, 2026-10-13). Next: the first SIM test, ready to run | [MODEM-PLAN](../device/cheetah/MODEM-PLAN.md) |
 | Cameras | partial | Ultrawide (Sony IMX386) works through libcamera (CAM5); front (S5K3J1) gives real images, raw and through libcamera (F.5-F.7); main (Samsung S5KGN1) and telephoto (S5KGM5), both C-PHY, stream through libcamera since the sensors keep each line under the CSIS DMA's limit; the telephoto's lens (SEM1215) doesn't answer yet. 30 and 60 fps on the main and telephoto (CAM5.5), autofocus on the main camera, tuning through libcamera 0.7.2-4.18, and omacam, our camera app with zoom, lens switching and video, as the default (omamobile-apps 0.2.0). Picture quality ([CAMERA-QUALITY-PLAN](CAMERA-QUALITY-PLAN.md)): chroma noise reduction and defective pixel correction in libcamera, and Night and HDR in omacam 0.3.3, merged from raw frames on the phone | [CAMERA-PLAN](../device/cheetah/CAMERA-PLAN.md) |
 | Phone shell | partial | Status bar, swipeable home screens with apps and widgets and an edit mode, quick settings with 19 tiles and a tile editor, launcher, switcher, the lock screen with PIN pad and fingerprint, squeekboard on demand. OWL widget support merged (the user's own widgets behind a feature flag); Omarchy's default-agent invitation at first login (omamobile-shell 0.2.8); desktop-shaped system dialogs | [`packages/omamobile-shell`](../packages/omamobile-shell), [NOTES](../device/cheetah/NOTES.md) "Phone UX to-dos" |
 | Android apps (Waydroid) | in progress | Planned and packaged offline: the kernel options are found and checked, `omamobile-waydroid` is drafted with the container kept away from debugfs, the camera nodes and every block device. Nothing run on the phone yet | [WAYDROID-PLAN](../device/cheetah/WAYDROID-PLAN.md) |
@@ -44,9 +44,9 @@ In priority order: the first four make it a phone, the rest make it a good one.
 
 | Need | Today | What's missing |
 | --- | --- | --- |
-| **Calls** | no | The modem chain (M3.4 first CP boot, M4 registration), a front end (oFono or ModemManager), IMS (VoLTE: most networks have no 2G/3G left), the AoC voice path and an earpiece mode under the speaker protection. Then a dialer: GNOME Calls is already an optional app |
-| **SMS** | no | M4 (`omamobile-sitd`), the front end, then Chatty (optional app today) |
-| **Mobile data** | no | M4's data call (`rmnet`), the front end, then suspend with the modem online (M6) |
+| **Calls** | no | Registration and IMS (VoLTE: most networks have no 2G/3G left) with a SIM (M4.2, ready to run), then the AoC voice path and an earpiece mode under the speaker protection (M5, T4). The front end (`omamobile-mmd`) and the dialers (GNOME Calls, omaphone) exist |
+| **SMS** | no | The SIM test (M4.4, over IMS); `omamobile-sitd`, the bridge, Chatty and omamessages exist |
+| **Mobile data** | no | The SIM test (M4.3, IPv4 on `rmnet0`), NetworkManager integration and IPv6 (T3), then suspend with the modem online (M6) |
 | **Standby and battery life** | 312 mA in s2idle (S7), about 16 h | s2idle on screen-off (S6-S8), then measured drain (S7, `power-ab`). s2idle alone won't reach Android's standby (the plan quotes about 274-286 mA in s2idle against 32-50 mA in deep sleep): deep sleep (SYS_SLEEP) is the real fix |
 | **A phone home screen** | pages, apps, built-in widgets | Touch testing, folders, user-built widgets (in progress) |
 | **Notifications** | desktop-style | Phone-shaped banners, a shade with actions, heads-up on the lock screen, do-not-disturb; incoming calls and SMS once the modem works |
@@ -70,22 +70,24 @@ Tracks in rough priority order. Most are independent and run in parallel; the ar
 The highest-value track and the longest. [MODEM-PLAN](../device/cheetah/MODEM-PLAN.md), [MODEM-CLIENT](../device/cheetah/MODEM-CLIENT.md):
 
 ```
-M2.5, M3.1, M3.3-B, M3.4.0-3 (passed) ─> M3.4.4-5 firmware boot, CP ONLINE ─> M3.6 SysMMU
-                                                         │
-                                                         └─> M4 SIT client: registration, SMS, data ─> oFono / ModemManager ─> Calls, Chatty
-                                                                    │
-                                                                    └─> M5 IMS (VoLTE) ─> calls with audio ◄─ AoC voice path + earpiece mode
-                                                                    └─> M6 boot integration, suspend with the modem online
+M2.5, M3.1, M3.3-B, M3.4 CP ONLINE, M4.1 SIT IPC and clean reboots (passed) ─> M3.6 SysMMU
+                                   │
+                                   └─> M4.2-M4.4 with a SIM: registration, data, SMS ─> T2 bridge on the phone: Calls, Chatty, omaphone, omamessages
+                                              │
+                                              ├─> IMS (VoLTE) registration ─> M5 calls with audio ◄─ AoC voice path + earpiece mode (T4)
+                                              └─> M4.6 modem at boot, M6 suspend with the modem online
 ```
 
 | Milestone | Effort (from the plans) | Next concrete step |
 | --- | --- | --- |
-| M3.4: Google's boot loader for the modem in the RAM-only NV chroot, firmware over PCIe, CP ONLINE | Done 2026-10-13: ONLINE, 10 min clean, NV unchanged | The main link trains at Gen1 x2, not Gen3 x2 (open) |
-| M3.6: the HSI1 SysMMU confines the modem's DMA | 1 week | Offline, after M3.4 |
-| M4: SIT client to registration, a data call and SMS | 3-6 weeks; `omamobile-sitd` is written and passes against a simulator | M4.1 (read-only) reached the CP but CPIF's IPC init handshake (INIT_END) never completes: the CPIF fix first, then M4.1 again; M4.2 needs a SIM |
-| Front end | oFono driver about 2-3 weeks, ModemManager plugin 2-4 weeks | MODEM-CLIENT §3 leans to oFono; decide once `omamobile-sitd` has run on the phone |
-| Calls and messages UI | days once the front end works, for GNOME Calls and Chatty (already optional in `omamobile-apps`); phone-shaped layout and lock-screen incoming-call UI on top | After the front end; the incoming-call screen belongs to the shell (3.5) |
-| M5: IMS and calls with audio | weeks more; needs the AoC voice path and the earpiece design in AOC-PLAN | Design only today |
+| M3.4: Google's boot loader for the modem in the RAM-only NV chroot, firmware over PCIe, CP ONLINE | Done 2026-10-13: ONLINE on a Gen3 x2 link (M4.1d), 10 min clean, NV unchanged | - |
+| M4.1: the CP serves SIT; reboots with the modem up | Done 2026-10-13: the IPC init handshake completes and the CP answers SIT without a SIM once it has the phone's board id (M4.1h, M4.1i); a reboot with the modem up no longer hangs (M4.1j) or warns (M4.1k) | - |
+| M3.6: the HSI1 SysMMU confines the modem's DMA | 1 week | Offline |
+| M4.2-M4.4: registration, a data call and SMS | `omamobile-sitd` 0.3.3 is written and passes against a simulator (locked SIM, IMS failure and no-audio cases included); on the phone, days if the carrier behaves like the one the IMS values came from, weeks if not | The SIM: MODEM-PLAN "M4.2-M4.7: the first SIM test"; which SIM in MODEM-CLIENT 1.4 |
+| IMS (VoLTE) registration | Part of M4.2's start-up; its values are proven on one network only (a T-Mobile-network MVNO). Since 0.3.2 a failure keeps data | The SIM test; another network may need its own IMS values |
+| Front end | Done offline: `omamobile-mmd` serves ModemManager's API and passed on the phone without a SIM (T1, 2026-10-14) | T2: GNOME Calls, Chatty, omaphone and omamessages against the real modem (runbook S11) |
+| Calls and messages UI | omatel (Phone, Messages, their agent) and the shell's call card and lock-screen calls are built and tested offline | After T2; MMS is T3 |
+| M5: calls with audio | 14-25 days (TELEPHONY-APPS-PLAN T4): the earpiece mode under speaker protection, a Voice Call UCM verb, speakerphone, Bluetooth | Design only; until then calls connect silent (`[audio] card = none`) |
 | M6: suspend with the modem online | after S8 and M4 | Design only |
 
 The modem's NV is never written from Linux: the chroot works on checksum-verified RAM copies.
