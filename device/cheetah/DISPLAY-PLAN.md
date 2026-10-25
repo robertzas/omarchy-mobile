@@ -1607,3 +1607,81 @@ off); `options gs_decon screen_off=0`; or the D6 rollback list.
 **Next:** D4a-3 (keep the trigger masked between flips, vblank from DECON's
 TE interrupt), and then the panel's 10 Hz idle at 120 Hz. D4b (DSIM/DECON
 restart) only if the panel wake proves unreliable without it.
+
+## R46: kernel #46 (Tensor G4 support in gs-decon) on cheetah (2026-10-24, offline)
+
+Kernel PR #46 (W4HO-ham, head `87423e2e42bc`) moves gs-decon's SoC-specific
+constants into per-SoC match data and adds Tensor G4's inherited display.
+Review (round 10): on gs201 each new field holds the constant it replaced and
+each new branch is off, but this is cheetah's display driver and the author
+has no Pixel 7 Pro, so we boot it once before merging (LESSONS L-111).
+
+Test kernel: the running kernel (`omamobile-test-gs201b`, c545bd509c58) plus
+#46's two commits, branch `omamobile-test-decon46`, worktree
+`~/android/mainline/wt-test-decon46`, output `~/android/mainline/out-test-decon46`.
+`gs-decon.c` is identical in the running tree and the published one, so the
+commits applied unchanged.
+
+Before (read-only, 2026-10-24, `7.3.0-rc6-omamobile-push1-00576-gc545bd509c58`,
+screen off): the probe logs `flip-only KMS on DECON0, 1440x3120, up to 120 Hz
+(at 60 Hz)`; `stats` shows `flip_timeouts 0`, `flips_late 0`,
+`trigger_masked 1`, `panel_asleep 1`, `refresh_hz 60`. The screen-on reads
+are step 1 below.
+
+**Runbook (risk: low; a push and reboot, the human's go).** The realistic
+failure is a black screen after probe; USB and SSH don't depend on the
+display, so a push of the old kernel recovers it.
+
+Step 6 turns the screen off and on: the human runs it. The `\|` in steps 3
+and 6 is markdown table escaping; type a plain `|`.
+
+| # | Risk | Step | Expect / Pass | Stop if |
+| --- | --- | --- | --- | --- |
+| 1 | read-only | Screen on, desktop showing, before the push: `tools/phone-ssh 'f=/sys/bus/platform/devices/1c240000.display-controller/stats; cat $f; sleep 10; cat $f'` and `bash tools/display-hz` | the "before": `trigger_masked 0`, `flips` rising while something animates, the measured rate | none (read-only) |
+| 2 | low | `KERNEL_DIR=~/android/mainline/wt-test-decon46 KERNEL_OUT=~/android/mainline/out-test-decon46 bin/omamobile push` | reboots into the new release; the screen comes up as usual (it goes dark for about a minute) | no SSH after 3 minutes |
+| 3 | read-only | `tools/phone-ssh 'uname -r; dmesg \| grep -iE "gs.decon\|1c240000.display"'` | the new release; the same probe lines as before | `unexpected scanout size`, `TE trigger is off`, `not running in command mode`, `DPP0 scans`, `boot framebuffer not taken yet`, `no frame done`, `frame interrupt storm` |
+| 4 | read-only | Step 1's reads again, screen on | the same as step 1; `flip_timeouts` steady | timeouts climbing, `trigger_masked 1` with the screen on, a different rate |
+| 5 | read-only | `bash tools/phone-smoke` | display, GPU and session `ok` | any of them not ok |
+| 6 | low (screen) | Power key off, wait 5 s, power key on, then step 1's reads | screen back; `panel_asleep 1` while off; no new timeouts | a black screen that doesn't come back |
+
+Rollback: `KERNEL_DIR=~/android/mainline/wt-test-gs201b
+KERNEL_OUT=~/android/mainline/out-test-gs201b bin/omamobile push` (the
+running kernel; its images are kept). If the screen is black but SSH works,
+push from SSH; if nothing answers, the force restart (Power about 30 s). On a
+failed boot, collect the previous boot's pstore or journal before anything
+else. If slot B no longer boots, the bootloader falls back to slot A's
+stock Android: reach fastboot (Volume Down + Power about 20 s) and
+`KERNEL_DIR=~/android/mainline/wt-test-gs201b
+KERNEL_OUT=~/android/mainline/out-test-gs201b bin/omamobile flash` writes
+the gs201b images to slot B. After any slot A boot, take a fresh read-only
+backup before the next modem, PMIC, AoC or Trusty step (AGENTS.md §1).
+
+**Result (2026-10-24/25, `7.3.0-rc6-omamobile-push1-00578-g79e0ae498ede`):
+pass.** The DTB is byte-identical to the gs201b kernel's, so only gs-decon
+changed.
+
+- Step 1, screen on, before: `refresh_hz 120`, `trigger_masked 0`, `flips`
+  2523 to 3024 in 10 s, `flip_timeouts 0`, `flip_latency_us_avg` about 4200.
+  `tools/display-hz` failed: it needs `devmem`, which the phone doesn't
+  have. The driver's `stats` replace it here.
+- Steps 2 and 3: the push and reboot were clean. The probe lines match the
+  "before" exactly, and none of the stop strings appears.
+- Step 4: `refresh_hz 120`, `trigger_masked 0`, `flips` 503 to 841 in 10 s,
+  `flip_timeouts 0`, `flips_late 0`, average latency 4135 µs (max 9549).
+- Step 5: `phone-smoke` shows display, GPU, session and touch `ok`, with no
+  failed units. The kernel error lines are the same 26 kinds as on the
+  previous boot (mailbox, nci, ALSA); only their counts differ.
+- Step 6, at 26 h of uptime: the screen had been off overnight
+  (`refresh_hz` stayed at 60 from 276 s, and `frame_count` was only 36725
+  in 94429 s), and it woke at 94395 s. It went off again on a power-key press
+  at 94398.6 s, locked at 94400.0 s, and came back at 94400.5 s (60 Hz, then
+  120 Hz 0.4 s later). It then unlocked with the fingerprint. The off period
+  was about 2 s, not 5, but the overnight off-and-wake covers the longer
+  case. Later, with the screen off again (2026-10-25): `panel_asleep 1`,
+  `flip_timeouts 0`. (A `grim` screenshot then waited forever for a frame;
+  take screenshots with the screen on.) After the wake, over 10 s: `flips` 10692 to 11036, `flip_timeouts 0`, `flips_late 0`,
+  `trigger_masked 0`, `panel_asleep 0`, average latency 3992 µs (max 10249).
+  There are no gs-decon errors or timeouts in the whole boot.
+
+#46's head moved to `c857c18e32b2` after this test. Whether the result
+carries over is in the round-11 review.
