@@ -7,11 +7,27 @@ its PCMs as stock does). AoC and CP exchange audio directly; no host
 recording or SRAM mapping. Amplifier protection, calibration and gain stay
 with omamobile-audio: the downlink plays through TDM 0, so it needs the
 amplifiers set up (stock's TDM 0 format, protection service running).
+
+TDM 0 feeds both amplifiers, and the top one is the earpiece. Until the
+protection service has an earpiece mode (TELEPHONY-APPS-PLAN T4), routing is
+refused unless the protection service reports itself running at stage
+media or c8 and the amplifiers are at or below the earpiece ceiling (top
+analog <= 6, AUDIO-PLAN.md section 4) and the media stage's (digital <= 737,
+analog <= 10, AGENTS.md). The default config routes no call audio at all.
 """
 import ctypes as C
+import os
 from pathlib import Path
 import re
 import subprocess
+
+# omamobile-speaker-protection's status line ("ok: stage <stage>, ...").
+PROTECTION = Path(os.environ.get('OMAMOBILE_SPK_STATUS', '/run/omamobile/speaker-protection'))
+STAGES = ('media', 'c8')
+# (control, ceiling): the earpiece ceiling for the top amplifier, the media
+# stage's for both (AUDIO-PLAN.md section 4, AGENTS.md "Speakers").
+CEILINGS = (('Top Analog PCM Volume', 6), ('Bottom Analog PCM Volume', 10),
+            ('Top Digital PCM Volume', 737), ('Bottom Digital PCM Volume', 737))
 
 
 def aoc_card(setting='auto'):
@@ -29,7 +45,8 @@ def aoc_card(setting='auto'):
                 return int(match[1])
     except OSError:
         pass
-    return 0
+    # No AoC card: route nothing rather than guess another card's index.
+    return None
 
 
 class VoiceAudio:
@@ -64,7 +81,25 @@ class VoiceAudio:
         if code < 0:
             raise RuntimeError('voice PCM '+operation+' failed: '+str(code))
 
+    def check_levels(self):
+        """Refuse call audio unless the amplifiers are under protection and
+        within the earpiece and media ceilings. Reads only."""
+        try:
+            status = PROTECTION.read_text().strip()
+        except OSError:
+            status = ''
+        if not any(status.startswith(f'ok: stage {stage},') for stage in STAGES):
+            raise RuntimeError('call audio refused: speaker protection is not running at stage media or c8')
+        for name, ceiling in CEILINGS:
+            match = re.search(r'^\s*: values=([0-9,]+)$', self.mixer('cget', name), re.M)
+            if match is None:
+                raise RuntimeError('call audio refused: cannot read ' + name)
+            if max(int(v) for v in match[1].split(',')) > ceiling:
+                raise RuntimeError(f'call audio refused: {name} is above {ceiling} '
+                                   '(the earpiece ceiling needs the top amplifier at analog 6 or less)')
+
     def __enter__(self):
+        self.check_levels()
         try:
             for name, value in (
                     ('Voice Call Audio Enable', '1'), ('Voice Call Mic Source', '1'),

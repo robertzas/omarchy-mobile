@@ -1,11 +1,25 @@
 # SPDX-License-Identifier: MIT
 import env  # noqa: F401  (paths and sys.path first)
+import os
+import tempfile
 import unittest
+from unittest.mock import patch
+import paths
+import voice_audio
 from voice_audio import VoiceAudio
+
+STATUS = os.path.join(tempfile.mkdtemp(dir=env.TMP), 'speaker-protection')
 
 
 class AudioCleanupTests(unittest.TestCase):
-    def fixture(self, fail_params=False):
+    def setUp(self):
+        with open(STATUS, 'w') as f:
+            f.write('ok: stage media, protection firmware with factory calibration, digital/analog 737/6\n')
+        patcher = patch.object(voice_audio, 'PROTECTION', voice_audio.Path(STATUS))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def fixture(self, fail_params=False, levels=None):
         class Alsa:
             opened = 0
             closed = []
@@ -34,7 +48,7 @@ class AudioCleanupTests(unittest.TestCase):
         changed = []
         def mixer(action, name, value=None):
             if action == 'cget':
-                return '  : values=0\n'
+                return '  : values=%s\n' % (levels or {}).get(name, '0')
             changed.append((name, value))
             return ''
         audio.mixer = mixer
@@ -65,3 +79,49 @@ class AudioCleanupTests(unittest.TestCase):
         self.assertIn(('MIC HW Gain At High Power Mode (cB)', '0'), changed[10:])
         with self.assertRaises(ValueError):
             VoiceAudio(mic_boost_db=12)
+
+
+class CallAudioCeilingTests(AudioCleanupTests):
+    def refused(self, audio, changed, reason):
+        with self.assertRaisesRegex(RuntimeError, reason):
+            audio.__enter__()
+        self.assertEqual(changed, [])           # not one control written
+        self.assertEqual(audio.alsa.opened, 0)  # no PCM opened
+
+    def test_media_stage_top_amplifier_above_the_earpiece_ceiling(self):
+        # The media stage's default (analog 10 on both) is too loud at the ear.
+        audio, changed = self.fixture(levels={'Top Analog PCM Volume': '10'})
+        self.refused(audio, changed, 'Top Analog PCM Volume is above 6')
+
+    def test_levels_above_the_media_stage(self):
+        for name, value in (('Bottom Analog PCM Volume', '17'), ('Top Digital PCM Volume', '817'),
+                            ('Bottom Digital PCM Volume', '737,817')):
+            audio, changed = self.fixture(levels={name: value})
+            self.refused(audio, changed, name + ' is above')
+
+    def test_protection_must_run_at_media_or_c8(self):
+        for line in ('', 'muted: no calibration', 'ok: stage c9, ...', 'MUTE FAILED: x'):
+            with open(STATUS, 'w') as f:
+                f.write(line)
+            audio, changed = self.fixture()
+            self.refused(audio, changed, 'speaker protection is not running')
+        os.unlink(STATUS)
+        audio, changed = self.fixture()
+        self.refused(audio, changed, 'speaker protection is not running')
+
+    def test_unreadable_level_refuses(self):
+        audio, changed = self.fixture(levels={'Top Analog PCM Volume': ''})
+        self.refused(audio, changed, 'cannot read')
+
+
+class CallAudioDefaultTests(unittest.TestCase):
+    def test_no_call_audio_by_default(self):
+        self.assertEqual(paths.config('/nonexistent')['audio']['card'], 'none')
+        packaged = paths.config(os.path.join(os.path.dirname(__file__), '..', 'etc', 'omamobile', 'modem-sit.conf'))
+        self.assertEqual(packaged['audio']['card'], 'none')
+        self.assertIsNone(voice_audio.aoc_card('none'))
+
+    def test_no_aoc_card_routes_nothing(self):
+        with patch.object(voice_audio, 'Path') as fake:
+            fake.return_value.read_text.return_value = ' 0 [Headset        ]: USB-Audio - Headset\n'
+            self.assertIsNone(voice_audio.aoc_card('auto'))

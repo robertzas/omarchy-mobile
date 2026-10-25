@@ -161,7 +161,7 @@ class Service:
     def audio_start(self):
         if self.audio is None:
             audio = self.settings['audio']
-            card = aoc_card(audio.get('card', 'auto'))
+            card = aoc_card(audio.get('card', 'none'))
             if card is None:
                 print('Call audio routing is off ([audio] card = none)', flush=True)
                 return
