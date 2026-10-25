@@ -66,6 +66,10 @@ def live_call(state, wanted=('ringing-in', 'waiting', 'active', 'dialing', 'ring
 def show(status):
     m = status['modem']
     print(f"stage: {m.get('stage')}")
+    sim = m.get('sim') or {}
+    retries = (f" (PIN tries left {sim['pin_retries']}, PUK {sim['puk_retries']})"
+               if 'pin_retries' in sim else '')
+    print(f"SIM: {sim.get('state', 'unknown')}{retries}; radio: {m.get('radio', 'unknown')}")
     print(f"network: {m.get('registration')} {m.get('tech')} {m.get('operator')}".rstrip())
     print(f"IMS voice: {'yes' if m.get('voice') else 'no'}, SMS: {'yes' if m.get('sms') else 'no'}, "
           f"data bearer: {'up' if m.get('data') else 'down'}")

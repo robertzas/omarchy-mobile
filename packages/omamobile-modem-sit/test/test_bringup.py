@@ -9,6 +9,24 @@ SETTINGS = paths.config('/nonexistent')
 SETTINGS['network']['apn'] = 'internet.example'
 
 
+def sim(card, *apps):
+    payload = bytes([card, 0, len(apps)])
+    for app_type, state in apps:
+        record = bytearray(63)
+        record[0], record[1] = app_type, state
+        payload += bytes(record)
+    return payload
+
+
+def clock(step=.5):
+    now = [0.0]
+
+    def tick():
+        now[0] += step
+        return now[0]
+    return tick
+
+
 class BringupTests(unittest.TestCase):
     def test_sim_requires_ready_usim_and_rejects_truncation(self):
         self.assertTrue(bringup.sim_ready(bytes([1, 0, 1, 2, 5]) + bytes(61)))
@@ -59,3 +77,44 @@ class BringupTests(unittest.TestCase):
         service.client.next_indication.return_value = None
         with patch.object(bringup.time, 'monotonic', side_effect=[0, 0, 0, 0, 2, 2]):
             bringup.wait_for(service, Mock(side_effect=[TimeoutError(), True]), 10, lambda: False)
+
+
+class SimStageTests(unittest.TestCase):
+    def run_sim_stage(self, payload):
+        service = Mock()
+        service.client.request.return_value = payload
+        service.client.next_indication.return_value = None
+        with patch.object(bringup.time, 'monotonic', side_effect=clock()), \
+             patch.object(bringup, 'radio') as radio, patch.object(bringup, 'initial_attach') as attach:
+            with self.assertRaises((RuntimeError, TimeoutError)) as raised:
+                bringup.start(service, SETTINGS)
+        radio.assert_not_called()
+        attach.assert_not_called()
+        return str(raised.exception)
+
+    def test_lock_states(self):
+        self.assertIsNone(bringup.sim_lock(sim(1, (2, 5))))
+        self.assertIsNone(bringup.sim_lock(sim(0)))
+        self.assertEqual(bringup.sim_lock(sim(1, (2, 2))), 'PIN')
+        self.assertEqual(bringup.sim_lock(sim(1, (5, 5), (2, 3))), 'PUK')
+        self.assertEqual(bringup.sim_lock(sim(1, (2, 4))), 'network')
+
+    def test_pin_lock_stops_startup_well_before_the_timeout(self):
+        message = self.run_sim_stage(sim(1, (2, 2), (5, 2)))
+        self.assertIn('PIN lock is on', message)
+
+    def test_puk_block_says_never_guess(self):
+        self.assertIn('never guess', self.run_sim_stage(sim(1, (2, 3))))
+
+    def test_no_card_times_out_with_the_reason(self):
+        message = self.run_sim_stage(sim(0))
+        self.assertIn('no SIM card detected', message)
+
+    def test_a_transient_lock_state_is_not_fatal(self):
+        service = Mock()
+        service.client.request.side_effect = [sim(1, (2, 2)), sim(1, (2, 5))]
+        service.client.next_indication.return_value = None
+        with patch.object(bringup.time, 'monotonic', side_effect=clock()), \
+             patch.object(bringup, 'radio', side_effect=InterruptedError):
+            with self.assertRaises(InterruptedError):
+                bringup.start(service, SETTINGS)

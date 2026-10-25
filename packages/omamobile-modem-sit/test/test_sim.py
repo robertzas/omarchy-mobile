@@ -100,6 +100,7 @@ class SimulatorTests(unittest.TestCase):
         modem = status['modem']
         self.assertEqual((modem['stage'], modem['voice'], modem['sms'], modem['data']),
                          ('running', True, True, True))
+        self.assertIn('SIM: ready', self.cli('status'))
         # The incoming SMS arrives just after the IMS registration.
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and 'hello' not in self.cli('sms', 'list'):

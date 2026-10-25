@@ -2,7 +2,8 @@
 """The start-up sequence for a freshly booted CP, using the service's IPC0
 owner. This order registered on LTE with IMS voice and SMS on this phone:
 
-  1. wait for the USIM application to be READY (type 2, state 5);
+  1. wait for the USIM application to be READY (type 2, state 5); a PIN,
+     PUK or network lock ends start-up at once (no PIN entry here);
   2. radio off (AT+CFUN=0), initial attach APN, the default data profile;
   3. radio on (AT+CFUN=1), wait for packet registration;
   4. NR mode 0 ([network] nr = off): stay on LTE (NR registered, but
@@ -28,6 +29,31 @@ def sim_ready(payload):
     return any(
         payload[i:i + 2] == bytes([2, 5])
         for i in range(3, 3 + payload[2] * 63, 63))
+
+
+# AOSP RIL_AppState values that need the user (the RIL has no PIN entry):
+# PIN, PUK and subscription personalisation (a network lock).
+LOCKS = {2: 'PIN', 3: 'PUK', 4: 'network'}
+LOCK_ADVICE = {
+    'PIN': 'the SIM PIN lock is on; the RIL has no PIN entry: turn the lock off in another phone',
+    'PUK': 'the SIM is PUK-blocked: unblock it with the carrier\'s PUK in another phone; never guess PUKs',
+    'network': 'the SIM is network-locked (subscription lock): ask the carrier, or use another SIM',
+}
+# A lock must hold this long before start-up gives up (a card that is still
+# initialising may report a transient state).
+LOCK_GRACE = 10
+
+
+def sim_lock(payload):
+    """The lock of the USIM application (else of the first one), or None.
+    Reads only the application type and state bytes."""
+    if len(payload) < 3 or payload[2] > 8 or len(payload) < 3 + payload[2] * 63:
+        raise ValueError('Unexpected SIM status layout')
+    if payload[0] != 1 or not payload[2]:
+        return None
+    apps = [payload[i:i + 2] for i in range(3, 3 + payload[2] * 63, 63)]
+    app = next((a for a in apps if a[0] == 2), apps[0])
+    return LOCKS.get(app[1])
 
 
 def packet_registered(payload, *, lte=False):
@@ -68,9 +94,10 @@ def start(service, settings, stopped=lambda: False):
     if not apn:
         raise RuntimeError('No APN configured: set [network] apn in /etc/omamobile/modem-sit.conf')
     previous = None
+    locked = None
 
     def usim_ready():
-        nonlocal previous
+        nonlocal previous, locked
         payload = client.request(0x0200)
         ready = sim_ready(payload)
         # Card state and application type/state only: never AIDs or labels.
@@ -79,10 +106,25 @@ def start(service, settings, stopped=lambda: False):
         if state != previous:
             print('SIM card state and application type/state:', state, flush=True)
             previous = state
+        lock = None if ready else sim_lock(payload)
+        if lock is None:
+            locked = None
+        elif locked is None or locked[0] != lock:
+            locked = (lock, time.monotonic())
+        elif time.monotonic() - locked[1] >= LOCK_GRACE:
+            # Nothing is ever sent to unlock it: no PIN or PUK request is on
+            # the allow-list, so a wrong guess can't use up a retry.
+            raise RuntimeError('SIM not usable: ' + LOCK_ADVICE[lock])
         return ready
     service.stage('sim')
     print('Startup: waiting for physical USIM ready', flush=True)
-    wait_for(service, usim_ready, net.getint('sim_timeout', 120), stopped)
+    timeout = net.getint('sim_timeout', 120)
+    try:
+        wait_for(service, usim_ready, timeout, stopped)
+    except TimeoutError:
+        card = {None: 'no answer', 0: 'no SIM card detected', 1: 'card present, USIM not ready',
+                2: 'card error'}.get(previous[0] if previous else None, 'unknown card state')
+        raise TimeoutError(f'No ready USIM within {timeout} s ({card})') from None
     service.stage('attach')
     radio(False)
     initial_attach(client, apn, ip_type)
