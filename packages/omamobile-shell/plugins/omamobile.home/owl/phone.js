@@ -288,13 +288,30 @@ function modesFrom(text) {
   return { dnd: /do-not-disturb/.test(l.slice(1).join(" ")), saver: false, ringer: "normal", torch: isFinite(torch) ? torch > 0 : null }
 }
 
-// /proc/meminfo, /proc/uptime and uname -> part of android.system.
-function systemFrom(meminfo, uptime, kernel) {
+// `df -B1 --output=size,used /`'s last line -> android.system's storage.
+function storageFrom(df) {
+  var n = String(df || "").trim().split(/\s+/).map(function(v) { return parseInt(v, 10) })
+  if (n.length < 2 || !isFinite(n[0]) || !isFinite(n[1]) || n[0] <= 0) return null
+  return { total: n[0], used: n[1], available: n[0] - n[1] }
+}
+
+// The first power supply of type Battery: "<capacity>\n<status>" -> android.battery.
+var BATTERY_COMMAND = "for d in /sys/class/power_supply/*; do [ \"$(cat \"$d/type\" 2>/dev/null)\" = Battery ] && { cat \"$d/capacity\" \"$d/status\" 2>/dev/null; break; }; done"
+function batteryFrom(text) {
+  var lines = String(text || "").trim().split("\n")
+  var level = parseInt(lines[0], 10)
+  var status = String(lines[1] || "").trim()
+  return { level: isFinite(level) ? level : null, charging: /Charging|Full/.test(status), status: status.toLowerCase() || null,
+           temp: null, voltage: null, health: null, plugged: null, technology: null, cycles: null }
+}
+
+// /proc/meminfo, /proc/uptime, uname and df -> android.system.
+function systemFrom(meminfo, uptime, kernel, df) {
   var kb = function(name) { var m = new RegExp("^" + name + ":\\s+(\\d+)", "m").exec(meminfo || ""); return m ? parseInt(m[1], 10) * 1024 : null }
   var total = kb("MemTotal"), available = kb("MemAvailable")
   return { kernel: String(kernel || "").trim() || null, uptime: Math.floor(parseFloat(uptime) || 0),
            memory: { total: total, used: total !== null && available !== null ? total - available : null, available: available },
-           storage: null, cpu: { soc: "gs201", maker: "Google", hardware: null, cores: 8, abi: "arm64-v8a", maxMhz: null },
+           storage: storageFrom(df), cpu: { soc: "gs201", maker: "Google", hardware: null, cores: 8, abi: "arm64-v8a", maxMhz: null },
            display: { width: 1440, height: 3120, hz: 120, dpi: 512 }, build: null, codename: "cheetah", patch: null,
            locale: null, timezone: null, launcher: "omamobile", theme: null, apps: 0 }
 }
@@ -327,6 +344,7 @@ if (typeof module !== "undefined") {
     capabilities: capabilities, capabilityList: capabilityList, approvalMatches: approvalMatches,
     sourceLimits: sourceLimits, LIMITS: LIMITS, hostOf: hostOf, OWL_CELL_DP: OWL_CELL_DP,
     actionArgv: actionArgv, volumeFrom: volumeFrom, mediaFrom: mediaFrom, MEDIA_FORMAT: MEDIA_FORMAT,
-    modesFrom: modesFrom, systemFrom: systemFrom, panelOff: panelOff, DEVICE_ACTIONS: DEVICE_ACTIONS
+    modesFrom: modesFrom, systemFrom: systemFrom, storageFrom: storageFrom,
+    batteryFrom: batteryFrom, BATTERY_COMMAND: BATTERY_COMMAND, panelOff: panelOff, DEVICE_ACTIONS: DEVICE_ACTIONS
   }
 }

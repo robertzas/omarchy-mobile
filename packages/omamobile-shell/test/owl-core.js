@@ -339,6 +339,10 @@ test("phone actions and android.* answers, with mocks", () => {
   eq(P.modesFrom("\n").torch, null)
   const sys = P.systemFrom("MemTotal:  8000 kB\nMemAvailable: 3000 kB\n", "123.4 99", "7.3.0\n")
   eq([sys.kernel, sys.uptime, sys.memory], ["7.3.0", 123, { total: 8192000, used: 5120000, available: 3072000 }])
+  eq(P.systemFrom("", "1", "7.3.0\n", " 116041613312 16160268288\n").storage, { total: 116041613312, used: 16160268288, available: 99881345024 })
+  eq([sys.storage, P.storageFrom("Size Used"), P.storageFrom("0 0")], [null, null, null])
+  eq([P.batteryFrom("97\nCharging\n").level, P.batteryFrom("97\nCharging\n").charging, P.batteryFrom("97\nCharging\n").status], [97, true, "charging"])
+  eq([P.batteryFrom("").level, P.batteryFrom("").status], [null, null])
   eq([P.panelOff("0\n"), P.panelOff("4\n"), P.panelOff("")], [false, true, false])
 })
 test("a terminal's output reads as lines", () => {

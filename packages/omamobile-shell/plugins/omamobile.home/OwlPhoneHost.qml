@@ -142,7 +142,7 @@ QtObject {
 
   // android.*, answered from Linux: battery from the kernel's power supply,
   // volume from wpctl, media from playerctl (MPRIS), modes from the torch LED
-  // and mako's modes, system from /proc.
+  // and mako's modes, system from /proc and df.
   function android(widget, kind, done) {
     const fromCommand = function(text, parse) {
       host.command(widget, text, 5, function(r) { done({ value: parse(String(r.out || "")) }) })
@@ -151,21 +151,13 @@ QtObject {
     if (kind === "media") { fromCommand("playerctl metadata --format " + JSON.stringify(Phone.MEDIA_FORMAT) + " 2>/dev/null", Phone.mediaFrom); return }
     if (kind === "modes") { fromCommand("brightnessctl --device=white:torch get 2>/dev/null || echo; makoctl mode 2>/dev/null", Phone.modesFrom); return }
     if (kind === "system") {
-      fromCommand("cat /proc/meminfo; echo '@@'; cat /proc/uptime; echo '@@'; uname -r", function(t) {
+      fromCommand("cat /proc/meminfo; echo '@@'; cat /proc/uptime; echo '@@'; uname -r; echo '@@'; df -B1 --output=size,used / | tail -1", function(t) {
         const parts = t.split("@@\n")
-        return Phone.systemFrom(parts[0], parts[1], parts[2])
+        return Phone.systemFrom(parts[0], parts[1], parts[2], parts[3])
       })
       return
     }
-    if (kind === "battery") {
-      host.command(widget, "cat /sys/class/power_supply/battery/capacity /sys/class/power_supply/battery/status 2>/dev/null", 5, function(r) {
-        const lines = String(r.out || "").trim().split("\n")
-        const level = parseInt(lines[0], 10)
-        done({ value: { level: isFinite(level) ? level : null, charging: /Charging|Full/.test(lines[1] || ""), status: String(lines[1] || "").toLowerCase() || null,
-                        temp: null, voltage: null, health: null, plugged: null, technology: null, cycles: null } })
-      })
-      return
-    }
+    if (kind === "battery") { fromCommand(Phone.BATTERY_COMMAND, Phone.batteryFrom); return }
     if (kind === "alarm") { done({ value: { set: false, time: null, app: null } }); return }
     if (kind === "notifications") { done({ value: { available: false, count: 0, items: [] } }); return }
     if (kind === "device") { done({ value: { model: "Pixel 7 Pro", maker: "Google", android: null, sdk: null, soc: "gs201" } }); return }
