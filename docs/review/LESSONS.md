@@ -521,6 +521,20 @@ never change, so reviews can cite them.
   a TMU threshold; under our driver the hardware trip is whatever the
   bootloader set. "INIT doesn't change them" isn't "they're set": ask for the
   decoded values. Extends L-23. *From:* kernel #7, round 12.
+- **L-151. An access table on shared driver data is checked against open
+  PRs on every SoC that falls back to it.** Kernel #49 limited
+  `google,zuma-pmu`'s regmap; Tensor G4 binds the same data through its
+  fallback, and open #40 reads PMU `0x2a84` there, which the table left out:
+  tegu's HSI0 clocks, and with them its only USB link, would have failed.
+  *Check:* `git grep` the compatible's fallback users, then grep open PR heads
+  for reads and writes through that regmap. *From:* kernel #49, round 13.
+- **L-152. "Both SoCs use the same Google source" is proven by blob ids.**
+  The gitiles JSON listing of `drivers/ufs/zuma/` gave identical blob ids on
+  the Pixel 8 and Pixel 9a branches. *From:* kernel #51, round 13.
+- **L-153. A per-function object diff normalises `adrp` pages, relocation
+  addends and `.altinstr_replacement` before naming changed functions.** The
+  raw diff of #42 showed 28 changed functions where one changed. Extends
+  L-110. *From:* kernel #42, round 13.
 
 ## The gates themselves
 
@@ -623,6 +637,24 @@ never change, so reviews can cite them.
   skips silently. *Check:* parse UCM changes locally with `alsaucm` on a
   virtual card, once per `If` branch. Extends L-103. *From:* #41,
   round 12.
+- **L-154. `kernel-pr-check` builds the PR's own commits against their
+  merge base, so a fix that lands on the base after a PR branched never
+  reaches its CI until the PR is rebased.** A fresh `base.sha` doesn't change
+  the merge base, and a re-run replays the event's stale one. *Check:* gate
+  the PR rebased onto the current base (L-73) before asking for a rebase, and
+  say whether the rebase is needed for the code or only for CI. *From:*
+  kernel #43, round 13.
+- **L-155. A gate runs under every awk it will meet.** Round 12's MAC regex
+  used `(…){5}`, which mawk 1.3.4 (Debian, Ubuntu, our build container)
+  rejects, so `pr-check` failed every change there while CI's gawk passed.
+  *Check:* after any edit to a gate, run its tests in `omamobile-build:24.04`
+  too. Extends L-30. *From:* round 13.
+- **L-156. A bindings-only PR gets no `dtbs_check`** from CI or
+  `kernel-pr-check` ("device trees: none touched"), so no board's DTB is
+  checked against the new schema. *Check:* validate the affected boards'
+  DTBs by hand; dtschema's schema checks run in the container with a stub
+  `libfdt`, only `dt-validate` needs the real one. Extends L-126. *From:*
+  kernel #51, round 13.
 
 ## Reviews and merging
 
