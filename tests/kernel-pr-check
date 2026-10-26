@@ -90,3 +90,26 @@ rel_build_status=0
 rel_build_out=$(cd "$k" && "$here/tools/kernel-pr-check" -C . --build out omamobile HEAD 2>&1) || rel_build_status=$?
 [[ $rel_build_status == 2 ]] || { echo "$rel_build_out"; fail "a relative --build inside the tree: exit $rel_build_status, expected 2"; }
 echo "ok - --build is refused inside the kernel tree, relative or not"
+
+# --merge: the base moves on after the branch is cut. A clean merge passes
+# and says so; a conflict fails as "rebase needed" while the commit checks
+# still run.
+git checkout -q omamobile && git checkout -q -b newbase
+echo other > drivers/b.c
+git add -A && git commit -q -m "drivers: b: added on the base"
+objs=$(git count-objects -v | grep -E '^(count|in-pack):')
+m_status=0
+m_out=$("$here/tools/kernel-pr-check" -C "$k" --merge newbase good 2>&1) || m_status=$?
+[[ $m_status == 0 ]] || { echo "$m_out"; fail "--merge, clean: exit $m_status"; }
+grep -q 'merges cleanly onto' <<<"$m_out" || { echo "$m_out"; fail "--merge, clean: silent"; }
+[[ $(git count-objects -v | grep -E '^(count|in-pack):') == "$objs" ]] || fail "--merge wrote objects into the kernel tree"
+echo "ok - --merge passes a branch that merges cleanly onto a newer base, and writes nothing to the tree"
+
+echo conflicting > drivers/a.c
+git commit -q -am "drivers: a: changed on the base"
+c_status=0
+c_out=$("$here/tools/kernel-pr-check" -C "$k" --merge newbase good 2>&1) || c_status=$?
+[[ $c_status == 1 ]] || { echo "$c_out"; fail "--merge, conflict: exit $c_status, expected 1"; }
+grep -q 'rebase needed' <<<"$c_out" && grep -q 'drivers/a.c' <<<"$c_out" || { echo "$c_out"; fail "--merge, conflict: doesn't name the rebase or the file"; }
+grep -q 'signed off by their authors' <<<"$c_out" || { echo "$c_out"; fail "--merge, conflict: skipped the commit checks"; }
+echo "ok - --merge fails a conflicting branch as 'rebase needed', and still checks its commits"

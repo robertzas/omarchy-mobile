@@ -4,8 +4,9 @@
 # .github/workflows/checks.yml on the kernel repository's omamobile branch;
 # see CONTRIBUTING.md section 6.2. It checks out the pull request's commits
 # and this repository's tools, then runs the sign-off, prefix, checkpatch
-# and identifier checks and the W=1, dtbs_check and dt_binding_check
-# builds, comparing device-tree warnings with the base.
+# and identifier checks on its commits, and the W=1, dtbs_check and
+# dt_binding_check builds on the pull request merged onto the current base
+# (--merge), comparing device-tree warnings with that base.
 name: checks
 
 on:
@@ -30,8 +31,11 @@ jobs:
           path: linux
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
-      - name: The base
-        run: git -C linux fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
+      # The base branch as it is when the job runs, not the event's base.sha:
+      # that is recorded at the pull request's last push, and a re-run
+      # replays it, so a fix merged since then would never be seen.
+      - name: The base, now
+        run: git -C linux fetch --no-tags origin "+refs/heads/${{ github.event.pull_request.base.ref }}:refs/remotes/origin/base"
       - uses: actions/checkout@v5
         with:
           repository: derekross/omarchy-mobile
@@ -43,5 +47,5 @@ jobs:
           pip install --break-system-packages dtschema
       - name: tools/kernel-pr-check
         run: |
-          omarchy-mobile/tools/kernel-pr-check -C linux --build "$RUNNER_TEMP/kbuild" \
-            "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+          omarchy-mobile/tools/kernel-pr-check -C linux --build "$RUNNER_TEMP/kbuild" --merge \
+            origin/base "${{ github.event.pull_request.head.sha }}"

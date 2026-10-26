@@ -20,11 +20,17 @@
 #     clang, ld.lld and, for the schema checks, dtschema (`pip install
 #     dtschema`); a missing tool skips its check and says so.
 #
-#   tools/kernel-pr-check [-C KERNEL] [--build OUT] BASE [HEAD]
+#   tools/kernel-pr-check [-C KERNEL] [--build OUT] [--merge] BASE [HEAD]
 #
 # KERNEL defaults to ~/android/mainline/linux, HEAD to HEAD. It reads git and
 # builds in OUT (and OUT-base, for the base's device trees); it never
 # touches the tree's checkout or anything else.
+#
+# --merge builds what would land: HEAD merged onto BASE (a test merge,
+# written as git objects only), compared with BASE itself. The commit checks
+# still read only HEAD's own commits. Without it the builds compare HEAD
+# with its merge base, so a fix that reached BASE after the branch was cut
+# never shows (L-154). A merge that conflicts fails with "rebase needed".
 set -uo pipefail
 # sort and comm must agree on the order, whatever the caller's locale.
 export LC_ALL=C
@@ -32,16 +38,18 @@ self=$(readlink -f "${BASH_SOURCE[0]}")
 repo=$(cd -- "$(dirname -- "$self")/.." && pwd)
 kernel=$HOME/android/mainline/linux
 out=""
+merge=0
 while (($#)); do
   case $1 in
     -C) kernel=${2:?-C needs a kernel tree}; shift 2 ;;
     --build) out=${2:?--build needs an output directory}; shift 2 ;;
-    -h|--help) sed -n '3,30p' "$self"; exit 0 ;;
+    --merge) merge=1; shift ;;
+    -h|--help) sed -n '3,36p' "$self"; exit 0 ;;
     -*) echo "kernel-pr-check: unknown option $1" >&2; exit 2 ;;
     *) break ;;
   esac
 done
-base=${1:?Usage: kernel-pr-check [-C KERNEL] [--build OUT] BASE [HEAD]}
+base=${1:?Usage: kernel-pr-check [-C KERNEL] [--build OUT] [--merge] BASE [HEAD]}
 head=${2:-HEAD}
 # -C may be relative to the caller's directory. This script changes into
 # the tree and then runs pr-check with the same path, so resolve it first.
@@ -73,6 +81,35 @@ pass() { echo "ok - $*"; }
 skip() { echo "ok - $* # SKIP"; }
 ai='claude|anthropic|openai|chatgpt|codex|copilot|gemini|cursor|llm|\[bot\]'
 
+# What the builds compare: HEAD with its merge base, or with --merge the
+# test merge of HEAD onto BASE with BASE. A conflict fails and skips the
+# builds; the commit checks still run.
+build_head=$head build_base=$mb
+mdir=""
+if ((merge)); then
+  # The test merge's objects go to a scratch object directory, with the
+  # tree's own as an alternate: the tree is never written (CI and the review
+  # container mount it read-only).
+  mdir=$(mktemp -d)
+  trap 'rm -rf "$mdir"' EXIT
+  GIT_ALTERNATE_OBJECT_DIRECTORIES=$(cd -- "$(git rev-parse --git-common-dir)" && pwd)/objects${GIT_ALTERNATE_OBJECT_DIRECTORIES:+:$GIT_ALTERNATE_OBJECT_DIRECTORIES}
+  export GIT_OBJECT_DIRECTORY=$mdir GIT_ALTERNATE_OBJECT_DIRECTORIES
+  mtree=$(git merge-tree --write-tree --name-only "$base" "$head" 2>&1); st=$?
+  if ((st == 1)); then
+    fail "rebase needed: $(git rev-parse --short "$head") doesn't merge cleanly onto $(git rev-parse --short "$base"); conflicts in:
+$(sed -n '2,/^$/p' <<<"$mtree" | sed '/^$/d; s/^/    /')"
+    out=""
+  elif ((st)); then
+    echo "kernel-pr-check: git merge-tree failed: $mtree" >&2; exit 2
+  else
+    build_head=$(GIT_AUTHOR_NAME=kernel-pr-check GIT_AUTHOR_EMAIL=kernel-pr-check@invalid \
+      GIT_COMMITTER_NAME=kernel-pr-check GIT_COMMITTER_EMAIL=kernel-pr-check@invalid git commit-tree -p "$(git rev-parse "$base")" -p "$(git rev-parse "$head")" \
+      -m "kernel-pr-check: test merge" "$(head -1 <<<"$mtree")") || exit 2
+    build_base=$base
+    pass "merges cleanly onto $(git rev-parse --short "$base") (test merge $(git rev-parse --short "$build_head"))"
+  fi
+fi
+
 # ---------------------------------------------------------------- commits
 sob_bad="" prefix_bad=""
 for c in $commits; do
@@ -98,7 +135,7 @@ ${prefix_bad%$'\n'}"
 # ---------------------------------------------------------------- checkpatch
 # checkpatch as the base has it: a pull request can't change its own checker.
 cpdir=$(mktemp -d)
-trap 'rm -rf "$cpdir"' EXIT
+trap 'rm -rf "$cpdir" ${mdir:+"$mdir"}' EXIT
 mkdir -p "$cpdir/checker" "$cpdir/tree/Documentation"
 git archive "$mb" scripts/checkpatch.pl scripts/spelling.txt scripts/const_structs.checkpatch 2>/dev/null | tar -x -C "$cpdir/checker" \
   || git archive "$mb" scripts/checkpatch.pl | tar -x -C "$cpdir/checker"
@@ -154,10 +191,10 @@ if [[ -n $out ]]; then
   if ! command -v clang >/dev/null || ! command -v ld.lld >/dev/null; then
     skip "builds: no clang or ld.lld"
   else
-    # A clean export of HEAD and BASE, so the tree's own checkout is never touched.
+    # A clean export of what's built and its base, so the tree's own checkout is never touched.
     src=$out/src srcb=$out/src-base
     rm -rf "$src" "$srcb"; mkdir -p "$src" "$srcb"
-    git archive "$head" | tar -x -C "$src"
+    git archive "$build_head" | tar -x -C "$src"
     k=(make -s -C "$src" O="$out/build" ARCH=arm64 LLVM=1 -j"$(nproc)")
     if "${k[@]}" defconfig >/dev/null 2>&1 \
        && (cd "$src" && KCONFIG_CONFIG="$out/build/.config" scripts/kconfig/merge_config.sh -m -O "$out/build" "$out/build/.config" "$repo/kernel/configs/omamobile.config" >/dev/null 2>&1) \
@@ -191,7 +228,7 @@ ${bad%$'\n'}"; fi
           fail "device trees don't build:
 $(tail -8 <<<"$log" | sed 's/^/    /')"
         else
-          git archive "$mb" | tar -x -C "$srcb"
+          git archive "$build_base" | tar -x -C "$srcb"
           kb=(make -s -C "$srcb" O="$out/build-base" ARCH=arm64 LLVM=1 -j"$(nproc)")
           cp "$out/build/.config" "$out/build-base/.config" 2>/dev/null || { mkdir -p "$out/build-base"; cp "$out/build/.config" "$out/build-base/.config"; }
           "${kb[@]}" olddefconfig >/dev/null 2>&1

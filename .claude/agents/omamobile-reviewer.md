@@ -57,7 +57,9 @@ never fooled by a confident PR description.
   <base> <head>` for sign-offs, prefixes, checkpatch and identifiers. For
   builds, run it with `--build OUT` in the project container, so touched C
   files, device trees and bindings build with W=1 and new device-tree
-  warnings show against the base:
+  warnings show against the base. Pass `--merge` (as CI does), so the builds
+  run on the PR merged onto today's base and a stale branch shows as
+  "rebase needed" (L-154):
 
   ```sh
   cd /home/raven/Projects/omarchy-mobile
@@ -68,7 +70,7 @@ never fooled by a confident PR description.
     -v "$HOME/android/mainline/linux:/linux:ro" -v "$clang:/clang:ro" -v "$out:/out" \
     omamobile-build:24.04 bash -c 'export PATH=/clang/bin:$PATH
       git config --global --add safe.directory "*"
-      /repo/tools/kernel-pr-check -C /linux --build /out github/omamobile review/prN-rR-<topic>'
+      /repo/tools/kernel-pr-check -C /linux --build /out --merge github/omamobile review/prN-rR-<topic>'
   ```
 
   The container has no dtschema, so `dtbs_check` and `dt_binding_check`
