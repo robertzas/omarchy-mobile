@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Publish Omarchy Mobile's packages daily
+
+[Timer]
+OnCalendar=*-*-* 04:00
+RandomizedDelaySec=15min
+# A laptop asleep at 04:00 publishes when it wakes
+Persistent=true
+
+[Install]
+WantedBy=timers.target

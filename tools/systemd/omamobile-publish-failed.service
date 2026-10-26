@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Tell the maintainer the package publish failed
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/notify-send -u critical "Omarchy Mobile publish failed" "journalctl --user -u omamobile-publish"

@@ -1,0 +1,263 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Publish the signed [omamobile] repository to pkgs.omamobile.org
+# (docs/RELEASES.md §10). Maintainer only: it signs with keys/.
+#
+#   tools/repo-publish [options] [development|stable]
+#     development (the default)
+#                  build what changed (tools/build-packages --all: only
+#                  packages whose version isn't in out/repo yet), check every
+#                  signature and checksum, and publish to development
+#     stable       promote: copy development's index and the signed files it
+#                  lists, as they are, to stable (asks first unless --yes)
+#     --no-build   publish out/repo as it is
+#     --dry-run    everything except the upload
+#     --yes        don't ask before promoting
+#     --from-main  build and publish from a clean checkout of origin/main
+#                  (out/publish-tree), never from this working tree; what the
+#                  daily timer uses (tools/systemd/omamobile-publish.*)
+#     --remind     no build or upload: if development has differed from stable
+#                  for REMIND_DAYS (3) days, open a "Ready for stable" issue
+#                  on GitHub, unless one is open already
+#
+# Each channel is out/publish/<channel>/aarch64 here, mirrored to the server.
+# It keeps the files of the current index and of the one before it, so a
+# phone can go back one version. Upload order: packages and signatures, then
+# the index, then the pruning, so a phone never sees an index that names a
+# file not there yet. Nothing is uploaded unless every package and the index
+# carry a good signature from a key omamobile-keyring trusts.
+#
+# Server: OMAMOBILE_PKGS_HOST (raven@nostr01.derekross.me), port
+# OMAMOBILE_PKGS_PORT (1022), path OMAMOBILE_PKGS_PATH
+# (/var/www/html/pkgs.omamobile.org). The account must be in `deployers`.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+ROOT=$PWD
+
+HOST=${OMAMOBILE_PKGS_HOST:-raven@nostr01.derekross.me}
+PORT=${OMAMOBILE_PKGS_PORT:-1022}
+DEST=${OMAMOBILE_PKGS_PATH:-/var/www/html/pkgs.omamobile.org}
+URL=https://pkgs.omamobile.org
+REMIND_DAYS=${REMIND_DAYS:-3}
+REPO=derekross/omarchy-mobile
+ARCH=aarch64
+DB=omamobile.db.tar.gz
+
+say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
+die() { echo "repo-publish: $*" >&2; exit 1; }
+
+channel=development build=1 dry=0 yes=0 remind=0 from_main=0 args=()
+while (($#)); do
+  [[ $1 == --from-main ]] || args+=("$1")
+  case $1 in
+    --from-main) from_main=1 ;;
+    development|stable) channel=$1 ;;
+    --no-build) build=0 ;;
+    --dry-run) dry=1 ;;
+    --yes) yes=1 ;;
+    --remind) remind=1 ;;
+    -h|--help) sed -n '3,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown argument $1" ;;
+  esac
+  shift
+done
+
+command -v bsdtar >/dev/null || die "needs bsdtar (libarchive)"
+
+if ((from_main)); then
+  # A detached checkout of origin/main, so half-finished local changes are
+  # never published. keys/ and out/ are this tree's; so are the gitignored
+  # prebuilt binaries some PKGBUILDs install (packages/*/…/prebuilt/).
+  wt=$ROOT/out/publish-tree
+  git fetch -q origin main
+  [[ -e $wt/.git ]] || git worktree add -q --detach "$wt" origin/main
+  git -C "$wt" checkout -q --detach --force origin/main
+  git -C "$wt" clean -qfdx -e /keys -e /out
+  ln -sfn "$ROOT/keys" "$wt/keys"
+  ln -sfn "$ROOT/out" "$wt/out"
+  git ls-files -z --others --ignored --exclude-standard -- packages | grep -z '/prebuilt/' |
+    rsync -a --from0 --files-from=- ./ "$wt/"
+  say "Publishing from origin/main at $(git -C "$wt" rev-parse --short HEAD)"
+  exec "$wt/tools/repo-publish" "${args[@]}"
+fi
+pub=$ROOT/out/publish
+dev=$pub/development/$ARCH
+stb=$pub/stable/$ARCH
+
+# The package file names an index lists, one per line
+db_files() { [[ -f $1/$DB ]] && bsdtar -xOf "$1/$DB" --include='*/desc' | awk '/^%FILENAME%$/ { getline; print }' | sort; }
+# "file sha256" for each package an index lists
+db_sums() {
+  bsdtar -xOf "$1/$DB" --include='*/desc' |
+    awk '/^%FILENAME%$/ { getline; f = $0 } /^%SHA256SUM%$/ { getline; print f, $0 }'
+}
+
+if ((remind)); then
+  [[ -f $dev/$DB ]] || exit 0
+  if [[ -f $stb/$DB ]] && cmp -s <(db_files "$dev") <(db_files "$stb"); then exit 0; fi
+  age=$(( ($(date +%s) - $(stat -c %Y "$dev/$DB")) / 86400 ))
+  # The age of development's oldest change stable lacks is at least the age
+  # of its index; once it's old enough, ask.
+  (( age >= REMIND_DAYS )) || exit 0
+  open=$(gh issue list -R "$REPO" --state open --search 'in:title "Ready for stable"' --json number -q 'length')
+  (( open == 0 )) || exit 0
+  new=$(comm -23 <(db_files "$dev") <(db_files "$stb" 2>/dev/null || true) | grep -v '\.sig$' | sed 's/^/- `/; s/$/`/' || true)
+  gh issue create -R "$REPO" --title "Ready for stable: development has changes from $age days ago" --body "$(cat <<EOF
+Development at $URL/development has packages that stable doesn't, published $age days ago or earlier:
+
+$new
+
+If they've run on the Pixel 7 Pro without trouble, promote them with \`tools/repo-publish stable\` and close this issue.
+
+_Opened by \`tools/repo-publish --remind\`._
+EOF
+)"
+  exit 0
+fi
+
+# Signature check against omamobile-keyring's trusted, unrevoked keys only
+keyhome=$(mktemp -d /dev/shm/omamobile-verify.XXXXXX)
+trap 'GNUPGHOME=$keyhome gpgconf --kill gpg-agent 2>/dev/null; rm -rf -- "$keyhome"' EXIT
+chmod 700 "$keyhome"
+GNUPGHOME=$keyhome gpg -q --batch --import packages/omamobile-keyring/omamobile.gpg 2>/dev/null
+mapfile -t trusted < <(cut -d: -f1 packages/omamobile-keyring/omamobile-trusted | grep -vxFf <(cut -d: -f1 packages/omamobile-keyring/omamobile-revoked | grep . || echo none))
+((${#trusted[@]})) || die "omamobile-keyring trusts no key"
+signed_ok() {
+  local status signer
+  status=$(GNUPGHOME=$keyhome gpg --batch --status-fd 1 --verify "$1.sig" "$1" 2>/dev/null) || return 1
+  signer=$(awk '$2 == "VALIDSIG" { print $NF }' <<<"$status")
+  [[ -n $signer && " ${trusted[*]} " == *" $signer "* ]]
+}
+# Every file the index lists is there, matches its checksum and is signed,
+# and so is the index.
+verify() {
+  local dir=$1 file sum n=0
+  [[ -f $dir/$DB && -f $dir/$DB.sig ]] || die "$dir has no signed index"
+  signed_ok "$dir/$DB" || die "$dir/$DB: no good signature from a trusted key"
+  while read -r file sum; do
+    [[ -f $dir/$file ]] || die "$dir: the index lists $file, which is missing"
+    [[ $(sha256sum < "$dir/$file" | cut -d' ' -f1) == "$sum" ]] || die "$dir/$file doesn't match the index"
+    [[ -f $dir/$file.sig ]] && signed_ok "$dir/$file" || die "$dir/$file: no good signature from a trusted key"
+    n=$((n + 1))
+  done < <(db_sums "$dir")
+  ((n)) || die "$dir: the index lists no packages"
+  echo "    $n packages and the index: checksums and signatures good"
+}
+
+# Bring a channel directory to a new index: the new files, plus the ones the
+# previous index listed, nothing else.
+stage() {
+  local from=$1 to=$2 f
+  mkdir -p "$to"
+  local previous
+  previous=$(db_files "$to" || true)
+  while read -r f; do
+    cp -p "$from/$f" "$from/$f.sig" "$to/"
+  done < <(db_files "$from")
+  for f in omamobile.db omamobile.files; do
+    cp -pL "$from/$f.tar.gz" "$from/$f.tar.gz.sig" "$to/"
+    cp -pL "$from/$f.tar.gz" "$to/$f"
+    cp -pL "$from/$f.tar.gz.sig" "$to/$f.sig"
+  done
+  local keep
+  keep=$( { db_files "$to"; if [[ -n $previous ]]; then echo "$previous"; fi; } | sort -u)
+  for f in "$to"/*.pkg.tar.*; do
+    [[ -e $f ]] || continue
+    f=${f##*/}; f=${f%.sig}
+    grep -qxF "$f" <<<"$keep" || rm -f "$to/$f" "$to/$f.sig"
+  done
+}
+
+write_index() {
+  local keys k
+  keys=$(for k in "${trusted[@]}"; do printf '      <li><code>%s</code></li>\n' "$k"; done)
+  cat > "$pub/index.html" <<EOF
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Omarchy Mobile packages</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #fff; --fg: #1b1b1b; --muted: #5b5b5b; --code: #f2f2f2; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #151515; --fg: #e8e8e8; --muted: #a0a0a0; --code: #262626; } }
+    body { background: var(--bg); color: var(--fg); font: 16px/1.55 system-ui, sans-serif; max-width: 44rem; margin: 3rem auto; padding: 0 16px; }
+    code, pre { background: var(--code); border-radius: 4px; font-size: .92em; }
+    code { padding: .1em .3em; } pre { padding: .8em 1em; overflow-x: auto; }
+    p.muted { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <h1>Omarchy Mobile packages</h1>
+  <p>The signed <code>[omamobile]</code> repository for <a href="https://omamobile.org">Omarchy Mobile</a> phones. It's read by pacman; phones get it through <code>omarchy update</code>.</p>
+  <h2>Channels</h2>
+  <ul>
+    <li><a href="stable/$ARCH/">stable</a>: what has run on the reference phone</li>
+    <li><a href="development/$ARCH/">development</a>: new builds, first</li>
+  </ul>
+  <p>In <code>/etc/pacman.conf</code>, above <code>[omarchy]</code>:</p>
+  <pre>[omamobile]
+Server = $URL/stable/\$arch</pre>
+  <h2>Signing keys</h2>
+  <p>Packages and the index are signed. The keys ship in <code>omamobile-keyring</code>:</p>
+  <ul>
+$keys
+  </ul>
+  <p class="muted">Source: <a href="https://github.com/$REPO">github.com/$REPO</a></p>
+</body>
+</html>
+EOF
+}
+
+upload() {
+  local local_dir=$1 remote_dir=$2
+  local ssh="ssh -p $PORT"
+  local rs=(rsync -rt --omit-dir-times --chmod=D2775,F664 -e "$ssh")
+  ((dry)) && rs+=(-n -v)
+  if ((dry == 0)); then
+    $ssh "$HOST" "mkdir -p '$DEST/$remote_dir' && test -w '$DEST/$remote_dir'" ||
+      die "can't write $HOST:$DEST/$remote_dir (is the account in deployers?)"
+  fi
+  # 1. packages and their signatures, 2. the index, 3. drop what the mirror dropped
+  "${rs[@]}" --exclude='omamobile.db*' --exclude='omamobile.files*' "$local_dir/" "$HOST:$DEST/$remote_dir/"
+  "${rs[@]}" "$local_dir/" "$HOST:$DEST/$remote_dir/"
+  "${rs[@]}" --delete "$local_dir/" "$HOST:$DEST/$remote_dir/"
+}
+
+if [[ $channel == development ]]; then
+  if ((build)); then
+    say "Building what changed"
+    tools/build-packages --all
+  fi
+  [[ -f out/repo/$ARCH/$DB ]] || die "out/repo has no index; run tools/build-packages"
+  say "Checking out/repo"
+  verify "out/repo/$ARCH"
+  say "Staging development"
+  stage "out/repo/$ARCH" "$dev"
+  verify "$dev"
+  target=$dev
+else
+  [[ -f $dev/$DB ]] || die "nothing in development to promote"
+  verify "$dev"
+  echo "Promoting to stable:"
+  comm -23 <(db_files "$dev") <(db_files "$stb" 2>/dev/null || true) | sed 's/^/    /'
+  if ((yes == 0 && dry == 0)); then
+    read -rp "Promote development to stable? [y/N] " answer
+    [[ $answer == y ]] || exit 1
+  fi
+  stage "$dev" "$stb"
+  verify "$stb"
+  target=$stb
+fi
+
+write_index
+say "Uploading $channel to $URL/$channel/$ARCH$( ((dry)) && echo ' (dry run)')"
+upload "$target" "$channel/$ARCH"
+if ((dry)); then
+  echo "    (dry run) index.html"
+else
+  rsync -t --chmod=F664 -e "ssh -p $PORT" "$pub/index.html" "$HOST:$DEST/index.html"
+  code=$(curl -s -o /dev/null -w '%{http_code}' "$URL/$channel/$ARCH/omamobile.db")
+  [[ $code == 200 ]] || die "$URL/$channel/$ARCH/omamobile.db answers $code"
+fi
+say "Done: $URL/$channel/$ARCH"

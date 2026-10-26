@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# The maintainer's daily publish (docs/RELEASES.md §10): build what changed on
+# origin/main, publish it to pkgs.omamobile.org's development channel, and
+# open a "Ready for stable" issue when development has waited long enough.
+# Install: cp tools/systemd/omamobile-publish* ~/.config/systemd/user/ &&
+#          systemctl --user enable --now omamobile-publish.timer
+[Unit]
+Description=Publish Omarchy Mobile's packages (development channel)
+OnFailure=omamobile-publish-failed.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Projects/omarchy-mobile
+ExecStart=%h/Projects/omarchy-mobile/tools/repo-publish --from-main development
+ExecStart=%h/Projects/omarchy-mobile/tools/repo-publish --remind
+TimeoutStartSec=infinity
+Nice=10
