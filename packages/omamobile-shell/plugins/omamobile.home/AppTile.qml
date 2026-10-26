@@ -35,7 +35,8 @@ Item {
     anchors.horizontalCenter: parent.horizontalCenter
     anchors.bottom: parent.verticalCenter
     anchors.bottomMargin: -Math.round(width * 0.18)
-    width: Math.min(52, Math.max(36, Math.min(tile.width, tile.height) * 0.48))
+    // Phone-sized, like a home-screen icon on iOS: most of the cell's width.
+    width: Math.min(64, Math.max(40, Math.min(tile.width, tile.height) * 0.62))
     height: width
     fillMode: Image.PreserveAspectFit
     asynchronous: true
@@ -58,9 +59,10 @@ Item {
     // An outline keeps the name readable on a light wallpaper; it costs
     // nothing like a blur or a drop shadow would.
     style: Text.Outline
-    styleColor: Util.alpha(Commons.Color.menu.background, 0.55)
+    styleColor: Util.alpha(Commons.Color.menu.background, 0.85)
     font.family: Style.font.family
-    font.pixelSize: Style.font.caption + 1
+    font.pixelSize: Style.font.caption + 3
+    font.weight: Font.DemiBold
     elide: Text.ElideRight
     maximumLineCount: 1
   }

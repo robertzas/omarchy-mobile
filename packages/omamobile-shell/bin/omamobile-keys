@@ -3,6 +3,8 @@
 # Phone hardware-key gestures, called by Hyprland binds (hypr/phone.lua), as
 # on Android:
 #   power, short       unlocked: lock and turn the screen off
+#                      unlocked, dark: screen on (nothing locked it, or the
+#                      panel was powered off by hand)
 #                      locked: screen off if it's on, on (PIN pad) if it's off
 #                      screensaver up: lock (it wakes to the PIN pad)
 #   power, held 0.6 s  unlocked: Omarchy's system menu, while still held
@@ -52,22 +54,36 @@ screensaver_up() {
   pgrep -f '[o]rg.omarchy.screensaver' >/dev/null
 }
 
-# The panel is off when its backlight's bl_power says so (4); without one,
-# ask Hyprland whether the display is powered.
-# Light the locked display like a touch on the lock screen would, so its
-# blank timer runs again (patches/omarchy/0009); plain "on" otherwise.
+# Light the locked display: first the lock's own wake, as a touch on the lock
+# screen would, so its blank timer runs again (patches/omarchy/0009), then the
+# display itself, because on tegu that wake reports ok without powering the
+# panel back on. The brightness is put back if it was saved as 0.
 wake_locked() {
-  [[ $(omarchy-shell lock wake 2>/dev/null) == "ok" ]] || omarchy-brightness-display on
+  # The lock's wake restarts its blank timer, but on tegu it reports "ok"
+  # without powering the panel back on, so always turn the display on too.
+  omarchy-shell lock wake >/dev/null 2>&1
+  omarchy-brightness-display on
+  local device
+  device=$(omarchy-hw-display 2>/dev/null)
+  sleep 0.3
+  [[ -n $device ]] || return 0
+  [[ $(brightnessctl -d "$device" get 2>/dev/null || echo 1) -gt 0 ]] || brightnessctl -q -d "$device" set 40%
 }
 
+# The panel is off when its backlight's bl_power says so (4), or when Hyprland
+# has the display powered off: on tegu a DPMS-off panel keeps bl_power at 0,
+# and judging by bl_power alone made every Power press lock a dark phone
+# into the dark again instead of waking it. Only a positive "off" counts:
+# if hyprctl or jq fails, the screen reads as on, and the press locks
+# rather than waking a phone that may be lit.
 screen_off() {
   local device
   device=$(omarchy-hw-display 2>/dev/null)
-  if [[ -n $device && -r /sys/class/backlight/$device/bl_power ]]; then
-    [[ $(</sys/class/backlight/"$device"/bl_power) != 0 ]]
-  else
-    ! hyprctl monitors -j 2>/dev/null | jq -e 'all(.dpmsStatus)' >/dev/null
+  if [[ -n $device && -r /sys/class/backlight/$device/bl_power ]] &&
+     [[ $(</sys/class/backlight/"$device"/bl_power) != 0 ]]; then
+    return 0
   fi
+  hyprctl monitors -j 2>/dev/null | jq -e 'any(.[]; .dpmsStatus == false)' >/dev/null
 }
 
 # The chord marker is cleared on power's release, but Hyprland drops that
@@ -96,6 +112,14 @@ long_press() {
 }
 
 short_press() {
+  # Debounce: a second press within 0.8 s of the first, while it was still
+  # locking and powering the panel off, read the screen as on and saved a
+  # brightness of 0, which left the phone dark on the next wake. A press a
+  # few seconds later must still count: it is the wake.
+  local now last
+  now=$(date +%s%3N); last=$(cat "$state/last-press" 2>/dev/null || echo 0)
+  echo "$now" >"$state/last-press"
+  (( now - last < 800 )) && return 0
   if screensaver_up; then
     omarchy-system-lock
   elif locked; then
@@ -103,6 +127,17 @@ short_press() {
       wake_locked
     else
       omarchy-brightness-display off
+    fi
+  elif screen_off; then
+    # Unlocked but dark (the lock didn't engage, or the panel was powered
+    # off by hand): a press wakes it instead of locking into the dark again.
+    omarchy-brightness-display on
+    local device
+    device=$(omarchy-hw-display 2>/dev/null)
+    # A saved brightness of 0 would wake to a black panel.
+    sleep 0.3
+    if [[ -n $device ]]; then
+      [[ $(brightnessctl -d "$device" get 2>/dev/null || echo 1) -gt 0 ]] || brightnessctl -q -d "$device" set 40%
     fi
   else
     # Dark at once, as on Android, but only by the backlight: Omarchy's lock
@@ -113,6 +148,7 @@ short_press() {
     device=$(omarchy-hw-display 2>/dev/null)
     if [[ -n $device ]]; then
       level=$(brightnessctl -d "$device" get 2>/dev/null)
+      [[ ${level:-0} -gt 0 ]] || level=
       brightnessctl -q -d "$device" set 0
     fi
     omarchy-system-lock
@@ -121,7 +157,11 @@ short_press() {
       sleep 0.1
     done
     omarchy-brightness-display off
-    [[ -n $level ]] && brightnessctl -q -d "$device" set "$level"
+    # The brightness the next wake lights up with: the saved level, or 40 % when
+    # the press caught the panel at 0.
+    if [[ -n $device ]]; then
+      [[ -n $level ]] && brightnessctl -q -d "$device" set "$level" || brightnessctl -q -d "$device" set 40%
+    fi
   fi
 }
 
