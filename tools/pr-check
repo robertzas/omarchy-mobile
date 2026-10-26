@@ -51,10 +51,19 @@ added=$(git diff --unified=0 --no-color "$range" -- . ':(exclude)tools/pr-check'
   | awk '/^\+\+\+ /{f=substr($0, 7); next} /^\+/{print f ": " substr($0, 2)}')
 
 # A MAC whose first octet has the locally administered bit set (x2, x6,
-# xA, xE) is made up; so are all zeros and all ones.
-macs=$(grep -iE '(^|[^0-9a-f:])[0-9a-f]{2}(:[0-9a-f]{2}){5}([^0-9a-f:]|$)' <<<"$added" \
-  | grep -viE '(^|[^0-9a-f:])[0-9a-f][26ae](:[0-9a-f]{2}){5}([^0-9a-f:]|$)' \
-  | grep -viE '00(:00){5}|ff(:ff){5}' || true)
+# xA, xE) is made up; so are all zeros, all ones and RFC 7042's
+# documentation range (00:00:5e:00:53:xx). Each address on a line is judged
+# on its own, so an exempt one doesn't hide a real one beside it.
+macs=$(awk '{
+    line = tolower($0); rest = line; real = 0
+    while (match(rest, /(^|[^0-9a-f:])[0-9a-f][0-9a-f](:[0-9a-f][0-9a-f]){5}([^0-9a-f:]|$)/)) {
+      m = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH - 1)
+      gsub(/^[^0-9a-f]|[^0-9a-f]$/, "", m)
+      if (m ~ /^.[26ae]:/ || m == "00:00:00:00:00:00" || m == "ff:ff:ff:ff:ff:ff" || m ~ /^00:00:5e:00:53:/) continue
+      real = 1
+    }
+    if (real) print
+  }' <<<"$added")
 [[ -z $macs ]] && pass "no MAC or Bluetooth addresses" || fail "MAC or Bluetooth addresses (use a placeholder such as <MAC>):
 $(sed 's/^/    /' <<<"$macs" | head -10)"
 

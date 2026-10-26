@@ -41,6 +41,18 @@ git add -A && git commit -q -m "notes"
 check "a real MAC" 1 "MAC or Bluetooth addresses"
 echo "ok - a real MAC fails"
 
+case_branch mac-doc
+echo "example 00:00:5E:00:53:01, none 00:00:00:00:00:00" > notes.md
+git add -A && git commit -q -m "notes"
+check "documentation and all-zero MACs" 0
+echo "ok - RFC 7042's documentation range and all zeros pass"
+
+case_branch mac-mixed
+echo "example 00:00:5e:00:53:01 then 3c:28:6d:aa:bb:cc" > notes.md
+git add -A && git commit -q -m "notes"
+check "a real MAC beside an exempt one" 1 "MAC or Bluetooth addresses"
+echo "ok - an exempt MAC doesn't hide a real one on the same line"
+
 case_branch getprop
 echo "[ro.boot.hardware.revision]: [MP1.0]" > notes.md
 git add -A && git commit -q -m "notes"

@@ -138,6 +138,25 @@ never change, so reviews can cite them.
   the boot goes into Results with `uname -r`, the tree and how slot B was
   written, and the code is pushed (branch or draft PR) with a runbook before
   it boots again. Extends L-34. *From:* #35, round 10.
+- **L-133. A dead-man's confirmation comes after the risky step.** felix's
+  cover-touch step 8 armed the timer, confirmed over a fresh login, then
+  loaded the driver and stopped the timer, so the timer could never fire on
+  the load. *Check:* every runbook goes arm → act → confirm with
+  `tools/phone-ssh --fresh` → stop the timer, and a driver load streams kmsg
+  to the laptop first, because an unbind timer can't undo a hang. Extends
+  L-81 and L-88. *From:* #35, round 12.
+- **L-134. A device's own `INITRAMFS_INIT` is a fork of the storage guard.**
+  raven's copy predated the final `ufs_unguarded` check and the fail-closed
+  allowlist, and `tests/storage-guard` tests the shared script only.
+  *Check:* `grep INITRAMFS_INIT device/*/device.conf`; for a value without a
+  leading `/`, diff that init against `initramfs/init` and list each guard
+  commit (`git log -- initramfs/init`) it lacks. Ask for the shared init with
+  descriptor-driven steps. *From:* #41, round 12.
+- **L-135. "Can't test on stock" is a §3.1 finding about the contributor's
+  phone.** A device without a bootable slot A has no way back. Ask for stock
+  back on slot A, and offer a read-only proxy for the test it blocks (for
+  gs101 power domains, a `pd_ignore_unused` boot after a warm reset shows
+  whether the boot chain re-powers them). *From:* kernel #9, round 12.
 
 ## Shared code and the reference device
 
@@ -221,6 +240,18 @@ never change, so reviews can cite them.
   *Check:* `git log -S` on the binding for the rule's origin, `git grep` for
   the value across all DTs (`da850-lego-ev3`'s zero `mode-normal`, written `<0x00000000>`), and both
   in the commit message. *From:* kernel #45.
+- **L-136. A probe's default pin or register is a per-board fact.**
+  `bt-uart-test --wake` defaulted to cheetah's gpp16:3 on every phone; on
+  gs101 that is a USI8 pin. *Check:* a tool that drives a GPIO or register
+  on the phone takes its default from the board's compatible, or refuses an
+  unknown board without an explicit value. Extends L-13. *From:* #22,
+  round 12.
+- **L-137. A device package's wants links can override another package's
+  "installed, not enabled" policy.** raven's package enabled the modem and
+  SIM units at boot. *Check:* for each `vendor/systemd/**/*.wants/*` link,
+  find the package that owns the unit and read its install message and unit
+  comments; turning a radio on by default is the maintainer's call. *From:*
+  #41, round 12.
 
 ## Shell and scripts
 
@@ -446,6 +477,50 @@ never change, so reviews can cite them.
   trailer block.** checkpatch doesn't flag it. *Check:* `git log -1
   --format=%B <c> | git interpret-trailers --parse` lists every intended
   trailer. *From:* kernel #35, round 10.
+- **L-138. "Stop where stock repairs" covers every error poll on stock's
+  path to the write decision.** FTM5's `fts_crc_check` polls config CRC
+  events 0x20/0x21 and `fts_fw_update` reflashes on them; kernel #48 read
+  and logged them, then scanned. *Check:* trace stock from probe to each
+  write decision and list every event or status that leads to a repair; the
+  driver must fail on each. Extends L-129 and L-108. *From:* kernel #48,
+  round 12.
+- **L-139. A PR that moves a compatible into its own binding is merged with
+  every open PR that uses it as a fallback, and the schemas rebuilt.** #9
+  moved `google,gs101-pmu` out of exynos-pmu.yaml while #47 added
+  `[gs201-pmu, gs101-pmu]` there: both merged as text, and dt-validate failed
+  on all four Google boards (`Duplicate compatible` from `dt-mk-schema`).
+  *Check:* `git grep` open PR heads for the moved compatible, test-merge,
+  `dt-mk-schema` and `dt-validate`. Extends L-126. *From:* kernel #9 with
+  #47, round 12.
+- **L-140. Compare an imported series against patchwork's mboxes when lore
+  is blocked.** `https://patchwork.kernel.org/api/1.3/patches/?q=<term>`
+  lists the message ids and `/project/<list>/patch/<msgid>/mbox/` gives each
+  patch; compare each commit's lines per file, and where only hunks differ,
+  apply to the base and compare the file. Extends L-62. *From:* kernel #9,
+  round 12.
+- **L-141. A gs101 power domain turned off without its DTZPC save needs the
+  save before anything powers it back on.** André's driver skips the EL3
+  save and restore for a `google,gs101-pd` without `samsung,dtzpc`, so the
+  first consumer finds the block's TrustZone settings reset, and its
+  registers SError. *Check:* a new `power-domains = <&pd_…>` on gs101 comes
+  with `samsung,dtzpc` and the block's CMU in the same series. *From:*
+  kernel #9, round 12.
+- **L-142. An enable commit before the fix for a known-bad first version is
+  a bisect hazard.** #7's raven enable commit came before the tuning that
+  stopped boot-time thermal power-offs (3 of 4 boots). *Check:* when a body
+  says "the first version did X on the phone", find that commit and ask for
+  the board enable to land last. Extends L-123. *From:* kernel #7,
+  round 12.
+- **L-143. A Kconfig guard is checked by building with the guarded symbol
+  off.** `kernel-pr-check` builds with our config (SPI on), and a
+  single-object build compiles even a driver whose symbol is off. *Check:*
+  `scripts/config -d SPI`, build the object, and `llvm-nm | grep -i spi` is
+  empty. Extends L-20. *From:* kernel #8, round 12.
+- **L-144. A vendor kernel may program what our read-only driver leaves
+  alone.** Google's `gs_tmu_v2.c` sends every non-passive DT trip to ACPM as
+  a TMU threshold; under our driver the hardware trip is whatever the
+  bootloader set. "INIT doesn't change them" isn't "they're set": ask for the
+  decoded values. Extends L-23. *From:* kernel #7, round 12.
 
 ## The gates themselves
 
@@ -538,6 +613,16 @@ never change, so reviews can cite them.
   rev-parse A^{tree} B^{tree}` on the same base carries the earlier boot and
   builds over to a reworded commit. Extends L-45 and L-84. *From:* kernel
   #41, #35, round 10.
+- **L-145. CI checks a PR that edits a gate with that edit.** `checks.yml`
+  runs the PR's own `tools/pr-check`, so #41's new MAC exemption passed
+  itself. *Check:* run main's gate too, and review an exemption as a policy
+  change: test a line that mixes an exempt value with a real one. (Ours
+  dropped whole lines for the all-zeros exemption; since round 12 each
+  address is judged on its own.) Extends L-30. *From:* #41, round 12.
+- **L-146. CI doesn't parse UCM:** the runner has no `alsaucm`, and the test
+  skips silently. *Check:* parse UCM changes locally with `alsaucm` on a
+  virtual card, once per `If` branch. Extends L-103. *From:* #41,
+  round 12.
 
 ## Reviews and merging
 
@@ -604,6 +689,17 @@ never change, so reviews can cite them.
   deleted (then restored) refs another was using. *Check:*
   `review/prN-r<round>-<topic>`; clean up from a list recorded at fetch time.
   Extends L-43. *From:* round 10.
+- **L-147. Before re-checking an earlier round's request, re-derive it from
+  what has landed since.** Round 11 asked #22 to gate `aoc-stage s2mpu` on a
+  `tzpc` restore, from the tool's header alone; raven's plans (#41) show
+  that SMC hung the SoC and that the `pd` stage made the read safe, so the
+  gate could only be passed by a known hang (C-6). *Check:* for every safety
+  gate we asked for, find the plan row it rests on and confirm the step it
+  requires passed there. Extends L-31. *From:* #22, round 12.
+- **L-148. `git merge-tree` exiting 1 can mean a missing ref, not a
+  conflict.** Another reviewer deleted their refs mid-review. *Check:* read
+  the message, and use commit ids for other reviewers' PRs. Extends L-127.
+  *From:* round 12.
 
 ## Claims and evidence
 
@@ -685,6 +781,17 @@ never change, so reviews can cite them.
   list); an edit to one must agree with the other**, and the plain words that
   say the evidence isn't public must survive. *Check:* `grep -n <codename>
   docs/DEVICES.md`. Extends L-28, L-66 and L-107. *From:* #39.
+- **L-149. A descriptor's overlays and config symbols must exist in the
+  published kernel or an open kernel PR.** raven's targeted nodes and
+  options in neither, so its images can't be built from our trees. *Check:*
+  `git grep` each overlay target and `CONFIG_` symbol against
+  `github/omamobile` and the open PR heads; whatever is missing means the
+  matrix cells name the port branch. Extends L-28 and L-61. *From:* #41,
+  round 12.
+- **L-150. Read every plan in the PR before quoting one plan's status.**
+  raven's BLUETOOTH-PLAN said "broken" while a later POWER-PLAN result said it
+  "works again". *Check:* `git grep -n` the subsystem across the PR's plans
+  and go by the newest dated result. *From:* #41, round 12.
 
 ## Corrections (where a review was wrong)
 
@@ -713,3 +820,13 @@ never change, so reviews can cite them.
   went into a commit message. *Lesson:* a fact we hand a contributor for a
   commit needs the line-level source we'd ask of them. *From:* kernel #35,
   round 10.
+- **C-5 (2026-10-26). Round 11 asked kernel #48's author for `Assisted-by:
+  AGENT_NAME:MODEL_VERSION`; the `coding-assistants.rst` on `omamobile` gives
+  `Assisted-by: LLM [TOOL1] [TOOL2]`,** which the author used. *Lesson:*
+  quote kernel process docs from the branch the PR targets (`git show
+  github/omamobile:Documentation/process/…`), not from memory. Extends C-4.
+  *From:* kernel #48, round 12.
+- **C-6 (2026-10-26). Round 11's request that `aoc-stage s2mpu` require
+  `cycle` and a `tzpc` restore was wrong.** raven's AUDIO-PLAN R2.1c/d record
+  both DTZPC SMCs hanging the SoC, and R2.1g makes the read safe through the
+  `pd` stage. *Lesson:* L-147. *From:* #22, round 12.
