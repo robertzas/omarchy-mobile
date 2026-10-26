@@ -13,6 +13,10 @@
       "right": []
     }
   },
+  "idle": {
+    "screensaver": 0,
+    "lock": 60
+  },
   "plugins": [
     {
       "id": "omamobile.quicksettings"

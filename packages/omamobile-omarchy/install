@@ -12,6 +12,7 @@ install -Dm755 bin/omamobile-update "$d/usr/bin/omamobile-update"
 for f in lib/update-bin/*; do
   install -Dm755 "$f" "$d/usr/lib/omamobile-omarchy/update-bin/${f##*/}"
 done
+install -Dm755 lib/lock-pam "$d/usr/lib/omamobile-omarchy/lock-pam"
 for f in patches/*.patch; do
   install -Dm644 "$f" "$d/usr/share/omamobile/omarchy/patches/${f##*/}"
 done

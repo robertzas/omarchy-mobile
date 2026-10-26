@@ -9,7 +9,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 
-for f in install omamobile-omarchy.install lib/update-bin/* test/update.sh; do
+for f in install omamobile-omarchy.install lib/update-bin/* lib/lock-pam test/update.sh test/lock-pam.sh; do
   bash -n "$f" || fail "$f parses"
 done
 for f in bin/omamobile-omarchy-patches bin/omamobile-update test/patches.py; do
@@ -19,7 +19,7 @@ pass "scripts parse"
 
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 ./install "$t/stage"
-for f in usr/bin/omamobile-omarchy-patches usr/bin/omamobile-update \
+for f in usr/bin/omamobile-omarchy-patches usr/bin/omamobile-update usr/lib/omamobile-omarchy/lock-pam \
          usr/share/libalpm/hooks/95-omamobile-omarchy-patches.hook \
          usr/share/licenses/omamobile-omarchy/LICENSE usr/share/omamobile/omarchy/version; do
   [[ -e $t/stage/$f ]] || fail "not staged: $f"
@@ -46,6 +46,21 @@ done
 pass "every patch has a header"
 
 python3 -B test/patches.py || fail "re-patch tool"
+
+# The lock's PAM file (lib/lock-pam), and against the real omarchy-apply-lock
+# when the package is at hand, found as test/patches.py finds it.
+pkg=${OMARCHY_PKG:-$(ls ~/.cache/omamobile-rootfs/pkg/omarchy-[0-9]*-aarch64.pkg.tar.* 2>/dev/null | grep -v '\.sig$' | sort | tail -1 || true)}
+if [[ -n $pkg ]] && command -v bsdtar >/dev/null; then
+  mkdir -p "$t/omarchy-pkg"
+  bsdtar -xf "$pkg" -C "$t/omarchy-pkg" usr/bin/omarchy-apply-lock
+  OMARCHY_PKG_ROOT=$t/omarchy-pkg bash test/lock-pam.sh || fail "lock-pam"
+else
+  bash test/lock-pam.sh || fail "lock-pam"
+  pass "lock-pam against the real omarchy-apply-lock # SKIP no omarchy package or bsdtar"
+fi
+[[ $(grep -cx '  /usr/lib/omamobile-omarchy/lock-pam || true' omamobile-omarchy.install) == 2 ]] \
+  || fail "install and upgrade write the lock's PAM file"
+pass "install and upgrade write the lock's PAM file when it is missing"
 bash test/update.sh || fail "omamobile-update"
 
 # Patch 0015 end to end (inline reply on a private bus), in the OWL

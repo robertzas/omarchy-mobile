@@ -346,6 +346,13 @@ def real_package(t):
        and "sendInlineReply" in read(root, notif + "Service.qml")
        and "notificationReplyField" in read(root, notif + "components/NotificationCard.qml"),
        "real omarchy: notifications take an inline reply (0015)")
+    for name in ("omarchy-channel-set", "omarchy-refresh-pacman"):
+        text = read(root, "usr/bin/" + name)
+        guard = text.find("if [[ -x /usr/bin/omamobile-update ]]")
+        ok(guard >= 0 and (text.find("sudo ") < 0 or guard < text.find("sudo ")),
+           "real omarchy: %s refuses on a phone before it touches pacman (0016)" % name)
+        ok("RELEASES.md section 5.4" in text, "real omarchy: %s points at RELEASES 5.4" % name)
+    screensaver_launcher(t, os.path.join(root, "usr/bin/omarchy-launch-screensaver"))
     rc, out = run(root, "apply", series=SERIES)
     ok(rc == 0 and "already applied" in out, "real omarchy: already applied")
     rc, _ = run(root, "verify")
@@ -379,6 +386,65 @@ def real_package(t):
     ok(rc == 0 and status["upstream"] == [os.path.basename(patch0000)],
        "real omarchy with %s upstream: skipped and reported, the rest applied" % os.path.basename(patch0000))
     ok(len(status["applied"]) == len(glob.glob(os.path.join(SERIES, "*.patch"))) - 1, "real omarchy with one patch upstream: the others apply on it")
+
+
+def screensaver_launcher(t, launcher):
+    """Patch 0006's launcher against fake commands: every way out of it puts
+    the on-screen keyboard back unless a screensaver runs (TOUCH-PLAN 0.5)."""
+    fakes = os.path.join(t, "ss-fakes")
+    runtime = os.path.join(t, "ss-runtime")
+    os.makedirs(fakes)
+    os.makedirs(runtime)
+    state = os.path.join(t, "ss-osk")
+    log = os.path.join(t, "ss-log")
+
+    def fake(name, body):
+        path = os.path.join(fakes, name)
+        with open(path, "w") as f:
+            f.write("#!/bin/bash\n" + body + "\n")
+        os.chmod(path, 0o755)
+
+    fake("omarchy-cmd-missing", "exit 1")
+    fake("pgrep", "exit 1")  # no screensaver running
+    fake("omarchy-toggle-enabled", "exit 1")
+    fake("omarchy-hyprland-monitor-focused", "echo DSI-1")
+    fake("omarchy-shell", '[[ "$*" == "lock isLocked" ]] && echo "${FAKE_LOCKED:-false}"')
+    fake("busctl", "exit 0")  # squeekboard is on the bus
+    fake("gsettings", 'case $1 in get) cat "$FAKE_OSK" ;; set) echo "$4" > "$FAKE_OSK"; echo "set $4" >> "$FAKE_LOG" ;; esac')
+    fake("xdg-terminal-exec", 'sleep "${FAKE_TERMINAL_DELAY:-0}"; echo xterm.desktop')
+    fake("omarchy-notification-send", "exit 0")
+    fake("hyprctl", "exit 0")
+
+    def start(**extra):
+        with open(state, "w") as f:
+            f.write("true\n")
+        open(log, "w").close()
+        env = {"PATH": fakes + ":/usr/bin:/bin", "HOME": t, "XDG_RUNTIME_DIR": runtime,
+               "FAKE_OSK": state, "FAKE_LOG": log}
+        env.update(extra)
+        return subprocess.Popen(["bash", launcher], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def osk():
+        return open(state).read().strip()
+
+    marker = os.path.join(runtime, "omarchy-screensaver-osk-off")
+    p = start()
+    p.wait(timeout=20)
+    ok(open(log).read() == "set false\nset true\n" and osk() == "true" and not os.path.exists(marker),
+       "0006: an early exit (no supported terminal) turns the keyboard back on")
+
+    p = start(FAKE_LOCKED="true")
+    p.wait(timeout=20)
+    ok(open(log).read() == "" and osk() == "true", "0006: a locked session leaves the keyboard setting alone")
+
+    p = start(FAKE_TERMINAL_DELAY="1")
+    for _ in range(100):
+        if osk() == "false":
+            break
+        subprocess.run(["sleep", "0.05"])
+    p.terminate()
+    p.wait(timeout=20)
+    ok(osk() == "true" and not os.path.exists(marker), "0006: a launcher stopped by a signal turns the keyboard back on")
 
 
 def mod_patch(root, path):

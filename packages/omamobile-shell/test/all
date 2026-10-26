@@ -349,6 +349,9 @@ fi
 pass "permission sheet"
 
 bash -n bin/omamobile-setup-user || fail "omamobile-setup-user parses"
+bash test/setup-user.sh || fail "omamobile-setup-user against a scratch home"
+bash -n bin/omamobile-osk-guard || fail "omamobile-osk-guard parses"
+bash test/osk-guard.sh || fail "omamobile-osk-guard"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ./install "$tmp/root"
 [[ -x $tmp/root/usr/bin/omamobile-setup-user && -f $tmp/root/usr/share/omamobile/shell/profile/shell.json ]] \
@@ -366,6 +369,9 @@ u=$tmp/root/usr/lib/systemd/user
 marker=$(sed -n 's|^ConditionPathExists=%h/.local/state/omarchy/done/||p' systemd/user/omamobile-setup-user.service)
 grep -c "omarchy-done ensure $marker\$\|omarchy-done ensure $marker;" bin/omamobile-setup-user >/dev/null || fail "the unit waits for a marker setup-user's first run leaves"
 grep -cx 'ExecStart=/usr/bin/omamobile-setup-user' systemd/user/omamobile-setup-user.service >/dev/null || fail "the unit runs setup-user"
+[[ -x $tmp/root/usr/bin/omamobile-osk-guard && -f $u/omamobile-osk-guard.service &&
+   $(readlink "$u/graphical-session.target.wants/omamobile-osk-guard.service") == ../omamobile-osk-guard.service ]] \
+  || fail "the keyboard safety net is staged and enabled for every user's session"
 [[ -x $tmp/root/usr/bin/omamobile-setup-user ]] || fail "setup-user is installed where the unit runs it"
 [[ -x $tmp/root/usr/bin/omamobile-portal-access && -f $tmp/root/usr/share/xdg-desktop-portal/portals/omamobile.portal \
    && -f $tmp/root/etc/xdg/xdg-desktop-portal/hyprland-portals.conf \

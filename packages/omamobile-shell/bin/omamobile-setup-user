@@ -6,7 +6,8 @@
 # markers, so the user's later changes are never overwritten.
 set -euo pipefail
 
-share=/usr/share/omamobile/shell
+# (test/setup-user.sh points both at the package's own tree and a scratch dir)
+share=${OMAMOBILE_SHELL_SHARE:-/usr/share/omamobile/shell}
 config=~/.config/omarchy
 
 # A phone has no keyboard-first workflow: skip Omarchy's "Learn Keybindings"
@@ -60,15 +61,35 @@ fi
 # list (v4l-utils comes with ffmpeg): hidden for this user with the usual
 # NoDisplay override in ~/.local/share/applications, which Omarchy's app
 # library honours. Still runnable from a terminal.
-if omarchy-done ensure omamobile-hide-dev-tools; then
-  apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+sysapps=${OMAMOBILE_SYSTEM_APPLICATIONS:-/usr/share/applications}
+apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+hide_app() {
+  local id=$1 src=$sysapps/$1.desktop
+  [[ -f $src && ! -e $apps/$id.desktop ]] || return 0
   mkdir -p "$apps"
+  sed '/^\[Desktop Entry\]/a NoDisplay=true' "$src" | grep -v '^NoDisplay=false' > "$apps/$id.desktop"
+}
+if omarchy-done ensure omamobile-hide-dev-tools; then
   for id in qv4l2 qvidcap assistant designer linguist qdbusviewer; do
-    src=/usr/share/applications/$id.desktop
-    [[ -f $src && ! -e $apps/$id.desktop ]] || continue
-    sed '/^\[Desktop Entry\]/a NoDisplay=true' "$src" | grep -v '^NoDisplay=false' > "$apps/$id.desktop"
+    hide_app "$id"
   done
 fi
+
+# Desktop and admin apps that don't fit a phone (TOUCH-PLAN 0.6, 3.4): Disks
+# offers Format and Edit on the phone's UFS (the storage guard keeps it
+# read-only, but it shouldn't be offered); Evince and Snapshot duplicate
+# Papers and the Camera app; Fcitx 5's settings configure an input method
+# the phone doesn't run; the rest are desktop tools. Omarchy's launcher.hides
+# already covers some of these for its own launcher; the override hides them
+# from any launcher. Each one once, when it is installed, so a user who
+# removes the override keeps the app.
+for id in org.gnome.DiskUtility org.gnome.Evince org.gnome.Snapshot fcitx5-configtool cmake-gui lstopo \
+          cups system-config-printer foot-server footclient; do
+  [[ -f $sysapps/$id.desktop ]] || continue
+  if omarchy-done ensure "omamobile-hide-app-$id"; then
+    hide_app "$id"
+  fi
+done
 
 # PIN or password (omamobile-set-pin records it): phones set up before the
 # choice existed used a PIN with the lock's number pad, so record that, once.
@@ -268,6 +289,81 @@ if omarchy-done ensure omamobile-menu-update; then
   [[ -s $extension ]] || printf '{\n}\n' >"$extension"
   if ! grep -q '"update.omarchy"' "$extension"; then
     sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: updates through the phone'"'"'s update sheet; no fwupd or Plymouth rebuilds\n  "update.omarchy": {"icon": "\xee\xa4\x80", "iconFont": "omarchy", "label": "Omarchy", "action": "omarchy-shell shell summon omamobile.update '"'"'{}'"'"'"},\n  "update.firmware": {"when": "false"},\n  "update.config.plymouth": {"when": "false"},/' "$extension"
+  fi
+fi
+
+# Menu rows that break the phone or can't work on it (TOUCH-PLAN 0.2, 0.3,
+# 3.3), hidden through the menu extension file with a failing "when". Checked
+# by content at every login, not by a marker: a row the file doesn't name yet
+# is added, and one the user has given their own entry (any value) is left
+# as they set it. Children are listed too, since the menu's search finds a
+# row under a hidden parent.
+menu_hide() {
+  local comment=$1 id rows=""
+  shift
+  local extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
+  mkdir -p "$(dirname "$extension")"
+  [[ -s $extension ]] || printf '{\n}\n' >"$extension"
+  for id; do
+    grep -qF "\"$id\"" "$extension" || rows+="  \"$id\": {\"when\": \"false\"},"$'\n'
+  done
+  [[ -n $rows ]] || return 0
+  OMAMOBILE_ROWS="  // Omarchy Mobile: $comment"$'\n'"${rows%$'\n'}" \
+    awk '!done && /^[[:space:]]*\{/ {print; print ENVIRON["OMAMOBILE_ROWS"]; done = 1; next} {print}' \
+    "$extension" >"$extension.new"
+  mv -f "$extension.new" "$extension"
+}
+# Update > Channel and omarchy-refresh-pacman put Omarchy's x86_64 pacman.conf
+# over the phone's (omamobile-omarchy refuses both too); Update > Config >
+# Hyprland and Shell reset the files that hold the phone's setup.
+menu_hide "these replace the phone's pacman.conf or its phone setup" \
+  update.channel update.channel.stable update.channel.rc update.channel.edge update.channel.dev \
+  update.config.hyprland update.config.shell
+# Logout leaves a phone at SDDM's password prompt with no keyboard (SDDM's
+# Relogin brings the session back, but the menu shouldn't offer it).
+menu_hide "no logout on a phone" system.logout
+menu_hide "no EFI, no encrypted drive, no trackpad on the phone" \
+  setup.direct-boot update.password.drive update.hardware.trackpad
+menu_hide "no keyboard to learn bindings for" learn.keybindings learn.tmux-keybindings learn.herdr-keybindings
+menu_hide "the phone's status bar stays at the top" \
+  style.bar.position.left style.bar.position.right style.bar.position.bottom \
+  trigger.toggle.top-bar trigger.toggle.one-window-ratio trigger.toggle.workspace-layout
+menu_hide "x86_64-only installers" \
+  install.windows install.browser.chrome install.browser.edge \
+  install.service.dropbox install.service.spotify install.service.nordvpn \
+  install.ai.chatgpt install.ai.lm-studio \
+  install.gaming.steam install.gaming.minecraft install.gaming.geforce-now install.gaming.xbox-controllers \
+  install.gaming.battlenet install.gaming.lutris install.gaming.heroic
+
+# Idle on a phone (TOUCH-PLAN 1.6): Omarchy's defaults show an animated
+# full-brightness screensaver after 2.5 minutes and lock after 5, on an OLED
+# panel. A phone locks (and blanks) after a minute and shows no screensaver.
+# Once, and only for a user without an idle block of their own (the phone
+# profile carries this one, so new users have it from the start); Omarchy's
+# Trigger > Toggle > Screensaver and the idle settings still change it.
+if omarchy-done ensure omamobile-idle; then
+  if python3 - "$config/shell.json" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        config = json.load(f)
+except FileNotFoundError:
+    sys.exit(1)
+phone = {"screensaver": 0, "lock": 60}
+if "idle" not in config:
+    config["idle"] = phone
+    with open(path + ".new", "w") as f:
+        json.dump(config, f, indent=2)
+        f.write("\n")
+    os.replace(path + ".new", path)
+# The toggle follows when the idle block is the phone's (seeded now, or
+# from the profile)
+sys.exit(0 if config["idle"] == phone else 1)
+PY
+  then
+    mkdir -p ~/.local/state/omarchy/toggles
+    touch ~/.local/state/omarchy/toggles/screensaver-off
   fi
 fi
 

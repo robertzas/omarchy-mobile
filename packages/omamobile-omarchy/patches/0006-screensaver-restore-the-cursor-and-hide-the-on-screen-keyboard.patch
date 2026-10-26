@@ -4,14 +4,19 @@
 # it hidden); a tap ends it; waking it goes straight to the lock; make sure
 # its window is fullscreen; a user foot config wins.
 #
-# Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4): 4.0.4's launcher has no
-# special-workspace loop or focus hand-back after it, so the keyboard
-# restore simply follows the final hypr_focus_monitor.
+# The launcher turns the keyboard back on from an EXIT trap, so no way out
+# of it (an early exit, a signal from the idle service or a shell restart,
+# no screensaver coming up) leaves the keyboard off with nothing to restore
+# it, and it leaves the setting alone when the session is already locked.
+# A phone that found the keyboard off with no screensaver running and the
+# marker gone (TOUCH-PLAN 0.5) is what this closes; omamobile-shell's
+# omamobile-osk-guard is the safety net behind it.
+#
+# Against Omarchy 4.0.6 (stable 4.0.6-1).
 diff --git i/bin/omarchy-launch-screensaver w/bin/omarchy-launch-screensaver
-index afee404..c12a1c6 100755
 --- i/bin/omarchy-launch-screensaver
 +++ w/bin/omarchy-launch-screensaver
-@@ -15,6 +15,16 @@ if omarchy-toggle-enabled screensaver-off && [[ $1 != "force" ]]; then
+@@ -15,6 +15,32 @@
  fi
  
  focused=$(omarchy-hyprland-monitor-focused)
@@ -19,16 +24,32 @@ index afee404..c12a1c6 100755
 +# Touch devices: an on-screen keyboard (squeekboard) pops up for whatever
 +# terminal has focus, the screensaver's included. Turn it off; the
 +# screensaver turns it back on when it exits (the marker says it should).
++# A locked session leaves it alone: the screensaver can't take focus from
++# the lock and exits at once.
 +osk_key="org.gnome.desktop.a11y.applications screen-keyboard-enabled"
 +osk_marker="${XDG_RUNTIME_DIR:-/tmp}/omarchy-screensaver-osk-off"
-+if busctl --user status sm.puri.OSK0 &>/dev/null && [[ $(gsettings get $osk_key 2>/dev/null) == true ]]; then
++
++# Every way out of this launcher (an early exit, a signal from the idle
++# service or a shell restart, no screensaver coming up) turns the keyboard
++# back on, unless a screensaver runs to do it when it exits.
++restore_osk_unless_running() {
++  if [[ -f $osk_marker ]] && ! pgrep -f '[o]rg.omarchy.screensaver' >/dev/null; then
++    rm -f "$osk_marker"
++    gsettings set $osk_key true
++  fi
++}
++
++if [[ $(omarchy-shell lock isLocked 2>/dev/null) != true ]] &&
++  busctl --user status sm.puri.OSK0 &>/dev/null && [[ $(gsettings get $osk_key 2>/dev/null) == true ]]; then
++  trap restore_osk_unless_running EXIT
++  trap 'exit 1' INT TERM HUP
 +  touch "$osk_marker"
 +  gsettings set $osk_key false
 +fi
  terminal=$(xdg-terminal-exec --print-id)
  
  case $terminal in
-@@ -64,7 +74,10 @@ for m in $(hyprctl monitors -j | jq -r '.[] | .name'); do
+@@ -64,7 +90,10 @@
      hypr_exec ghostty --class=org.omarchy.screensaver --config-file="$OMARCHY_PATH/default/ghostty/screensaver" --font-size=18 -e omarchy-screensaver
      ;;
    *foot*)
@@ -40,21 +61,10 @@ index afee404..c12a1c6 100755
      ;;
    *kitty*)
      hypr_exec kitty --class=org.omarchy.screensaver --override font_size=18 --override window_padding_width=0 -e omarchy-screensaver
-@@ -75,3 +88,9 @@ for m in $(hyprctl monitors -j | jq -r '.[] | .name'); do
- done
- 
- hypr_focus_monitor "$focused"
-+
-+# No screensaver came up to turn the on-screen keyboard back on: do it here.
-+if [[ -f $osk_marker ]] && ! pgrep -f '[o]rg.omarchy.screensaver' >/dev/null; then
-+  rm -f "$osk_marker"
-+  gsettings set $osk_key true
-+fi
 diff --git i/bin/omarchy-screensaver w/bin/omarchy-screensaver
-index acd3868..8802d3a 100755
 --- i/bin/omarchy-screensaver
 +++ w/bin/omarchy-screensaver
-@@ -6,8 +6,34 @@ screensaver_in_focus() {
+@@ -6,8 +6,34 @@
    hyprctl activewindow -j | jq -e '.class == "org.omarchy.screensaver"' >/dev/null 2>&1
  }
  
@@ -90,7 +100,7 @@ index acd3868..8802d3a 100755
    pkill -x ttfx 2>/dev/null
    pkill -f '[o]rg.omarchy.screensaver' 2>/dev/null
    exit 0
-@@ -17,6 +43,9 @@ exit_screensaver() {
+@@ -17,6 +43,9 @@
  trap exit_screensaver SIGINT SIGTERM SIGHUP SIGQUIT
  
  printf '\033]11;rgb:00/00/00\007'  # Set background color to black
@@ -100,7 +110,7 @@ index acd3868..8802d3a 100755
  
  hyprctl eval 'hl.config({ cursor = { invisible = true } })' &>/dev/null || hyprctl keyword cursor:invisible true &>/dev/null
  
-@@ -33,6 +62,17 @@ wait_for_terminal_resize() {
+@@ -33,6 +62,17 @@
    done
  }
  
@@ -118,7 +128,7 @@ index acd3868..8802d3a 100755
  wait_for_terminal_resize
  
  while true; do
-@@ -41,7 +81,26 @@ while true; do
+@@ -41,7 +81,26 @@
      --random-effect --no-eol --no-restore-cursor &
  
    while pgrep -t "${tty#/dev/}" -x ttfx >/dev/null; do

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Phones set up before 0.1.2 have an autologin drop-in without Relogin, so
+# after a logout SDDM showed its password prompt, which a phone can't type
+# into (TOUCH-PLAN 0.4). Add it to the drop-in firstboot wrote; SDDM reads it
+# at its next start (the next boot). Nothing is restarted here.
+omamobile_relogin() {
+  local f=/etc/sddm.conf.d/autologin.conf
+  [[ -f $f ]] || return 0
+  grep -qx '\[Autologin\]' "$f" || return 0
+  grep -q '^Relogin=' "$f" && return 0
+  sed -i '/^\[Autologin\]$/a Relogin=true' "$f"
+}
+
+post_install() {
+  omamobile_relogin
+}
+
+post_upgrade() {
+  omamobile_relogin
+}

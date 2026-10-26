@@ -15,7 +15,8 @@
 #      root stays locked; sudo for wheel, as Omarchy does;
 #   4. the SSH key for root and the user, sshd on;
 #   5. Omarchy's system setup leaves (install/{config,hardware,login,
-#      post-install}), minus the few that don't fit a phone (SKIP below);
+#      post-install}), minus the few that don't fit a phone (SKIP below),
+#      and the lock's PAM file from omamobile-omarchy's lock-pam;
 #   6. the services the phone needs, and ufw with SSH allowed on usb0 only;
 #   7. optional Wi-Fi, stored as a NetworkManager connection (and then removed
 #      from firstboot.conf at once);
@@ -77,6 +78,12 @@ SKIP=(
   config/snapper.sh        # snapshots need btrfs; the phone's root is ext4
   hardware/network.sh      # disables systemd-networkd, which runs the USB link
 )
+# Omarchy's lock PAM leaf runs omarchy-apply-lock, which also deletes
+# /etc/pam.d/omarchy-lock-fingerprint (omamobile-fingerprint's file) when
+# fprintd lists no finger. omamobile-omarchy's lock-pam writes the same
+# password stanza without that (s_lock_pam), so it takes the leaf's place.
+LOCK_PAM=${OMAMOBILE_LOCK_PAM:-/usr/lib/omamobile-omarchy/lock-pam}
+[[ -x $LOCK_PAM ]] && SKIP+=(config/lockscreen-pam.sh)
 
 die() { echo "omamobile-firstboot: $*" >&2; exit 1; }
 
@@ -301,6 +308,17 @@ s_omarchy_system() {
   return 0
 }
 
+# Omarchy's lock refuses to lock without /etc/pam.d/omarchy-lock-password
+# (TOUCH-PLAN 0.1): written here when missing, in place of Omarchy's leaf.
+s_lock_pam() {
+  if [[ -x $LOCK_PAM ]]; then
+    "$LOCK_PAM" --root "${ROOT:-/}"
+  else
+    echo "    no $LOCK_PAM; Omarchy's own leaf ran instead"
+  fi
+  [[ -f $ROOT/etc/pam.d/omarchy-lock-password ]] || { echo "    no /etc/pam.d/omarchy-lock-password: the lock will refuse to lock"; return 1; }
+}
+
 # The services a phone needs whatever Omarchy's leaves did, and the firewall:
 # Omarchy's rules plus SSH on the USB link (NOTES 2026-10-12, firewall).
 s_services() {
@@ -384,8 +402,9 @@ s_login() {
   [[ -n $session ]] || { echo "Omarchy's Wayland session (omarchy.desktop) isn't installed"; return 1; }
   mkdir -p "$ROOT/etc/sddm.conf.d" "$ROOT/var/lib/sddm"
   # A phone logs in by itself and then locks (lock-on-start, s_user_setup),
-  # like Android; the PIN or password opens the lock.
-  printf '[Autologin]\nUser=%s\nSession=%s.desktop\n' "$U" "$session" > "$ROOT/etc/sddm.conf.d/autologin.conf"
+  # like Android; the PIN or password opens the lock. Relogin: SDDM logs in
+  # again after the session ends, since a phone can't type at its greeter.
+  printf '[Autologin]\nUser=%s\nSession=%s.desktop\nRelogin=true\n' "$U" "$session" > "$ROOT/etc/sddm.conf.d/autologin.conf"
   printf '[Last]\nSession=%s.desktop\nUser=%s\n' "$session" "$U" > "$ROOT/var/lib/sddm/state.conf"
   chown -R sddm:sddm "$ROOT/var/lib/sddm" 2>/dev/null || true
 }
@@ -430,6 +449,7 @@ step "hostname, time zone, locale" optional s_identity
 step "user ${U}" essential s_user
 step "SSH keys" essential s_ssh
 step "Omarchy system setup" optional s_omarchy_system
+step "lock screen PAM" optional s_lock_pam
 step "services and firewall" essential s_services
 step "Wi-Fi" optional s_wifi
 step "login" essential s_login

@@ -179,7 +179,7 @@ Each entry gives the gotcha, then the reason or the fix. Details are in the link
 - **`grep -q` under `set -o pipefail`:** `grep -q` exits early, SIGPIPEs the writer, and the pipeline fails on large input. Use `grep -c … >/dev/null`.
 - **Omarchy's Chromium launcher splits each line of `chromium-flags.conf` on spaces:** quote a flag whose value has spaces (`"--user-agent=…"`).
 - **Chromium needs `--force-device-scale-factor` on the phone,** even with the mobile user agent: its window layout won't go below about 500 px and the panel is 480 px wide in logical pixels, so without it the window runs off the right edge. Sites get phone layouts from the user agent.
-- **The screensaver runs in a terminal, so focusing it pops up the on-screen keyboard:** `patches/omarchy/0006-*` turns `org.gnome.desktop.a11y.applications screen-keyboard-enabled` off for the screensaver and back on afterwards. If the keyboard stops appearing, check that key first.
+- **The screensaver runs in a terminal, so focusing it pops up the on-screen keyboard:** `patches/omarchy/0006-*` turns `org.gnome.desktop.a11y.applications screen-keyboard-enabled` off for the screensaver and back on afterwards (from an EXIT trap in the launcher, since omamobile-omarchy 0.1.9), and `omamobile-osk-guard` (omamobile-shell 0.2.19) turns it back on whenever it is off with no screensaver running. If the keyboard stops appearing, check that key first.
 - **Vendor chroots:** bootstrap binaries such as `servicemanager` use `/system/bin/bootstrap/linker64` as their interpreter. `extract-vendor-chroot` links it to the runtime APEX linker. Run the chroot by path, without `env chroot`.
 - **Quickshell plugins:**
   - live reload can keep the old code, so run `omarchy-restart-shell`;

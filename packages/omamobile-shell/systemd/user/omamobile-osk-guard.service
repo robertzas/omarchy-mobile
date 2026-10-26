@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Turns the on-screen keyboard back on when it was left off with no
+# screensaver running (TOUCH-PLAN 0.5). Enabled for every user by a vendor
+# wants link; runs for the graphical session.
+[Unit]
+Description=Omarchy Mobile on-screen keyboard safety net
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/omamobile-osk-guard
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

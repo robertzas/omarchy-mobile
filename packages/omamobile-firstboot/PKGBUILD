@@ -9,6 +9,7 @@ url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
 depends=(bash coreutils grep sed gawk shadow sudo systemd openssh ufw networkmanager pacman util-linux)
 backup=(etc/ssh/sshd_config.d/10-omamobile.conf)
+install=omamobile-firstboot.install
 
 check() {
   "$startdir/test/all"

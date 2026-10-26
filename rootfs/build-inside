@@ -101,6 +101,22 @@ else
   die "omamobile-omarchy is not installed"
 fi
 
+say "Lock screen PAM (omarchy-lock-password)"
+# Omarchy's lock refuses to lock without it and only Omarchy's installer
+# writes it (TOUCH-PLAN 0.1). omamobile-omarchy's install scriptlet already
+# wrote it during pacstrap; this runs the same helper (a no-op when the file
+# is there) and stops the build if it is still missing.
+if [[ -x $T/usr/lib/omamobile-omarchy/lock-pam ]]; then
+  arch-chroot "$T" /usr/lib/omamobile-omarchy/lock-pam
+fi
+if [[ -f $T/etc/pam.d/omarchy-lock-password ]]; then
+  echo "    present"
+elif [[ " $ALLOW_MISSING " == *" omamobile-omarchy "* ]]; then
+  echo "    missing (omamobile-omarchy allowed missing): Omarchy's own setup at firstboot writes it"
+else
+  die "no /etc/pam.d/omarchy-lock-password: the lock would never lock (omamobile-omarchy too old?)"
+fi
+
 say "Services"
 systemctl --root="$T" enable NetworkManager.service systemd-networkd.service systemd-resolved.service \
   sshd.service sddm.service >/dev/null 2>&1

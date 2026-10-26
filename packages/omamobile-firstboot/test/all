@@ -129,7 +129,20 @@ fake chpasswd 'echo "chpasswd $* $(cat)" >> "$CALLS.secret"'
 fake id 'echo 1000'
 fake runuser 'echo "runuser $*" >> "$CALLS"; shift 3; [[ $1 == env ]] && { shift; while [[ $1 == -i || $1 == *=* ]]; do shift; done; }; case $1 in mkdir|touch|sh) "$@" ;; esac'
 export CALLS R
-run() { OMAMOBILE_FIRSTBOOT_ROOT=$R OMARCHY_PATH=$t/no-omarchy PATH="$F:$PATH" bin/omamobile-firstboot > "$t/run.out" 2>&1; }
+# omamobile-omarchy's lock-pam, as a fake that writes into the scratch root
+fake lock-pam '[[ $1 == --root ]] && mkdir -p "$2/etc/pam.d" && echo "auth required pam_unix.so" > "$2/etc/pam.d/omarchy-lock-password"'
+# Omarchy's install tree, with its lock PAM leaf and one other
+O=$t/omarchy; mkdir -p "$O/install/helpers" "$O/install/config" "$O/install/hardware" "$O/install/login" "$O/install/post-install"
+cat > "$O/install/helpers/logging.sh" <<'EOF'
+start_install_log() { :; }
+stop_install_log() { :; }
+run_logged() { bash "$1"; }
+EOF
+printf 'run_logged "$OMARCHY_INSTALL/config/lockscreen-pam.sh"\nrun_logged "$OMARCHY_INSTALL/config/other.sh"\n' > "$O/install/config/all.sh"
+for part in hardware login post-install; do : > "$O/install/$part/all.sh"; done
+echo 'touch "$R/ran-omarchy-apply-lock"' > "$O/install/config/lockscreen-pam.sh"
+echo 'touch "$R/ran-other-leaf"' > "$O/install/config/other.sh"
+run() { OMAMOBILE_FIRSTBOOT_ROOT=$R OMARCHY_PATH=$O OMAMOBILE_LOCK_PAM=$F/lock-pam PATH="$F:$PATH" bin/omamobile-firstboot > "$t/run.out" 2>&1; }
 
 good > "$R/etc/omamobile/firstboot.conf"
 run || { cat "$t/run.out"; fail "a run with a good conf succeeds"; }
@@ -152,12 +165,17 @@ grep -qx alice-phone "$R/etc/hostname" || fail "the host name"
 wifi=$(ls "$R"/etc/NetworkManager/system-connections/*.nmconnection)
 grep -qx 'ssid=Home Net' "$wifi" && grep -qxF "psk=$PSK" "$wifi" || fail "the Wi-Fi connection"
 [[ $(stat -c %a "$wifi") == 600 ]] || fail "the Wi-Fi connection is root-only"
-printf '[Autologin]\nUser=alice\nSession=omarchy.desktop\n' | cmp -s - "$R/etc/sddm.conf.d/autologin.conf" || fail "SDDM logs alice in"
+printf '[Autologin]\nUser=alice\nSession=omarchy.desktop\nRelogin=true\n' | cmp -s - "$R/etc/sddm.conf.d/autologin.conf" || fail "SDDM logs alice in"
 grep -qx pin "$R/home/alice/.config/omamobile/credential" || fail "the credential type"
 [[ -e $R/home/alice/.local/state/omarchy/toggles/lock-on-start ]] || fail "the phone locks after boot"
 grep -qF "$PSK" "$R/var/log/omamobile/firstboot.log" "$t/run.out" && fail "the log never has the passphrase"
 grep -qF "$HASH" "$R/var/log/omamobile/firstboot.log" "$t/run.out" && fail "the log never has the hash"
 pass "a run sets everything up and deletes the conf"
+
+[[ -e $R/ran-other-leaf ]] || fail "Omarchy's setup leaves run"
+[[ ! -e $R/ran-omarchy-apply-lock ]] || fail "Omarchy's lock PAM leaf (omarchy-apply-lock) is skipped"
+grep -c 'pam_unix.so' "$R/etc/pam.d/omarchy-lock-password" >/dev/null || fail "the lock's PAM file is written"
+pass "the lock's PAM file comes from lock-pam, not omarchy-apply-lock"
 
 : > "$CALLS"
 run || fail "without a conf, nothing to do"
@@ -177,3 +195,20 @@ run && fail "a failed user step fails the run"
 [[ -f $R/etc/omamobile/firstboot.conf ]] || fail "a failed run keeps the conf"
 grep -q '^WIFI_' "$R/etc/omamobile/firstboot.conf" && fail "the Wi-Fi secret leaves the conf as soon as it is stored"
 pass "a failed run keeps the conf for the next boot, without the Wi-Fi secret"
+
+# The install scriptlet adds Relogin to a drop-in an older firstboot wrote,
+# once, and leaves other files alone
+bash -n omamobile-firstboot.install || fail "the install scriptlet parses"
+grep -qx 'install=omamobile-firstboot.install' PKGBUILD || fail "the package runs the scriptlet"
+mkdir -p "$t/sddm"
+sed "s|/etc/sddm.conf.d|$t/sddm|" omamobile-firstboot.install > "$t/scriptlet"
+printf '[Autologin]\nUser=alice\nSession=omarchy.desktop\n' > "$t/sddm/autologin.conf"
+( source "$t/scriptlet"; post_upgrade; post_upgrade )
+printf '[Autologin]\nRelogin=true\nUser=alice\nSession=omarchy.desktop\n' | cmp -s - "$t/sddm/autologin.conf" || fail "an upgrade adds Relogin once"
+printf '[Autologin]\nUser=alice\nRelogin=false\n' > "$t/sddm/autologin.conf"
+( source "$t/scriptlet"; post_upgrade )
+grep -qx 'Relogin=false' "$t/sddm/autologin.conf" || fail "an explicit Relogin is kept"
+rm "$t/sddm/autologin.conf"
+( source "$t/scriptlet"; post_install ) || fail "no drop-in, nothing to do"
+[[ ! -e $t/sddm/autologin.conf ]] || fail "no drop-in is made"
+pass "upgrades add Relogin=true to an existing autologin drop-in"

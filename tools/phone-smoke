@@ -141,6 +141,24 @@ else
   check "not ok" 1 "session" "Hyprland $(pgrep -x Hyprland >/dev/null && echo runs || echo "isn't running"), the shell $(pgrep -f quickshell >/dev/null && echo runs || echo "isn't running")"
 fi
 
+# Omarchy's lock refuses to lock without its PAM file (TOUCH-PLAN 0.1). The
+# shell's own view, when it answers: whether it loaded that file, and whether
+# the session is locked now (only those two fields are reported).
+if [[ -f /etc/pam.d/omarchy-lock-password ]]; then
+  lock=$(as_user env OMARCHY_PATH=/usr/share/omarchy timeout 5 /usr/bin/omarchy-shell lock status 2>/dev/null)
+  pam=$(sed -n 's/.*"passwordPam":\(true\|false\).*/\1/p' <<<"$lock")
+  locked=$(sed -n 's/.*"locked":\(true\|false\).*/\1/p' <<<"$lock")
+  if [[ $pam == false ]]; then
+    check "not ok" 0 "lock" "PAM file present, but the shell hasn't loaded it (passwordPam false)"
+  elif [[ $pam == true ]]; then
+    check ok 0 "lock" "PAM file present, the shell can lock (passwordPam true, locked ${locked:-?})"
+  else
+    check ok 0 "lock" "PAM file present (the shell didn't answer lock status)"
+  fi
+else
+  check "not ok" 0 "lock" "no /etc/pam.d/omarchy-lock-password: Omarchy's lock refuses to lock"
+fi
+
 # ---------------------------------------------------------------- input
 # /proc/bus/input/devices: one name and capability set per device.
 inputs=$(awk '/^N: Name=/{sub(/^N: Name="/, ""); sub(/"$/, ""); name=$0}

@@ -1,0 +1,43 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The on-screen keyboard's safety net (TOUCH-PLAN 0.5). Omarchy's screensaver
+# launcher turns the global screen-keyboard-enabled setting off while the
+# screensaver runs (patches/omarchy/0006-*), and its exit paths turn it back
+# on. A path that missed left a phone with no keyboard for any text field
+# until the next login. This watches the setting: whenever it goes off, it
+# waits until no screensaver runs, gives the screensaver's own restore its
+# time (it waits up to 5 s for the lock), and turns it back on if it is
+# still off. On a phone nothing else turns the keyboard off: squeekboard's
+# hide button only hides it.
+#
+#   omamobile-osk-guard          watch (omamobile-osk-guard.service)
+#   omamobile-osk-guard --once   check once and exit
+set -u
+
+key=(org.gnome.desktop.a11y.applications screen-keyboard-enabled)
+# The launcher turns the setting off a moment before the screensaver's
+# window opens, and the screensaver's restore waits for the lock.
+grace=${OMAMOBILE_OSK_GUARD_GRACE:-10}
+
+osk_off() { [[ $(gsettings get "${key[@]}" 2>/dev/null) == false ]]; }
+screensaver_up() { pgrep -f '[o]rg.omarchy.screensaver' >/dev/null; }
+
+check() {
+  osk_off || return 0
+  sleep "$grace"
+  while screensaver_up; do sleep 2; done
+  sleep "$grace"
+  if osk_off && ! screensaver_up; then
+    gsettings set "${key[@]}" true
+    echo "omamobile-osk-guard: the on-screen keyboard was off with no screensaver running; turned it back on"
+  fi
+}
+
+check
+[[ ${1:-} == --once ]] && exit 0
+
+while IFS= read -r line; do
+  [[ $line == *false ]] && check
+done < <(gsettings monitor "${key[@]}")
+# The monitor ended (the session bus went away): let systemd restart it.
+exit 1

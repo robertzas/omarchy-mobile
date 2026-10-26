@@ -1081,7 +1081,7 @@ Item {
           model: [
             { label: "Widgets", glyph: "󰕰", act: "widgets" },
             { label: "Apps", glyph: "󰀻", act: "apps" },
-            { label: "Wallpaper", glyph: "󰸉", act: "style" },
+            { label: "Style", glyph: "", act: "style" },
             { label: "Pages", glyph: "󰓩", act: "pages" },
             { label: "Done", glyph: "󰄬", act: "done" }
           ]

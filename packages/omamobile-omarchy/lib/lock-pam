@@ -1,0 +1,73 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Omarchy's lock refuses to lock without /etc/pam.d/omarchy-lock-password
+# ("lock-denied: missing-pam", shell/plugins/lock/Service.qml), and only
+# Omarchy's installer writes it (install/config/lockscreen-pam.sh, which runs
+# omarchy-apply-lock). This writes the same password stanza when the file is
+# missing, and leaves an existing one alone.
+#
+# It doesn't run omarchy-apply-lock: that also deletes
+# /etc/pam.d/omarchy-lock-fingerprint unless fprintd lists a finger, and on
+# the phone that file belongs to omamobile-fingerprint. The file stays
+# unowned, as Omarchy's installer leaves it, so phones that already have a
+# copy keep it through package upgrades.
+#
+# The stanza is read from Omarchy's own omarchy-apply-lock, so it follows
+# Omarchy; the copy below is the fallback when that can't be read.
+#
+#   lock-pam [--root DIR]     run as root (the package's install scriptlet,
+#                             the root image build and firstboot do)
+set -euo pipefail
+
+root=
+if [[ ${1:-} == --root ]]; then
+  root=${2:?--root needs a directory}
+  [[ -d $root ]] || { echo "lock-pam: no directory $root" >&2; exit 2; }
+  [[ $root == / ]] && root=
+fi
+target=$root/etc/pam.d/omarchy-lock-password
+
+if [[ -e $target ]]; then
+  echo "lock-pam: $target is there; left as it is"
+  exit 0
+fi
+
+fallback() {
+  cat <<'EOF'
+#%PAM-1.0
+auth       required                    pam_faillock.so preauth silent deny=10 unlock_time=120
+-auth      [success=2 default=ignore]  pam_systemd_home.so
+auth       [success=1 default=bad]     pam_unix.so try_first_pass nullok
+auth       [default=die]               pam_faillock.so authfail deny=10 unlock_time=120
+auth       optional                    pam_permit.so
+auth       required                    pam_env.so
+auth       required                    pam_faillock.so authsucc
+account    include                     system-local-login
+EOF
+}
+
+# The here-document omarchy-apply-lock tees into omarchy-lock-password
+from_omarchy() {
+  local script
+  for script in "$root/usr/bin/omarchy-apply-lock" "$root/usr/share/omarchy/bin/omarchy-apply-lock"; do
+    [[ -f $script ]] || continue
+    awk '/omarchy-lock-password/ && /<<.EOF.$/ {on = 1; next} on && /^EOF$/ {exit} on {print}' "$script"
+    return 0
+  done
+}
+
+stanza=$(from_omarchy || true)
+# Only a stanza that is plainly a PAM password check is taken from Omarchy
+if [[ $stanza != '#%PAM-1.0'* || $stanza != *pam_unix.so* || $stanza != *account* ]]; then
+  stanza=$(fallback)
+  source="the built-in copy"
+else
+  source="Omarchy's omarchy-apply-lock"
+fi
+
+mkdir -p "$root/etc/pam.d"
+tmp=$(mktemp "$root/etc/pam.d/.omarchy-lock-password.XXXXXX")
+printf '%s\n' "$stanza" >"$tmp"
+chmod 644 "$tmp"
+mv -f "$tmp" "$target"
+echo "lock-pam: wrote $target from $source"
