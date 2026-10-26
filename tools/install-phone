@@ -50,7 +50,10 @@ shopt -s nullglob
 export LC_ALL=C
 
 FASTBOOT=${FASTBOOT:-fastboot}
-SIGNING_KEY=6C84FE3D240709E70E27CC94B301F5EA62B249FE  # Omarchy Mobile package and release key
+# Omarchy Mobile's keys (packages/omamobile-keyring): the release key, and the
+# original package key until it is retired. A subkey's signature reports its
+# primary's fingerprint, which is what is matched.
+SIGNING_KEYS='20567593566EEEE2DD8864608632C8075EB94673|6C84FE3D240709E70E27CC94B301F5EA62B249FE'
 here=$(cd -- "$(dirname -- "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 
 say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
@@ -154,8 +157,9 @@ if [[ $mode == bundle ]]; then
     gpg --homedir "$gnupg" -q --batch --import "$here/omamobile.gpg" 2>/dev/null || die "the bundle has no omamobile.gpg"
     status=$(gpg --homedir "$gnupg" --batch --status-fd 1 --verify "$here/SHA256SUMS.sig" "$here/SHA256SUMS" 2>/dev/null || true)
     rm -rf "$gnupg"
-    grep -Eq "^\[GNUPG:\] VALIDSIG .* $SIGNING_KEY\$" <<<"$status" || die "SHA256SUMS is not signed by the Omarchy Mobile key ($SIGNING_KEY)"
-    note "SHA256SUMS signed by $SIGNING_KEY"
+    signer=$(grep -Eo "^\[GNUPG:\] VALIDSIG .* ($SIGNING_KEYS)\$" <<<"$status" | awk '{ print $NF }') ||
+      die "SHA256SUMS is not signed by the Omarchy Mobile key (${SIGNING_KEYS//|/ or })"
+    note "SHA256SUMS signed by $signer"
   else
     ((unsigned)) || die "the bundle is not signed (SHA256SUMS.sig); --unsigned accepts a development bundle"
     note "unsigned bundle (--unsigned)"

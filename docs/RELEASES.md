@@ -307,9 +307,10 @@ CI never holds the signing key and never sees a factory image. The maintainer do
 
 ## 10. Signing
 
-- One key signs everything today: packages, the repository database, and (new) each bundle's `SHA256SUMS` and the root image's checksum. Its private half lives in `keys/` on the maintainer's machine (gitignored); its public half ships in `omamobile-keyring`, and the bundle `install` script carries the fingerprint.
-- `tools/repo-build` already signs packages and the database. A `tools/release-sign` signs bundles the same way (`gpg --detach-sign` with `keys/gnupg`).
-- Rotation and revocation go through `omamobile-keyring`'s `omamobile-trusted` and `omamobile-revoked`, as Arch's keyring does. A separate release key, or subkeys with the primary offline, is worth doing before the repository goes public (§11).
+- **The release key** (2026-10-26, `20567593566EEEE2DD8864608632C8075EB94673`) is an ed25519 primary that only certifies, with an ed25519 signing subkey that expires 2028-10-26. `tools/release-key-init` made it once, on a tmpfs: the primary's secret (passphrase-protected), its revocation certificate and the public key are kept offline by the maintainer, in a password manager, and the passphrase separately. The build machine holds only the signing subkey, without a passphrase, in `keys/gnupg.release` (with `keys/fingerprint.release`), so a scheduled publish can sign unattended. Phones trust the primary, so a lost build machine costs a subkey: revoke it and certify a new one from the offline primary, and phones keep working.
+- **Renew the subkey before 2028-10-26** (`--quick-set-expire` from the offline primary, then re-export the public key into `omamobile-keyring`). An expired subkey's signatures stop verifying.
+- **The move from the original key.** The original package key (2026-10-12, `6C84FE3D240709E70E27CC94B301F5EA62B249FE`, `keys/gnupg`) still signs packages, the database and bundles. `omamobile-keyring` 20261026 trusts both keys and is itself signed by the original, so phones accept the release key with an ordinary update. Then: switch the build tools to the release key (`keys/gnupg.release`), and once published phones have that keyring, move the original key to `omamobile-revoked`. `tools/install-phone` accepts either key's signature on a bundle until then.
+- Rotation and revocation go through `omamobile-keyring`'s `omamobile-trusted` and `omamobile-revoked`, as Arch's keyring does.
 - Never commit, paste or upload a key, a passphrase or `keys/`. CI gets no key.
 
 ## 11. Release checklist

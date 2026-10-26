@@ -1,0 +1,115 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Make Omarchy Mobile's release key (docs/RELEASES.md §10): an ed25519
+# primary that only certifies and lives offline, and an ed25519 signing
+# subkey for the build machine. Maintainer only, run once, interactively:
+#
+#   tools/release-key-init /run/media/$USER/<stick>/omamobile-release-key
+#
+# OFFLINE_DIR (empty, on removable media) gets the primary's secret key,
+# protected by the passphrase you type, its revocation certificate, the
+# public key and a README. keys/gnupg.release gets a keyring holding only
+# the signing subkey, without a passphrase, so packages can be signed and
+# published unattended. If the laptop is ever lost, the offline primary
+# revokes that subkey and certifies a new one; phones keep trusting the
+# primary. Nothing is switched over here: keys/gnupg keeps signing until
+# omamobile-keyring ships the new key.
+#
+# The key is made in a tmpfs directory that is removed on exit. The
+# passphrase is read from the terminal and passed to gpg through a pipe,
+# never written to disk.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+die() { echo "release-key-init: $*" >&2; exit 1; }
+
+out=${1:-}
+[[ -n $out ]] || die "usage: tools/release-key-init OFFLINE_DIR"
+[[ ! -e keys/gnupg.release ]] || die "keys/gnupg.release exists; move it away first"
+mkdir -p -- "$out"
+out=$(cd -- "$out" && pwd)
+[[ -z $(ls -A -- "$out") ]] || die "$out is not empty"
+case $out in
+  "$PWD"/*|"$HOME"/*)
+    echo "warning: $out is not on removable media; the primary key belongs offline"
+    read -rp "continue anyway? [y/N] " answer
+    [[ $answer == y ]] || exit 1
+    ;;
+esac
+
+read -rsp "Passphrase for the offline primary key: " pp; echo
+read -rsp "Again: " pp2; echo
+[[ $pp == "$pp2" ]] || die "the passphrases differ"
+(( ${#pp} >= 12 )) || die "use at least 12 characters"
+unset pp2
+
+tmp=$(mktemp -d /dev/shm/omamobile-key.XXXXXX)
+cleanup() {
+  for home in "$tmp/gnupg" "$tmp/release"; do
+    [[ -d $home ]] && GNUPGHOME=$home gpgconf --kill gpg-agent 2>/dev/null
+  done
+  rm -rf -- "$tmp"
+}
+trap cleanup EXIT
+export GNUPGHOME=$tmp/gnupg
+mkdir -m 700 "$GNUPGHOME"
+# gpg with the passphrase on fd 3, fed from a pipe
+gpp() { gpg --batch --pinentry-mode loopback --passphrase-fd 3 "$@" 3< <(printf '%s\n' "$pp"); }
+
+uid="Omarchy Mobile Release Key"
+gpp --quick-gen-key "$uid" ed25519 cert never 2>/dev/null
+fpr=$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }')
+gpp --quick-add-key "$fpr" ed25519 sign 2y 2>/dev/null
+sub=$(gpg --batch --with-colons --list-keys "$fpr" | awk -F: '$1 == "fpr" { n++ } $1 == "fpr" && n == 2 { print $10 }')
+[[ -n $fpr && -n $sub ]] || die "key generation failed"
+
+# The offline copy: everything needed to revoke or certify later.
+gpg --batch --armor --export "$fpr" > "$out/omamobile-release.pub.asc"
+gpp --armor --export-secret-keys "$fpr" > "$out/omamobile-release.secret.asc"
+cp -- "$GNUPGHOME/openpgp-revocs.d/$fpr.rev" "$out/omamobile-release.revoke.asc"
+cat > "$out/README.txt" <<EOF
+Omarchy Mobile release key, made $(date -u +%F).
+
+Primary (certify only): $fpr
+Signing subkey (2 years): $sub
+
+omamobile-release.secret.asc  the primary and subkey, protected by the passphrase
+omamobile-release.revoke.asc  revokes the primary; use only if it is lost or stolen
+omamobile-release.pub.asc     the public key (also in packages/omamobile-keyring)
+
+Keep this directory offline, in two places. To revoke or replace the
+signing subkey: import omamobile-release.secret.asc into a temporary
+GNUPGHOME on a tmpfs, use gpg --edit-key / --quick-add-key there, and
+export the public key into omamobile-keyring again.
+EOF
+
+# The build machine's keyring: the signing subkey only, without a passphrase.
+gpp --export-secret-subkeys "$sub!" > "$tmp/sub.gpg"
+mkdir -m 700 "$tmp/release"
+GNUPGHOME=$tmp/release gpp --import "$tmp/sub.gpg" 2>/dev/null
+# --passwd only takes an empty new passphrase interactively, so answer its
+# prompts on the command fd: the old passphrase, then empty twice.
+GNUPGHOME=$tmp/release gpg --pinentry-mode loopback --command-fd 0 --passwd "$sub" \
+  < <(printf '%s\n\n\n' "$pp") >/dev/null 2>&1 || true
+unset pp
+
+# Check: the build keyring signs without a passphrase and has no primary secret.
+# A fresh agent, so no cached passphrase can make the test pass.
+GNUPGHOME=$tmp/release gpgconf --kill gpg-agent
+echo test > "$tmp/t"
+GNUPGHOME=$tmp/release gpg --batch --pinentry-mode loopback --passphrase '' \
+  --local-user "$fpr" --detach-sign -o "$tmp/t.sig" "$tmp/t" 2>/dev/null ||
+  die "the subkey keyring can't sign without a passphrase; nothing was written to keys/"
+GNUPGHOME=$tmp/release gpg --batch --verify "$tmp/t.sig" "$tmp/t" 2>/dev/null || die "test signature doesn't verify"
+[[ $(GNUPGHOME=$tmp/release gpg --batch --with-colons --list-secret-keys "$fpr" | awk -F: '$1 == "sec" { print $15 }') == "#" ]] ||
+  die "the build keyring still holds the primary's secret"
+
+cp -a -- "$tmp/release" keys/gnupg.release
+rm -f keys/gnupg.release/S.* 2>/dev/null || true
+echo "$fpr" > keys/fingerprint.release
+
+echo
+echo "Primary:        $fpr"
+echo "Signing subkey: $sub"
+echo "Offline copy:   $out (copy it to a second stick, then unplug both)"
+echo "Build keyring:  keys/gnupg.release, keys/fingerprint.release"
