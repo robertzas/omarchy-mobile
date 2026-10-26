@@ -2,6 +2,13 @@
 
 Native Omarchy on mobile devices: Arch Linux ARM, Hyprland and Omarchy's own packages running directly on the device with a mainline kernel, with Android apps in Waydroid as a later goal. The reference device is the Pixel 7 Pro (cheetah, gs201); community ports cover more Pixels and the first non-Pixel phones ([docs/DEVICES.md](docs/DEVICES.md)).
 
+<p align="center">
+  <img src="docs/screenshots/home.png" width="22%" alt="The home screen, with widgets and a dock">
+  <img src="docs/screenshots/quick-settings.png" width="22%" alt="Quick settings">
+  <img src="docs/screenshots/apps.png" width="22%" alt="The app list with the on-screen keyboard">
+  <img src="docs/screenshots/terminal.png" width="22%" alt="A terminal running an AI agent">
+</p>
+
 **Status (2026-10-22), on the Pixel 7 Pro.** Each item's detail and the notes behind it: [docs/DEVICES.md](docs/DEVICES.md); what's missing and the plan to get there: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 - **Works:** display at 120 Hz, GPU, touch, buttons, USB networking, Wi-Fi, Bluetooth audio, battery, charging (on at boot under a battery temperature guard), haptics, torch, sensors with auto-rotate, GNSS (Location tile, GeoClue), NFC (reading and writing tags, opening a tag's link) and fingerprint unlock alongside the PIN pad or password, which keeps working across sleep (opt-in, because its first run writes Trusty's secure storage). All four cameras work in omacam ("Camera", [our own camera app](https://github.com/derekross/omacam), the default since omamobile-apps 0.2.0: one zoom control from the ultrawide to the telephoto, full-resolution photos, tap to focus, Night mode and an HDR chip) through libcamera: main, ultrawide, front and telephoto, at full size by default (`cam` with no options). The telephoto is fixed-focus for now: sharp on distant subjects, soft up close, because its focus motor isn't driven yet (it holds its I2C bus when driven). Single shots are still well below stock's quality: that is tuning.
