@@ -3386,7 +3386,9 @@ omamobile-apps 0.1.1): GNOME Snapshot works with all four cameras.**
   ultrawide has no lens control on these images (the `camera-uw-lens`
   overlay isn't in `device.conf` yet: one boot to add).
 - Open: the telephoto's lens (it NACKs; longer waits hung its bus, CAM-T
-  T.3), so the telephoto has no autofocus; the main and ultrawide AK7375
+  T.3), so the telephoto has no autofocus. It stays at its resting focus:
+  sharp on distant subjects outdoors, soft on close ones indoors (seen
+  2026-10-26); the main and ultrawide AK7375
   lenses stay powered while PipeWire holds their subdevs (power: measure).
 
 **CAM5.4 follow-ups (2026-10-14, 00533-00543):**
