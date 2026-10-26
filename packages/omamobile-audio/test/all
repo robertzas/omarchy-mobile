@@ -34,12 +34,33 @@ if command -v alsaucm >/dev/null && [[ -r /usr/share/alsa/ucm2/ucm.conf ]]; then
   [[ $(ucm get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM: Speaker PCM"
   [[ $(ucm get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM: Mic PCM"
   pass "UCM profile parses: HiFi with Speaker and Mic"
+  # tegu: its own long-name file in the same conf.d directory
+  # The long-name file must be named exactly as alsa-ucm-conf looks it up, or
+  # alsa falls back to the shared profile and cheetah's microphone list.
+  cp -r ucm2/Google/tegu "$u/Google/"
+  cp "ucm2/conf.d/aoc-snd-card/google,tegu-aoc-snd-card.conf" "$u/conf.virt.d/tegutest.conf"
+  sed -i -e 's/\${CardId}/0/g' -e 's/\${find-device:[^}]*playback[^}]*}/5/' \
+      -e 's/\${find-device:[^}]*capture[^}]*}/8/' "$u/Google/tegu/HiFi.conf"
+  ucmt() { ALSA_CONFIG_UCM2=$u alsaucm -c tegutest "$@" 2>&1; }
+  [[ $(ucmt list _verbs) == *"0: HiFi"* ]] || fail "UCM tegu: the HiFi verb"
+  out=$(ucmt list _devices/HiFi)
+  [[ $out == *"0: Speaker"* && $out == *"1: Mic"* ]] || fail "UCM tegu: Speaker and Mic devices"
+  [[ $(ucmt get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM tegu: Speaker PCM"
+  [[ $(ucmt get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM tegu: Mic PCM"
+  pass "UCM profile parses: tegu HiFi with Speaker and Mic"
 fi
 grep -c "find-device:type=pcm,stream=playback,field=id,regex='^EP6 playback'" ucm2/Google/cheetah/HiFi.conf >/dev/null ||
   fail "UCM: the Speaker PCM is found by its id"
 grep -c "find-device:type=pcm,stream=capture,field=id,regex='^EP1 capture'" ucm2/Google/cheetah/HiFi.conf >/dev/null ||
   fail "UCM: the Mic PCM is found by its id"
-if grep -E "cset .*(PCM Volume|PCM Source|DSP|Analog|Digital)" ucm2/Google/cheetah/HiFi.conf; then
+# The 9a's profile is found through the card's long name: the UCM file must be
+# named exactly after the card name the WirePlumber rule matches.
+tegu_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/52-omamobile-tegu-aoc.conf | head -1)
+[[ $tegu_card == google,tegu-aoc-snd-card ]] || fail "52-omamobile-tegu-aoc.conf matches the 9a's card name"
+[[ -f "ucm2/conf.d/aoc-snd-card/$tegu_card.conf" ]] || fail "tegu long-name UCM file is named exactly $tegu_card.conf"
+grep -c "channelmix.max-volume = 0.562" wireplumber/52-omamobile-tegu-aoc.conf >/dev/null || fail "the 9a's speaker sink is capped (channelmix.max-volume)"
+grep -c "CAPTURE LIST' 0,1,-1,-1" ucm2/Google/tegu/HiFi.conf >/dev/null || fail "tegu HiFi must set its own mic list (cheetah's 0,3,2 kills the AoC)"
+if grep -E "cset .*(PCM Volume|PCM Source|DSP|Analog|Digital)" ucm2/Google/cheetah/HiFi.conf ucm2/Google/tegu/HiFi.conf; then
   fail "UCM touches no amplifier control"
 fi
 pass "UCM finds the PCMs by id and leaves the amplifiers alone"
@@ -624,6 +645,8 @@ for f in usr/bin/omamobile-speaker-protection usr/lib/systemd/system/omamobile-s
          usr/lib/modprobe.d/omamobile-audio.conf etc/omamobile/speaker.conf \
          usr/share/alsa/ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf usr/share/alsa/ucm2/Google/cheetah/HiFi.conf \
          usr/share/wireplumber/wireplumber.conf.d/51-omamobile-aoc.conf \
+         usr/share/alsa/ucm2/conf.d/aoc-snd-card/google,tegu-aoc-snd-card.conf usr/share/alsa/ucm2/Google/tegu/HiFi.conf \
+         usr/share/wireplumber/wireplumber.conf.d/52-omamobile-tegu-aoc.conf \
          usr/share/pipewire/pipewire.conf.d/60-omamobile-speaker-loudness.conf usr/bin/omamobile-speaker-eq \
          usr/lib/omamobile-audio/speaker_response.py usr/lib/systemd/user/omamobile-speaker-orient.service; do
   [[ -e $tmp/root/$f ]] || fail "install stages $f"

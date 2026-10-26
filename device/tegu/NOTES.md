@@ -13,6 +13,82 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-10-26: audio (speakers, microphones, A2DP) with omamobile-audio 0.5.0
+
+Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`: the private
+integration tree for now (the pieces go to linux-omarchy-mobile one by one;
+the S2MPG14 RTC is #54), with the AoC started by a staged script. The card
+is `google,tegu-aoc-snd-card`; the TAS2572 amplifiers (I2C 19, top 0x48 and
+bottom 0x49) take their gains from the owner's `tas2572RCA1.bin` (the Pixel
+9a's own file from the factory image, not linux-firmware) at every playback
+start, and the codec exposes only `Top/Bottom Speaker Digital Volume` = 220
+(0 dB; 232 is +6 dB), unchanged during a 1 kHz tone at 100 % PipeWire volume.
+Without stock's speaker processing or protection in the path, PipeWire's
+100 % is full scale into stock's amplifier gains, so the WirePlumber rule caps
+the 9a's speaker sink at `channelmix.max-volume = 0.562` (a -10 dB ceiling, a
+cautious number, not a measured one) until the speakers' limits are measured
+or a protection path exists. PipeWire applies the clamp twice, to the master
+volume and to each channel volume, and the channel mixer multiplies the two,
+so the ceiling is the square of the value: the first cut of this rule used
+0.316 and measured about 20 dB down, not 10. Checked on the phone: with the
+sink at 100 % (`wpctl set-volume @DEFAULT_AUDIO_SINK@ 100%`) `pw-dump` still
+reports `channelVolumes [1.0, 1.0]` (the cap is applied inside the channel
+mixer, not to the reported volume), and a 440 Hz tone at -20 dBFS played at
+100 % and recorded through the 9a's own microphone measured -43.6 dBFS RMS
+at 0.316 and -24.0 dBFS with the line removed and WirePlumber restarted
+(19.6 dB apart through an uncalibrated microphone path); at 0.562 it measures
+-33.3 dBFS RMS, 9.7 dB below uncapped. The Pixel 7 Pro's speaker loudness filter is active
+on the 9a too (`effect_input.omamobile_speaker_loudness` in front of
+`alsa_output.platform-sound-aoc.HiFi__Speaker__sink`); it adds a bass boost
+tuned for amplifiers with protection behind them, so it should be limited to
+the Pixel 7 Pro's card.
+
+Tested on the phone: speakers through PipeWire (a 2 s 440 Hz sine at -20 dBFS
+played with `pw-play --volume 0.2`, then a 1 kHz tone at 100 % for the
+amplifier readback, then system sounds; the owner heard them), both
+microphones recording (EP1, `0,1,-1,-1`), Bluetooth A2DP endpoints registered.
+The tested package was omamobile-audio 0.4.1 with this branch's four files
+copied in by hand (remove them before installing 0.5.0, since pacman does not
+overwrite files it does not own): `/usr/share/alsa/ucm2/conf.d/aoc-snd-card/`
+`aoc-snd-card.conf` (b7bf918a…) and `google,tegu-aoc-snd-card.conf`
+(b6033775…), `/usr/share/alsa/ucm2/Google/tegu/HiFi.conf` (a6d460f3…) and
+`/usr/share/wireplumber/wireplumber.conf.d/52-omamobile-tegu-aoc.conf`
+(a8b4e025…, sha256 prefixes of the committed files; the speaker and microphone
+tests above ran before the cap existed, and the cap's own measurement came after). The AoC's own log for the third
+microphone: `Could not enable power for PDM 2`, no fault. Cheetah's list
+`0,3,2` kills the DSP: `FF1 (task=AUD_CAP_PDM): Assertion failed: asp_status
+== ASP_SUCCESS, mic_compensation.cc, 99 [SetPdmMask]`, after which the AoC
+needs a reboot (restarting the proxy does not help).
+
+`tools/phone-smoke`, 2026-10-26T16:42Z:
+
+### phone-smoke: tegu
+
+Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, tools at `7310611`, 2026-10-26T16:43Z.
+
+| Check | Result | Detail |
+| --- | --- | --- |
+| boot (required) | skip | kernel 7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty, no slot on the command line |
+| storage guard (required) | ok | 62 partitions; only userdata and slot B's boot images writable |
+| root (required) | ok | ext4 on userdata, 22G free |
+| kernel health (required) | ok | no oops or BUG; 0 WARN, 307 error lines in dmesg |
+| systemd units | ok | none failed |
+| USB gadget (required) | ok | bound to 11210000.usb |
+| display | ok | card1-DSI-1 connected, 1080x2424 |
+| GPU | ok | render node on panthor |
+| session (required) | ok | Hyprland and the Omarchy shell running |
+| touch | ok | Synaptics TouchComm Touchscreen |
+| buttons | ok | gpio-keys |
+| Wi-Fi | ok | wlan0 on brcmfmac, link up |
+| Bluetooth | ok | hci0, powered true |
+| battery | ok | 92% Unknown |
+| sound cards | ok | googleteguaocsn |
+| sensors | ok | Accelerometer AmbientLight Proximity |
+| cameras | skip | no libcamera tools |
+| thermal | ok | hottest zone 46 °C |
+
+Packages: hyprland 0.56.2-5.1, libcamera 0.7.2-4.16, mesa 1:26.2.4-1.4, omacam 0.1.9-1, omamobile-apps 0.2.0-1, omamobile-audio 0.4.1-1, omamobile-device-tegu 0.1.0-1, omamobile-fingerprint 0.1.8-1, omamobile-firstboot 0.1.0-1, omamobile-gnss 0.2.1-1, omamobile-keyring 20261013-1, omamobile-mirror 0.1.1-1, omamobile-modem 0.1.4-1, omamobile-omarchy 0.1.4-1, omamobile-owl-widgets 0.1.1-1, omamobile-sensors 0.2.0-1, omamobile-shell 0.2.17-1, omarchy 4.0.6-1, quickshell 0.3.2.r7.g2b4501a-1
+
 ## Sources and firmware gate
 
 - `R0/`: private retail capture `tegu-20261020-1349`, before unlocking:
