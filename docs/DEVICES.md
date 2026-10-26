@@ -71,3 +71,4 @@ Devices we'd like to support, with the closest starting point. Open an issue to 
 | Pixel 10 family | mustang (10 Pro XL) | laguna (Tensor G5) | 10 Pro XL (mustang): stock facts, contributors welcome ([#18](https://github.com/derekross/omarchy-mobile/issues/18)) |
 | Pixel 11 Pro, 11 Pro Fold | grizzly, yogi | malibu (Tensor G6) | stock facts, contributors welcome: 11 Pro ([#26](https://github.com/derekross/omarchy-mobile/issues/26)), 11 Pro Fold ([#40](https://github.com/derekross/omarchy-mobile/issues/40)) |
 | POCO F3 | alioth | SM8250 (Snapdragon 870) | the first non-Pixel port: a guarded installer and root image in review ([#25](https://github.com/derekross/omarchy-mobile/pull/25)) |
+| PinePhone Pro | - | Rockchip RK3399S | No port in this tree yet; prior art: [Omarchy on the PinePhone Pro](https://github.com/FlorencioJP/omarchy-mobile-pinephone-pro) |
