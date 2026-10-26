@@ -157,6 +157,20 @@ never change, so reviews can cite them.
   back on slot A, and offer a read-only proxy for the test it blocks (for
   gs101 power domains, a `pd_ignore_unused` boot after a warm reset shows
   whether the boot chain re-powers them). *From:* kernel #9, round 12.
+- **L-157. A runbook that relies on a watchdog names what arms and feeds
+  it.** `s3c2410_wdt` stops ABL's watchdogs at probe and nothing feeds
+  `/dev/watchdog0`, so felix's step 8 ("the watchdogs are the reset") had
+  nothing to reset a hang. *Check:* a feeder such as `--watchdog`, or the
+  button recovery and "run attended" in the step. Extends L-6 and L-133.
+  *From:* #35, round 14.
+- **L-158. A device package without boot-success makes the slot A fallback
+  part of every root-image runbook.** ABL falls back after three unmarked
+  boots; stock then offers to reset an Arch `userdata`, and its boot writes
+  `efs`/`persist`. *Check:* the runbook says how to get back to B, "decline
+  the reset" and "back up after a stock boot". *From:* #42, round 14.
+- **L-159. A storage power test runs where the root isn't on the device
+  under test, and reads with `iflag=direct`,** or the page cache answers and
+  the device never wakes. *From:* #42, round 14.
 
 ## Shared code and the reference device
 
@@ -252,6 +266,23 @@ never change, so reviews can cite them.
   find the package that owns the unit and read its install message and unit
   comments; turning a radio on by default is the maintainer's call. *From:*
   #41, round 12.
+- **L-160. Hiding a shell surface removes every gesture on it, and a new
+  edge surface is checked against the keyboard and fullscreen windows.** #43
+  hid the dock over apps, its swipe-up the switcher's only entry point; its
+  new full-width pill sat on the Overlay layer with no input mask. *Check:*
+  `git grep` the surface's handlers; for a new layer surface, its layer,
+  input region, the keyboard's layer and fullscreen apps. *From:* #43,
+  round 14.
+- **L-161. A lock-path check that fails open is a finding.** `jq -e
+  'all(.dpmsStatus)'` read a failed `hyprctl` query as "screen off", so Power
+  would stop locking. Test for the positive state, failing towards locking.
+  *From:* #43, round 14.
+- **L-162. A per-board audio file is only as safe as the shared fallback,
+  and node-name filters apply to every board with that name.** If tegu's card
+  name changed, alsa-ucm-conf would fall back to cheetah's profile, whose mic
+  list takes tegu's AoC down; cheetah's loudness filter matches any sink named
+  `sound-aoc`. "Stage ceilings" are cheetah's CS35L41 bound: a new amplifier
+  needs its own. *From:* #44, round 14.
 
 ## Shell and scripts
 
@@ -535,6 +566,14 @@ never change, so reviews can cite them.
   addends and `.altinstr_replacement` before naming changed functions.** The
   raw diff of #42 showed 28 changed functions where one changed. Extends
   L-110. *From:* kernel #42, round 13.
+- **L-163. A regmap table for a new block allows writes only to what its
+  client driver writes,** not the vendor's register enum. #54's RTC table
+  could write the PMIC's SMPL, WTSR and oscillator trim. Note that
+  `update_bits` on a volatile register skips the write table when the bus has
+  `reg_update_bits`. Extends L-25. *From:* kernel #54, round 14.
+- **L-164. Re-validate an approved binding PR against every board merged
+  since.** #13's `soc_compatible: false` rule began rejecting lynx's real node
+  once #43 merged. *From:* kernel #13, round 14.
 
 ## The gates themselves
 
@@ -732,6 +771,15 @@ never change, so reviews can cite them.
   conflict.** Another reviewer deleted their refs mid-review. *Check:* read
   the message, and use commit ids for other reviewers' PRs. Extends L-127.
   *From:* round 12.
+- **L-165. "No checks reported" can mean the PR conflicts with its base,**
+  since GitHub runs no `pull_request` workflow then. *From:* kernel #53,
+  round 14.
+- **L-166. When a PR is force-pushed after its phone test, diff the old head
+  against the new.** GraphQL's `HeadRefForcePushedEvent.beforeCommit` gives
+  the old id; REST's timeline omits it. *From:* kernel #54, round 14.
+- **L-167. Posting scripts split drafts by heading, never by line number,
+  and each posted file is checked first.** Round 13's line ranges put #49's
+  last bullet at the top of #50's comment. *From:* round 13 (found in 14).
 
 ## Claims and evidence
 
