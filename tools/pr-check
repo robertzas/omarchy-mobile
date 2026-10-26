@@ -56,7 +56,7 @@ added=$(git diff --unified=0 --no-color "$range" -- . ':(exclude)tools/pr-check'
 # on its own, so an exempt one doesn't hide a real one beside it.
 macs=$(awk '{
     line = tolower($0); rest = line; real = 0
-    while (match(rest, /(^|[^0-9a-f:])[0-9a-f][0-9a-f](:[0-9a-f][0-9a-f]){5}([^0-9a-f:]|$)/)) {
+    while (match(rest, /(^|[^0-9a-f:])[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]([^0-9a-f:]|$)/)) {
       m = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH - 1)
       gsub(/^[^0-9a-f]|[^0-9a-f]$/, "", m)
       if (m ~ /^.[26ae]:/ || m == "00:00:00:00:00:00" || m == "ff:ff:ff:ff:ff:ff" || m ~ /^00:00:5e:00:53:/) continue
