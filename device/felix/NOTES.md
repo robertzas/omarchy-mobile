@@ -3,6 +3,11 @@
 
 Findings from real hardware, newest first. [BRINGUP-M1.md](BRINGUP-M1.md) is the first-light record.
 
+## 2026-10-26: the power key and the GPU in the published kernel
+
+- **Power key.** linux-omarchy-mobile#41 (merged) describes `gpa10-0` on `gpio-keys`, so the 2026-10-22 entry's "not described" no longer holds. On `7.3.0-rc6-omamobile-push1-g9860657fffb1`, slot B, not marked successful: event0 advertised `KEY_VOLUMEDOWN`, `KEY_VOLUMEUP` and `KEY_POWER`, a short press read code 116 down then up, logind reported `HandlePowerKey` and `HandlePowerKeyLongPress` as ignore (`omamobile-device-felix` 0.1.2), and the phone stayed up. A long press was not tried.
+- **GPU.** linux-omarchy-mobile#5 (merged) enables the Mali-G710. On `7.3.0-rc6-omandroid-push1-gb60e882f0c1f` Panthor bound at 151 MHz and glmark2-es2-drm ran on the cover's simple framebuffer with no GPU fault. The #41 boot's smoke test found no render node, so the GPU is not up on every image yet.
+
 ## 2026-10-23: cover touch id
 
 - **Which boot.** The rail, chip-id, and attention lines below were read on an unpublished tree: the hinge-hall commit `994dd90` plus uncommitted work, `uname -r` `7.3.0-rc6-omandroid-push1-g994dd90ad7c3-dirty`, with an overlay that set `regulator-always-on`. linux-omarchy-mobile#27 and #32 carry the published versions. #27 is merged. A later boot of #32 head `b1b5f1fd6` (`7.3.0-rc6-omamobile-push1-gb1b5f1fd66ba`) had the driver enable the rails itself, with no `regulator-always-on`, and the cover still answered `36 40`. That boot was the built-in reader and a kernel overlay. A boot of #32 head `dd05dd347` (`7.3.0-rc6-omamobile-push1-gdd05dd347ad0`) loaded the blacklisted module by hand. The blacklist was not the package file. A test initramfs wrote `/etc/modprobe.d/omamobile-cover-touch.conf` and copied `exynos-mailbox.ko`, `acpm-protocol.ko`, `sec-acpm.ko`, and `salixp.ko` to `/root/fts`. It did not load them. The installed package was still `omamobile-device-felix` 0.1.1. Slot B was written by hand, to `boot_b`, `init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b`, and `dtbo_b`, and was not marked successful. The boot logged `salixp spi0.0: chip id 36 40`, held each rail with one user, and left both disabled with no users after unbind. The reader does not load firmware or report touches.

@@ -189,8 +189,8 @@ bin/omamobile capture <codename>-stock          # over adb; or in fastboot: getv
 | --- | --- | --- |
 | Pixel 7, 7a, Fold, Tablet | gs201 (Tensor G2) | our `gs201.dtsi` and every gs201 driver; mostly a board DTS |
 | Pixel 6, 6 Pro, 6a | gs101 (Tensor) | upstream mainline `gs101.dtsi`, `gs101-oriole.dts` and `gs101-raven.dts`; much of our gs201 work was ported *from* gs101 |
-| Pixel 8, 8 Pro, 8a | zuma (Tensor G3) | not started: new clock, pinctrl and SoC data; use gs201 as the pattern |
-| Pixel 9 family | zumapro (Tensor G4) | not started |
+| Pixel 8, 8 Pro, 8a | zuma (Tensor G3) | under way on the Pixel 8 Pro (husky): zuma's PMU, watchdogs, USB PHY and pin controllers are in linux-omarchy-mobile, the device tree is in review; use gs201 as the pattern for the rest |
+| Pixel 9 family | zumapro (Tensor G4) | under way on the Pixel 9a (tegu): its UFS host and PHY, core clocks, pin controllers, ACPM, SPI chip selects, the GPU's cache hash and the inherited display are in linux-omarchy-mobile; the board DTS isn't public yet |
 | Pixel 10 family | laguna (Tensor G5) | not started; a new SoC vendor generation, expect more differences |
 
 The same SoC does **not** mean the same board. The panel, touch controller, PMIC rails, GPIO assignments, battery model and firmware names all differ between phones. **Never copy interrupt numbers between SoCs**: gs201's GIC SPIs differ from gs101's, and gs201's EINT numbering even skips EINT19.
@@ -287,6 +287,7 @@ Findings that matter beyond one subsystem go into `device/<codename>/NOTES.md`, 
 - **Commit subjects** name the area, then say what changed: `omamobile-gnss: package GNSS with location on demand`, `device-cheetah 0.1.15: reconnect USB after a replug`, `shell 0.1.17: …`, `DISPLAY-PLAN: D3b-1b result, …`, `NOTES: …`. When a commit changes a package, bump its `version` file and put the new version in the subject.
 - **Bodies** explain the why and what was tested. Wrap at 72 columns. If an AI assistant co-wrote the commit, end with a `Co-Authored-By:` trailer, as the history does.
 - **Every file has an SPDX header** (§7).
+- **Describe what something is built from, not which other project it's based on.** Docs, the README, device notes and the website don't name or compare other mobile Linux projects or distributions: say "Arch Linux ARM with the `linux-megi` kernel", not "based on X". Citing a properly licensed source for a fact (upstream Linux, Google's GPL kernel, postmarketOS, Mesa, Omarchy) is fine, and expected.
 - **Packages** follow the existing layout: `PKGBUILD`, `install`, `version`, `README.md`, and `test/all`, which must pass. Device packages are named `omamobile-device-<codename>`. Nothing in them is enabled unless it's safe at boot, with hang markers where needed.
 - **Keep identifying data out.** No Wi-Fi names, MAC or Bluetooth addresses, serial numbers, IMEIs, account names or captures: use placeholders such as `<SSID>`. Screenshots must not show any of these either.
 - **Open a PR** with what you ran on the phone, the kernel release, and the plan section it follows, after the checks and the smoke test in §6.5. Kernel PRs go to your fork's topic branch against linux-omarchy-mobile's `omamobile`; everything else to this repository's `main`. A new device's first PR here is usually its `device/<codename>/device.conf` and notes (§5).

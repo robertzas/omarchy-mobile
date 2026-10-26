@@ -25,6 +25,7 @@ Omarchy Mobile runs native Omarchy (Arch Linux ARM, Hyprland, Omarchy's packages
 - **When a reboot gets stuck:** systemd's `RebootWatchdogSec=1min` resets the phone a minute into a hung shutdown, so wait. It doesn't cover a hang in the kernel's `device_shutdown` (a held device lock, as after the AoC `rmmod` oops below). If it's still stuck, ask the human to force a restart: Power held about 30 s, then Power. On the Pixel 8 Pro, hold Power + Volume Up for 15-30 s; Power alone does nothing under our kernel ([BRINGUP-M1](device/husky/BRINGUP-M1.md) test 23). For fastboot by hand: Volume Down + Power held about 20 s. Don't send more commands to a phone that has stopped answering, and don't guess at its state. Ask.
 - **Never commit or paste identifying data or vendor blobs.** That means MAC and Bluetooth addresses, serial numbers, IMEIs, SSIDs, account names, `getprop` dumps, `persist` or `efs` contents, partition images, Google firmware and binaries. Grep your diff before committing (`[0-9a-f]{2}(:[0-9a-f]{2}){5}`, the SSID, the serial). Use placeholders such as `<SSID>`.
 - **Cite only properly licensed, citable sources** in commits, docs and code: upstream Linux, Google's GPL kernel, postmarketOS, Mesa, Omarchy and our own captures.
+- **Never name or compare other mobile Linux projects or distributions in public copy** (docs, README, device notes, the website): describe a base by its parts. A source citation as above is fine ([CONTRIBUTING](CONTRIBUTING.md) §6.3).
 
 ## 2. Workflow
 
