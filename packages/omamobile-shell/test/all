@@ -501,6 +501,8 @@ bash -n bin/omamobile-setup-user || fail "omamobile-setup-user parses"
 bash test/setup-user.sh || fail "omamobile-setup-user against a scratch home"
 bash -n bin/omamobile-osk-guard || fail "omamobile-osk-guard parses"
 bash test/osk-guard.sh || fail "omamobile-osk-guard"
+bash -n bin/omamobile-sleepd || fail "omamobile-sleepd parses"
+bash test/sleepd.sh || fail "omamobile-sleepd"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ./install "$tmp/root"
 [[ -x $tmp/root/usr/bin/omamobile-setup-user && -f $tmp/root/usr/share/omamobile/shell/profile/shell.json ]] \
@@ -521,6 +523,15 @@ grep -cx 'ExecStart=/usr/bin/omamobile-setup-user' systemd/user/omamobile-setup-
 [[ -x $tmp/root/usr/bin/omamobile-osk-guard && -f $u/omamobile-osk-guard.service &&
    $(readlink "$u/graphical-session.target.wants/omamobile-osk-guard.service") == ../omamobile-osk-guard.service ]] \
   || fail "the keyboard safety net is staged and enabled for every user's session"
+# Sleep on screen-off: staged and running for every session, but off until
+# the user's toggle (SUSPEND-PLAN 6.2): nothing in the package turns it on.
+[[ -x $tmp/root/usr/bin/omamobile-sleepd && -f $u/omamobile-sleepd.service &&
+   $(readlink "$u/graphical-session.target.wants/omamobile-sleepd.service") == ../omamobile-sleepd.service ]] \
+  || fail "the sleep watcher is staged and runs for every user's session"
+grep -cx 'ExecStart=/usr/bin/omamobile-sleepd' systemd/user/omamobile-sleepd.service >/dev/null || fail "the unit runs the watcher"
+if grep -rnE '^[^#]*(omarchy-toggle omamobile-sleep( on| toggle|$)|toggles/omamobile-sleep)' bin install systemd plugins; then
+  fail "nothing turns the omamobile-sleep toggle on by default"
+fi
 [[ -x $tmp/root/usr/bin/omamobile-setup-user ]] || fail "setup-user is installed where the unit runs it"
 [[ -x $tmp/root/usr/bin/omamobile-portal-access && -f $tmp/root/usr/share/xdg-desktop-portal/portals/omamobile.portal \
    && -f $tmp/root/etc/xdg/xdg-desktop-portal/hyprland-portals.conf \
