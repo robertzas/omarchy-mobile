@@ -169,8 +169,9 @@ if grep -nE 'property +[a-z]+ +(top|bottom|left|right|horizontalCenter|verticalC
 pass "notification shade, Settings gear, unread count and Clipboard wiring"
 
 # QML has to parse; qmlformat is the Qt tool that fails on a syntax error
-# without needing the shell's own imports to resolve.
-qmlformat=$(command -v qmlformat || command -v /usr/lib/qt6/bin/qmlformat || true)
+# without needing the shell's own imports to resolve. Qt 6's first: a Qt 5
+# qmlformat on PATH (Arch's qt5-declarative) rejects Qt 6 syntax.
+qmlformat=$(command -v /usr/lib/qt6/bin/qmlformat || command -v qmlformat6 || command -v qmlformat || true)
 if [[ -n $qmlformat ]]; then
   for qml in plugins/*/*.qml plugins/omamobile.home/owl/*.qml; do
     "$qmlformat" "$qml" >/dev/null 2>&1 || fail "$qml parses"
