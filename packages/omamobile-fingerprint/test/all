@@ -10,6 +10,18 @@ for f in lib/omamobile-fp-chroot install; do bash -n "$f" || fail "syntax: $f"; 
 grep -c 'TA=g7.app' lib/omamobile-fp-chroot >/dev/null || fail "cheetah loads g7.app"
 grep -c 'TA=g7a.app' lib/omamobile-fp-chroot >/dev/null || fail "tegu loads g7a.app"
 grep -c 'keymint-service.rust.trusty' lib/omamobile-fp-chroot >/dev/null || fail "tegu runs the Rust KeyMint"
+# Each phone's panel name, overridable; Trusty's stores mapped only when their images exist.
+grep -c 'PANEL_NAME=sdc-s6e3hc4' lib/omamobile-fp-chroot >/dev/null || fail "cheetah's panel name"
+grep -c 'PANEL_NAME=google-tg4c' lib/omamobile-fp-chroot >/dev/null || fail "tegu's panel name"
+grep -c 'OMAMOBILE_FP_PANEL_NAME' lib/omamobile-fp-chroot >/dev/null || fail "panel name override"
+grep -c 'sdc-s6e3hc4 >' lib/omamobile-fp-chroot >/dev/null && fail "a fixed panel name is written"
+grep -c 'PANEL_NAME=google-tg4c MAP_STORES=1' lib/omamobile-fp-chroot >/dev/null || fail "the 9a maps its stores"
+grep -c 'PANEL_NAME=sdc-s6e3hc4 MAP_STORES=0' lib/omamobile-fp-chroot >/dev/null || fail "the 7 Pro never maps its stores"
+grep -c 'ln -sfn' lib/omamobile-fp-chroot >/dev/null && fail "no forced link over a store"
+grep -c '\[\[ -f \$STATE/td.img \]\] && maps+=(-f 0:/dev/block/ss-td -m /dev/block/ss-td)' lib/omamobile-fp-chroot >/dev/null ||
+  fail "TD maps only with its image"
+grep -c '\[\[ -f \$STATE/tdp.img \]\] && maps+=(-f persist/0:/dev/block/ss-tdp)' lib/omamobile-fp-chroot >/dev/null ||
+  fail "TDP maps only with its image"
 grep -c '^ro.hardware=tegu$' lib/props-tegu.conf >/dev/null || fail "props-tegu.conf"
 grep -c '^ro.hardware=cheetah$' lib/props-cheetah.conf >/dev/null || fail "props-cheetah.conf"
 grep -c '^ro.hardware=' lib/props.conf >/dev/null && fail "props.conf keeps a phone's ro.hardware"

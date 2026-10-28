@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Fingerprint plan (tegu / zumapro): fingerprint unlock on the palmtop
 
-Status (2026-10-27, night): **F0, F2, F6a and F6b passed; F3-F5 and F6c wait for D1.** Earlier: **research and plan only, nothing run on the palmtop for
+Status (2026-10-28): **F0 and F2-F5 passed (F4, the first RPMB write, on 2026-10-27 under D1 = A); F6a and F6b passed; F6c waits for the factory calibration, which the owner fetched on 2026-10-28.** Earlier: **research and plan only, nothing run on the palmtop for
 fingerprint.** Stage 16 of ALL-HARDWARE-PLAN (private). The
 Pixel 7 Pro stack works ([cheetah FINGERPRINT-PLAN](../cheetah/FINGERPRINT-PLAN.md),
 opt-in); this plan says what carries over to the Pixel 9a and what is new.
@@ -202,6 +202,10 @@ New for tegu:
   (`dd` from the node found by `PARTNAME`), and `persist` is read from the
   off-phone backup image, not mounted on the palmtop (f2fs: a read-only
   mount can still run recovery). Never add them to `UFS_RW`.
+- `fastboot oem udfps update-cal`, or any other `oem` command that writes,
+  doesn't run without Derek's explicit go and a named exception: it writes
+  `mfg_data`, outside slot B and `userdata`. Every `fastboot oem` step in a
+  runbook pins the serial with `-s`.
 - `sg` stays blacklisted from autoload; the runner loads it and binds only
   the RPMB LUN's node.
 - `gpp1` is shared with the touchscreen reset (`gpp1-1`): the fingerprint pin
@@ -232,7 +236,14 @@ New for tegu:
 Neither choice can roll back the RPMB: its write counter and superblocks move
 at the first run either way.
 
-**Decision:** _not taken yet._
+**Decision (2026-10-27): A, with the stores as block devices.** Taken by
+the owner (W4HO) at the console on 2026-10-27, evening: he never runs
+stock Android, so nothing is written outside `userdata` and stock on slot A
+is left to need a factory reset if it's ever booted. Within A, the stores
+are loop devices of Linux-owned images in `/var/lib/omamobile-fp`
+(`td.img`, `tdp.img`; step F4b), so storageproxyd gets its `-m` limit from
+a block device and maps `0` and `persist/0` the way stock does, but onto
+those images, never onto `trusty_userdata` or `trusty_persist`.
 
 ## 7. Runbook
 
@@ -320,6 +331,33 @@ requests, `fs_ready`, Trusty's log mounting its stores (TD new under A).
 **Stop** on authentication failures, MAC mismatches or storage errors: no
 retry loop, collect the logs. Rollback: stop the unit; the RPMB cannot be
 rolled back. Risk: irreversible for the RPMB; low for the running system.
+
+### F4b: the store images (TD and TDP as block devices; risk: low)
+
+Only on the 9a (the runner maps them only there, and only when the files
+exist). Both live in `/var/lib/omamobile-fp` (0700, root), are made on the
+palmtop and are **never committed or copied off it** (they hold Trusty's
+secure-storage state):
+
+```sh
+# TD: a fresh, empty 128 MiB store; storageproxyd takes its -m limit from it
+truncate -s 128M /var/lib/omamobile-fp/td.img && chmod 600 /var/lib/omamobile-fp/td.img
+# TDP: the F3 copy of trusty_persist (read-only copy, same size). Before the
+# first mapped run it is persist-ss/0; after it, that path is the link and the
+# copy is persist-ss/0.before-map.<time>.
+install -m 600 /var/lib/omamobile-fp/persist-ss/0 /var/lib/omamobile-fp/tdp.img
+```
+
+The runner then maps each to a loop device bound to `/dev/block/ss-td` and
+`/dev/block/ss-tdp` in the chroot, links `data/vendor/ss/0` and
+`persist-ss/0` to them before storageproxyd starts (an existing store there
+is moved aside with a timestamp, never deleted), and passes `-f 0:...`,
+`-f persist/0:...` and `-m`. Expect "secure storage ready" with "Using
+0x8000000 as max file size". Rollback: stop the runner, `losetup -d` both,
+delete the two images (Trusty's state in them is lost; the RPMB is not
+rolled back), then remove the two links (`data/vendor/ss/0`,
+`persist-ss/0`) and move any `*.before-map.*` file back to its own name, so
+the next unmapped run doesn't find links to nothing.
 
 ### F5: the TA (risk low)
 
@@ -415,3 +453,83 @@ needs them.
   reads it over SPI would. Touch, keys and haptics unaffected.
 - F6c (the HAL) needs the TA, which needs secure storage (F4), so it waits
   for D1 like F3-F5.
+
+## F3-F6c results (2026-10-27, evening, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`)
+
+- **F3 passed.** `mfg_data`, `trusty_persist` and `persist` read with the
+  sha256 of the 10-27 backup. Stock's `persist/ss` holds only `0` (a link to
+  `trusty_persist`) and an empty `nsp`. **`mfg_data` is all zeros** on this
+  palmtop; `persist` has no fingerprint files.
+- **F4 ran (irreversible, D1 = A).** storageproxyd without `-f`/`-m`:
+  "secure storage ready" (fs_ready and fs_ready_rw), no RPMB errors.
+- **F5 passed.** g7a.app loaded; `com.goodix.fingerprint.test` open.
+- **F6c, sensor.** With LDO15S off (not described), the TA read chip id 0
+  ("SENSOR_NOT_AVAILABLE"). LDO15S is off at hand-off, as on cheetah: round
+  fp2 describes it (`S2MPG15_PMIC_L15S_CTRL` 0x3d in the regmap table, an
+  `ldo15s` descriptor, DT always on; reads 3.3 V). Then the sensor answers
+  and the HAL reports sensor0 at (540, 1769), radius 113.
+- **F6c, still failing: secure objects and calibration.** Every TA write
+  fails ("transaction would leave fs too full, abort", WRITE_SECURE_OBJECT),
+  the calibration objects (`GHBM_*`, `autoCalibrationParams`) don't open on
+  TD or TDP, and the TA says "spmt is not pass": no factory calibration, so
+  init ends in CALIBRATION_NOT_READY. Tried: `-m` (needs a block device:
+  TD now on a loop device of a 128 MiB Linux image, `0 -> /dev/block/ss-td`,
+  max 0x8000000; Trusty reads it, writes nothing); TDP mapped to a loop
+  device of the F3 copy (fs_ready never came); TD seeded from a copy of
+  stock's `trusty_userdata` (fs_ready never came: Trusty refuses it, so the
+  first F4 run moved its anchor). Back on the empty 128 MiB TD; the runner
+  with the loop store is `/root/omamobile-fp-chroot.td-loop` on the palmtop.
+- Open question: where the 9a's factory fingerprint calibration lives. It
+  isn't in `mfg_data` (zeros) or `persist`; stock's TD (`trusty_userdata`,
+  intact, read-only copy in `td.img.stock-copy`) is the likely place, now
+  unreadable to Trusty after F4. Next: find which file system is "too full"
+  (TP on the RPMB is the suspect), and whether the HAL can run SPMT-free
+  calibration (Google's `gf_cali` "default cali data" is disabled by the TA).
+- 2026-10-27, night: with TD and TDP both mapped as stock maps them
+  (`-f 0:` and `-f persist/0:` on loop devices of `td.img` and `tdp.img`,
+  `-m` the TD device) storageproxyd reports fs_ready; it first answered
+  "Pending symlink: forcing read result 0" for both (Trusty saw them empty)
+  until the symlinks `ss/0` and `ss/persist/0` existed, as on stock. Then
+  the "too full" commits stop, but every TA object open fails
+  (OPEN_SECURE_OBJECT, 1035), on TDP too: Trusty reads both devices (about
+  100 reads each) and finds no objects. The calibration (`GHBM_*`,
+  `autoCalibrationParams`) is the open question; Trusty's storage service
+  logs nothing at this log level. Runner copies on the palmtop:
+  `/root/omamobile-fp-chroot.td-loop` and the live one (TD+TDP maps).
+- 2026-10-27, night, later: with the symlinks in place, a copy of stock's
+  `trusty_userdata` as TD mounts too (fs_ready; it failed earlier only
+  because storageproxyd's pending-symlink reads showed Trusty an empty TD).
+  Trusty then wrote 13 blocks to the TDP copy and none to TD. The TA still
+  finds no calibration: "so(autoCalibrationParams.so_0_0) not exist", and
+  the `GHBM_*` bases don't open on TD or TDP. So the 9a's fingerprint
+  calibration isn't in `mfg_data` (zeros), `persist` (an empty `ss/nsp`),
+  stock's TD or the TDP. The HAL also names `/data/device_cali/` and
+  `/data/vendor_de/0/fpdata`, both on stock's userdata, which Arch replaced:
+  the likely home, and gone. Without it the TA refuses enrollment ("spmt is
+  not pass": the factory sensor test). Open: whether the TA can run on
+  default calibration (it logs "disable using default cali data") and what
+  enables that. The live runner maps TD (`td.img`, now the stock copy) and
+  TDP (`tdp.img`) as block devices with the symlinks.
+- 2026-10-28: the calibration's home is in ABL. Its strings carry
+  `oem udfps status`, `oem udfps get-cal-url`, `oem udfps update-cal`,
+  "udfps data is not valid", "Calibration signature matches/mismatch",
+  `udfps` next to `mfg_data`, and the URL template
+  `https://storage.googleapis.com/hardware-mfg-data-ext-sacal/%s.signed.cal`.
+  So Google keeps each sensor's factory calibration as a signed file on its
+  manufacturing bucket, and `update-cal` writes it into `mfg_data`; the zeros
+  there mean this palmtop's calibration was never written (or was wiped).
+  Next (needs the owner's hands at fastboot, Volume Down + Power: reaching
+  fastboot from Linux can fall back to stock on slot A): `fastboot oem udfps
+  status` and `get-cal-url` (read-only), fetch the file, then feed it to the TA from Linux (no partition write;
+  `update-cal` writes `mfg_data` and is under the rule in section 5). The URL's `%s` is presumably the device serial, so fetching it
+  sends the serial to Google: the owner's call.
+  With the owner's go, the URL with the serial (either case) answers 404,
+  so the id is something else, presumably the sensor's own id that ABL
+  reads at `udfps_init`. `fastboot oem udfps get-cal-url` will name it.
+- 2026-10-28, morning: at fastboot by the buttons, `fastboot oem udfps
+  status` answers "invalid sentinel 0x0" (no calibration stored) and
+  `get-cal-url` names the file on Google's bucket; its id isn't the serial.
+  With the owner's go the file was fetched (472,368 bytes, HTTP 200). It
+  and its id stay in the owner's private reference folder, never in the
+  repository or a log. Next: hand it to the TA from Linux, without writing
+  `mfg_data`.
