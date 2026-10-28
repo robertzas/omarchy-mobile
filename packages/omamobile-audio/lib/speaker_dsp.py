@@ -221,6 +221,14 @@ class JsonCtl:
         except (OSError, ValueError):
             return {}
 
+    def _save(self, state):
+        # rename over the file, so the fake mixer reading it at the same
+        # moment never sees half of it
+        tmp = f'{self.path}.{os.getpid()}'
+        with open(tmp, 'w') as f:
+            json.dump(state, f)
+        os.replace(tmp, self.path)
+
     def names(self):
         return list(self._load())
 
@@ -238,8 +246,7 @@ class JsonCtl:
             if name.endswith('HALO_HEARTBEAT') and os.environ.get('FAKE_HB_STUCK') != '1' and not frozen:
                 v += 1           # the firmware's heartbeat moves while it runs
                 c['v'] = list(v.to_bytes(4, 'big'))
-                with open(self.path, 'w') as f:
-                    json.dump(state, f)
+                self._save(state)
             return v
         if t == 'ENUMERATED':
             return c['items'][c['v']]
@@ -274,8 +281,7 @@ class JsonCtl:
             if log_path:
                 with open(log_path, 'a') as f:
                     f.write(name + '\n')
-        with open(self.path, 'w') as f:
-            json.dump(state, f)
+        self._save(state)
         return True
 
 

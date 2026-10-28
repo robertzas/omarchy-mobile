@@ -76,8 +76,12 @@ def load():
 
 
 def save(c):
-    with open(state_path, 'w') as f:
+    # write and rename, so a reader running at the same moment (the
+    # watchdog while a test changes a control) never sees half a file
+    tmp = f'{state_path}.{os.getpid()}'
+    with open(tmp, 'w') as f:
         json.dump(c, f)
+    os.replace(tmp, state_path)
 
 
 def show(name, ctl):

@@ -351,8 +351,12 @@ pass "watchdog: mutes on DSP errors, bypass, levels, runtime PM, a stuck heartbe
 # level drop, so a jump there must not mute; OMAMOBILE_SPK_TEMP_JUMP brings it back.
 jump() {  # name [wprep...]: watchdog on a running stream; the bottom's estimate goes 25 -> 40 C a moment in
   local n=$1; shift; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; wprep=("$@")
-  ( sleep 0.4; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null ) &
-  watchrun; wait
+  # the jump comes once the watchdog has its first reading (its start line,
+  # then a few intervals), not at a fixed time: a slow runner started it late
+  rm -f "$r/watch.out"
+  ( for _ in $(seq 1 100); do grep -c 'watchdog: watching' "$r/watch.out" >/dev/null 2>&1 && break; sleep 0.05; done
+    sleep 0.3; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null ) &
+  WATCH_N=60 watchrun; wait
 }
 startok w-jump8; jump w-jump8
 ((rc == 0)) && ! muted && grep -c 'jump rule off' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: at analog 10 or below a 15 C jump of the estimate does not mute (C9j)"; }
