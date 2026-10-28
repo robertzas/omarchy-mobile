@@ -3,8 +3,62 @@
 
 Findings from real hardware, newest first. Tracking issue: #36.
 
-## 2026-10-24: on-screen console
+## 2026-10-27: Wi-Fi parked
 
+- **The chip's boot ROM stops at its authentication stage,** `pbl_auth.c`, after reading only the ELF header and the hash segment of an image byte-identical to stock's. Every host-side difference two testers could act on was tried, one change per boot, and all were negative. The write-up, the ruled-out list, both stop conditions and what is left are in [WIFI-PLAN.md](WIFI-PLAN.md). The maintainer agreed on #36 that parking here is the right call.
+- **Stock-side read done.** `WLAN_SECURE_BOOTN` (`0x1E22B24`), the register that stage consults, reads `0x0` under stock's `cnss2` in the link-up pre-BHI state and in mission mode (six reads), not the `0x11111111` seen on mainline after the stall. Two more registers differ: `PBL_WLAN_BOOT_CFG` `0x200` and `TLMM_PBL_BOOTSTRAP_STATUS` `0x40` under stock, 0 on mainline. Read with stock Android restored to slot A for an afternoon (Magisk root, `userdata` backed up first and Arch put back the same evening). None of the windowed reads hung on stock.
+- **Two stop conditions.** No windowed chip register reads before `mhi_sync_power_up()` (that read hung HSI2 and rebooted the other tester's phone), and no userspace reads of the HSI2 SysMMU or iATU blocks (`devmem` of `0x145c000c` reset this one). WIFI-PLAN.md section 6.
+- **State:** the published kernel has no PCIe node for lynx and the Wi-Fi branch stays local; on the test phone `pcie_gs201` and `ath11k_pci` stay blacklisted. Bluetooth, on the same chip, waits on the same question.
+- **Reinstalling Arch after the stock afternoon** needed `install-phone --bootloader-slots-match lynx-17.0-15199429` again. The root image carried package 0.1.0, without the marker, so the slot was marked successful once by hand with 0.2.0's `omamobile-boot-success` and its unit enabled. The PMIC RTC came back with stock's date; `hwclock -w` after setting the clock fixed it.
+
+## 2026-10-24: Wi-Fi bring-up (not working yet)
+
+- **The Wi-Fi chip is a Qualcomm QCA6490 (`17cb:1103`, subsystem `17cb:0108`) on PCIe channel 1,** not the Broadcom part in the Pixel 7 Pro. Linux drives it as WCN6855 hw2.1 through ath11k. Bluetooth is on the same chip.
+- **Power pins, from the stock tree:** `gph2-5` enables the 0.95 V buck (stock name `bt-0p95-en`), and `gph2-4` is WLAN_EN. Stock raises the buck, then WLAN_EN, then waits 1 ms and brings up the link. BT_EN is `gpp16-2` on the PERIC1 pin controller (`0x10840000`), which our tree does not describe yet. The PCIe wake line `gpa6-1` only lets the chip wake the host.
+- **Local, unsigned kernel branch `omamobile-gs201-lynx-wifi`** (on the touch branch). It imports the gs201 PCIe host, PHY and SysMMU drivers from `omamobile-int`. The board commit describes the two power pins as the root port's supply, with no restricted DMA pool: such a pool hands out at most 256 KiB in one piece, and MHI needs 512 KiB. A test-only `msi=1` adds MSI through iMSI-RX. A test-only `skip_soc_reset` stops ath11k from resetting the chip. Test-only `bhi_zero_from` and `bhi_flip_at` corrupt the image MHI hands over.
+- **Working:** link Gen2 x1, enumeration, 32 MSI vectors, and the chip reading host memory.
+- **Not working:** the chip's boot ROM stalls during the first firmware load (BHI), after about 20 s MHI times out with -110. `TCSR_PBL_LOGGING` reads `0xef0a0002`. `BHI_STATUS` stays 0, no MSI arrives, and neither end logs an AER error or completion timeout.
+- **Bisecting the image shows where it stalls:**
+
+  | Image handed to the chip | Boot ROM ends at |
+  | --- | --- |
+  | real image | `0xef0a0002` |
+  | all zeros | `0xef128100` |
+  | hash segment (offset 0x1000) zeroed | `0xef0a0125` |
+  | code from 0x2000 zeroed | `0xef0a0002` |
+  | one byte flipped in the header hash (0x1028) or the first segment hash (0x1068) | `0xef0a0002` |
+
+  So the boot ROM reads the ELF header and the hash table's header, then stalls before it checks a single hash. The hash segment holds plain SHA-256 hashes with no signature. The Pixel's own `amss20.bin` stalls at the same stage, so the image is not the cause.
+- **Ruled out:** firmware signing, cache coherency, power-up timing (also tried after several minutes powered off), the S2MPU, SysMMU bypass, Relaxed Ordering and No Snoop, read request size, ath11k's SOC global reset, the QFPROM shutdown bit (`0x1F8031C` reads `0x62`), and the BT_EN pin held high (stock raises it about 1 s before WLAN_EN). That BT_EN test was the pin only: `gpp16-2` set high with `devmem` several seconds before the buck, with no Bluetooth firmware over the UART. FlorencioJP later ruled Bluetooth out from stock's side (WIFI-PLAN.md section 4).
+- **Stock (dmesg from 2026-10-23):** the BHI load finishes in 57 ms. Stock runs with the SysMMU translating (image buffers near `0xfa880000`, in `wifi_region`), a 36-bit DMA mask, PCIe I/A on, L1.2 on, and three MSI vectors for MHI. Here the SysMMU is bypassed (control register `0x24`), the device has no IOMMU group, and DMA uses physical addresses.
+- **Next, as of this entry:** run with the SysMMU translating as stock does, then with I/A on, then check the chip's supplies. The PCIe PHY rails are S2MPG13 `LDO3S` and `LDO18S`, both always-on in the stock tree. (Superseded: see the 2026-10-27 entry and [WIFI-PLAN.md](WIFI-PLAN.md).)
+- **Firmware on the phone** lives in `/usr/lib/firmware/updates/ath11k/WCN6855/hw2.1`: linux-firmware `amss.bin` and `m3.bin`, plus the phone's own calibration as `board.bin`. Nothing from the vendor image goes into this repo.
+- **`devmem` here takes only `ADDRESS [VALUE]`.** A second argument is written as a value, not read as a width. Reading SysMMU offset `0x145c000c` crashed the phone.
+
+## 2026-10-24: touchscreen, RTC and slot retries
+
+- **The touchscreen is a Goodix GT9895 on SPI0 (USI0),** chip select `gpp20-3`, interrupt `gpa7-0` (falling edge), reset `gpp23-2`. Kernel branch `omamobile-gs201-lynx-touch` adds it to `goodix_berlin_spi` with the Berlin D register addresses. Touch works in the Hyprland session, with no checksum errors over about 1000 interrupts.
+- **The GT9895 sends 14-byte contact records,** not the 8 bytes the Berlin driver assumed. With 8 every report failed its checksum. The driver now takes the record size from the chip's match data.
+- **ABL leaves the touch supplies off.** The first probe read all zeros ("device confirm failed") and the interrupt line stayed low after reset. The supplies are S2MPG12 `LDO25M` (vddio, 1.6 to 1.95 V) and `LDO26M` (avdd, 3.0 V, not felix's 3.3 V), from the stock tree. The board file describes the PMIC on ACPM and hands both LDOs to the touch node. The AOC mux on `gph1-0` is not involved.
+- **The S2MPG12 RTC sets the clock at boot,** now that the PMIC is described. The "No RTC" entry below no longer applies.
+- **Slot B has three retries after `fastboot --set-active=b`, and each unmarked boot uses one.** The fourth push in a row booted slot A, where Android shows "Cannot load Android system" (shared `userdata`). It was not a bad DTB. `fastboot --set-active=b` from the bootloader menu (Power + Volume Down) brought slot B back. Never pick "Factory data reset" there: it wipes the Arch root.
+- **devinfo is `sdd1`, layout 3.15, the same as the Pixel 7 Pro.** Slot B's flags are byte 0x35. `omamobile-bootctl mark-successful` changed it from `04` to `06`, and the retry count stayed. `omamobile-device-lynx` 0.2.0 ships the Pixel 7 Pro's `omamobile-boot-success` unit, which does this after every boot. The bytes against `fastboot getvar` are in [BRINGUP-M1.md](BRINGUP-M1.md#devinfo-against-fastboot-2026-10-27-g38b5a04d67e0-device-lynx-020).
+- **The on-screen keyboard (squeekboard) appears** for text fields in the session, as well as at the PIN prompt.
+
+## 2026-10-24: Arch root on userdata
+
+- **`tools/install-phone` works on lynx.** It flashed slot B's five boot images and a root image built with `DEVICE=lynx tools/build-rootfs`, set B active and rebooted. The phone booted into the Arch root on `sda31` (grown to 109 GiB), `omamobile-firstboot` created the user, and SDDM logged in to Hyprland on simpledrm. Slot A's Android does not boot after this (shared `userdata`).
+- **The bootloader reports only the current slot's version.** `install-phone` needs `--bootloader-slots-match`. Slot B's `lynx-17.0-15199429` comes from stock's `getprop` while it ran from slot B (`ro.boot.bootloader`), the same as slot A.
+- **`omamobile-device-lynx`** is felix's package without the lid drop-in: storage guard rule, USB address, power-key drop-in, mirrorlist, `reboot-to`. No boot-success marker yet, so slot B stays unmarked.
+- **No RTC.** The clock starts days behind (2026-10-18 on the first boot), and `pacman-key --populate` skips a signing key created "in the future", so the keyring step of `omamobile-firstboot` can fail. Setting the clock and repopulating fixes it.
+- **The lock screen blanks after about 10 seconds** and nothing wakes it without touch. `qs ipc call lock wake` lights it again, and the PIN can be typed with `wtype`. `loginctl unlock-sessions` does not unlock it.
+- **`systemd-firstboot.service` fails** (status 208/STDIN): no console with `console=null`. `omamobile-firstboot` already sets the host name, time zone and locale.
+
+## 2026-10-24: on-screen console and UFS
+
+- **UFS works with cheetah's nodes.** The board file enables `ufs_0` and its PHY with an always-on fixed VCC (stock drives it from `gpp0-1`, boot-on, as on cheetah). The link comes up at `FAST series_B G_4 L_2`, as on stock. The part is an SK hynix `HN8T05DEHKX073` (fw G002): `sda` 128 GB (31 partitions, `userdata` is `sda31`, 109 GiB), `sdb` and `sdc` 32 MiB each (10 partitions), `sdd` 4 MiB (4). No UFS errors at boot.
+- **`poweroff -f` does not fully power off.** PSCI system-off stops the SoC (USB and SSH go away), but the panel stays lit with its last frame and Power alone does nothing. Holding Power for about 30 seconds force-restarts the phone (back into slot B), so a real power-off goes through the bootloader menu. Probably the PMIC rails stay up with no S2MPG12 driver; not investigated.
+- **The storage guard holds on lynx.** It removes `/dev/sda`, sets `sdb`, `sdc` and `sdd` read-only, and leaves exactly six partitions writable: `boot_b`, `init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b`, `dtbo_b` (`sda20` to `sda24`) and `userdata`. The first UFS boot ran with `omamobile.initramfs` on the vendor cmdline, so the init did not touch `userdata`.
 - **simpledrm drives the panel through ABL's pipeline.** The board file reserves `0xfac00000` (`splash@fac00000`, no-map, 1080 x 2400 x 4 bytes) and adds a 1080x2400 a8r8g8b8 simple-framebuffer on it. simpledrm binds it, fbcon switches to it at 67x75 (Terminus 16x32), and the boot log and a shell prompt show on the panel. No panel driver: the framebuffer node has no panel phandle.
 - **DECON0 TRIG_CON (`0x1c240030`) reads `0x3070` after ABL,** the same masked value as the Pixel 7 Pro. The initramfs writes cheetah's `0x3061` (`SIMPLEFB_TRIG_CON`), and it reads back `0x3061`. Without it the panel, a command-mode panel, keeps ABL's last frame. `BRINGUP_PROBE=1` logs `dpp0 cfg 0x40000004 base 0xfac00000`.
 - **ABL rewrites the console arguments.** It drops our `console=tty0` from `bootargs` and appends `console=null`. fbcon still takes the framebuffer and the init's messages reach it.
