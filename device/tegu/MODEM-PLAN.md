@@ -541,6 +541,26 @@ startNmea 25; callbacks location 4, NMEA 5).
   omamobile-modem 0.1.7 runs gnssd as an optional daemon, so its exit no
   longer stops the profile. Until M6 qualifies the power-off, don't stop the
   modem profile by hand; reboot with someone at the palmtop.
+- **gnssd's custom GNSS library (2026-10-28, omamobile-modem 0.1.8).** An
+  `strace` of gnssd found two gaps. gps.cfg sets
+  `GlueLayer_IsUseCustomGnssLib=1`, and gnssd `dlopen()`s
+  `/vendor/lib64/libcustomgnss.so` (ENOENT), which waits for the CP at
+  `/sys/bus/platform/devices/cpif/modem_state` and then `dlopen()`s
+  `libsitril-gps.so`, which uses `libsitril-client.so` (RIL's GPS channel,
+  over binder to the radioExternal HAL). Nothing links the three, so the
+  extractor never copied them; they are `VENDOR_LIBS` of the tegu modem
+  profile now, and the chroot binds cpif at its bus path too. With both,
+  libcustomgnss logs "Modem state ONLINE"; `GpsOpen()` still fails (no
+  radioExternal HAL in the chroot: no binder), and Kepler still faults at
+  every engine start. A re-run of the extractor on the BP3A factory image
+  (2026-10-29) resolves everything: 195 files against 188, the three
+  libraries plus libbinder, libbinder_ndk, libapexsupport and the
+  radioExternal NDK library, nothing new to stub. **An existing 9a chroot
+  gets the libraries only when its owner re-extracts** (`tools/extract-vendor-chroot
+  -p modem -d tegu` on the factory image, then the install line from its
+  usage text); a chroot from before 0.1.8 keeps running without them, as
+  before. The second `/sys` bind is in every phone's modem profile and is
+  harmless on the 7 Pro and the 6 Pro: cbd never looks there.
 
 ### Suspend with the modem on (2026-10-27, early morning, same kernel)
 
