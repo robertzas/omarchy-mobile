@@ -19,9 +19,10 @@ Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`: the private
 integration tree for now (the pieces go to linux-omarchy-mobile one by one;
 the S2MPG14 RTC is #54), with the AoC started by a staged script. The card
 is `google,tegu-aoc-snd-card`; the TAS2572 amplifiers (I2C 19, top 0x48 and
-bottom 0x49) take their gains from the owner's `tas2572RCA1.bin` (the Pixel
-9a's own file from the factory image, not linux-firmware) at every playback
-start, and the codec exposes only `Top/Bottom Speaker Digital Volume` = 220
+bottom 0x49) take their gains from `tas2572RCA1.bin` at every playback
+start (corrected 10-29: that file is linux-firmware's
+`ti/audio/tas257x/tas2572-1-1amp-reg.bin`, byte for byte; stock's factory
+image carries no RCA-format profile, only its own `ti_sp_tuning.bin`), and the codec exposes only `Top/Bottom Speaker Digital Volume` = 220
 (0 dB; 232 is +6 dB), unchanged during a 1 kHz tone at 100 % PipeWire volume.
 Without stock's speaker processing or protection in the path, PipeWire's
 100 % is full scale into stock's amplifier gains, so the WirePlumber rule caps
