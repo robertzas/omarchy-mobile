@@ -49,14 +49,20 @@ case $DEVICE in
   cheetah)
     TA=g7.app
     KEYMINT=/vendor/bin/hw/android.hardware.security.keymint-service.trusty
-    PANEL=1440x3120 PANEL_NAME=sdc-s6e3hc4 MAP_STORES=0 ;;
+    # the 7 Pro's HAL got a bare "on" and the circle after pointer down,
+    # and matches with both
+    PANEL=1440x3120 PANEL_HZ=60 PANEL_STATE=on LHBM_FIRST=0
+    PANEL_NAME=sdc-s6e3hc4 MAP_STORES=0 ;;
   tegu)
     TA=g7a.app
     KEYMINT=/vendor/bin/hw/android.hardware.security.keymint-service.rust.trusty
     # Google's panel_name is the DSI device's name, from the bootloader's
     # "google-tg4c" panel; OMAMOBILE_FP_PANEL_NAME overrides it.
     # the 9a's Trusty stores as block devices (FINGERPRINT-PLAN D1, F4b)
-    PANEL=1080x2424 PANEL_NAME=google-tg4c MAP_STORES=1 ;;
+    # the 9a's HAL parses the rate after the "@" of gs_panel's state line
+    # ("On: WxH@Hz") and captures at pointer down, so the circle comes first
+    PANEL=1080x2424 PANEL_HZ=120 PANEL_STATE="On: 1080x2424@120" LHBM_FIRST=1
+    PANEL_NAME=google-tg4c MAP_STORES=1 ;;
   *) echo "omamobile-fp: unknown device '$DEVICE' (cheetah, tegu)" >&2; exit 1 ;;
 esac
 PANEL_NAME=${OMAMOBILE_FP_PANEL_NAME:-$PANEL_NAME}
@@ -182,13 +188,16 @@ setup_sys() {
   done
   mkdir -p "$sys/devices/platform/exynos-drm/primary-panel"
   echo "$PANEL_NAME" > "$sys/devices/platform/exynos-drm/primary-panel/panel_name"
-  echo 60 > "$sys/devices/platform/exynos-drm/primary-panel/op_hz"
+  # The 9a's HAL reads the refresh rate from the backlight state, after its
+  # "@" (gs_panel's "On: WxH@Hz"); a bare "on" logs "Failed to parse refresh
+  # rate". PANEL_STATE is per device: the 7 Pro keeps its bare "on".
+  echo "$PANEL_HZ" > "$sys/devices/platform/exynos-drm/primary-panel/op_hz"
   # The panel driver's backlight device carries local_hbm_mode and
   # local_hbm_max_timeout; expose it under Google's name.
   bl=$(grep -l . /sys/class/backlight/*/local_hbm_mode 2>/dev/null | head -1 || true)
   mkdir -p "$sys/class/backlight/panel0-backlight"
   echo 0 > "$sys/class/backlight/panel0-backlight/hbm_mode"
-  echo on > "$sys/class/backlight/panel0-backlight/state"
+  echo "$PANEL_STATE" > "$sys/class/backlight/panel0-backlight/state"
   if [[ -n $bl ]]; then
     bl=$(dirname "$bl")
     bind "$bl/local_hbm_mode" "$sys/class/backlight/panel0-backlight/local_hbm_mode"
@@ -419,6 +428,7 @@ start() {
       --socket /dev/socket/omamobile-fp/bridge.sock --touch /dev/input/touchscreen \
       --ui-state /dev/socket/omamobile-fp-ui/state.json \
       --inhibit /dev/socket/omamobile-fp-ui/inhibit --panel "$PANEL" \
+      --lhbm-first "$LHBM_FIRST" \
       ${OMAMOBILE_FP_LHBM_SETTLE_MS:+--settle "$OMAMOBILE_FP_LHBM_SETTLE_MS"}
   fi
 
