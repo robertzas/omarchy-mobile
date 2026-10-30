@@ -35,6 +35,83 @@ resets) and are in [MODEM-PLAN](MODEM-PLAN.md) under "G3, twenty-fourth to
 thirty-fourth tries" and "The CP link hang". Not a GNSS matter: if a boot
 with nothing but Bluetooth starting resets again at that time, start here.
 
+## 2026-10-28, evening: USB-C host mode through TCPM
+
+Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` (the
+integration tree), DTB with the TCPC as a dual-role port.
+
+- **USB-C host mode works end to end** [V]. TCPM runs the port as dual-role
+  (try sink, source PDO 5 V 900 mA), with `vbus-supply` = the MAX77779
+  charger's `chgin-otg` regulator (kernel #124) over the RT9470's OTG boost,
+  and a graph to dwc3's role switch. A USB flash drive attaches as source
+  (SRC_READY), VBUS holds at 5.2 V, the data role goes to host, and the
+  drive enumerates at high speed (`sde: sde1 sde2`). With the drive out and
+  the laptop back: sink, a PD contract, the gadget configured. Again after a
+  fresh boot. Two parts of that setup aren't in a public tree yet: the DT
+  fragment (the TCPC as dual-role with `vbus-supply`, the graph to dwc3) and
+  the RT9470 bring-up module that writes OTG_EN, JEITA_EN and the watchdog
+  bits. They are on the kernel bring-up branch
+  derekross/linux-omarchy-mobile#127, with the plan and runbook in #136.
+  This supersedes #100's "the eUSB2 repeater doesn't take the host role
+  yet".
+- **How the cable swaps were covered** [V]: attended, with W4HO at the
+  palmtop for every swap. Taking the laptop out cuts the only link, so each
+  sampling script carried its own dead-man: with no USB gadget configured 6
+  to 8 minutes after the cable came out, it unloaded `tcpci_maxim` and set
+  the role switch back to device, so the laptop would come back as a sink.
+  It never fired, because the laptop came back every time. The DTB boot
+  itself ran under a one-boot DTB dead-man. The next run uses a reboot
+  timer armed before the unplug and stopped over a fresh login (#136's
+  runbook). `tools/usbc-deadman` is written for the 7 Pro's MAX77759 and
+  doesn't apply here.
+- **Why VBUS collapsed at first** [V]: the RT9470's JEITA temperature
+  control (0x0c bit 7) was on with STAT2 reading 0x80, and its I2C
+  watchdog (0x01 bits 1:0) had expired (STAT3 0x20). That JEITA read "hot"
+  is an inference [I]: the TS pin may have no thermistor on it, which
+  hasn't been checked. With either set, the
+  boost reported OTG (ICSTAT 0x0f) while VBUS fell from 5.2 V within ~60 ms,
+  and TCPM retried every second. Google's `rt9471_charger` turns JEITA off
+  on the 9a (`en-jeita` is unset in `zumapro-buck-charge-rt9471.dtsi`) and
+  only runs the watchdog while it kicks it. With both off, VBUS holds under
+  Rd and Rp, with and without AutoDischargeDisconnect. The boost's driver
+  has to clear both.
+- **What that leaves open** [I]: with the watchdog off, nothing turns the
+  boost off after a crash. What a warm reboot with host mode on leaves
+  behind (the RT9470's OTG bit and ICSTAT before any driver loads) hasn't
+  been measured, so whether VBUS stays out across one is unknown. With
+  JEITA off the RT9470 has no temperature cut-off of its own, which
+  matters only if it charges. Its CE comes from the MAX77779's sGPIO 7,
+  which hasn't been read. On the charger with the battery full, FUNCTION
+  read 0x41 (`CHG_EN` set) and ICSTAT 0xf1 (VBUS ready, not charging), so
+  whether it charges under our kernel isn't known yet.
+- **The eUSB2 side** [V]: the PHY has to come out of reset with the device
+  attached. A drive plugged into a port that's already host isn't seen
+  (the TUSB2E11's attach-detect interrupt never latched). TCPM's flow
+  (attach on CC, then the role switch, then `phy-snps-eusb2` resetting the
+  PHY on the role change) does it in that order.
+- **NFC after s2idle** [V]: the ST54L loses its NCI state across a
+  suspend. The first command after resume gets no I2C ACK (`NFC: Error -6
+  on I2C send`), and every NCI request times out after it. Powering the
+  adapter off and on through neard (a fresh NCI init) brings it back, so
+  the sleep hook has to power the adapter off before the sleep and on
+  after it, not only stop polling (10-29: not needed with
+  https://github.com/derekross/linux-omarchy-mobile/pull/131, and a
+  power-off hook failed to wake once; see #137).
+- **Fingerprint calibration** [V]: the HAL injects it itself
+  (`injectMtCali`), reading a 112-byte header at offset 0 of
+  `/dev/block/by-name/mfg_data`. The file `fastboot oem udfps get-cal-url`
+  names has exactly that layout (magic `0xca11ca11`, version 1, and the
+  payload length at 0x6c). Written into the chroot's private `mfg_data.img`
+  copy (the partition itself untouched), it's accepted:
+  `vendor.gf.cali.state = 1`, and the "No SA calibration present" line is
+  gone. Later that evening enrollment completed, but matching doesn't work
+  yet (#135; 10-29: it does now, see FINGERPRINT-PLAN F9/F10 in #138).
+- **GNSS** [V]: telling the AoC the GNSS type (`gnss-type = <2>`, as
+  Google's `zumapro-phone-ignss.dtsi`) doesn't change the fault. Kepler
+  loads and goes OPERATIONAL, and the HAL starts a session, but every engine
+  start still ends in "KEP M7 HARDFAULT ... LR,PC 600B5B39 0000062C"
+  (20 in 4 minutes).
+
 ## 2026-10-26 and 2026-10-28: slot A fallbacks that cost userdata
 
 Both times slot B was active but **not marked successful**, so each boot
