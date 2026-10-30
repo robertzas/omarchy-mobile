@@ -13,6 +13,28 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-10-29: two resets at about 34 s, right after Bluetooth started
+
+[V] During the night's GNSS G3 tries (kernel
+`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, gn3 DTB), two
+boots reset at about 34 s of uptime, right after Bluetooth started (01:41
+and 03:03), before any GNSS step. The cause was not seen. Read again from
+the journal on 10-29 afternoon (the 03:03 boot; the 01:41 one is out of the
+journal and its console was rotated out): its last 34 s are the same
+timeline, to the tenth of a second, as the two boots around it that
+survived (the Bluetooth firmware at 27.9 and 31.4 s, MGMT at 33.0,
+`tegu-curated-bluetooth-prepare` at 34.1, `bluetooth.service` at 34.2,
+`systemd-hostnamed` at 34.4, then nothing), and it ends there. The curated
+Bluetooth dead-man is armed for 120 s, so it was not that; the audio
+bring-up script had not yet acted (its first action comes 5-7 s later in
+the surviving boots); the only thing running in that window is bluetoothd
+setting the adapter up over the UART. Without the console of the reset
+there is nothing more to read. The night's other
+resets came from the modem side (the CP link hang after Kepler's watchdog
+resets) and are in [MODEM-PLAN](MODEM-PLAN.md) under "G3, twenty-fourth to
+thirty-fourth tries" and "The CP link hang". Not a GNSS matter: if a boot
+with nothing but Bluetooth starting resets again at that time, start here.
+
 ## 2026-10-26: audio (speakers, microphones, A2DP) with omamobile-audio 0.5.0
 
 Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`: the private
