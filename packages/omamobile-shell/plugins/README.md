@@ -942,13 +942,13 @@ names an output directory).
 
 ## Testing in the desktop harness
 
-`phone/dev/run-desktop` copies the shell and runs it in a nested Hyprland, so
-point IPC at that copy and its Wayland display, never at
-`/usr/share/omarchy/shell` (your real desktop):
+`phone/dev/run-desktop` copies the shell into an Omarchy tree of its own and
+runs it in a nested Hyprland, so point IPC at that tree and its Wayland
+display, never at `/usr/share/omarchy` (your real desktop):
 
 ```sh
-HOME=~/android/phone-dev/home WAYLAND_DISPLAY=wayland-2 \
-  quickshell ipc -p ~/android/phone-dev/shell call shell listPlugins
+OMARCHY_PATH=~/android/phone-dev/omarchy WAYLAND_DISPLAY=wayland-2 \
+  omarchy-shell shell listPlugins
 ```
 
 (`quickshell list --all` shows which `wayland-N` the nested shell is on.)
