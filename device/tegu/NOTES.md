@@ -35,6 +35,88 @@ resets) and are in [MODEM-PLAN](MODEM-PLAN.md) under "G3, twenty-fourth to
 thirty-fourth tries" and "The CP link hang". Not a GNSS matter: if a boot
 with nothing but Bluetooth starting resets again at that time, start here.
 
+## 2026-10-26 and 2026-10-28: slot A fallbacks that cost userdata
+
+Both times slot B was active but **not marked successful**, so each boot
+used up one ABL retry. After `fastboot --set-active=b` the 9a's ABL gives
+B **three** tries (10-28: retry 3 after the flash, 1 after two boots, from
+the devinfo dumps below). A boot that never reaches the USB host is crashed
+by the initramfs safety net about 65 s in, so a bad image uses up the tries
+within minutes, and ABL then boots stock on slot A.
+
+**2026-10-26.** The failing boot was a comparison run of Google's own
+kernel (`6.1.134-android14-11-g2bae8aca899a-ab13800907`), written to slot B
+by `omamobile flash` (so `--set-active=b`). It ran with a RAM-only
+filesystem assembled from our initramfs files, with PID 1 replaced by a
+static supervisor that opens no block device. Stock's own first stage didn't
+run on slot B. It never brought up USB.
+Fastboot (buttons) then showed A selected and B at retry 0. Stock's own
+boot wasn't captured. Afterwards `userdata`'s ext4 and F2FS magics were
+gone, with non-zero data in their place, `e2fsck -fn` failed, and `persist`
+had changed. [I] Stock on slot A wrote over the start of `userdata`; nobody
+saw its boot. At 16:35 MST the palmtop sat in stock recovery (USB 18d1:4ee7,
+sideload-only adbd: every adb command answered `error: closed`). Nobody
+chose anything in recovery. A fresh read-only backup of efs, efs_backup,
+modem_userdata, persist, modem_a/b, devinfo and metadata was taken
+(off-repo). Slot B came back by `omamobile flash` of the last good five
+images (which set it active again). The root came back by streaming the
+verified 10-25 recovery image over USB SSH into `userdata` from our
+initramfs, with a readback hash and a read-only `e2fsck`. B was then on its
+last try (byte 0x34 `00` in the "before" row below): one more unmarked
+reboot would have fallen back again.
+
+**2026-10-28.** Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`
+(the release the day's run kit records; the string stays the same across
+that tree's builds, so it names the tree, not one build) with our initramfs
+(`bin/omamobile initramfs`, `initramfs/init`, packed by the kit), and a new
+DTB (the TCPC as a dual-role port with a link to dwc3's role switch). In the morning, slot B was
+written by `omamobile flash`, recovering from a test boot of kernel #55's
+head that hung on the Google logo, and it was **not marked** afterwards.
+Every `push` round after that ran unmarked, so the tries ran out on the
+first round that failed. That's the situation the rule is there to prevent. The DTB round lost USB on its boot (`push`: "no SSH after
+reboot"), and a few minutes later the palmtop was on stock. adb answered
+`error: closed` again, the same sideload-only adbd as 10-26. The owner
+doesn't remember what the screen showed, and nobody tapped anything.
+Afterwards `userdata` read as non-zero data with no filesystem magic (the
+first 64 KiB looks random), and the root wouldn't mount. Fastboot by the
+buttons, `omamobile flash` of the last good images, the 10-25 recovery
+image streamed to `userdata` and read back against its sha256, then a boot.
+Fresh read-only backup of the same eight partitions, taken before the boot:
+efs, efs_backup, modem_userdata, persist, devinfo and metadata differed
+from the 10-26 backup, modem_a/b didn't. `fastboot getvar slot-*` wasn't
+captured either day, apart from `current-slot: a` on 10-28.
+
+So stock doesn't just stop at a recovery prompt: on both days `userdata`
+was overwritten before anyone could choose anything. Treat a fallback to
+slot A as losing the Linux root.
+
+**Marking B both days** was the approved operation below, `omamobile-bootctl
+mark-successful` for B. The binary was built statically from
+`packages/omamobile-device-cheetah/src/omamobile-bootctl.c` (source sha256
+`89d03460…`, binary `f44936d5…`), driven by a laptop script that:
+
+1. reads a fresh full `devinfo` snapshot and checks its sha256 against live
+   storage right before the write;
+2. runs the tool's dry run, which must plan exactly one byte;
+3. arms a 30 s timed read-only restore, writes, reads back all 8192 bytes
+   against the predicted image, and checks the read-only flags over a fresh
+   SSH login.
+
+systemd's 10 s runtime watchdog was running throughout (the bring-up checks
+for it). The script didn't arm anything beyond that.
+
+The laptop keeps the command log. The 10-28 harness copy differed from the
+10-26 one only in its baseline paths (slot A's bytes are read live).
+
+| Moment | Bytes 0x30–0x37 |
+| --- | --- |
+| 10-26, before | `02 1a 00 00 00 14 00 00` |
+| 10-26, after | `02 1a 00 00 00 16 00 00` |
+| 10-28, before | `02 1a 00 00 01 14 00 00` |
+| 10-28, after | `02 1a 00 00 01 16 00 00` |
+
+Only byte 0x35 changed (bit 0x02), and slot A was untouched.
+
 ## 2026-10-26: audio (speakers, microphones, A2DP) with omamobile-audio 0.5.0
 
 Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`: the private
