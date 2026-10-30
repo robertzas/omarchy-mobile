@@ -117,6 +117,145 @@ The laptop keeps the command log. The 10-28 harness copy differed from the
 
 Only byte 0x35 changed (bit 0x02), and slot A was untouched.
 
+## 2026-10-28: what the device table's claims rest on
+
+Each line is a run on this 9a, on `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`
+unless it says otherwise; the kernel pull request has the details.
+
+- **Display:** the published kernel drives the panel at 60 Hz. 120 Hz runs
+  on the palmtop with kernel #88's two files (DECON timers per panel), in
+  review.
+- **Touch, sleep fix (kernel #82):** 20 s2idle cycles with RTC wakes in a
+  row, no `bad message header`, touch working after each; without it touch
+  broke at the 13th.
+- **Buttons, Power wakes s2idle:** checked by hand on 2026-10-27, Power from
+  a freeze back to the desktop.
+- **Bluetooth, BCM4383 (kernel #94, merged):** `hci_uart` reloaded with that
+  exact `hci_bcm.c`: the controller came up as `hci0` on its REG_ON latch.
+  Pairing (A2DP) ran with the older form of the code.
+- **Charging, status and inhibit (kernel #92):** the driver bound at 0x69;
+  status, and inhibit through `charge_behaviour`, read and set on the
+  palmtop.
+- **Haptics, CS40L26 with VPBR (kernel #95, merged):** binds, loads its
+  firmware with brownout prevention at 3.008 V, plays effects.
+- **Torch, LM3644 (DT in kernel #96):** 25 brightness steps up to 75 mA on
+  the torch LED.
+- **Suspend, Power and RTC wakes:** Power by hand as above; RTC wakes in the
+  #82 run and in the 2026-10-28 sleep tests, where one of four never woke
+  (recorded in the camera switching entry below).
+
+## 2026-10-28: camera switching, pstore, idle hints, sleep memory rate
+
+Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`.
+
+- **Camera switching works** (kernel #103). The first capture after a
+  switch away from the ultrawide or front camera came back empty about
+  half the time. The LoCH's EN_STATUS (0x0a8) stays active with the old
+  link in its low bits after a stream that stopped cleanly, and a disabled
+  LoCH ignores the abort, so the next stream on another link got no
+  interrupts. Enabling it for the abort fixes it: nine captures, every
+  switch order, all write frames.
+- **pstore** (kernel #106): ramoops on stock's region survives a watchdog
+  reset on zumapro (the bootloader writes its own log at the start of the
+  console zone).
+- **Core and cluster power-down hints** (the CPU_INFORM register Google's
+  driver writes at every idle entry): powering down cluster 0 stops ACPM
+  answering its DVFS channel, and the palmtop resets (pstore shows it);
+  Google never powers down cluster 0. Clusters 1 and 2 are stable, but
+  neither hint saves anything measurable, screen on or off. Dropped.
+- **Memory rate in s2idle:** with the cable in and charging paused,
+  10-minute RTC-woken freezes drew 371 and 373 mA at MIF 2028 MHz and
+  314 mA at 421 MHz. One later freeze never woke (in s2idle the watchdog
+  is stopped); a hand restart brings it back.
+- **Link errors** on every camera are ERR_WRONG_CONFIG: packets on VC 0
+  with a data type no channel takes (an embedded-data line a frame on the
+  front and ultrawide, about 527 PDAF packets a frame on the main camera).
+- **Fingerprint:** the trusted app's secure storage is up, with Trusty's
+  stores at the paths stock uses (`0`, `persist/0`) but on loop devices of
+  Linux-owned images under `/var/lib/omamobile-fp`, not on stock's
+  `trusty_userdata` and `trusty_persist` (omarchy-mobile #101;
+  FINGERPRINT-PLAN D1 and F4b). The factory
+  calibration lives with Google: the bootloader names the file (its
+  `get-cal-url` answer) and it comes from a manufacturing bucket. The panel's
+  id isn't the key (omarchy-mobile #101).
+- **GNSS:** the S2MPG15's three GNSS rails are off at hand-off and stock
+  turns them on; they're now described (kernel #101) and on.
+
+### Reserved memory beyond Google's map (kernel #80)
+
+`zumapro-reserved-memory.dtsi` in #80 carries Google's fixed regions from
+`zumapro-rmem.dtsi`, zuma's xhci pools, and three more:
+
+- `abl@f8800000`: predeclared in stock's own factory base DTB as 32 MiB,
+  which ABL shrinks to 16 MiB at hand-off.
+- `0x913a0000` (+0x60000) and `0xfd7ff000` (+0x1000): two ranges the early
+  bring-up kept reserved, next to GXP and the debug tail. They come from the
+  private DRAM map the first boots were built from, not from a public
+  source.
+
+Keeping them reserved is the safe direction. What would free the two gaps
+is stock's live `/proc/iomem` and reserved-memory nodes compared with ours;
+this palmtop can't produce that (stock on slot A overwrites `userdata`
+before it reaches recovery: [2026-10-26 and 2026-10-28](#2026-10-26-and-2026-10-28-slot-a-fallbacks-that-cost-userdata)),
+so it needs a second 9a or a reinstall of stock.
+
+## 2026-10-27: cameras, NFC, USB-C, storage power, fingerprint, drain
+
+Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` (the
+integration tree; the pieces are kernel PRs, linked below) for everything
+here. The 35 s2idle cycles in AGENTS.md's NFC entry ran on this release too.
+
+**Cameras (kernel #63, #103).** `cam -l`:
+
+    1: Internal back camera (/base/soc/usi@108c00c0/i2c@108c0000/camera@56)
+    2: Internal back camera (/base/soc/usi@108900c0/i2c@10890000/camera@1a)
+    3: Internal front camera (/base/soc/usi@108a00c0/i2c@108a0000/camera@1a)
+
+`tools/phone-smoke`: `| cameras | ok | 3 listed by libcamera |`. With the
+ultrawide's test pattern on, LoCH 0 on link 1 (CTL 0x01000200, RESOL
+0x0c001070, 5312 bytes a line, format 4) wrote three 4208x3072 frames
+(48955392 bytes) showing the sensor's eight colour bars, full width and
+height; the solid-colour pattern (R 1023, Gr 0, B 341, Gb 682) reads back as
+BGGR. The main camera (S5KGN8, C-PHY) delivers whole 4000x3000 frames once
+gs201-csis raises the INT domain and the ISP front end's NOC clock while it
+streams. The ultrawide and the front stream at about 29 fps through the
+software ISP. The tested `phy-gs201-mipi-dcphy-rx.c` is #63's (ed3dacc7f958);
+the tested `gs201-csis.c` (acd8d7d0987a) differs from #63's in one comment.
+Open: the first capture after a camera switch is often empty.
+
+**NFC (kernel #100).** The ST54L reads a contactless card through the
+kernel and neard once nxp-nci sends ST's CORE_SET_CONFIG after init: an
+ISO-DEP target on NFC-A, 15 activations in 45 s with the card held, neard
+lists a tag, with no periodic discovery restart. NFC polling costs about
+60 mA, so omamobile-shell 0.2.33 (PR #99 here) stops it with the screen off.
+
+**USB-C.** tcpci_maxim (merged, kernel #97) loads at boot: a PD contract at
+5 V 3 A, replug back within 1 s. Host mode: VBUS comes from the RT9470 on
+USI10 (Google's ext-otg-only use case; USI10 clocks in kernel #102), the
+TCPC sees VBUS, dwc3 goes host, but a flash drive never connects: the
+eUSB2 repeater (hsi2c9 0x3e) doesn't take the host role yet. Plug-in wakes
+s2idle once the TCPC's interrupt is armed.
+
+**Storage power (kernel #99).** UFS idle clock gating: the cores spend
+60-68 % of an idle minute in C2 with the core's latency request left on
+(0 % with the clocks held on), no UFS errors under load.
+
+**Fingerprint.** The sensor's 3.3 V is S2MPG15 LDO15S, off at hand-off
+(kernel #101); with it on the trusted app finds the sensor and the HAL
+reports it at (540, 1769), radius 113. Init still ends without factory
+calibration: `mfg_data` is all zeros on this palmtop and the TA's
+calibration objects don't open (FINGERPRINT-PLAN.md).
+
+**Drain, cable out.** Awake with the screen off: 556 mA before UFS gating,
+409 mA after it at MIF 2028 MHz and 366 mA at 421 MHz (ACPM lowers MIF on
+request); NFC polling about 60 mA of that; Wi-Fi off and the CPUs at their
+lowest changed little. s2idle: about 140 mA over 59 min. MIF stays at the
+bootloader's 2028 MHz until something asks for less.
+
+**Recovery.** A reboot stuck in `device_shutdown` needs Power held about
+30 s, then Power; with a task stuck in D, reboot with `echo b >
+/proc/sysrq-trigger` instead of `systemctl reboot`.
+
 ## 2026-10-26: audio (speakers, microphones, A2DP) with omamobile-audio 0.5.0
 
 Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`: the private
