@@ -11,8 +11,11 @@ G3 partial: our HAL client starts sessions and the engine tracks
 satellites, but the CHPP link over the GNSS SPI loses bytes and gnssd's
 own watchdog resets Kepler (the "hardfault"); the clock and the transfer
 cut are in derekross/linux-omarchy-mobile#138 (in review), and GNSS is parked without a
-hardware probe (the owner's decision, 2026-10-29). The CP link hang with
-frequent Kepler resets is open. Next: a stock GNSS capture, IOCC, the SIM.
+hardware probe (the owner's decision, 2026-10-29); G3-A (automatic chip
+select, 2026-10-30) ended in the same CHPP failure with clean checksums, and
+G3-A2 (32-bit words with the controller's swap) is the one boot left to
+build. The CP link hang with frequent Kepler resets is open. Next: a stock
+GNSS capture, IOCC, the SIM.
 The staged plan (sections F, K, U and runbooks M0.2-M6, G1-G4) is below,
 with each step's results under it. Kernel branches `omamobile-tegu-modem` and `omamobile-tegu-gnssif`
 (section K).
@@ -888,6 +891,51 @@ addition to the zumapro port) rather than a software swap. No analyzer in
 either.
 
 **Parked (2026-10-29, the owner's decision):** no logic analyzer, and no more module-level guessing. The two kernel changes stay ([linux-omarchy-mobile#138](https://github.com/derekross/linux-omarchy-mobile/pull/138), the signed-off replacement of #135); the as-ported gnssif and gnss_spi run on the palmtop. GNSS resumes when either a stock capture of SPI21's timing or a new idea about the first byte of a back-to-back block turns up.
+
+### G3-A, forty-fifth try: automatic chip select at stock's clock (2026-10-30, morning, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`)
+
+[V] One DTB round, attended, on the charger, as the paragraph above set it
+out: the gn3 DTB plus the two overlays from
+[linux-omarchy-mobile#137](https://github.com/derekross/linux-omarchy-mobile/pull/137),
+`gnss-spi-autocs` (the SPI node's compatible becomes `google,gs101-spi`, so
+the controller drives nCS itself) and `gnss-spi-fb0` (feedback delay 0),
+8-bit words at 3.07 MHz. The boot's device tree read back `google,gs101-spi`
+and `samsung,spi-feedback-delay` 0. On the method: the kit's push was
+refused by its `deny-hardware` guard (the hands-free tool stubs on its
+PATH since 10-26), so the images the kit packed went to slot B through the
+repository's own `bin/omamobile push` from a scratch checkout of main
+carrying the kit's `device.conf`.
+
+- The modem came up (`preconditions met`, `CP ONLINE`), the 12-second
+  session ran, and every counter the script keeps stayed at zero: BAD
+  checksum 0, ACK timeout 0, soft_dog 0, HARDFAULT 0, RX RESET-ACK 0, RX
+  packet len 0; `ufshcd_err_handler` 0; `rx.txt` empty (nothing captured
+  on the SPI).
+- gnssd: `Modem state ONLINE`, then `state: UNUSABLE->CODELOAD tx=3 rx=3`,
+  `pcie_init modem available (0)`, `state: CODELOAD->OPERATIONAL tx=1
+  rx=1`, then `GNSS ASSERT: chppPlatformNotifierWait in
+  STATE_PERMANENT_FAILURE`; gnssd exited, the profile logged `a service
+  exited` and stopped itself. The HAL saw `lal_device_error: Connection
+  lost`, `Error creating IO port` and `GNSSWaitAck: Timed out`. The kernel
+  logged only CPIF's `Load GNSS images` (127.7 s) and the gnss devices'
+  release (142.7 s); nothing from the SPI controller. The palmtop was
+  rebooted afterwards, as the rule for a stopped profile says; no hang, no
+  reset.
+
+**Reading.** This is the failure mode already recorded for about half the
+earlier tries (CODELOAD to OPERATIONAL, then the CHPP permanent failure),
+reached this time without a single bad checksum, so the automatic chip
+select and feedback delay 0 change the checksum picture but not the CHPP
+outcome. What this round still doesn't reproduce is stock's word size: the
+kernel moved 8-bit words with its own swapping, where stock moves 32-bit
+words with `swap-mode` and the controller's `SWAP_CFG`. That is G3-A2, and
+it needs two things built before a boot: the swap-mode Image (the
+`swap-mode` property and `SWAP_CFG` by word size, commit 11ea0ef5e on the
+bring-up branch, built as `logs/tegu-review-20261029/g3a/Image`, sha
+ff9aceacb40286f6) and a gnss_spi variant that asks for 32-bit words and
+does no software swap, which is not built yet. One session, no reset: this
+was G3-A's own one DTB round, not a G3-L1 session, so the trace's cap of
+three sessions and two resets is untouched. GNSS stays parked otherwise.
 
 ### Suspend with the modem on (2026-10-27, early morning, same kernel)
 
