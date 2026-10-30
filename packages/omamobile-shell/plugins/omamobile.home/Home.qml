@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import QtQuick
+import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
@@ -561,18 +562,42 @@ Item {
     return card
   }
 
-  // Sources run while the widget's page or a neighbour shows and no app
-  // covers the home screen (an app on this workspace).
-  readonly property bool owlPaused: owlPanelOff || (!!Hyprland.focusedWorkspace && Hyprland.focusedWorkspace.toplevels.values.length > 0)
+  // ---------- who can see the home screen
+
+  // Widgets run (OWL sources, `every` and frames, the built-ins' timers)
+  // only while someone can see them: the panel is on, no app is on the
+  // workspace, no drawer, recent apps or call card covers the home screen
+  // (HomeModel.homeShown), and their page shows (pageShown). Kept running
+  // behind an app, a koi pond on page 2 cost the phone about 118 % CPU.
+  readonly property bool appOnScreen: !!Hyprland.focusedWorkspace && Hyprland.focusedWorkspace.toplevels.values.length > 0
+  // The covering surfaces mapped now, from Hyprland's openlayer and
+  // closelayer events ({ namespace: count }).
+  property var coveringLayers: ({})
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (event && (event.name === "openlayer" || event.name === "closelayer"))
+        root.coveringLayers = HomeModel.layersAfter(root.coveringLayers, event.name, event.data)
+    }
+  }
+  readonly property bool homeShown: HomeModel.homeShown(owlPanelOff, appOnScreen, coveringLayers)
+  readonly property bool owlPaused: !homeShown
+  // The pages are being swiped: the neighbours show too.
+  property bool pagesMoving: false
+  function pageShown(index) { return HomeModel.pageShown(index, currentPage, pagesMoving, homeShown) }
+  // A finger on the home screen proves it shows: an event missed while the
+  // shell was busy can't keep the widgets stopped.
+  function sawTouch() { if (Object.keys(coveringLayers).length) coveringLayers = ({}) }
 
   // The panel is off when its backlight's bl_power isn't 0, read the way
   // omamobile-keys reads it (the device from omarchy-hw-display). sysfs has
-  // no change events, so it is read every 2 s, a cheap file read.
+  // no change events, so it is read every 2 s, a cheap file read. Every
+  // widget stops on it, OWL or not.
   property bool owlPanelOff: false
   property string owlBacklight: ""
   Process {
     command: ["omarchy-hw-display"]
-    running: root.owlEnabled
+    running: true
     stdout: StdioCollector { id: displayName; waitForEnd: true; onStreamFinished: root.owlBacklight = String(displayName.text || "").trim().split("\n")[0] }
   }
   FileView {
@@ -584,16 +609,18 @@ Item {
   Timer {
     interval: 2000
     repeat: true
-    running: root.owlEnabled && root.owlBacklight !== ""
+    running: root.owlBacklight !== ""
     onTriggered: blPower.reload()
   }
 
   // An OWL Input has focus: the surface takes the keyboard.
   property bool owlTyping: false
   function owlKeyboard(on) { owlTyping = !!on }
+  // Whether a placed widget runs now (its cell has the same answer as
+  // `shown`); the pages drawn are the view layout's.
   function owlActive(entryId) {
-    const found = HomeModel.findItem(layout, entryId)
-    return !!found && Math.abs(found.page - currentPage) <= 1 && !owlPaused
+    const found = HomeModel.findItem(viewLayout, entryId)
+    return !!found && pageShown(found.page)
   }
 
   // The palette OWL names resolve to: the Omarchy theme, with the names that
@@ -860,6 +887,7 @@ Item {
   function requestEdit() {
     if (!longPressAllowed()) return "busy"
     if (landscape) { flash("Turn the phone upright to edit"); return "landscape" }
+    sawTouch()
     setEditing(true)
     return "editing"
   }
@@ -1087,6 +1115,8 @@ Item {
         cacheBuffer: width * 2
         model: root.viewLayout.pages.length
         onCurrentIndexChanged: root.currentPage = currentIndex
+        onMovingChanged: root.pagesMoving = moving
+        onMovementStarted: root.sawTouch()
 
         delegate: Page { }
         onWidthChanged: root.owlPageWidth = width
@@ -1111,7 +1141,7 @@ Item {
               anchors.centerIn: parent
               width: index === root.currentPage ? 9 : 7
               height: width
-              radius: width / 2
+              radius: Math.min(Style.cornerRadius, width / 2)
               color: index === root.currentPage ? root.foreground : root.dimForeground
               opacity: index === root.currentPage ? 1 : 0.6
               border.width: index === root.layout.home && root.editing ? 1 : 0
@@ -1216,7 +1246,7 @@ Item {
         anchors.bottomMargin: Style.spacing.lg
         width: noticeText.implicitWidth + Style.spacing.xxl * 2 + (canUndo ? undoChip.width + Style.spacing.md : 0)
         height: canUndo ? root.touch : noticeText.implicitHeight + Style.spacing.lg * 2
-        radius: height / 2
+        radius: Math.min(Style.cornerRadius, height / 2)
         color: Commons.Color.menu.background
         Text {
           id: noticeText
@@ -1240,7 +1270,7 @@ Item {
           Rectangle {
             anchors.fill: parent
             anchors.margins: Style.spacing.xs
-            radius: height / 2
+            radius: Math.min(Style.cornerRadius, height / 2)
             color: undoTap.pressed ? Style.pressedFillFor(root.foreground, Commons.Color.accent) : "transparent"
           }
           Text {
@@ -1362,6 +1392,8 @@ Item {
 
     readonly property var limits: HomeModel.sizeLimits(modelData, root.viewLayout.grid, root.userCatalog)
     readonly property bool isUser: isWidget && HomeModel.isUserType(modelData.type)
+    // Someone can see this cell's widget (Home's pageShown).
+    readonly property bool shown: root.pageShown(owner.index)
     x: modelData.x * owner.cellW + dragX
     y: modelData.y * owner.cellH + dragY
     width: Math.max(limits.minW * owner.cellW, Math.min(limits.maxW * owner.cellW, modelData.w * owner.cellW + growX))
@@ -1369,20 +1401,44 @@ Item {
     z: dragging || resizing ? 20 : 1
 
     // The widget's card. Plain and opaque enough to read on any wallpaper;
-    // no blur or shadow, to keep the 120 Hz panel smooth.
+    // no blur or shadow, to keep the 120 Hz panel smooth. Its corners are
+    // Omarchy's (Style.cornerRadius, Hyprland's rounding: square by
+    // default, as the lock, the shade and the keypad), not a rounding of
+    // our own.
     Rectangle {
       id: card
       anchors.fill: parent
       anchors.margins: root.gap
       visible: cell.isWidget
-      radius: Math.max(Style.cornerRadius, 12)
+      radius: Style.cornerRadius
       color: root.cardColor
+    }
+
+    // The widget's inside is clipped to the card. Square, the plain clip is
+    // the card's shape and costs nothing; with rounding set, a mask of the
+    // card's shape keeps pictures out of the corners (a layer per widget,
+    // only then).
+    readonly property bool roundClip: cell.isWidget && Style.cornerRadius > 0
+    Rectangle {
+      id: cornerMask
+      anchors.fill: card
+      visible: false
+      layer.enabled: cell.roundClip
+      radius: Style.cornerRadius
+      color: "white"
     }
 
     Loader {
       id: content
       anchors.fill: cell.isWidget ? card : parent
       clip: cell.isWidget
+      layer.enabled: cell.roundClip
+      layer.effect: MultiEffect {
+        maskEnabled: true
+        maskSource: cornerMask
+        maskThresholdMin: 0.5
+        maskSpreadAtMin: 1.0
+      }
       // A user widget goes through UserWidgetCell, which loads its code
       // only when the scan calls it ok and shows an error card otherwise.
       source: (cell.isUser && root.isOwlType(cell.modelData.type)) || HomeModel.isOwlType(cell.modelData.type) ? Qt.resolvedUrl("OwlCell.qml")
@@ -1393,6 +1449,8 @@ Item {
         item.home = root
         item.entry = Qt.binding(function() { return cell.modelData })
         item.editing = Qt.binding(function() { return root.editing })
+        // Widgets stop their timers while nobody can see them.
+        if ("shown" in item) item.shown = Qt.binding(function() { return cell.shown })
       }
     }
 
@@ -1401,7 +1459,7 @@ Item {
       anchors.fill: parent
       anchors.margins: root.gap / 2
       visible: root.editing
-      radius: Math.max(Style.cornerRadius, 12)
+      radius: Style.cornerRadius
       color: cell.dragging ? Util.alpha(Commons.Color.accent, 0.12) : "transparent"
       border.width: cell.dragging || cell.resizing ? 2 : 1
       border.color: Commons.Color.accent
@@ -1462,7 +1520,7 @@ Item {
       Rectangle {
         anchors.left: parent.left
         anchors.top: parent.top
-        width: 24; height: 24; radius: 12
+        width: 24; height: 24; radius: Math.min(Style.cornerRadius, width / 2)
         color: Commons.Color.urgent
         Text {
           anchors.centerIn: parent
@@ -1487,7 +1545,7 @@ Item {
       Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        width: 26; height: 26; radius: 13
+        width: 26; height: 26; radius: Math.min(Style.cornerRadius, width / 2)
         color: Commons.Color.accent
         Text {
           anchors.centerIn: parent

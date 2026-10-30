@@ -285,16 +285,26 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
   in a bar-coloured strip that reserves its height so windows tile above it.
   Tapping it opens the drawer.
 * **Home pill (over an app, where the dock is hidden).** A light bar with a
-  dark outline, so it shows over dark and light apps, at the bottom middle.
-  Swipe up from it to go home; swipe up and hold, or further, for recent apps.
-  The swipe may start anywhere in a 240x44 px strip around it (an input mask:
-  the rest of the bottom edge stays the app's, but the app loses taps in that
-  strip).
-* **Under the keyboard.** While squeekboard is up over an app, the masked
-  strip gives way (it would take the bottom row's keys) and the pill moves
-  into a 44 px bar-coloured strip of its own under the keyboard, as Android's
-  gesture bar does. The same swipes work from anywhere along it, and a
-  keyboard-down key at its right end hides the keyboard. Bottom to top:
+  dark outline, centred in a 44 px bar-coloured strip along the bottom edge
+  (`omamobile-home-strip`, bottom layer). Swipe up from anywhere along it to
+  go home; swipe up and hold, or further, for recent apps; double-tap it for
+  the keyboard.
+
+  The strip reserves its height (an exclusive zone), as Android's gesture-nav
+  inset does, so windows end above it and nothing of the app is under the
+  pill. Before 0.2.42 it reserved nothing and covered whatever an app keeps at
+  the very bottom, the Phone app's Favorites, Recents, Contacts and Keypad
+  tabs among them. 44 px, a whole touch target (TOUCH-PLAN 2.5), is all an
+  app gives up. The zone goes with the strip: nothing is reserved for it on
+  the home screen (the dock reserves its own height there), with the drawer
+  open, under the lock screen's keyboard, or for a real fullscreen window
+  (video, the screensaver), which keeps the whole screen. Under the lock it
+  isn't drawn (no `above_lock` rule), and the lock covers the whole screen
+  anyway. The back gesture's edge strips end above it, and the shell's
+  sheets (top and overlay layers) draw over it.
+* **Under the keyboard.** While squeekboard is up over an app, the same strip
+  is the keyboard's, as Android's gesture bar is: it stays mapped at the same
+  height, and a keyboard-down key appears at its right end. Bottom to top:
 
   ```
   +-----------------------------+
@@ -306,15 +316,18 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
   +-----------------------------+  reserves its height
   ```
 
-  The strip is on the bottom layer and reserves its height (an exclusive
-  zone). Hyprland lays out the surfaces that reserve space layer by layer
-  from the bottom, so the strip takes the screen's edge first and the
-  keyboard sits right above it, as it sits above the dock on the home
-  screen; the strip covers no key, and a swipe that starts in it stays its
-  own as the finger crosses the keyboard. It isn't shown for a fullscreen
-  window, with the drawer open, or under the lock screen's keyboard (asked
-  through `omarchy-shell lock isLocked` each time the keyboard comes up).
-  The log names where a swipe started:
+  Hyprland lays out the surfaces that reserve space layer by layer from the
+  bottom, so the strip takes the screen's edge first and the keyboard sits
+  right above it, as it sits above the dock on the home screen; the strip
+  covers no key, and a swipe that starts in it stays its own as the finger
+  crosses the keyboard. One window for both, so what is reserved at the
+  bottom never changes while an app is shown and the app resizes only by
+  the keyboard's own height. (Two strips swapping at each keyboard show and
+  hide were both mapped for a moment: an app resized to that 88 px, missed
+  the final resize and left a 44 px gap above the
+  strip.) Whether the lock is up is asked through
+  `omarchy-shell lock isLocked` each time the keyboard comes up or goes, and
+  again 1.5 s after it goes. The log names where a swipe started:
   `omamobile-home-indicator: swipe -142 recents (keyboard)`, or `(pill)`.
 * **The keyboard from the pill.** Nothing floats over the app for the
   keyboard (a floating hide button covered a terminal's input line, and
@@ -424,6 +437,15 @@ prompt, NFC links and the Create-a-widget agent.
   the app shares one) gives it a new empty workspace. Both act on the
   window's Hyprland address (`hl.dsp.window.move({ window = "address:…",
   workspace = … })`). Empty workspaces go away as Hyprland's always do.
+* **Cards are named by the app**, as the drawer names it: the desktop
+  entry's name, found by the window's class (`SwitcherModel.js`: the entry's
+  id, its `StartupWMClass`, a Chromium app's `chrome-<id>-<profile>` /
+  `crx_<id>`, an Omarchy web app's `chrome-<host>_<path>-<profile>` from its
+  URL, then the matches `omamobile-launch` uses), else the window's title,
+  else its class. One line, elided, centred over the card. A card is always
+  centred, its neighbours peeking in at the sides: recent apps open on the
+  newest, a swipe ends on the nearest card, and the view centres again when
+  the window gets its size or the window list changes.
 * **Keyboards** keep Omarchy's workspace bindings (Super+1…9, Super+Shift+1…9
   and the rest) unchanged.
 
@@ -440,6 +462,13 @@ wallpaper, swiped sideways, with page dots above the dock.
   apps goes back to it) is marked in the Pages sheet.
 * **Grid.** 4 columns by 6 rows by default (3-6 by 4-8, set in Pages). Apps
   take one cell, widgets a span within their own limits.
+* **Omarchy's corners.** Widget cards, the edit outlines, the sheets and the
+  small badges follow `Style.cornerRadius` (Hyprland's rounding: square by
+  default, as the lock, the shade and the keypad); set rounding and they
+  round with it. A widget's inside is clipped to its card: square, a plain
+  clip; rounded, a mask of the card's shape (a layer per widget, only then).
+  The widget picker sheet has Omarchy's popup border. `test/all` fails on a
+  radius in `omamobile.home` or `omamobile.switcher` that isn't the token.
 * **Apps** launch the way the drawer does (`omamobile-launch app`: Omarchy's
   `uwsm-app -- gtk-launch`, on a screen of their own). An app that is no longer
   installed stays, dimmed, until you remove it: its package may come back.
@@ -447,7 +476,7 @@ wallpaper, swiped sideways, with page dots above the dock.
   drag an item to move it (dropped on an item of the same size, the two swap;
   on a bigger one, it takes the nearest free cell; dragged past the left or
   right edge, it moves to that page, making a new page on the right), drag
-  the round corner handle to resize a widget, tap the cross to remove (an
+  the corner handle to resize a widget, tap the cross to remove (an
   **Undo** chip stays for 5 seconds and puts the item back, with its
   settings, where it was or in the nearest free cell), tap a
   widget for its settings. The toolbar: **Widgets** and **Apps** add to the
@@ -476,6 +505,17 @@ coordinates rounded to about 1 km. No key or account. Location from GeoClue
 and no GNSS power. The calendar reads khal's local store; syncing it is
 vdirsyncer's job. The text/command widget runs only what you typed into your
 own `home.json`.
+
+Idle. Widgets run only while someone can see them: their page is the one on
+screen (the neighbours too while you swipe), the screen is on, and no app,
+app drawer, recent apps or call card covers the home screen (Hyprland's
+`openlayer`/`closelayer` events say when those map). Hidden, OWL widgets
+run no sources, `every` or frames, and the built-ins' timers stop (the
+clock, the calendar's refresh, the weather, the command, the toggles' poll);
+shown again, what fell due runs once. OWL animation runs at 20 fps, 30 while
+you touch the widget. Since 0.2.44: before, a koi pond on page 2 animated
+behind page 1 and behind apps, about 118 % CPU. The lock screen doesn't say
+when it is up, so the widgets run under it until it blanks the panel.
 
 Storage. `~/.config/omamobile/home.json`, written atomically 300 ms after an
 edit and watched, so a hand edit shows up at once. `HomeModel.js` documents
@@ -730,7 +770,8 @@ sheets) closes with a tap outside it instead.
 Each edge is a 14 px strip on the overlay layer, masked like the home pill,
 in a window wide enough to draw the arrow that follows the finger. Normal
 exclusion keeps the strips between the status bar and the on-screen keyboard
-(or the dock), so they never take the keyboard's edge keys. They hide for a
+(or the dock, or the home pill's strip over an app), so they never take the
+keyboard's edge keys or the pill's swipe. They hide for a
 real fullscreen window, as the home pill does, and aren't shown over the
 lock. A page swipe on the home screen that starts in the outer 14 px goes
 back instead; start it further in.
