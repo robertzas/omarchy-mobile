@@ -91,6 +91,12 @@ b=plugins/omamobile.back/Back.qml
 python3 -c 'import json; assert {"id": "omamobile.back"} in json.load(open("profile/shell.json"))["plugins"]' \
   || fail "the phone profile enables the back gesture"
 grep -c 'add_plugin omamobile.back' bin/omamobile-setup-user >/dev/null || fail "existing users get the back gesture"
+grep -c "google,zumapro-tegu' >/dev/null && scale='8 \\\\/ 3'" bin/omamobile-setup-user >/dev/null || fail "the 9a's scale is 8/3"
+# the seeded line stays valid Lua for both scales
+for sc in 3 '8 \/ 3'; do
+  t=$(printf 'local omarchy_monitor_scale = 2\n' | sed "s/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = $sc/")
+  [[ $t == 'local omarchy_monitor_scale = 3' || $t == 'local omarchy_monitor_scale = 8 / 3' ]] || fail "the seeded scale line ($t)"
+done
 grep -c 'Quickshell.execDetached(BackModel.ESCAPE_ARGV)' "$b" >/dev/null || fail "back sends Escape through BackModel"
 grep -c 'WlrLayershell.namespace: "omamobile-back"' "$b" >/dev/null || fail "back strips' namespace"
 grep -c 'mask: Region { item: strip }' "$b" >/dev/null || fail "only the edge strip takes touches"
