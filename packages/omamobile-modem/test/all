@@ -59,6 +59,19 @@ python3 "$cp" baseband-version "$t/noinfo.bin" 2>/dev/null && fail "a TOC withou
 python3 "$cp" baseband-version "$t/notoc.bin" 2>/dev/null && fail "a file without a TOC is refused"
 pass "baseband version"
 
+# watch's poll interval is read inside watch(): a value outside the range,
+# or not a number, falls back to the default, and never stops another
+# subcommand (power-off at the profile's stop runs with the same environment).
+ws() {
+  OMAMOBILE_MODEM_WATCH_SECONDS=$1 python3 -c '
+import sys; g = {"__name__": "cp"}; exec(open(sys.argv[1]).read(), g); print(g["watch_seconds"]())' "$cp" 2>/dev/null
+}
+[[ $(ws 5) == 5.0 && $(ws 60) == 60.0 && $(ws five) == 0.5 && $(ws 0) == 0.5 && $(ws 600) == 0.5 && $(ws nan) == 0.5 ]] ||
+  fail "watch interval: $(ws 0.5) $(ws 60) $(ws five) $(ws 0) $(ws 600) $(ws nan)"
+[[ $(OMAMOBILE_MODEM_WATCH_SECONDS=five python3 "$cp" baseband-version "$t/modem.bin" 2>/dev/null) == test-version-001 ]] ||
+  fail "a bad watch interval leaves other subcommands alone"
+pass "watch interval"
+
 mkdir -p "$t/efs" "$t/efs_backup"
 for f in efs/nv_normal.bin efs/nv_protected.bin efs_backup/nv_protected.bak; do
   printf 'made-up %s' "$f" > "$t/$f"
