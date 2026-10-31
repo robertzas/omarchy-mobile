@@ -10,6 +10,42 @@ Sources:
 - `P/`: postmarketOS pmaports `device/testing` (2026-10-21).
 - `G/`: Google's GPL kernel for this phone, `android-gs-shusky-6.1-android16` ([source.android.com: Build Pixel kernels](https://source.android.com/docs/setup/build/building-pixel-kernels)).
 
+## 2026-10-31: the touchscreen
+
+Touch works on a test kernel, [kernel #153](https://github.com/derekross/linux-omarchy-mobile/pull/153) (in review, stacked on #148). The test booted the U4 Omarchy image from `userdata` ([UFS-PLAN](UFS-PLAN.md)), with U4's kernel config.
+
+- **The controller** [V, `R/` live DT]: an ST FTM5 (SALIXP, chip id `36 40`, firmware `0083`) on HSI0's USI2 SPI at `0x111d0000`.
+  - It runs at 10 MHz with manual chip select, as stock's `fts` node.
+  - Its attention line is `gpn0-0` (CUSTOM_ALIVE) and its reset is `gpp21-2` (PERIC1).
+  - The panel is 1344 × 2992.
+- **Its rails** [V, `R/` live DT]: the main PMIC's (S2MPG14) LDO25M at 1.8 V and LDO4M at 3.3 V. The firmware leaves both off, already at those voltages.
+  - The PMIC sits behind ACPM, so #153 adds ACPM and its mailbox too.
+- **Its clock** [V, `G/` CMUCAL tables]: the bootloader leaves USI2 at 399.36 MHz (PLL_SHARED2 / 2).
+  - zuma had no clock driver, so #153 adds one: it describes the path from CMU_TOP to USI2.
+  - It writes only USI2's divider and gates.
+- **The scan echo** [V]: after the scan command, husky's firmware first reports a forced calibration (`43 05 01`), then echoes the command about 60 ms later.
+  - The `salixp` driver gave up after 50 ms. #153 waits up to stock's 2.5 s and stops at the echo.
+  - The touchscreen registers 3.8 s into the boot.
+- **Orientation** [V, tag `husky-test-20261031-c5` on greenbrettmichael/linux-omarchy-mobile]: stock's node inverts both axes, but `salixp` already reports in the panel's orientation.
+  - With stock's inversion, taps came in rotated 180°: a tap at the top-left read (1191, 2824).
+  - Without it, a tap at the top-left reads (87, 144) of 1343 × 2991.
+- **In Omarchy** [V]: Hyprland lists the touchscreen (`salixp-touchscreen`). The lock screen's PIN pad takes the keys that are touched, and the phone unlocks by touch. A touch wakes the screen.
+
+## 2026-10-30: the buttons
+
+Power and volume work through `gpio-keys` on a test kernel, the U4 kernel plus [kernel #148](https://github.com/derekross/linux-omarchy-mobile/pull/148) (in review). The test booted the U4 Omarchy image from `userdata` ([UFS-PLAN](UFS-PLAN.md)), with U4's kernel config.
+
+- **The pins** [V, `R/` live DT]: power on `gpa4-0` (pull-up), volume down on `gpa4-1` and volume up on `gpa6-2`. All are active low, in the EINT function, and wake-up sources.
+- **The ALIVE pin controller** [V, `R/` live DT]:
+  - It is at `0x154d0000`, controller 0 of the driver's zuma data, with ten banks (gpa0–gpa4, gpa6–gpa10).
+  - Each of its 50 pins has its own GIC interrupt, SPI 10–59 in pin order, level high, through a wake-up interrupt controller like Tensor G4's.
+  - zuma's upstream device tree had no ALIVE node, so #148 adds it.
+- **Events** [V, tags `husky-test-20261030-b` and `-b2` on greenbrettmichael/linux-omarchy-mobile]: a reader on `/dev/input/event0` (`gpio-keys`) logged a down and an up event for each press of volume down (`KEY_VOLUMEDOWN`), volume up (`KEY_VOLUMEUP`) and power (`KEY_POWER`).
+- **In Omarchy** [V]:
+  - A short press of power locks and darkens the screen, and the next one wakes it (omamobile-keys).
+  - Volume does nothing visible yet, since there is no sound card.
+- **The driver's `irq number not available`** [V]: once ALIVE was described, the zuma pinctrl data ran the GPIO EINT setup on ALIVE, whose banks are all wake-up EINTs, and it logged this line at every boot. #148 drops that setup from ALIVE, as gs101 does, and test `-b2` logs no such line.
+
 ## 2026-10-21: stage 0, part 4: root capture, backup, and how ABL picks the DTB
 
 Root for the capture: the stock `init_boot` from the CP3A.261005.005 OTA, extracted with `payload-dumper-go` 2.1.0 (hashes checked against the signed payload) and patched with Magisk v31.0, the first release with Android 17 support. It was flashed to **`init_boot_b` only**, with slot B booted. Slot A was not written. The capture and backup were read-only (`su -c cat`), into `~/android/reference/husky-root-*` (never the repository).
