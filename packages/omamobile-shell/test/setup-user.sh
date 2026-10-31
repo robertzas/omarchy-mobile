@@ -110,6 +110,21 @@ RUN_HOME=$t/own run
 [[ $(idle "$t/own") == '{"screensaver": 300, "lock": 0}' ]] && ! toggle "$t/own" || fail "a user's own idle block is kept, and their screensaver"
 pass "idle: lock after a minute, no screensaver, unless the user set their own"
 
+# The phone rules land where Hyprland reads them: looknfeel.lua under
+# Omarchy's hyprland.lua, hyprland.lua itself when the user's own file never
+# loads looknfeel.lua (a bring-up gate); never twice.
+grep -c 'dofile(".*hypr/phone.lua")' "$H/.config/hypr/looknfeel.lua" >/dev/null || fail "the phone rules are loaded from looknfeel.lua"
+[[ $(grep -c 'hypr/phone.lua' "$H/.config/hypr/looknfeel.lua") == 1 ]] || fail "the phone rules are added once"
+mkdir -p "$t/gate/.config/hypr" "$t/gate/.config/omarchy/extensions"
+printf 'dofile("/usr/share/omarchy/default/hypr/bootstrap.lua")\nrequire("default.hypr.omarchy")\n' >"$t/gate/.config/hypr/hyprland.lua"
+for f in monitors looknfeel autostart; do echo "-- $f" >"$t/gate/.config/hypr/$f.lua"; done
+printf 'local omarchy_gdk_scale = 2\nlocal omarchy_monitor_scale = "auto"\n' >"$t/gate/.config/hypr/monitors.lua"
+cp "$H/.config/omarchy/extensions/omarchy-menu.jsonc" "$t/gate/.config/omarchy/extensions/"
+RUN_HOME=$t/gate run
+grep -c 'dofile(".*hypr/phone.lua")' "$t/gate/.config/hypr/hyprland.lua" >/dev/null || fail "a hyprland.lua that skips looknfeel.lua gets the phone rules itself"
+grep -c 'hypr/phone.lua' "$t/gate/.config/hypr/looknfeel.lua" >/dev/null && fail "the phone rules aren't put where Hyprland never reads them"
+pass "the phone rules go to the file Hyprland loads, once"
+
 # GDK_SCALE follows the phone's monitor scale (TOUCH-PLAN 2.8)
 grep -cx 'local omarchy_monitor_scale = 3' "$H/.config/hypr/monitors.lua" >/dev/null || fail "the monitor scale is 3"
 grep -cx 'local omarchy_gdk_scale = 3' "$H/.config/hypr/monitors.lua" >/dev/null || fail "GDK_SCALE is 3 with it"
