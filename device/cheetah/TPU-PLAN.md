@@ -2512,3 +2512,89 @@ $CL --target=aarch64-linux-android30 -O2 -fPIE -pie -nostdlib -fuse-ld=lld \
 ```
 
 Result of this run: recorded below once the phone has been power-cycled.
+
+### Result (2026-11-07, `7.3.0-rc6-omamobile-push1-g29a7a9326bf0-dirty`)
+
+Cold boot (poweroff, the owner pressed Power; 20 s to SSH), `janeiro-new.ko`,
+one group, 35 submissions, `/root/tpu-cmdsweep.sh`:
+
+```
+cmdsweep: create_group -> 0
+cmdsweep: finalize -> 0
+cmdsweep: map_buffer -> 0 dev 0xfffff000
+cmdsweep: A baseline ring type 0
+cmdsweep: B1 ring type 0
+cmdsweep: B2 ring type 0
+...
+cmdsweep: D field 26 ring -1 ... done, submissions 35
+fwlog head 0x62 tail 0x126
+log@0x8e: ERR vii_handler_layer.cc:247 - Setup is not done yet received a command of type 0.
+```
+
+Every response was `0xf000009`, every ring line `type 0`, and — the part that
+matters — **no `Could not parse Command flatbuffer.` line at all**, although one
+submission carried a 32-field table with every field set. Two readings survive:
+
+1. The payload is parsed and its type field is not one of the 4-byte-aligned
+   table slots (our fields sit at table+4, +8, +12, ...). U3's decode of the
+   runtime's own payload found its three fields at table offsets **8, 7 and
+   12** — offset 7 is a byte-aligned slot, and no sweep has ever written there
+   (`typesweep` used +16..+23, `cmdsweep` uses 4+4i).
+2. The firmware never reads the payload for this command at all; the gate then
+   runs on an element field. U16/U17 argue against the element being the type,
+   but no run has yet proved the parse *can* fail on this path.
+
+One control settles which: submit a deliberately unparseable payload (all
+`0xFF`). A `Could not parse Command flatbuffer.` line proves the parse runs and
+that reading 1 is the one to chase; silence proves the gate precedes the parse.
+The next experiment does that first, then sweeps every byte-aligned vtable slot.
+
+### New client mode: `bytesweep`
+
+`tools/edgetpu-run.c` gains `bytesweep [/vendor/payload.bin]`, one group:
+
+- **0** an all-`0xFF` 64-byte payload — the parse-error control;
+- **A** the captured runtime payload (expect `type 0`);
+- **B** a table with **60 byte-aligned vtable slots** (table+4 .. table+63), all
+  set to `(i % 24) + 1`, then to `((i * 7) % 24) + 1`: whichever byte the schema
+  reads as the type is printed by the firmware, and the two patterns name it;
+- **C** that byte swept 0..24, the runtime's whole command table;
+- **D** fallback per byte, alone, value 1.
+
+Responses are read from the ring after a settle delay (the firmware's printer
+is asynchronous), never from the response word, which stays `0xf000009` behind
+the gate.
+
+### Result (2026-11-07, `7.3.0-rc6-omamobile-push1-g29a7a9326bf0-dirty`, bytesweep)
+
+Cold boot (20 s to SSH), one group, 64 submissions, `/root/tpu-bytesweep.sh`:
+
+```
+bytesweep: D byte 59 ring 0
+bytesweep: done, submissions 64
+fwlog head 0x1ea tail 0x1880 dropped 0
+log@0x8e: ERR vii_handler_layer.cc:247 - Setup is not done yet received a command of type 0.
+... (29 deduplicated copies, one per distinct submission slot)
+```
+
+**Phase 0 is the answer: an all-`0xFF` payload produced no
+`Could not parse Command flatbuffer.` line.** The firmware never parses the
+payload before the gate, so the gate's `type %d` is not a payload field, and
+the two flatbuffer sweeps (U17's typesweep, U18's cmdsweep) could never have
+moved it. The 60 byte-aligned slots changed nothing either, as expected once
+the parse is out of the picture.
+
+That leaves the element header. Ruled out so far: `+8` (u16, swept 0..199 in
+U16), `+10` (priority, 11 in every submission), `+4`/`+6` (probe markers), and
+`+9`, `+11`..`+15` (nonzero there trips the reserved-field check with detail
+`0x14140000`). Untested: `+12` (u32; the HAL's one command carried
+`0x35614856`, which has the shape of stack garbage) and `+32..+47`. The `with
+%d` may also simply be a variable the firmware fills after the gate — the
+`type 0` is a constant across four different payload shapes, so a placeholder
+is now the leading explanation.
+
+Next, in order: (1) sweep the remaining element fields (`+12`, `+32..+47`) in
+one group and watch the ring; (2) if the line is a placeholder, stop reading
+the log and read the firmware's gate code instead — locate
+`vii_handler_layer.cc:247` in the A32 image by its string table entry, which
+names the element field the gate reads.

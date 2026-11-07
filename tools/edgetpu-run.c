@@ -1799,6 +1799,223 @@ static void cmd_build(unsigned char *b, int field, unsigned value) {
     *(unsigned short *)(b + CMD_TABLE + 4 + 4 * field) = (unsigned short)value;
 }
 
+static void sleep_ms(long ms) {
+  struct {
+    long sec;
+    long nsec;
+  } ts = {0, ms * 1000000};
+
+  syscall(101, &ts, 0);
+}
+
+// The firmware prints its log from its own thread, so a read right after the
+// doorbell can still see the previous tail. Poll until the type changes.
+static int ring_settle(int prev) {
+  int pe, t = prev, i;
+
+  for (i = 0; i < 40; i++) {
+    t = ring_type(&pe);
+    if (t != prev || pe)
+      return t;
+    sleep_ms(5);
+  }
+  return t;
+}
+
+// A Command table whose vtable declares one field per *byte* of the table, not
+// one per 4-byte slot: U3's decode of the runtime's payload puts its fields at
+// table offsets 8, 7 and 12, and a byte-aligned slot (7) is what a 4-byte
+// sweep cannot reach. Field i points at table+4+i and carries one byte.
+#define BYTE_SPAN 60
+#define BYTE_VT 0x04
+#define BYTE_TABLE 0x100
+#define BYTE_LEN (BYTE_TABLE + 4 + BYTE_SPAN)
+static void byte_build(unsigned char *b, int field, unsigned value,
+                       int pattern) {
+  int i;
+
+  for (i = 0; i < BYTE_LEN; i++)
+    b[i] = 0;
+  *(unsigned *)(b + 0) = BYTE_TABLE;
+  *(unsigned short *)(b + BYTE_VT + 0) = (unsigned short)(4 + 2 * BYTE_SPAN);
+  *(unsigned short *)(b + BYTE_VT + 2) = (unsigned short)(4 + BYTE_SPAN);
+  for (i = 0; i < BYTE_SPAN; i++)
+    *(unsigned short *)(b + BYTE_VT + 4 + 2 * i) = (unsigned short)(4 + i);
+  *(unsigned *)(b + BYTE_TABLE) = BYTE_TABLE - BYTE_VT;
+  for (i = 0; i < BYTE_SPAN; i++) {
+    unsigned v;
+
+    if (field >= 0)
+      v = (unsigned)field == (unsigned)i ? value : 0;
+    else if (pattern == 0)
+      v = (unsigned)((i % 24) + 1);
+    else
+      v = (unsigned)(((i * 7) % 24) + 1);
+    b[BYTE_TABLE + 4 + i] = (unsigned char)v;
+  }
+}
+
+// "bytesweep [payload]": the byte-granular version of cmdsweep, with a control
+// that proves whether the firmware parses the payload at all.
+//   0  all-0xff payload: expect "Could not parse Command flatbuffer." if the
+//      parse runs; silence means the setup gate precedes it
+//   A  the runtime payload (baseline, expect type 0)
+//   B  every byte slot of the table set at once, two patterns
+//   C  the found byte swept 0..24, D  each byte alone with 1
+static void bytesweep_mode(const char *file) {
+  unsigned attr[5] = {24, 12, 48, 24, 0x58};
+  int ev[2] = {0, -1};
+  static unsigned char base[0x1000];
+  unsigned char elem[48];
+  unsigned char *page;
+  unsigned long map[4];
+  unsigned plen = 0;
+  int t0, t1, t2, pe, field = -1, fd, efd, i, v;
+  long r;
+
+  fd = open("/dev/edgetpu", 2);
+  put("bytesweep: fd ");
+  putdec(fd);
+  put("\n");
+  if (fd < 0)
+    return;
+  syscall(29, fd, 0xed1a, 0);
+  efd = (int)syscall(19, 0, 0);
+  ev[1] = efd;
+  ioctl(fd, 0x4008ed05, ev);
+  r = ioctl(fd, 0x4014ed06, attr);
+  put("bytesweep: create_group -> ");
+  putdec(r);
+  put("\n");
+  if (r)
+    return;
+  r = ioctl(fd, 0xed08, 0);
+  put("bytesweep: finalize -> ");
+  putdec(r);
+  put("\n");
+  if (r)
+    return;
+  page = mmap(0, 0x1000, 3, 0x22, -1, 0);
+  if ((long)page < 0)
+    return;
+  for (i = 0; i < 0x1000; i++)
+    page[i] = 0;
+  map[0] = (unsigned long)page;
+  map[1] = 0x1000;
+  map[2] = 0;
+  map[3] = 0;
+  r = ioctl(fd, 0xc020ed00, map);
+  put("bytesweep: map_buffer -> ");
+  putdec(r);
+  put(" dev ");
+  puthex(map[2]);
+  put("\n");
+  if (r || !map[2])
+    return;
+  g_csr = mmap(0, 0x1000, 3, 1, fd, 0x1800000);
+  g_cq = mmap(0, 24 * 1024, 3, 1, fd, 0x1900000);
+  g_rq = mmap(0, 12 * 1024, 3, 1, fd, 0x1a00000);
+  g_kmsg = (int)syscall(56, -100, "/dev/kmsg", 0x800, 0);
+  g_log = mmap(0, 0x10000, 3, 1, fd, 0x1B00000);
+  if ((long)g_csr < 0 || (long)g_cq < 0 || (long)g_rq < 0)
+    return;
+
+  /* 0: unparseable payload, the control for "is the payload parsed" */
+  for (i = 0; i < 64; i++)
+    page[i] = 0xff;
+  make_elem(elem, 0, 11, map[2], 64);
+  submit_elem(elem);
+  ring_settle(-1);
+  ring_type(&pe);
+  put("bytesweep: 0 control parse error ");
+  putdec(pe);
+  put(" ring type ");
+  putdec(ring_type(0));
+  put("\n");
+
+  /* A: the runtime payload */
+  if (file) {
+    long fsz;
+    int ffd = (int)syscall(56, -100, file, 0, 0);
+
+    if (ffd >= 0) {
+      fsz = syscall(62, ffd, 0, 2);
+      syscall(62, ffd, 0, 0);
+      if (fsz > 0 && fsz <= 0x1000 && syscall(63, ffd, page, fsz) == fsz)
+        plen = (unsigned)fsz;
+      syscall(57, ffd);
+    }
+  }
+  t0 = ring_type(0);
+  if (plen) {
+    make_elem(elem, 0, 11, map[2], plen);
+    submit_elem(elem);
+    t0 = ring_settle(t0);
+    put("bytesweep: A runtime payload type ");
+    putdec(t0);
+    put("\n");
+  }
+
+  /* B: every byte slot at once, two patterns */
+  byte_build(page, -1, 0, 0);
+  make_elem(elem, 0, 11, map[2], BYTE_LEN);
+  submit_elem(elem);
+  t1 = ring_settle(t0);
+  put("bytesweep: B1 ring type ");
+  putdec(t1);
+  put("\n");
+
+  byte_build(page, -1, 0, 1);
+  make_elem(elem, 0, 11, map[2], BYTE_LEN);
+  submit_elem(elem);
+  t2 = ring_settle(t1);
+  put("bytesweep: B2 ring type ");
+  putdec(t2);
+  put("\n");
+
+  if (t1 > 0 && t1 <= 24 && t2 > 0 && t2 <= 24) {
+    for (i = 0; i < BYTE_SPAN; i++) {
+      if ((i % 24) + 1 == t1 && ((i * 7) % 24) + 1 == t2) {
+        field = i;
+        break;
+      }
+    }
+  }
+  put("bytesweep: type byte ");
+  putdec(field);
+  put("\n");
+
+  if (field >= 0) {
+    for (v = 0; v <= 24 && g_idx < 60; v++) {
+      byte_build(page, field, (unsigned)v, 0);
+      make_elem(elem, 0, 11, map[2], BYTE_LEN);
+      submit_elem(elem);
+      put("bytesweep: C v=");
+      putdec(v);
+      put(" ring ");
+      putdec(ring_type(&pe));
+      put("\n");
+      if (*(unsigned *)(g_rq + ((g_idx - 1) % 512) * 24 + 8) != 0xf000009)
+        put("bytesweep: C response changed!\n");
+    }
+  } else {
+    for (i = 0; i < BYTE_SPAN; i++) {
+      byte_build(page, i, 1, 0);
+      make_elem(elem, 0, 11, map[2], BYTE_LEN);
+      submit_elem(elem);
+      put("bytesweep: D byte ");
+      putdec(i);
+      put(" ring ");
+      putdec(ring_type(&pe));
+      put("\n");
+    }
+  }
+  put("bytesweep: done, submissions ");
+  putdec(g_idx);
+  put("\n");
+  fwlog_scan_g(g_log);
+}
+
 // "cmdsweep [payload]": locate the Command flatbuffer's type field and the
 // setup type in one group, with the firmware's own log line as the read-back.
 //   A  the captured runtime payload (baseline: expect "type 0")
@@ -2177,6 +2394,10 @@ int main(int argc, char **argv) {
   }
   if (argc > 1 && streq(argv[1], "cmdsweep")) {
     cmdsweep_mode(argc > 2 ? argv[2] : 0);
+    return 0;
+  }
+  if (argc > 1 && streq(argv[1], "bytesweep")) {
+    bytesweep_mode(argc > 2 ? argv[2] : 0);
     return 0;
   }
   // "hal": dump the stock HAL function table and exit. Touches no device, so
