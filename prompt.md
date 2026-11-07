@@ -1,28 +1,32 @@
-# Next: unpack vendor_boot_a's DTB section and read the real janeiro node
+# Next: make GSA's TPU_START succeed (it returns 2 today)
 
-The TPU blocker is a device-tree gap (U46): `janeiro@1ce00000` has no `clocks`
-and no `power-domains`, so its AON registers read `0xdeadfeed` and `PSM0_STATUS`
-never acknowledges. Stock's node is not in `dtbo_a` (U47, no janeiro fragment)
-and not a plain FDT in `boot_a` or the first 24 MB of `vendor_boot_a` (U48), so:
+The device tree is not the problem: Google's own `gs201-tpu.dtsi` has the same
+properties as ours and likewise no `clocks`/`power-domains` (U49). The TPU is
+started by the GSA, and our kernel's own log says the start fails:
 
-1. The whole 64 MB `vendor_boot_a` contains **no** FDT magic, so unpack it
-   properly on the laptop: read the `ANDROID!` boot-image header (page size,
-   kernel/ramdisk sizes, header v4's `dtb_size`/`dtb_addr`), decompress the
-   payload if needed, and find the DTB section. Use `unpack_bootimg`-style
-   parsing in the project container rather than magic scans on the phone.
-2. Dump that node's `clocks`, `clock-names`, `power-domains`,
-   `power-domain-names`, `reg`, `samsung,acpm-ipc` and `gsa-device`.
-3. Add the missing properties to `gs201.dtsi`'s janeiro node, using mainline
-   names where the mainline clock/power-domain drivers already expose the same
-   hardware; if the AON clock is not exposed, add it to the gs201 clock driver.
-4. Rebuild (modules too - `janeiro` is a module), `modules-push`, recreate
-   `/dev/janeiro` from `/sys/class/edgetpu/janeiro/dev`, kill stray clients, and
-   run `timeout 60 chroot $R /vendor/bin/edgetpu-run /vendor/detect_edgetpu.tflite`.
+    google-gsa 17c90000.gsa: loading TPU image: header 0x82e63000 body 0x93000000
+    google-gsa 17c90000.gsa: TPU cmd 1 (Trusty): 2
 
-Success: no `Set LPM0 failed`, and the tool prints the graph's tensor counts. Then
-benchmark `detect_edgetpu.tflite` on the 720p 10-object video against CPU (3.98
-ms/frame at 4 threads, 10 detections/frame at 0.4), GPU and the other backends.
+Then `Set LPM0 failed: -110`, `firmware handshake failed: -110`, `Powering down`.
+So the work is in `drivers/soc/google/gsa.c` and its Trusty interface:
 
-Rules: slot B only, read-only on slot A, `pkill -x`, `depmod` + `modules-push`
-after module changes, announce screen-off before `poweroff`, no vendor blobs or
-identifiers in commits, no `Signed-off-by`.
+1. Read `gsa_send_tpu_cmd()` and the TPU image load/unload helpers: where does
+   the "loading TPU image" come from, what does the return code 2 mean (map it
+   against the Trusty service's error space), and is the command id the one the
+   gs201 GSA firmware expects (GSA_TPU_START is 1 in our header).
+2. Check that Trusty actually exposes the gsa/tpu service: `dmesg | grep -i
+   trusty`, `/dev/trusty-ipc-dev*` and the tpu-related Trusty service name in the
+   vendor image. Our binder/AoC work already showed Trusty running for other
+   services, so a missing service is plausible and testable.
+3. If the image itself is wrong, compare the header/body addresses and sizes the
+   driver computes against the `tpu_fw_reserved` region in `gs201.dtsi` (the
+   reserved-memory entries use `#address-cells = <2>`, `#size-cells = <1>` on
+   gs201 - a 16-byte `reg` is silently ignored, a mistake this project already
+   made once).
+
+Success: `TPU cmd 1` returns 0, `Set LPM0` disappears, and `edgetpu-run` prints
+the graph's tensor counts. Then the benchmark: `detect_edgetpu.tflite` on the
+720p 10-object video against CPU (3.98 ms/frame at 4 threads), GPU and the rest.
+
+Rules: slot B only, `pkill -x`, `modules-push` after module changes, announce
+screen-off before `poweroff`, no vendor blobs or identifiers, no `Signed-off-by`.
