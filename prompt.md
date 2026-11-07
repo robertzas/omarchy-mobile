@@ -1,51 +1,47 @@
-# Next: get the VII setup from the Tachyon service, not the direct path
+# Next: why the delegate never connects to the Tachyon service
 
-State (U32, `uname -r` 7.3.0-rc6-omamobile-push1-g29a7a9326bf0-dirty): the
-TPU powers up, loads firmware, opens the device, finalizes its mailbox.
-servicemanager and `com.google.edgetpu.tachyon-service` run, and the delegate
-no longer aborts — with the shim installed as the chroot's `liblog.so` it runs
-to its own end and returns rc 1 with
-`INTERNAL: Sync VII command failed: error_code=9`.
+State (U33): every vendor client library loads in the chroot, servicemanager
+and `com.google.edgetpu.tachyon-service` are both alive, and the delegate still
+takes its direct path: `Sync VII command failed: error_code=9`, then
+`create device status: 13`, `device: 0x0`, rc 1. It never logs a Tachyon
+connection attempt, although `libedgetpu_tachyon.google.so` has the service
+name `com.google.edgetpu.tachyon.IComputeService/default` and the message
+`Failed to connect to the Tachyon Compute Service`.
 
-So the stack smash was stock liblog's hidden-alias path (U32), not the
-delegate. What remains is U27's wall: the firmware's VII gate needs the setup
-command carrying the global scratches, and stock Android sends the host half
-from the Tachyon service. The delegate is still choosing its direct path.
+Do not re-derive: `tools/tpu-tachyon-run` (modes `GDB=1`, `BT=1`, `PROBE=1`)
+sets everything up; `tools/android-log-stderr.c` is installed as the chroot's
+`liblog.so` and covers all 21 liblog symbols; `tools/android-props-stub.c`
+answers `servicemanager.ready` `true`, sdk `34`, else `1`;
+`tools/dlopen-check.c` proves the client libraries load. The chroot's
+`/system/lib64/libc.so` points at a stale `/tmp/sysx/...`, so any inline repro
+needs the runner's `LD_LIBRARY_PATH`.
 
-Do not re-derive:
+Step 1: find the branch. In `libedgetpu_util.so` the client is `dlopen`ed at
+`0x1bf8e0` behind a lazily initialized global at `[x22, #0x8a8]`; the object
+built around it is 104 bytes and its slots are filled by `dlsym` from
+`/vendor/lib64/libedgetpu_client.google.so`. Trace who calls that initializer
+and what sets the "use the client" flag. `llvm-objdump -d` plus
+`llvm-objdump -s -j .data` around `0x3a6000` are the tools.
 
-- `tools/tpu-tachyon-run` sets up binderfs, mounts proc/sys/dev into the
-  chroot, starts servicemanager, starts the Tachyon service, then runs
-  `edgetpu-run`. Modes: `GDB=1`, `BT=1`.
-- `tools/android-props-stub.c` answers `servicemanager.ready` with `true`,
-  sdk `34`, else `1`. `tools/android-log-stderr.c` is now a full liblog
-  replacement (21 symbols) and is installed as the chroot's `liblog.so`; the
-  stock one has no backup, so re-extract the chroot before needing it.
-- The delegate's ioctl trail: `0x4014ed06`, `0x4008ed05`, `0xed08`, heap
-  alloc, `0xc028ed11`, `0xed1a`, `0x8010ed1b`, then the sync that returns 9.
-- `libedgetpu_util.so` logs from `0x13c2bc`; `TachyonComputeService_create`,
-  `createSession(service, &config, &ret)` and
-  `setupCommandQueue(session, &fd, &size)` are the client-side entry points.
+Step 2: test the cheap hypothesis that the Tachyon service needs its vendor
+backend. Start `com.google.edgetpu_vendor_service-V2-ndk`'s service binary and
+`com.google.edgetpu_app_service-V3` alongside, then rerun the delegate and look
+for a session in the service's log. Confirm the binary names under
+`/vendor/bin/hw/` in the chroot.
 
-Step 1 (read-only, laptop): find how the delegate decides between the Tachyon
-service and the direct firmware path. Disassemble
-`libedgetpu_util.so` around the session-create path and look for a property
-read, an environment variable, or a service-presence check that gates it.
-`llvm-objdump -d` plus `llvm-objdump -s -j .rodata` for the nearby strings.
-Candidate knobs to test, one per boot: `ro.build.type`, `ro.debuggable`,
-`persist.edgetpu.*`, `EDGETPU_*` environment variables.
+Step 3: if the delegate keeps choosing direct, break on
+`AServiceManager_getService` (and on `dlopen` of
+`libedgetpu_client.google.so`) under gdb with the chroot's `libbinder_ndk.so`
+added with `add-symbol-file`, then read the caller's registers to find the
+flag.
 
-Step 2 (phone, cold boot): if the gate is a property, answer it from
-`tools/android-props-stub.c` and re-run `tools/tpu-tachyon-run`; if it is an
-environment variable, pass it in the runner's delegate invocation.
+Step 4: whatever makes the delegate take the Tachyon path, the goal is the VII
+setup command carrying the global scratches; watch for `error_code` changing
+from 9 and record the result as U34+ with `uname -r`.
 
-Step 3: watch for a session on the Tachyon side (`tachyon` log lines, a new
-`createSession` result) and for the VII sync changing from 9 to something
-else. Record as U33+ with `uname -r`.
-
-Rules: slot B only; announce screen-off before `poweroff`; one TPU power-up
-per cold boot; never `rmmod` janeiro and never insmod over a loaded module; the
-runner caps its log at 50 MB; grep diffs for identifiers; no `Signed-off-by`.
+Rules: slot B only; announce screen-off before `poweroff`; one TPU power-up per
+cold boot; never `rmmod` janeiro and never insmod over a loaded module; keep
+the runner's log cap; grep diffs for identifiers; no `Signed-off-by`.
 
 After the gate opens: a real inference, then the 720p 10+ object benchmark
 (`tools/bench-object-detection.py`, `out/bench/detect.tflite`,
