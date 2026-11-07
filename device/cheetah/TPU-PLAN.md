@@ -3054,3 +3054,23 @@ earlier abort was its missing `LD_PRELOAD`, now fixed). What is missing is
 delegate reach the service, and a small client calling
 `TachyonComputeService_create` + `createSession` would test the same path
 without the delegate.
+
+### U30: property shims are not the hang (2026-11-07)
+
+`tools/android-props-stub.c` now answers every `__system_property_get` with
+`1` (`ro.build.version.sdk` with `34`), and `servicemanager.ready` was already
+true. The delegate still ends in `timeout` 124 after it loads the model
+(`model bytes: 4749998`) and maps its buffers, with the driver's
+`OPEN_DEVICE ret 0` already logged. So the spin is no longer a property wait;
+it happens after the device is open and before the first VII element.
+
+The direct Tachyon API is now mapped for the next attempt: `SessionConfig` is
+0x28 bytes with a bool at 0, int32 fields at 4, 8 and 0xc, a
+`shared_ptr<IGetFdsResponseCallback>` at 0x10, and int32 fields at 0x20 and
+0x24; `TachyonComputeService_createSession(service, &config, &ret)` writes a
+`CreateSessionReturn`, and the session's queue fds come from
+`TachyonComputeSession_setupCommandQueue(session, &fd, &size)`.
+
+Next, before writing that client: attach gdb to the hung delegate (the binary
+is unstripped) and read the spinning frame; that names the exact call instead
+of guessing.
