@@ -3130,3 +3130,30 @@ Note: the stock `liblog.so` in the chroot was overwritten without a backup
 (the backup step ran in the same command as a copy that failed). Regenerate
 the chroot with `tools/extract-vendor-chroot` before any step that needs
 stock liblog.
+
+### U33 (2026-11-07): the client libraries load; the delegate still picks the direct path
+
+`uname -r` 7.3.0-rc6-omamobile-push1-g29a7a9326bf0-dirty.
+
+`tools/dlopen-check.c`, preloaded through the runner (`PROBE=1`), loads all five
+vendor client libraries with `RTLD_NOW`: `libedgetpu_client.google.so`,
+`libedgetpu_tachyon.google.so`, `libtachyon_core.so`,
+`com.google.edgetpu.tachyon-ndk.so` and
+`com.google.edgetpu_vendor_service-V2-ndk.so` all return OK. So the delegate's
+fallback to direct ioctls is a choice it makes, not a missing library.
+
+With servicemanager and `com.google.edgetpu.tachyon-service` both alive (pids
+confirmed), the delegate still runs its own VII sync:
+`INTERNAL: Sync VII command failed: error_code=9`, then
+`create device status: 13`, `device: 0x0`, rc 1. Nothing in its log mentions
+connecting to the Tachyon service, though
+`libedgetpu_tachyon.google.so` carries `com.google.edgetpu.tachyon.
+IComputeService/default` and the message `Failed to connect to the Tachyon
+Compute Service`.
+
+Two chroot facts that cost time here: the chroot has no `/root` directory
+(created now; shims the runner needs live in `/system/lib64`), and its
+`/system/lib64/libc.so` is a symlink to a stale extraction path
+`/tmp/sysx/apex/...`, so an inline repro must set
+`LD_LIBRARY_PATH=/system/lib64:/vendor/lib64:/apex/com.android.runtime/lib64/bionic`
+exactly as the runner does.

@@ -79,6 +79,7 @@ cp /root/liblogstderr.so "$R/system/lib64/liblogstderr.so" 2>/dev/null
 cp /root/libselinux-shim.so "$R/system/lib64/libselinuxshim.so" 2>/dev/null
 cp /root/libpropsshim.so "$R/system/lib64/libpropsshim.so" 2>/dev/null
 cp /root/libstackchkshim.so "$R/system/lib64/libstackchkshim.so" 2>/dev/null
+cp /root/dlopenprobe.so "$R/system/lib64/dlopenprobe.so" 2>/dev/null
 
 export LD_LIBRARY_PATH=/system/lib64:/vendor/lib64:/apex/com.android.runtime/lib64/bionic
 # servicemanager needs both shims: without liblog-to-stderr its abort reason is
@@ -101,6 +102,9 @@ echo "tachyon pid: $(pgrep -x com.google.edge)" >>"$LOG"
 
 log "delegate (system-property shim so the service lookup can finish)"
 DELEGATE_PRELOAD="/system/lib64/libstackchkshim.so /system/lib64/liblogstderr.so /system/lib64/libselinuxshim.so /system/lib64/libpropsshim.so"
+# PROBE=1 loads the vendor client libraries first, to tell a dlopen failure
+# apart from a choice the delegate makes.
+[ "${PROBE:-0}" = "1" ] && DELEGATE_PRELOAD="/system/lib64/dlopenprobe.so $DELEGATE_PRELOAD"
 if [ "${GDB:-0}" = "1" ]; then
 	# Stop at the abort that happens right after OPEN_DEVICE and print the
 	# frames; the delegate is unstripped, so the smashed function is named.
