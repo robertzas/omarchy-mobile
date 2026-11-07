@@ -2673,3 +2673,32 @@ Two other checks the same day:
 After six KCI sends the client still ran normally in the same boot, so the hook
 does not wedge the device; a group created after it still answers `0xf000009`
 for element type 8 = 0..10.
+
+### U19 addendum: the ioctl path (same boot series)
+
+Moving the send behind an ioctl (`_IOW(0xed, 33, u32)`, added next to the other
+private codes) so it runs with the device open:
+
+```
+elemsweep: create_group -> 0
+elemsweep: finalize -> 0
+elemsweep: map_buffer -> 0 dev 0xfffff000
+kci: code 4 -> -1
+kci: code 9 -> -1
+kci: code 6 -> -1
+k=0 rsp 0x1 0x0 0xf000009 0x100164f5 ...
+```
+
+`dmesg` has no `kci_send(ioctl)` line, so the ioctl fails **before** the send:
+`edgetpu_alloc_coherent()` with `EDGETPU_CONTEXT_DOMAIN_TOKEN` refuses a
+client-side allocation (-EPERM). The next attempt should allocate in the
+client's own context (or point the KCI descriptor at the group's already-mapped
+buffer), then repeat 4/9 as the control.
+
+Vermagic note for the next build: `setlocalversion` takes the git hash from the
+worktree tip, so a module built after committing on `omamobile-tpu` does not
+load on a phone running the kernel built from the commit before it
+(`version magic '...-g537403c986a6-dirty' should be '...-g29a7a9326bf0-dirty'`).
+Building with the tip moved back to the running kernel's commit (`git reset
+--soft HEAD~1`, changes stay staged, so `-dirty` still matches) produces a
+loadable module.
