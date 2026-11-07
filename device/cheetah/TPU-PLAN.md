@@ -2860,3 +2860,40 @@ So the next dependency is the Android DMA-BUF heap (`/dev/dma_heap/system`).
 The driver's own coherent allocator is not what the delegate reaches for: it
 asks the heap by Android's path. The kernel config and the phone must provide
 it, or the HAL must be given a memory option that does not need it.
+
+### U25: even the stock delegate gets error 9 (2026-11-07)
+
+With `dev/dma_heap/system` (c 249 0) in the chroot and the servicemanager shim
+preloaded, `edgetpu-run` runs the whole reference sequence and gets as far as
+its **Sync VII command**:
+
+```
+ioctl fd 4 req 0x4014ed06 -> 0        create group
+ioctl fd 4 req 0x4008ed05 -> 0        eventfd 0
+ioctl fd 4 req 0xed08      -> 0        finalize
+ioctl fd 4 req 0x4008ed05 -> 0        eventfd 1
+ioctl fd 15 req 0xc0184800 -> 0       dma-buf heap alloc
+ioctl fd 4 req 0xc028ed11  -> 0       map dmabuf
+ioctl fd 4 req 0xed1a      -> 0
+ioctl fd 4 req 0x8010ed1b  -> 0
+E0000 file.cc:1506] INTERNAL: Sync VII command failed: error_code=9
+```
+
+9 is FAILED_PRECONDITION, the same answer the firmware gives every hand-built
+element, and the driver's dump of that element's payload reads zeros. So the
+reference runtime cannot get past the gate either: **the setup is a step whose
+host half is missing in this environment**, not a malformed element of ours.
+
+Next places to look for that host half, in order:
+
+- `edgetpu_mailbox_init_vii` in our driver against the vendor kernel's: a setup
+  element may be written there before any doorbell;
+- `com.google.edgetpu_vendor_service`, which may send the setup at device open
+  before any client does;
+- the GSA/PSM firmware configuration path, which would carry the global
+  scratches the firmware names.
+
+Keep: the dma-buf heap node makes allocations succeed, and
+`tools/edgetpu-nometrics.c` clears the servicemanager wait. The captured
+`out/edgetpu-runtime/model.tflite` is a COCO detector (98 label strings), so it
+is the right model for the benchmark once the gate opens.
