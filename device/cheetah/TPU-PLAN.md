@@ -3307,3 +3307,37 @@ Measured alongside: `secctx` failures stay at 0, tachyon stays alive
 (`tachyon pid: 6981`), and the vendor service's `addService` returns
 `0xffffff7f` (`-129`, EX_TRANSACTION_FAILED) exactly because servicemanager had
 just died.
+
+## U38 (2026-11-07): the access check is not a servicemanager variant problem
+
+The vendor image ships its own context manager (`vendor/bin/vndservicemanager`,
+78 KiB), so the obvious next try was to run that instead of the system one. With
+the chain processes killed first, it starts and survives:
+
+    vsm=8575
+
+and then dies as soon as the vendor service registers:
+
+    ABORT-MSG Check failed: nullptr == IPCThreadState::self()->getServingStackPointer()
+      ... Did not get context from PID 8594. We should always get contexts from other processes.
+    ABORT-MSG Check failed: status == STATUS_OK      (the vendor service, after it)
+
+So both context managers abort on the same client call: it is the transaction
+that lacks something, not the binary. `getServingStackPointer()` is nullptr and
+`getCallingPid()` is a real pid, i.e. servicemanager is inside a transaction but
+libbinder does not consider it to be serving one - which is what the
+security-context bookkeeping feeds.
+
+Our binder patch made that worse by dropping the context entirely: a node
+published with `FLAT_BINDER_FLAG_TXN_SECURITY_CTX` then gets a plain
+`BR_TRANSACTION` with no context at all. The driver now hands out a fixed label
+(`u:object_r:system:s0`, a static string, never freed - `security_release_secctx()`
+only frees when an LSM that implements it is enabled) so the transaction keeps
+the shape libbinder expects. Rebuilt as
+`7.3.0-rc6-omamobile-push1-g<synthetic-secctx>`; result in U39.
+
+Two operational notes: `pkill -f` with a pattern that also appears in the remote
+command line kills the ssh session mid-command (exit 255, no output), so match
+with `pkill -x` on the 15-character `comm`; and killing the chain in the right
+order matters, because a leftover tachyon service keeps reconnecting to
+servicemanager and triggers the same abort.
