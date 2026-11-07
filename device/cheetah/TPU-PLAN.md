@@ -3108,3 +3108,25 @@ backtrace is `#0 0x0000fffff634ea10 in ?? ()` and `#1 0x...20`, i.e. libc's
 abort plus a garbage frame. The way to name the smashed function is an
 `LD_PRELOAD` `__stack_chk_fail` that writes its return address, paired with
 the delegate's load base from `/proc/self/maps`.
+
+### U32 (2026-11-07): the abort was inside stock liblog, and the VII gate is next
+
+`uname -r` 7.3.0-rc6-omamobile-push1-g29a7a9326bf0-dirty.
+
+A preloaded shim cannot intercept liblog's own hidden-alias calls, and the
+frame whose canary fired (`__system_property_find` plus a `getprogname` tag
+string, then `__stack_chk_fail` at file offset 0x60d4 of the stock
+`liblog.so`) is one of them. So the shim now exports all 21 liblog symbols the
+chroot's libraries import (`tools/android-log-stderr.c`), and the runner
+installs it as the chroot's `liblog.so`.
+
+Result: no `stack corruption detected`, no SIGABRT. The delegate runs to its
+own end and fails with `INTERNAL: Sync VII command failed: error_code=9` and
+rc 1. The crash was in liblog, not in the delegate; the remaining wall is the
+same one as U27: the VII global-scratch setup has to come from the Tachyon
+service, and the delegate is still taking its direct path.
+
+Note: the stock `liblog.so` in the chroot was overwritten without a backup
+(the backup step ran in the same command as a copy that failed). Regenerate
+the chroot with `tools/extract-vendor-chroot` before any step that needs
+stock liblog.

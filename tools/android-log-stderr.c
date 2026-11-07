@@ -148,3 +148,134 @@ void __android_log_assert(const char *cond, const char *tag, const char *fmt, ..
 	va_end(ap);
 	__builtin_trap();
 }
+
+// The rest of liblog's API, so this file can stand in for liblog.so itself.
+// A preloaded shim cannot intercept liblog's internal hidden-alias calls, and
+// one of them (the tag/property path) was the frame whose canary fired; with
+// this file installed as liblog.so every call reaches us.
+struct android_log_message {
+	unsigned long struct_size;
+	int buffer_id;
+	int priority;
+	const char *tag;
+	const char *file;
+	unsigned line;
+	const char *message;
+};
+
+typedef int (*android_log_logger)(const struct android_log_message *);
+typedef void (*android_log_aborter)(const char *);
+
+static android_log_logger g_logger;
+static android_log_aborter g_aborter;
+static const char *g_default_tag = "";
+static int g_min_prio;
+
+int __android_log_logd_logger(const struct android_log_message *m)
+{
+	if (!m)
+		return 0;
+	emit_tagged(m->tag ? m->tag : g_default_tag, m->message ? m->message : "");
+	return 0;
+}
+
+void __android_log_set_logger(android_log_logger logger)
+{
+	g_logger = logger;
+}
+
+void __android_log_set_default_tag(const char *tag)
+{
+	g_default_tag = tag ? tag : "";
+}
+
+void __android_log_set_aborter(android_log_aborter aborter)
+{
+	g_aborter = aborter;
+}
+
+void __android_log_call_aborter(const char *msg)
+{
+	if (g_aborter)
+		g_aborter(msg ? msg : "abort");
+	__builtin_trap();
+}
+
+int __android_log_set_minimum_priority(int prio)
+{
+	g_min_prio = prio;
+	return 0;
+}
+
+int __android_log_get_minimum_priority(void)
+{
+	return g_min_prio;
+}
+
+int __android_log_write_log_message(const struct android_log_message *m)
+{
+	if (g_logger)
+		return g_logger(m);
+	return __android_log_logd_logger(m);
+}
+
+int __android_log_buf_print(int buf, int prio, const char *tag, const char *fmt, ...)
+{
+	va_list ap;
+
+	(void)buf;
+	(void)prio;
+	va_start(ap, fmt);
+	vemit(tag, fmt, ap);
+	va_end(ap);
+	return 0;
+}
+
+int __android_log_bswrite(int prio, const char *text)
+{
+	(void)prio;
+	emit_tagged(0, text);
+	return 0;
+}
+
+int __android_log_btwrite(int tag, int prio, const void *buf, unsigned long len)
+{
+	(void)tag;
+	(void)prio;
+	(void)buf;
+	(void)len;
+	return 0;
+}
+
+int __android_log_error_write(int tag, const char *sub_tag, int uid, const char *msg, unsigned len)
+{
+	(void)tag;
+	(void)uid;
+	(void)len;
+	emit_tagged(sub_tag, msg);
+	return 0;
+}
+
+int __android_log_is_loggable(int prio, const char *tag, int def)
+{
+	(void)prio;
+	(void)tag;
+	return def ? def : 1;
+}
+
+int __android_log_is_loggable_len(int prio, const char *tag, unsigned long len, int def)
+{
+	(void)prio;
+	(void)tag;
+	(void)len;
+	return def ? def : 1;
+}
+
+int __android_log_security(void)
+{
+	return 0;
+}
+
+void __android_log_close(void)
+{
+}
