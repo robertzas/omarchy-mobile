@@ -1,0 +1,39 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!--
+  Device VINTF manifest for the Edge TPU vendor chain (TPU-PLAN U40).
+
+  servicemanager validates every registration against the VINTF manifests, and
+  the vendor chroot built from a factory image has none, so every registration
+  comes back -3 ("Could not find <service> in the VINTF manifest"). For AIDL
+  HALs, <name> is the AIDL *package* and each <fqname> is an interface and
+  instance inside it: writing the interface name in <name> (the obvious
+  reading) makes every lookup for that package fail while the others still
+  match, which is exactly the half-working state U39 left.
+
+  Install as vendor/etc/vintf/manifest.xml inside the chroot; the runner logs
+  "Found <iface>/default in device VINTF manifest." for each entry servicemanager
+  accepts.
+-->
+<manifest version="1.0" type="device">
+    <hal format="aidl">
+        <name>com.google.edgetpu</name>
+        <version>1</version>
+        <fqname>IEdgeTpuVendorService/default</fqname>
+        <fqname>IEdgeTpuAppService/default</fqname>
+    </hal>
+    <hal format="aidl">
+        <name>com.google.edgetpu.tachyon</name>
+        <version>1</version>
+        <fqname>IComputeService/default</fqname>
+    </hal>
+    <hal format="aidl">
+        <name>android.frameworks.stats</name>
+        <version>1</version>
+        <fqname>IStats/default</fqname>
+    </hal>
+    <hal format="aidl">
+        <name>android.hardware.neuralnetworks</name>
+        <version>1</version>
+        <fqname>IDevice/default</fqname>
+    </hal>
+</manifest>
