@@ -3616,3 +3616,19 @@ Also fixed this round: the runner derived `/dev/edgetpu` only by symlink, so a
 stale node major silently broke every ioctl (U45). `/root/tpu-tachyon-run` now
 reads `/sys/class/edgetpu/janeiro/dev` and creates the node from it at every
 start.
+
+## U47 (2026-11-07): the TPU node is not in dtbo_a
+
+Read `dtbo_a` (`/dev/sda14`) read-only and parsed it: an Android DTBO image
+(magic `d7b7ab1e`) with the embedded FDT at offset 0x800. Its strings list
+fragments for the camera, `gsa_gsc`, `st21nfc` and friends, and **no janeiro or
+TPU fragment at all**. So the stock TPU node is not an overlay: it lives in the
+stock *base* DTB, which is why `tpu-enable.dtso` had to invent the node in the
+first place.
+
+That also means the missing `clocks`/`power-domains` (U46) must be recovered from
+the base DTB, not from `dtbo_a`. The base DTB partition is the next read (the
+partition list on the phone gives the name; `dtb`/`dtb_a` rather than `dtbo_a`).
+`dtc` is not installed on the laptop, so parsing needs the project container's
+`dtc`/`fdtdump`, or a small FDT reader; the strings scan is enough to confirm the
+node and the names of its `clock-names`/`power-domain-names` values.
