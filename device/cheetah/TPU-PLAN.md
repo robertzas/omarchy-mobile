@@ -3718,3 +3718,28 @@ handshake afterwards. Since `Set LPM0 failed` is what aborts `mobile_power_up`,
 the PSM0 poll is the gate to fix first - and it is being run before the GSA has
 started the core, which is exactly why it cannot succeed. The vendor order starts
 the firmware first; ours polls PSM0 first.
+
+### U49 second correction: `lpm_up` is not fatal; the -110 is the firmware handshake
+
+Read `mobile_power_up()` again: `platform_pwr->lpm_up(etdev);` is called with its
+result **ignored**, so a failed PSM0 poll cannot abort anything. The `-110` that
+ends the attempt comes later, from the firmware restart path, which logs
+`firmware handshake failed: -110` and then calls `mobile_power_down()`.
+
+So the chain is: ACPM state ok -> `lpm_up` poll fails (logged, ignored) ->
+`edgetpu_chip_init` -> GSA loads the image and `GSA_TPU_START` returns 2
+(RUNNING) -> `edgetpu_firmware_restart_locked()` waits for the firmware's KCI
+handshake and gets nothing -> `-110` -> power down.
+
+That makes the KCI handshake the thing to debug, with two candidate causes: the
+PSM0/LPM0 failure is not cosmetic after all (the core may be running with its
+AON island unclocked, so it cannot answer), or the wait is on a mailbox that the
+mainline driver has not configured the way the vendor runtime expects. The
+`dmesg` already shows the mailbox interrupts arriving (`irq 163 idx 0 ... status
+1`) when a client holds the device, so the AP side of the mailbox is alive.
+
+Next measurement: enable the driver's own debug (`edgetpu.debug` /
+`CONFIG_EDGETPU_DEBUG`) and watch the KCI send/receive around
+`firmware handshake failed`, and read `kci_send`/`fw_tracing` in
+`/sys/kernel/debug/edgetpu/janeiro/`; that separates "firmware never answers" from
+"driver never sends".
