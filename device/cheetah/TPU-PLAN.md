@@ -3552,3 +3552,40 @@ before start (mainline writes it only after LPM0 succeeds), the AON clock enable
 regions or a `power-domains` link that our `janeiro@1ce00000` lacks. The vendor
 DT capture is not on this laptop (`~/android/reference` is empty), so the next
 run needs it from the phone's stock slot or the factory image.
+
+## U45 (2026-11-07): the node major is dynamic; the PSM reorder did not help
+
+Two findings, one of them a trap that had been masking the other.
+
+**The device node must come from sysfs.** `/sys/class/edgetpu/janeiro/dev` read
+`501:0` this boot, while the chroot (and the host) carried a hard-coded node
+`502:0` from an earlier boot. With the wrong major every ioctl returns `ENOTTY`
+("Could not create device group ... Inappropriate ioctl for device"), which reads
+like a driver bug but is a node bug. Create `/dev/janeiro` from that sysfs value
+at every start and symlink `/dev/edgetpu` to it; the runner should do the same
+instead of `ln -sfn janeiro /dev/edgetpu` only.
+
+**With the right node, the group is created and the mailbox works.** The driver
+logs its ioctl round trip and then, while the client holds the device, the TPU
+mailbox interrupts arrive:
+
+    ioctl fd 3 req 0x4014ed06 -> 0
+    ioctl fd 3 req 0x4008ed05 -> 0 event_id 0 efd 4
+    edgetpu janeiro: irq 163 idx 0 mailbox ffff00081a28c240 status 1   (repeating)
+
+So the irq wiring and `edgetpu_register_irq()` are fine, and the AP/TPU mailbox
+path carries interrupts. What still fails is the power-up before the handshake:
+
+    edgetpu janeiro: Set LPM0 failed: -110 (PSM0_STATUS=0x5644c13 ... AON_RESET=0xdeadfeed
+      AON_CLK=0xdeadfeed AON_QUIESCE=0xdeadfeed POWER_CONTROL=0xdeadfeed GSA state=0)
+    edgetpu janeiro: firmware handshake failed: -110
+
+**The PSM0_CFG-before-PSM0_START reorder did not change it.** `janeiro_lpm_up()`
+now writes `PSM0_CFG`/`PSM1_CFG` before starting either PSM (matching the vendor
+order), rebuilt and pushed as module srcversion `713ADC800D632B5AEF88A1D`; the
+timeout and the `0xdeadfeed` AON reads are identical. So the missing piece is not
+the PSM configuration order but the AON island itself: its clock/power enable.
+
+Operational note: a client that hangs on the 60 s timeout keeps the device and
+the TPU in a half-powered state, and stray `edgetpu-run` processes keep the irq
+line busy; kill them by exact name before each attempt.
