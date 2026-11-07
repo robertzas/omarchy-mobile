@@ -36,6 +36,10 @@ static struct {
 	char value[92];
 } fake_prop = {"ro.build.version.sdk", "34"};
 
+// The caller that finds a property then reads it back must see the same name;
+// libbinder copies and compares the name and a mismatch smashes its stack.
+static char last_name[64] = "ro.build.version.sdk";
+
 static int is_name(const char *name, const char *want)
 {
 	unsigned long i = 0;
@@ -49,7 +53,9 @@ int __system_property_get(const char *name, char *value)
 {
 	const char *v = "1";
 
-	if (name && is_name(name, "ro.build.version.sdk"))
+	if (name && is_name(name, "servicemanager.ready"))
+		v = "true";
+	else if (name && is_name(name, "ro.build.version.sdk"))
 		v = sdk_value;
 	copy(value, v, 92);
 	return (int)str_len(v);
@@ -57,15 +63,21 @@ int __system_property_get(const char *name, char *value)
 
 const void *__system_property_find(const char *name)
 {
-	(void)name;
+	copy(last_name, name ? name : "", sizeof(last_name));
 	return &fake_prop;
 }
 
 int __system_property_read_callback(const void *pi, void (*cb)(void *, const char *, const char *, uint32_t), void *cookie)
 {
+	const char *value = "1";
+
 	(void)pi;
+	if (is_name(last_name, "servicemanager.ready"))
+		value = "true";
+	else if (is_name(last_name, "ro.build.version.sdk"))
+		value = sdk_value;
 	if (cb)
-		cb(cookie, "servicemanager.ready", "1", 0);
+		cb(cookie, last_name, value, 0);
 	return 0;
 }
 

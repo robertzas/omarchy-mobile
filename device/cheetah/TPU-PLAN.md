@@ -3074,3 +3074,30 @@ The direct Tachyon API is now mapped for the next attempt: `SessionConfig` is
 Next, before writing that client: attach gdb to the hung delegate (the binary
 is unstripped) and read the spinning frame; that names the exact call instead
 of guessing.
+
+### U31: ready=true ends the spin, then a stack-protector abort (2026-11-07)
+
+The 500 MB log was the delegate itself: `libbinder.BackendUnifiedServiceManager`
+waited for the `servicemanager.ready` property in a loop that printed without
+sleeping (`wchan 0`, `syscall running`). Android sets that property to the
+string `true`; the first shim returned `1`, which never matched.
+
+With `true`, the spin stops and the delegate moves on, then aborts in 0.1 s:
+
+```
+[libbinder.IPCThreadState] Binder transaction failure. id: 4, cmd:
+  BR_FAILED_REPLY, error: 4294967201 (Operation not supported on transport endpoint)
+[libbinder.ServiceManagerCppClient] Failed to get isDeclared for
+  android.frameworks.stats.IStats/default: Status(-129, EX_TRANSACTION_FAILED)
+stack corruption detected (-fstack-protector)
+libc: Fatal signal 6 (SIGABRT) ... tid 4170 (edgetpu-run)
+delegate rc: 134
+```
+
+That is after `OPEN_DEVICE ret 0` and `kci_finalized ret 0`, with the TPU
+powered down at 39.58 s, i.e. before any VII element. The shim now echoes the
+name the caller asked for (a mismatched name was the first suspect) and the
+abort is unchanged, so the corruption is either in libbinder's `isDeclared`
+fallback or in the delegate's own stats/perfetto path, not in the property
+name. Next is a gdb run that stops at SIGABRT, with the chroot follow-exec
+method that already worked for servicemanager.

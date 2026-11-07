@@ -14,6 +14,9 @@ set -u
 R=/usr/lib/omamobile-vendor/edgetpu/root
 LOG=/tmp/tpu-tachyon.log
 : >"$LOG"
+# A libbinder wait loop can print gigabytes in seconds; cap the file so a
+# spin cannot fill userdata.
+ulimit -f 51200 2>/dev/null || true
 
 log() {
 	echo "=== $*" >>"$LOG"
@@ -96,9 +99,21 @@ sleep 3
 echo "tachyon pid: $(pgrep -x com.google.edge)" >>"$LOG"
 
 log "delegate (system-property shim so the service lookup can finish)"
-LD_PRELOAD="/system/lib64/liblogstderr.so /system/lib64/libselinuxshim.so /system/lib64/libpropsshim.so" timeout 25 \
-	chroot "$R" /vendor/bin/edgetpu-run /vendor/etc/model.tflite >>"$LOG" 2>&1
-echo "delegate rc: $?" >>"$LOG"
+DELEGATE_PRELOAD="/system/lib64/liblogstderr.so /system/lib64/libselinuxshim.so /system/lib64/libpropsshim.so"
+if [ "${BT:-0}" = "1" ]; then
+	LD_PRELOAD="$DELEGATE_PRELOAD" chroot "$R" /vendor/bin/edgetpu-run /vendor/etc/model.tflite >>"$LOG" 2>&1 &
+	dpid=$!
+	sleep 6
+	log "backtrace of $dpid"
+	gdb -batch -q -p "$dpid" -ex "set sysroot $R" -ex "thread apply all bt 15" >>"$LOG" 2>&1
+	echo "--- wchan: $(cat /proc/$dpid/wchan 2>/dev/null) syscall: $(cat /proc/$dpid/syscall 2>/dev/null)" >>"$LOG"
+	kill "$dpid" 2>/dev/null
+	wait "$dpid" 2>/dev/null
+else
+	LD_PRELOAD="$DELEGATE_PRELOAD" timeout 25 \
+		chroot "$R" /vendor/bin/edgetpu-run /vendor/etc/model.tflite >>"$LOG" 2>&1
+	echo "delegate rc: $?" >>"$LOG"
+fi
 
 log "dmesg"
 dmesg | grep -iE 'edgetpu|janeiro|tachyon' | tail -20 >>"$LOG"

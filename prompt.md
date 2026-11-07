@@ -1,56 +1,55 @@
-# Next: backtrace the delegate hang, then call Tachyon directly
+# Next: catch the delegate's SIGABRT and name the stack smash
 
 State: the TPU powers up, loads firmware, opens the device and finalizes its
-mailbox (`OPEN_DEVICE ret 0`, `kci_finalized ret 0`). servicemanager and the
-vendor Tachyon service both run (`tools/tpu-tachyon-run`), with three shims
-preloaded. The delegate still hangs: `timeout` 124 after `model bytes: 4749998`
-and its mmaps, with no VII element sent and no error. A property stub that
-answers every `__system_property_get` with `1` did not change that, so the spin
-is not a property wait (U30).
+mailbox; servicemanager and the Tachyon service run. With the
+`servicemanager.ready` property answered as `true`, the delegate's 500 MB
+busy loop is gone and it now aborts in about 0.1 s with
+`stack corruption detected (-fstack-protector)` right after
+`OPEN_DEVICE ret 0` (delegate rc 134, U31). It also logs a failed binder
+`isDeclared` for `android.frameworks.stats.IStats/default`
+(`FAILED_TRANSACTION`). No VII element is sent.
 
 Do not re-derive:
 
-- binderfs works (`mount -t binder binder /dev/binderfs`, `binder` 507:1);
-  servicemanager is from `out/cp2a-system.img`; shims are
-  `tools/android-log-stderr.c`, `tools/android-selinux-allow.c`,
-  `tools/android-props-stub.c`.
-- `SessionConfig` is 0x28 bytes: bool at 0, int32 at 4, 8, 0xc,
-  `shared_ptr<IGetFdsResponseCallback>` at 0x10, int32 at 0x20 and 0x24.
-  `TachyonComputeService_createSession(service, &config, &ret)` fills a
-  `CreateSessionReturn`; `TachyonComputeSession_setupCommandQueue(session,
-  &fd, &size)` yields the queue fd.
-- Run `TachyonComputeService_create` is a binder client
-  (`AServiceManager_isDeclared` + `waitForService`), so the service must be up.
-- Firmware gate: one VII setup command per firmware boot carrying global
-  scratches; the delegate never sends it.
+- The stack: `tools/tpu-tachyon-run` (binderfs, servicemanager from the stock
+  system image, Tachyon service, three shims). `BT=1` starts the delegate in
+  the background and attaches gdb; that is how `wchan 0` was read.
+- The property shim `tools/android-props-stub.c` answers `servicemanager.ready`
+  with `true`, `ro.build.version.sdk` with `34`, everything else `1`, and
+  echoes the requested name from `find` to `read_callback`.
+- gdb on the phone can follow the chroot exec when run as
+  `gdb -batch -ex "set sysroot $R" -ex "set follow-exec-mode same"
+  -ex "set environment LD_LIBRARY_PATH=..." -ex "file /usr/bin/chroot"
+  -ex "set args $R /system/bin/linker64 <program>" -ex run -ex "bt 20"`.
+  That worked for servicemanager; the delegate is unstripped, so its frames
+  should resolve.
 
-Step 1 (phone, no reboot needed while it is up): find the exact spin.
-- Start the stack with `tools/tpu-tachyon-run` but replace the delegate line
-  with a background `chroot $R /vendor/bin/edgetpu-run ...` and, after 5 s,
-  `gdb -p <pid> -batch -ex "thread apply all bt 15"` (the delegate is
-  unstripped; capture the frame in `CreateVirtualDevice`).
-- Record the function and call it names in `device/cheetah/TPU-PLAN.md` U31.
+Step 1 (phone, cold boot): stop at the abort.
+- Change the runner's delegate line to run under the gdb command above with
+  the delegate's `LD_PRELOAD` and `/vendor/bin/edgetpu-run /vendor/etc/model.tflite`.
+- Cold boot, run, and save the backtrace: the frame that calls
+  `__stack_chk_fail` names the function whose local buffer was smashed.
 
-Step 2: act on that frame.
-- If it waits on a file descriptor, read `/proc/<pid>/fd` and the fd's peer;
-  the Tachyon service's queue fds and the driver's eventfds are the candidates.
-- If it waits on a mutex/condition in `libedgetpu_util`, the direct client in
-  Step 3 is the way around it.
+Step 2: fix what the frame names.
+- If the frame is in `libbinder`'s `isDeclared` path, the fake `prop_info`
+  pointer is the suspect: return a pointer to a real-shaped 96-byte struct and
+  make `read_callback` fill name and value, or drop the C++ property shim and
+  give libbinder the real (empty) property area plus a `wait` that succeeds.
+- If the frame is in the delegate's own stats/perfetto path, disable that path
+  (env or `LD_PRELOAD` stub) so it never queries `IStats`.
+- If the frame is in the shim's `__system_property_get`, lower the copy bound
+  and return lengths like Android does.
 
-Step 3: `tools/tachyon-client.c` (aarch64 bionic, no libc++):
-- `TachyonComputeService_create(&service, name)` against the running service;
-- build a zeroed 0x28-byte `SessionConfig`, set the bool at 0 to 1 (privileged)
-  and any int32 the AIDL `createSession` requires;
-- `TachyonComputeService_createSession(service, &config, &ret)`;
-- `TachyonComputeSession_setupCommandQueue` and
-  `..._setupResponseQueue`, then `..._sendCommand` with the model's first
-  command, and watch dmesg for a VII submission that does not answer 9.
+Step 3: after the abort is gone, the delegate either reaches the Tachyon
+service (then watch for a session/setup) or goes direct and answers
+`error_code=9`; either way record it in `device/cheetah/TPU-PLAN.md` as U32+
+with `uname -r`.
 
 Rules: slot B only; announce screen-off before `poweroff`; one TPU power-up
 per cold boot (a failed attempt needs a cold boot before the next); never
-`rmmod` janeiro and never insmod over a loaded module; record results in
-`device/cheetah/TPU-PLAN.md` as U31+ with `uname -r`; grep diffs for
-identifiers.
+`rmmod` janeiro and never insmod over a loaded module; the runner caps its log
+(`ulimit -f 51200`) because a binder loop once wrote 500 MB in seconds; grep
+diffs for identifiers.
 
 After the gate opens: a real inference, CPU comparison, then the 720p 10+
 object benchmark (`tools/bench-object-detection.py`,
