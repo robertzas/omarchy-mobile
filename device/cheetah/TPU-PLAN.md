@@ -3341,3 +3341,30 @@ command line kills the ssh session mid-command (exit 255, no output), so match
 with `pkill -x` on the 15-character `comm`; and killing the chain in the right
 order matters, because a leftover tachyon service keeps reconnecting to
 servicemanager and triggers the same abort.
+
+## U39 (2026-11-07): the synthetic context works; VINTF is the next gate
+
+Pushed the build with the fixed context (`uname -v` `Sat Nov 7 16:40:07 UTC 2026`)
+and ran the chain. Servicemanager no longer aborts - the log shows the label
+arriving and the registration being decided on its own merits:
+
+    Caller(pid=4200,uid=0,sid=u:object_r:system:s0) Could not find
+      com.google.edgetpu.IEdgeTpuVendorService/default in the VINTF manifest.
+      No alternative instances declared in VINTF.
+    registerLazySer 00000000fffffffd000
+    [] registerLazyService took 2 milliseconds.
+    [] Check failed: status == STATUS_OK
+
+So `getServingStackPointer()`/context is settled (U38), and registration fails
+with status `-3` because servicemanager validates every registration against the
+VINTF manifests, and the chroot has none it can parse (`NULL VINTF MANIFEST!:
+device` / `framework`). The chroot was extracted from a factory image; the VINTF
+manifests live in `vendor/etc/vintf` and `system/etc/vintf` on the device, and
+they are what lists the Google TPU interfaces. Next: assemble a manifest for the
+chroot that declares `com.google.edgetpu.IEdgeTpuVendorService/default`,
+`com.google.edgetpu.IEdgeTpuAppService/default` and whatever tachyon registers,
+then run the chain again.
+
+Also worth keeping: with the abort gone, `tachyon pid: 4337` stays up across the
+whole attempt, and the Darwinn HAL's only complaint is that nobody ever published
+`com.google.edgetpu.IEdgeTpuAppService/default`.
