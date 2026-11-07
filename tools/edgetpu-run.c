@@ -2022,6 +2022,28 @@ static void bytesweep_mode(const char *file) {
 // 1..24, and read the firmware's "received a command of type %d" back from the
 // ring. +8 (U16) and +4/+6 (probe) are already ruled out; +9 and +11..+15 trip
 // the reserved-field check, so they stay zero.
+static int g_kci_probe; /* kcisweep: send the KCI codes once the group is live */
+
+/* Send the KCI codes the driver's command set does not implement, through the
+   driver's development-only ioctl (_IOW(0xed, 33, u32) = 0x4001ed21), with the
+   device open so the response path is live. 4 and 9 are the control: the
+   driver sends those at run time, so they must answer. */
+static void kci_probe(int fd) {
+  static const unsigned codes[] = {4, 9, 6};
+  int i;
+  long r;
+
+  for (i = 0; i < (int)(sizeof(codes) / sizeof(codes[0])); i++) {
+    unsigned c = codes[i];
+    r = ioctl(fd, 0x4001ed21, &c);
+    put("kci: code ");
+    putdec(c);
+    put(" -> ");
+    putdec(r);
+    put("\n");
+  }
+}
+
 static void elemsweep_mode(const char *file) {
   static const int fields[] = {4, 12, 32, 36, 40, 44};
   unsigned attr[5] = {24, 12, 48, 24, 0x58};
@@ -2087,6 +2109,8 @@ static void elemsweep_mode(const char *file) {
   put("\n");
   if (r || !map[2])
     return;
+  if (g_kci_probe)
+    kci_probe(fd);
   g_csr = mmap(0, 0x1000, 3, 1, fd, 0x1800000);
   g_cq = mmap(0, 24 * 1024, 3, 1, fd, 0x1900000);
   g_rq = mmap(0, 12 * 1024, 3, 1, fd, 0x1a00000);
@@ -2099,7 +2123,7 @@ static void elemsweep_mode(const char *file) {
      expected seq desyncs ("Received command.seq 0x8a, expected
      0x100000002") and every later response is noise. */
   for (i = 0; i < (int)(sizeof(fields) / sizeof(fields[0])); i++) {
-    for (v = 1; v <= 24 && g_idx < 120; v++) {
+    for (v = 1; v <= (g_kci_probe ? 1 : 24) && g_idx < 120; v++) {
       make_elem(elem, 0, 11, map[2], plen);
       *(unsigned *)(elem + fields[i]) = (unsigned)v;
       submit_elem(elem);
@@ -2504,6 +2528,11 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (argc > 1 && streq(argv[1], "elemsweep")) {
+    elemsweep_mode(argc > 2 ? argv[2] : 0);
+    return 0;
+  }
+  if (argc > 1 && streq(argv[1], "kcisweep")) {
+    g_kci_probe = 1;
     elemsweep_mode(argc > 2 ? argv[2] : 0);
     return 0;
   }
