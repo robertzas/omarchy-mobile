@@ -3665,3 +3665,28 @@ boot-image header this scan did not walk), and reading it needs a real
 boot-image unpacker rather than a magic scan. That is a laptop-side step with the
 project container's tooling or an `unpack_bootimg`-style parser, not something to
 iterate on the phone.
+
+## U49 (2026-11-07): the vendor node is identical - GSA is what starts the TPU
+
+Fetched Google's own gs201 TPU device tree (`arch/arm64/boot/dts/google/
+gs201-tpu.dtsi` from the public GPL kernel tree) and compared it with ours. The
+properties are the same set, and the important part is what it does **not** have:
+no `clocks`, no `power-domains`, exactly like our node. So U46's "DT gap" reading
+was wrong - the node is not supposed to carry them. Stock's TPU is brought out of
+reset by the GSA, not by a Linux clock/PM-domain link.
+
+That lines up with our own log, which had been read as noise:
+
+    google-gsa 17c90000.gsa: loading TPU image: header 0x82e63000 body 0x93000000
+    google-gsa 17c90000.gsa: TPU cmd 1 (Trusty): 2      <- GSA_TPU_START result
+
+The image load is attempted and `GSA_TPU_START` (cmd 1) comes back **2**, i.e.
+not success; the TPU therefore stays in reset, `PSM0_STATUS` never reports 0x80,
+every AON register reads `0xdeadfeed`, and the firmware handshake times out. The
+PSM/ACPM work in U44/U45 was chasing a consequence: with GSA refusing to start
+the core, no register sequence can bring it up.
+
+So the next target is `drivers/soc/google/gsa.c`'s Trusty path for the TPU
+commands (`gsa_send_tpu_cmd()` and the firmware load/unload helpers) and what
+result 2 means there - a Trusty service that is not present, a wrong command id,
+or a rejected image - rather than any device-tree property.
