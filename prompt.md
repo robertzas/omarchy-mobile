@@ -5,10 +5,11 @@ and no `power-domains`, so its AON registers read `0xdeadfeed` and `PSM0_STATUS`
 never acknowledges. Stock's node is not in `dtbo_a` (U47, no janeiro fragment)
 and not a plain FDT in `boot_a` or the first 24 MB of `vendor_boot_a` (U48), so:
 
-1. Fetch `vendor_boot_a` read-only (`/dev/sda12`) and parse the Android boot-image
-   header: magic `ANDROID!`, page size, kernel/ramdisk sizes, then the vendor
-   ramdisk and the DTB section (header v4 has `dtb_size`/`dtb_addr`). The DTB is
-   an FDT; the string "janeiro" appears exactly once in the image and marks it.
+1. The whole 64 MB `vendor_boot_a` contains **no** FDT magic, so unpack it
+   properly on the laptop: read the `ANDROID!` boot-image header (page size,
+   kernel/ramdisk sizes, header v4's `dtb_size`/`dtb_addr`), decompress the
+   payload if needed, and find the DTB section. Use `unpack_bootimg`-style
+   parsing in the project container rather than magic scans on the phone.
 2. Dump that node's `clocks`, `clock-names`, `power-domains`,
    `power-domain-names`, `reg`, `samsung,acpm-ipc` and `gsa-device`.
 3. Add the missing properties to `gs201.dtsi`'s janeiro node, using mainline
