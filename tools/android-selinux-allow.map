@@ -1,0 +1,21 @@
+/* SPDX-License-Identifier: MIT
+ *
+ * Version script for android-selinux-allow.c.
+ *
+ * The vendor libselinux exports every entry point with the symbol version
+ * LIBSELINUX_R (`nm -D` shows getpidcon@@LIBSELINUX_R and friends). A plain
+ * LD_PRELOAD definition is unversioned, so the dynamic linker will not let it
+ * satisfy a versioned reference: the call keeps binding to the real libselinux,
+ * which then fails on a kernel without selinuxfs. Building the shim with this
+ * script gives its definitions the same version, so the preload actually
+ * interposes. servicemanager's `Check failed: selinux_status_open(true) >= 0`
+ * and `Did not get context from PID N` are both this problem.
+ *
+ * Usage:
+ *   clang --target=aarch64-linux-android30 -shared -fPIC -nostdlib \
+ *     -fno-stack-protector -Wl,--version-script=tools/android-selinux-allow.map \
+ *     -o libselinuxshim.so tools/android-selinux-allow.c
+ */
+LIBSELINUX_R {
+	global: *;
+};

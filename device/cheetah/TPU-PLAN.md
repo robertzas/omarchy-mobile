@@ -3270,3 +3270,40 @@ needs a writable `$WORK` (it defaults to `$HOME/android`, which is root-owned
 here), and `make modules_install` skipped depmod in the container, so
 `/usr/lib/modules/<release>/modules.dep` had to be regenerated on the phone
 (`depmod -a $(uname -r)`) before `modprobe janeiro` resolved its dependencies.
+
+## U37 (2026-11-07): servicemanager's CHECK, and why the SELinux shim never bound
+
+Two findings that explain the whole servicemanager failure.
+
+**The abort message was invisible.** gdb cannot unwind bionic here ("previous
+frame identical ... corrupt stack?"), and libbase's `DefaultAborter` only hands
+the string to the crash reporter. Interposing `android_set_abort_message()`
+(`tools/android-abort-msg.c`) prints it:
+
+    ABORT-MSG Check failed: selinux_status_open(true) >= 0
+    ABORT-MSG Check failed: nullptr == IPCThreadState::self()->getServingStackPointer() ...
+      Did not get context from PID N. We should always get contexts from other processes.
+
+**The SELinux shim never interposed.** `nm -D` on the vendor libselinux shows
+`getpidcon@@LIBSELINUX_R`, `selinux_status_open@@LIBSELINUX_R` and so on: every
+entry point is versioned, and the dynamic linker will not let an unversioned
+LD_PRELOAD definition satisfy a versioned reference. So `tools/android-selinux-allow.c`
+was loaded (its SELINUX-SHIM marker printed) and still every call went to the
+real libselinux, which needs selinuxfs and this kernel has none. Building the
+shim with `tools/android-selinux-allow.map` (`LIBSELINUX_R { global: *; };`)
+gives its definitions the same version; `nm` now reports
+`getpidcon@@LIBSELINUX_R` on the shim too. Patching the chroot's
+`libselinux.so` (`selinux_status_open` -> `mov w0,#0; ret`) also fixed the first
+CHECK and the original is kept as `libselinux.so.orig`.
+
+What remains is the second CHECK: servicemanager calls its access check with no
+serving transaction (`getServingStackPointer()` null, so `getCallingPid()` is 0
+and there is no peer context), and aborts. That is servicemanager's own startup
+path, not a client's call, so the next step is either the flag/argument that
+makes the AIDL servicemanager skip access checks, or a patch of that CHECK in
+the chroot's `system/bin/servicemanager` (private chroot, never committed).
+
+Measured alongside: `secctx` failures stay at 0, tachyon stays alive
+(`tachyon pid: 6981`), and the vendor service's `addService` returns
+`0xffffff7f` (`-129`, EX_TRANSACTION_FAILED) exactly because servicemanager had
+just died.
