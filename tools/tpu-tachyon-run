@@ -1,0 +1,107 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Bring up the vendor Tachyon compute stack on a Linux userspace, then run the
+# reference delegate. Run on the phone as root; it only touches /dev/binderfs,
+# the extracted vendor chroot under $R, and /tmp.
+#
+# Why: the TPU firmware refuses every VII command until its one-time setup
+# command has run, and on stock Android that command comes from the vendor
+# service. That service is binder-only, so this mounts binderfs and runs a
+# servicemanager (from the stock system image) plus two LD_PRELOAD shims that
+# stand in for logd and SELinux. See device/cheetah/TPU-PLAN.md U27/U28.
+set -u
+
+R=/usr/lib/omamobile-vendor/edgetpu/root
+LOG=/tmp/tpu-tachyon.log
+: >"$LOG"
+
+log() {
+	echo "=== $*" >>"$LOG"
+}
+
+run() {
+	echo "+ $*" >>"$LOG"
+	"$@" >>"$LOG" 2>&1
+}
+
+log "kernel $(uname -r)"
+# The module must load exactly once per boot: a second load (or a load racing
+# udev's autoload at ~11 s) oopses in edgetpu_mmu_attach. Give udev 20 s to
+# bring it up, then insmod only if the device still is not there.
+i=0
+while [ ! -e /dev/janeiro ] && [ $i -lt 40 ]; do
+	sleep 0.5
+	i=$((i + 1))
+done
+if [ -e /dev/janeiro ]; then
+	log "janeiro up after ~$((i / 2))s (autoload)"
+elif lsmod | grep -q '^janeiro'; then
+	# Loaded but no device: the probe crashed. A second insmod would oops
+	# again, so stop and let a cold boot reset the TPU.
+	log "janeiro loaded but /dev/janeiro missing (probe failed), stopping"
+	dmesg | tail -20 >>"$LOG"
+	tail -n 30 "$LOG"
+	exit 1
+else
+	log "janeiro absent after 20s, loading once"
+	run insmod "$(modinfo -n janeiro)"
+	i=0
+	while [ ! -e /dev/janeiro ] && [ $i -lt 20 ]; do
+		sleep 0.5
+		i=$((i + 1))
+	done
+fi
+if [ ! -e /dev/janeiro ]; then
+	log "janeiro did not come up, stopping"
+	tail -n 30 "$LOG"
+	exit 1
+fi
+ln -sfn janeiro /dev/edgetpu
+run lsmod
+
+log "binderfs"
+mkdir -p /dev/binderfs /dev/dma_heap
+mountpoint -q /dev/binderfs || run mount -t binder binder /dev/binderfs
+for n in binder hwbinder vndbinder; do ln -sfn /dev/binderfs/$n /dev/$n; done
+[ -e /dev/dma_heap/system ] || mknod /dev/dma_heap/system c 249 0
+ls -l /dev/binderfs /dev/dma_heap >>"$LOG" 2>&1
+
+log "chroot mounts"
+mkdir -p "$R/dev" "$R/proc" "$R/sys" "$R/vendor/etc"
+run mount --rbind /dev "$R/dev"
+mountpoint -q "$R/proc" || run mount -t proc proc "$R/proc"
+mountpoint -q "$R/sys" || run mount --rbind /sys "$R/sys"
+cp /root/model.tflite "$R/vendor/etc/model.tflite" 2>/dev/null
+cp /root/liblogstderr.so "$R/system/lib64/liblogstderr.so" 2>/dev/null
+cp /root/libselinux-shim.so "$R/system/lib64/libselinuxshim.so" 2>/dev/null
+cp /root/libpropsshim.so "$R/system/lib64/libpropsshim.so" 2>/dev/null
+
+export LD_LIBRARY_PATH=/system/lib64:/vendor/lib64:/apex/com.android.runtime/lib64/bionic
+# servicemanager needs both shims: without liblog-to-stderr its abort reason is
+# invisible, and without libselinux it dies in selinux_status_open.
+export LD_PRELOAD="/system/lib64/liblogstderr.so /system/lib64/libselinuxshim.so"
+
+log "servicemanager"
+pkill -x servicemanager 2>/dev/null
+sleep 0.5
+setsid chroot "$R" /system/bin/servicemanager >>"$LOG" 2>&1 </dev/null &
+sleep 2
+echo "servicemanager pid: $(pgrep -x servicemanager)" >>"$LOG"
+
+log "tachyon service"
+pkill -x com.google.edge 2>/dev/null
+sleep 0.5
+setsid chroot "$R" /vendor/bin/hw/com.google.edgetpu.tachyon-service >>"$LOG" 2>&1 </dev/null &
+sleep 3
+echo "tachyon pid: $(pgrep -x com.google.edge)" >>"$LOG"
+
+log "delegate (system-property shim so the service lookup can finish)"
+LD_PRELOAD="/system/lib64/liblogstderr.so /system/lib64/libselinuxshim.so /system/lib64/libpropsshim.so" timeout 25 \
+	chroot "$R" /vendor/bin/edgetpu-run /vendor/etc/model.tflite >>"$LOG" 2>&1
+echo "delegate rc: $?" >>"$LOG"
+
+log "dmesg"
+dmesg | grep -iE 'edgetpu|janeiro|tachyon' | tail -20 >>"$LOG"
+
+log "done"
+tail -n 40 "$LOG"
