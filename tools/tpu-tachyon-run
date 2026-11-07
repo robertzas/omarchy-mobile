@@ -90,6 +90,7 @@ cp /root/libpropsshim.so "$R/system/lib64/libpropsshim.so" 2>/dev/null
 cp /root/libstackchkshim.so "$R/system/lib64/libstackchkshim.so" 2>/dev/null
 cp /root/dlopenprobe.so "$R/system/lib64/dlopenprobe.so" 2>/dev/null
 cp /root/liblazysvc.so "$R/system/lib64/liblazysvc.so" 2>/dev/null
+cp /root/libnosid.so "$R/system/lib64/libnosid.so" 2>/dev/null
 
 # Vendor first: that is what makes libbinder pick /dev/vndbinder, the domain
 # the Edge TPU services and the delegate register and look up on.
@@ -108,10 +109,13 @@ setsid chroot "$R" /system/bin/servicemanager /dev/vndbinder >>"$LOG" 2>&1 </dev
 sleep 2
 echo "servicemanager pid: $(pgrep -x servicemanager)" >>"$LOG"
 
-# The stock servicemanager here answers registerLazyService with ENOTSUP, and
-# AidlLazyServiceRegistrar aborts the service on any non-OK status. The shim
-# turns that call into an eager addService, so a name is registered and kept.
-SVC_PRELOAD="/system/lib64/liblazysvc.so $LD_PRELOAD"
+# libnosid first: without it every transaction to a node published by
+# libbinder fails in the kernel (no LSM provides secid_to_secctx here, so
+# FLAT_BINDER_FLAG_TXN_SECURITY_CTX cannot be honoured).
+# Then the lazy-registration shim: the stock servicemanager answers
+# registerLazyService with ENOTSUP, and AidlLazyServiceRegistrar aborts the
+# service on any non-OK status.
+SVC_PRELOAD="/system/lib64/libnosid.so /system/lib64/liblazysvc.so $LD_PRELOAD"
 
 # Stock's order: the vendor service owns /dev/edgetpu, the tachyon service
 # fronts it, and Darwinn's NNAPI HAL publishes IEdgeTpuAppService for clients.

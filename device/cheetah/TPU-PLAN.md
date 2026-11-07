@@ -3194,3 +3194,43 @@ Darwinn HAL. All three abort on registration:
 
 Reading `AStatus` fields by hand faulted the service; the next probe uses the
 exported `AStatus_getExceptionCode` to name the failing status.
+
+## U35 (2026-11-07): the kernel refuses the transactions: no LSM provides secid_to_secctx
+
+The registration failure is not servicemanager's doing. dmesg during a chain run:
+
+    binder: 16769:16767 failed to get security context
+    binder: 16769:16767 transaction call to 16751:0 failed 413/29201/-95, code 4 size 168-0 line 3376
+
+`drivers/android/binder.c:3366` translates the caller's secid for every
+transaction whose target node carries `FLAT_BINDER_FLAG_TXN_SECURITY_CTX`
+(binder.c:782, set from the `flat_binder_object` flags). Android's libbinder sets
+that flag on the nodes it publishes, so each `addService` needs
+`security_secid_to_secctx()`. This kernel has no LSM that implements it --
+SELinux is not built in and `/sys/kernel/security/lsm` reads `capability,landlock`
+-- so `call_int_hook(secid_to_secctx, -EOPNOTSUPP, ...)` returns -95 and the
+transaction fails with `BR_FAILED_REPLY`. That is the ENOTSUP seen through
+`registerLazyService` too: same code, one layer down.
+
+Tried and measured, all on the same boot as before (no reboot between runs):
+
+- `tools/android-nosid-shim.c` (interposes `AIBinder_setRequestingSid` and
+  `BBinder::setRequestingSid` to drop the flag): preloaded into the three
+  services, never called -- neither marker printed, and the count stayed at 14.
+- Byte patch of the flag computation in both libbinder copies (`mov w10,#0x1100`
+  -> `#0x100`, at 0x505bc in `/system/lib64/libbinder.so` and 0x4ffac in
+  `/vendor/lib64/libbinder.so`): the vendor copy is the one servicemanager maps
+  (`/proc/<pid>/maps` shows `/vendor/lib64/libbinder.so`), the patch is in place
+  (md5 7781e1b16999...), and the secctx count still reads 14. The patched site is
+  `flatten_binder`'s `isRequestingSid()` branch; the context-manager node's flag
+  comes from somewhere else (`becomeContextManager` at 0x9cb50 builds its
+  `flat_binder_object` with `flags = 0`, so the flag is not from there either).
+  The originals are kept next to the patched files as `libbinder.so.orig`.
+
+So the honest options are (a) find the remaining flag site in libbinder and clear
+it, or (b) give the kernel an LSM that implements `secid_to_secctx`, i.e. build
+with `CONFIG_SECURITY_SELINUX=y` and `CONFIG_LSM="landlock,lockdown,yama,integrity,selinux,bpf"`.
+With no policy loaded SELinux still answers the initial SIDs from
+`initial_sid_to_string` (`security_sid_to_context_core`, services.c:1371), which is
+exactly the "no labels matter here" answer this chroot needs; it is a kernel
+build, a `push` and a reboot, so it needs its own gated run.
