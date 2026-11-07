@@ -3368,3 +3368,35 @@ then run the chain again.
 Also worth keeping: with the abort gone, `tachyon pid: 4337` stays up across the
 whole attempt, and the Darwinn HAL's only complaint is that nobody ever published
 `com.google.edgetpu.IEdgeTpuAppService/default`.
+
+## U40 (2026-11-07): VINTF schema, and the last two deaths
+
+The device manifest has to be installed as `vendor/etc/vintf/manifest.xml` in the
+chroot (`device/cheetah/tpu-vintf-manifest.xml` in the repo). The schema detail
+that cost the most: for an AIDL HAL, `<name>` is the AIDL **package** and each
+`<fqname>` is an interface and instance inside it. Writing the interface name in
+`<name>` (the obvious reading) yields a manifest that parses and answers for the
+other entries while every lookup for that package fails:
+
+    Could not find com.google.edgetpu.IEdgeTpuVendorService/default ... No alternative instances declared
+
+With package-scoped entries every lookup succeeds and the chain registers:
+
+    Found com.google.edgetpu.IEdgeTpuVendorService/default in device VINTF manifest.
+    registerLazySer 0000000000000000000      (the vendor service)
+    [] registerLazyService took 2 milliseconds.
+    registerLazySer 0000000000000000000      (the tachyon service)
+
+What is left is one death each side of that registration:
+
+* vendor service: registers, prints `Starting cache cleanup.`, then SIGABRT;
+* Darwinn HAL: `Non-ok status from HAL: 2` right after it lands, then SIGTRAP;
+* servicemanager and the tachyon service stay up throughout, and tachyon's
+  service name is `com.google.edgetpu.tachyon.IComputeService/default` (that is
+  why the manifest entry is scoped to `com.google.edgetpu.tachyon`).
+
+So the transport is finally healthy and the remaining failures are inside the
+vendor binaries, where the abort-message shim (`tools/android-abort-msg.c`) and
+the runner's per-service logs are the tools: the vendor service's abort text is
+not in the filtered log tail yet, and `status 2` from the HAL is
+`android::base::Error`-style, i.e. its own check rather than binder's.

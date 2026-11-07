@@ -1,28 +1,32 @@
-# Next: declare the TPU interfaces in a VINTF manifest, then light the chain
+# Next: read the two vendor-side deaths now that registration works
 
-The binder transaction now carries `u:object_r:system:s0`, servicemanager
-survives registration, and the vendor service's `registerLazyService` returns
-`0xfffffffd` (`-3`) because servicemanager cannot find
-`com.google.edgetpu.IEdgeTpuVendorService/default` in a VINTF manifest
-(`NULL VINTF MANIFEST!: device` / `framework`). Make that manifest exist:
+Transport is healthy: servicemanager survives, the vendor service and the
+tachyon service both register (`registerLazySer …000`, VINTF "Found …"), and the
+tachyon service stays up. Two deaths remain inside the vendor binaries:
 
-1. `bin/omamobile push` the build from `out-tpu` (delete `$KERNEL_OUT/images`
-   first - `push` reuses stale images otherwise), `reboot-to omamobile`, then
-   `depmod -a $(uname -r)` and confirm `uname -r` names the new release.
-2. Run the chain in the right order and kill leftovers first **by exact name**
-   (`pkill -x com.google.edge`, `pkill -x android.hardwa`,
-   `pkill -x vendor.google.e`, `pkill -x vndservicemanag`); never `pkill -f`
-   with a pattern that matches the ssh command line itself.
-3. Watch for: servicemanager surviving the vendor service's `addService`
-   (`registerLazyService took N ms` with no `Check failed: status == STATUS_OK`),
-   the Darwinn HAL publishing `IEdgeTpuAppService/default`, and the delegate
-   opening `/dev/janeiro`.
-4. If the CHECK persists, it is time to patch that CHECK out of
-   `system/bin/servicemanager` (private chroot, never committed) rather than
-   keep guessing at the transaction shape: the message string and its
-   `LOG(FATAL)` call site are both in the binary, and the abort shim already
-   proves which path runs.
+1. `vendor.google.edgetpu_vendor_service@1.0-service` registers, prints
+   `Start cache cleanup.`, then SIGABRTs. Get its abort message: it is started
+   with `/system/lib64/libabortshim.so` already, so read the *unfiltered* block
+   (`awk "/=== vendor edgetpu service/,/vendor pid:/" /tmp/tpu-tachyon.log`) and
+   `grep -a "ABORT-MSG\|Check failed\|cache cleanup" -A3`.
+2. `android.hardware.neuralnetworks@service-darwinn-aidl` exits with
+   `[Darwinn] Non-ok status from HAL: 2` then SIGTRAP — it comes from its own
+   `file.cc` checks, not binder. Grep its block for the file.cc line numbers and
+   the lines above the trace.
 
-Then: one real int8 inference (`RUN_UID=10000 /root/tpu-tachyon-run`), and once
-that works, the 720p object-detection benchmark against CPU (baseline 3.98
-ms/frame at 4 threads, 10 detections/frame at 0.4) and the other backends.
+Likely suspects, in order: the vendor service's cache cleanup needs
+`/data/vendor/edgetpu` (does the chroot have it? `mkdir -p` and check the code's
+path), and the HAL's status 2 is the vendor service answering a "device ready"
+query before it has powered the TPU. `/dev/janeiro` exists (`crw------- root
+502,0`) and janeiro logs `janeiro edgetpu initialized` on each boot, so the
+kernel side is no longer the question; the userspace handshake is.
+
+When the HAL stays up and publishes `com.google.edgetpu.IEdgeTpuAppService/default`,
+run one inference (`RUN_UID=10000 /root/tpu-tachyon-run`), then the 720p
+object-detection benchmark (CPU baseline 3.98 ms/frame at 4 threads, 10
+detections/frame at 0.4) against every other backend.
+
+Rules unchanged: slot B only, `pkill -x` never `pkill -f`, delete
+`$KERNEL_OUT/images` before `push`, `depmod -a $(uname -r)` after, announce
+screen-off before `poweroff`, never commit vendor blobs or identifiers, no
+`Signed-off-by`.
