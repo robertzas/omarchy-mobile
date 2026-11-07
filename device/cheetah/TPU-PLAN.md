@@ -2598,3 +2598,40 @@ one group and watch the ring; (2) if the line is a placeholder, stop reading
 the log and read the firmware's gate code instead — locate
 `vii_handler_layer.cc:247` in the A32 image by its string table entry, which
 names the element field the gate reads.
+
+### Result (2026-11-07, `7.3.0-rc6-omamobile-push1-g29a7a9326bf0-dirty`, elemsweep)
+
+Cold boot (20 s to SSH), one group, 144 submissions, `/root/tpu-elemsweep.sh`.
+The element header is exhausted too:
+
+```
+k=0  rsp 0x1 0x0 0xf000009 0x100164f5   ...   (+4, v=1: the gate, as before)
+k=138 rsp 0x8b 0x0 0x9 0x14140000       ...   (+40..+44: reserved-field check)
+log@0x2fd2: ERR vii_tracker.h:465 - Received command.seq 0x8a, expected 0x100000002
+```
+
+- `+4` and `+12`, swept 1..24 each, keep the gate line at `type 0`.
+- `+36..+44` are inside the firmware's reserved-field check (`0x14140000`), so
+  they are not a type field either.
+- Past about 128 submissions in one group the firmware's expected seq desyncs
+  (`expected 0x100000002`), and every later response is noise; the "response
+  changed" lines in the +4/+12 phases came from that, not from a real change.
+  The client now caps a sweep at 120 submissions.
+
+Conclusion after four cold boots today: neither the element header nor the
+payload changes the string the gate prints. The `%d` is a constant zero for a
+command it refuses, so the log cannot name the setup type. Two live
+explanations remain:
+
+1. the gate checks a **per-context setup state** that a command on another
+   channel sets, not a field of this command; or
+2. the setup command is identified by a field outside the 48-byte element we
+   write (e.g. the firmware reads a `CommandInfo` word the driver's queue
+   mapping does not expose).
+
+Both point away from more userspace sweeps. The next cycle should either find
+the KCI-side setup (code 6 is the one code the driver's enum skips, and the
+firmware wants a DMA buffer of global scratches, which a KCI command carries in
+its `struct edgetpu_dma_descriptor`) or read the firmware's gate code, whose
+file/line `vii_handler_layer.cc:247` is in the image but whose address is not
+reachable by an absolute or movw/movt reference.

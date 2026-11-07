@@ -2016,6 +2016,109 @@ static void bytesweep_mode(const char *file) {
   fwlog_scan_g(g_log);
 }
 
+// "elemsweep [payload]": the payload is out of the picture (bytesweep proved the
+// gate runs before the flatbuffer parse), so sweep the element header fields
+// that no run has written yet: +4, +12 and the eight u32s at +32..+44, each
+// 1..24, and read the firmware's "received a command of type %d" back from the
+// ring. +8 (U16) and +4/+6 (probe) are already ruled out; +9 and +11..+15 trip
+// the reserved-field check, so they stay zero.
+static void elemsweep_mode(const char *file) {
+  static const int fields[] = {4, 12, 32, 36, 40, 44};
+  unsigned attr[5] = {24, 12, 48, 24, 0x58};
+  int ev[2] = {0, -1};
+  static unsigned char base[0x1000];
+  unsigned char elem[48];
+  unsigned char *page;
+  unsigned long map[4];
+  unsigned plen = 0;
+  int fd, efd, i, v, t, pe;
+  long r;
+
+  fd = open("/dev/edgetpu", 2);
+  put("elemsweep: fd ");
+  putdec(fd);
+  put("\n");
+  if (fd < 0)
+    return;
+  syscall(29, fd, 0xed1a, 0);
+  efd = (int)syscall(19, 0, 0);
+  ev[1] = efd;
+  ioctl(fd, 0x4008ed05, ev);
+  r = ioctl(fd, 0x4014ed06, attr);
+  put("elemsweep: create_group -> ");
+  putdec(r);
+  put("\n");
+  if (r)
+    return;
+  r = ioctl(fd, 0xed08, 0);
+  put("elemsweep: finalize -> ");
+  putdec(r);
+  put("\n");
+  if (r)
+    return;
+  page = mmap(0, 0x1000, 3, 0x22, -1, 0);
+  if ((long)page < 0)
+    return;
+  for (i = 0; i < 0x1000; i++)
+    page[i] = 0;
+  if (file) {
+    long fsz;
+    int ffd = (int)syscall(56, -100, file, 0, 0);
+
+    if (ffd >= 0) {
+      fsz = syscall(62, ffd, 0, 2);
+      syscall(62, ffd, 0, 0);
+      if (fsz > 0 && fsz <= 0x1000 && syscall(63, ffd, page, fsz) == fsz)
+        plen = (unsigned)fsz;
+      syscall(57, ffd);
+    }
+  }
+  if (!plen)
+    plen = 0x40;
+  map[0] = (unsigned long)page;
+  map[1] = 0x1000;
+  map[2] = 0;
+  map[3] = 0;
+  r = ioctl(fd, 0xc020ed00, map);
+  put("elemsweep: map_buffer -> ");
+  putdec(r);
+  put(" dev ");
+  puthex(map[2]);
+  put("\n");
+  if (r || !map[2])
+    return;
+  g_csr = mmap(0, 0x1000, 3, 1, fd, 0x1800000);
+  g_cq = mmap(0, 24 * 1024, 3, 1, fd, 0x1900000);
+  g_rq = mmap(0, 12 * 1024, 3, 1, fd, 0x1a00000);
+  g_kmsg = (int)syscall(56, -100, "/dev/kmsg", 0x800, 0);
+  g_log = mmap(0, 0x10000, 3, 1, fd, 0x1B00000);
+  if ((long)g_csr < 0 || (long)g_cq < 0 || (long)g_rq < 0)
+    return;
+  t = ring_settle(-1);
+  /* Stay inside one tracker window: past ~128 submissions the firmware's
+     expected seq desyncs ("Received command.seq 0x8a, expected
+     0x100000002") and every later response is noise. */
+  for (i = 0; i < (int)(sizeof(fields) / sizeof(fields[0])); i++) {
+    for (v = 1; v <= 24 && g_idx < 120; v++) {
+      make_elem(elem, 0, 11, map[2], plen);
+      *(unsigned *)(elem + fields[i]) = (unsigned)v;
+      submit_elem(elem);
+      t = ring_settle(t);
+      if (*(unsigned *)(g_rq + ((g_idx - 1) % 512) * 24 + 8) != 0xf000009)
+        put("elemsweep: response changed!\n");
+    }
+    put("elemsweep: +");
+    putdec(fields[i]);
+    put(" swept, ring type ");
+    putdec(ring_type(&pe));
+    put(pe ? " parse-error\n" : "\n");
+  }
+  put("elemsweep: done, submissions ");
+  putdec(g_idx);
+  put("\n");
+  fwlog_scan_g(g_log);
+}
+
 // "cmdsweep [payload]": locate the Command flatbuffer's type field and the
 // setup type in one group, with the firmware's own log line as the read-back.
 //   A  the captured runtime payload (baseline: expect "type 0")
@@ -2398,6 +2501,10 @@ int main(int argc, char **argv) {
   }
   if (argc > 1 && streq(argv[1], "bytesweep")) {
     bytesweep_mode(argc > 2 ? argv[2] : 0);
+    return 0;
+  }
+  if (argc > 1 && streq(argv[1], "elemsweep")) {
+    elemsweep_mode(argc > 2 ? argv[2] : 0);
     return 0;
   }
   // "hal": dump the stock HAL function table and exit. Touches no device, so
