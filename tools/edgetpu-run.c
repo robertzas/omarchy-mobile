@@ -2044,6 +2044,32 @@ static void kci_probe(int fd) {
   }
 }
 
+static void kci_variant_probe(int fd) {
+  int v;
+  long r;
+  unsigned spec;
+
+  for (v = 0; v <= 7; v++) {
+    spec = 6 | ((unsigned)v << 8);
+    r = ioctl(fd, 0x4004ed22, &spec);
+    put("kci6 var ");
+    putdec(v);
+    put(" -> ");
+    putdec(r);
+    put("\n");
+  }
+  spec = 4;
+  r = ioctl(fd, 0x4004ed22, &spec);
+  put("kci4 var0 -> ");
+  putdec(r);
+  put("\n");
+  spec = 9;
+  r = ioctl(fd, 0x4004ed22, &spec);
+  put("kci9 var0 -> ");
+  putdec(r);
+  put("\n");
+}
+
 static void elemsweep_mode(const char *file) {
   static const int fields[] = {4, 12, 32, 36, 40, 44};
   unsigned attr[5] = {24, 12, 48, 24, 0x58};
@@ -2109,8 +2135,10 @@ static void elemsweep_mode(const char *file) {
   put("\n");
   if (r || !map[2])
     return;
-  if (g_kci_probe)
+  if (g_kci_probe == 1)
     kci_probe(fd);
+  else if (g_kci_probe == 2)
+    kci_variant_probe(fd);
   g_csr = mmap(0, 0x1000, 3, 1, fd, 0x1800000);
   g_cq = mmap(0, 24 * 1024, 3, 1, fd, 0x1900000);
   g_rq = mmap(0, 12 * 1024, 3, 1, fd, 0x1a00000);
@@ -2528,6 +2556,11 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (argc > 1 && streq(argv[1], "elemsweep")) {
+    elemsweep_mode(argc > 2 ? argv[2] : 0);
+    return 0;
+  }
+  if (argc > 1 && streq(argv[1], "kciv")) {
+    g_kci_probe = 2;
     elemsweep_mode(argc > 2 ? argv[2] : 0);
     return 0;
   }

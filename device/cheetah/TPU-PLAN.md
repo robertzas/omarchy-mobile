@@ -2729,3 +2729,28 @@ Two traps this cost, both now fixed:
 - the VII responses after the KCI sends (`0xff0003`) are the tracker desync
   (`Received command.seq 0x2, expected 0x100000002`), not a gate change; the
   ring still holds one gate line per group.
+
+### U21: the device stops opening after a module reload (2026-11-07)
+
+The variant sweep never ran. On the boots after U20, `open("/dev/edgetpu",
+O_RDWR)` inside the chroot returns -1 with the node present (`502:0`) and the
+driver logs nothing, so the failure is before any logged path. What the boots
+did establish, all worth keeping:
+
+- the module is now loaded by the boot itself. Its probe logs
+  `Failed to fetch pasid-num-bits, defaulting to 8 PASIDs (-22)`, a WARN in
+  `iommu_set_fault_handler` and one in `__setup_irq`, then "initialized".
+- **a second load in one boot oopses**: `rmmod janeiro; insmod …` after the
+  boot's own load crashed in `edgetpu_mmu_attach+0x110` (SMMU state is not
+  reset by `rmmod`), and that boot then had no usable device. One load per
+  cold boot, before anything opens the device.
+- the chroot has its own `/dev`: it held `edgetpu -> janeiro`, a dangling
+  link, so every chroot run failed to open even with a good host node. Real
+  nodes (`mknod … c 502 0` and `502 1`) plus
+  `LD_LIBRARY_PATH=/apex/com.android.runtime/lib64/bionic:/system/lib64:/vendor/lib64`
+  make the client run.
+- the module file is `janeiro.ko`; the boot copies it from
+  `/usr/lib/modules/<release>/kernel/drivers/edgetpu/`, not from the worktree.
+
+Next cycle: replace that copy with the ioctl build, cold boot, and open the
+device **before** any `rmmod`; then run `kciv`.
