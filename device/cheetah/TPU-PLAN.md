@@ -2929,3 +2929,128 @@ attempt at all**. So the "firmware setup" path in libedgetpu_util is not
 entered by `edgetpu-run`; the host half the firmware wants is sent by something
 else on stock Android (the vendor service or the Tachyon compute session), not
 by the delegate.
+
+### U27: the Tachyon service path is binder-only (2026-11-07)
+
+The vendor image's Tachyon stack is not usable from a Linux userspace, and the
+reason is structural rather than a missing file:
+
+- `com.google.edgetpu.tachyon-service` aborts at start with
+  `Binder driver '/dev/binder' could not be opened. Error: 2`. Arch has no
+  binder at all, so the service never reaches the TPU and the delegate's next
+  run still answers `error_code=9`.
+- `libedgetpu_tachyon.google.so`'s `TachyonComputeService_create` is a binder
+  **client**: it calls `AServiceManager_isDeclared` and then
+  `AServiceManager_waitForService`, and only wraps the resulting
+  `IComputeService` proxy. It never opens `/dev/edgetpu` itself.
+- `TachyonComputeSession_setupCommandQueue` only calls
+  `ComputeSession::SetupCommandFmq(int*, int*)` on a session object the service
+  handed out. The fds come from the service, so a session cannot be built
+  in-process without binder either.
+
+So the Tachyon compute API is a thin AIDL skin over a device-owning service,
+and that service is Android-only. The VII setup it would send is not reachable
+from the phone's Linux side without a binder driver plus a servicemanager,
+which is an Android userspace, not a shim.
+
+The firmware's own words narrow what is missing (strings in
+`edgetpu-janeiro.fw`, `out/tpu-firmware/`):
+
+```
+Setup is not done yet received a command of type %d.
+Setup is already done, yet received another setup command.
+No global scratches were provided in setup command.
+Global scratch is too small to for fallback array allocator, %u bytes needed.
+```
+
+So the setup is one VII command, once per firmware boot, carrying the global
+scratch list. `libedgetpu_util.so` contains the builder (`Firmware setup failed
+for commands[%d]`, `firmware_setup_done_`) but `GLOG_v=3` shows the delegate
+never enters it: on stock Android the vendor service does, at boot, before any
+client. With binder out of reach and the lib stripped, the host half cannot be
+reproduced from the vendor image alone. Reproducing it would mean reverse
+engineering the flatbuffer from the service binary by hand.
+
+Decision: the VII/Tachyon gate stays closed for this bring-up. The TPU work
+continues from the kernel side (mailbox, firmware load, MMU, power) and the
+userspace client stays in `tools/edgetpu-run`; inference is blocked until a
+host-side setup implementation exists, and that is not a kernel problem.
+
+### U27 addendum: where the setup builder logs (2026-11-07)
+
+`Firmware setup failed for commands[%d]` sits at file offset `0x67ce7` in
+`libedgetpu_util.so`, and its `LOG(ERROR)` site is at **`0x13c2bc`**:
+
+```
+13c2b8: adrp x0, 0x67000
+13c2bc: add  x0, x0, #0xce7
+13c2c0: add  x2, sp, #0x90
+13c2c4: mov  w1, #0x45          ; line 69
+```
+
+`llvm-objdump` labels nothing after `0xfca90` in this stripped library, so the
+enclosing function has no name and its start is only findable by a prologue
+scan. That function is the setup builder: it is the thing the missing host half
+does, and it is either callable through an exported path or copyable field by
+field from its disassembly. `tools/edgetpu-run.c` gains a `firmware` mode when
+the buffer layout is known.
+
+### U28: binder does exist, and the vendor stack runs under shims (2026-11-07)
+
+U27's conclusion held only for a userspace without binder. The kernel has
+`CONFIG_ANDROID_BINDER_IPC=y` and `CONFIG_ANDROID_BINDERFS=y`
+(`CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"`), and
+`/proc/filesystems` lists `binder`; nothing ever mounted it. After
+`mount -t binder binder /dev/binderfs` the four nodes appear (`binder` is
+507:1, not 507:0).
+
+With binder present the vendor stack needed two more things, both now tools:
+
+- **a servicemanager**: extracted from the stock system image
+  (`debugfs -R "dump /system/bin/servicemanager"` on `out/cp2a-system.img`);
+- **two LD_PRELOAD shims**, because this is not Android:
+  `tools/android-log-stderr.c` routes liblog to stderr (logd does not exist),
+  and `tools/android-selinux-allow.c` satisfies libselinux (the kernel has
+  `CONFIG_SECURITY_SELINUX` unset, and servicemanager aborts in
+  `Check failed: selinux_status_open(true ) >= 0`).
+
+With both preloaded, servicemanager runs (it prints `SELINUX-SHIM` and
+`Using old property service protocol`), and
+`/vendor/bin/hw/com.google.edgetpu.tachyon-service` starts and stays up
+instead of aborting on `/dev/binder`. The full sequence is packaged as
+`tools/tpu-tachyon-run`, which also creates `/dev/dma_heap/system`, mounts the
+chroot's `/dev`, `/proc` and `/sys`, and runs the delegate.
+
+Benchmark baseline meanwhile, on the host (16 cores), the COCO SSD int8 model
+from Google's `coco_ssd_mobilenet_v1_1.0_quant_2018_06_29` bundle over a 720p
+mosaic clip of COCO val2017 images (`out/bench/mosaic720.mp4`, 60 frames):
+
+```
+cpu-xnnpack-t1   11.52 ms mean   86.8 fps   10 detections/frame (th 0.4)
+cpu-xnnpack-t4    3.98 ms mean  251.1 fps   10 detections/frame (th 0.4)
+```
+
+`tools/bench-object-detection.py` produced those numbers; the TPU row is added
+when the VII gate opens.
+
+### U29: the service runs, but the delegate never asks it (2026-11-07)
+
+Cold boot with `tools/tpu-tachyon-run` (kernel
+`7.3.0-rc6-omamobile-push1-g29a7a9326bf0-dirty`): janeiro autoloads from
+`/etc/modprobe.d/omamobile-tpu.conf` (`blacklist janeiro` is *not* in it; the
+file only marks it), the TPU powers up, `loaded prod firmware (1.0 895567958)`,
+`OPEN_DEVICE ret 0`, `kci_finalized ret 0`, mailbox 1 VII queues created, and
+the delegate gets through create-group / eventfd / finalize / its mmaps. Then
+it hangs and `timeout` returns 124, no sync and no error.
+
+With the nometrics shim preloaded instead, the same binary skips the service
+check, reaches Sync and gets `error_code=9`. So the two paths differ exactly at
+the Android service lookup: without a property service the delegate spins in
+`CreateVirtualDevice` before it can use the now-running Tachyon service.
+
+Both servicemanager and the Tachyon service were up in that boot (the script's
+earlier abort was its missing `LD_PRELOAD`, now fixed). What is missing is
+`__system_property_*`: a shim that answers the property wait would let the
+delegate reach the service, and a small client calling
+`TachyonComputeService_create` + `createSession` would test the same path
+without the delegate.
