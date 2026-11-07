@@ -2431,3 +2431,84 @@ so it dumps the empty next slot — use (REAL_INDEX(head)+size-1) % size; (b) fw
 scan must treat tail&0xffff < 128 as empty (observed tail 0x62 on a fresh boot).
 Phone state: last boot's TPU run spent (typesweep consumed the one run); next client
 run needs poweroff + Power.
+
+## U18. The firmware's type is a Command flatbuffer field; a schema sweep with the ring as oracle (2026-11-07)
+
+Kernel `7.3.0-rc6-omamobile-push1-g29a7a9326bf0-dirty`. Offline work on the
+laptop (the boot in progress had already spent its one TPU run on the U17
+typesweep, so nothing here touched the TPU).
+
+### What the firmware says it does
+
+The strings in `out/tpu-firmware/edgetpu-janeiro.fw` (`third_party/darwinn/
+firmware/driver/mailbox/vii_handler_layer.cc`) put the parse and the gate in
+one function, in this order:
+
+```
+efb34  Unknown command type
+efb4c  Buffer cannot be reached by firmware.
+efbb8  Could not parse Command flatbuffer.
+efbdc  Setup is not done yet received a command of type %d.
+efc14  Invalid command.
+efdc8  Setup is already done, yet received another setup command.
+efe18  No global scratches were provided in setup command.
+```
+
+So the firmware (1) parses the element's DMA payload as a **Command
+flatbuffer**, (2) takes the command *type* from that flatbuffer, and (3) refuses
+every type but setup while the setup flag is clear, logging the parsed type.
+The element's `u16` at `+8` is not that type: the two stock writers put 0 there
+and the runtime's type byte at `+10` (11 for its setup) never reaches the log
+either — every sweep in U8/U16/U17 read back `type 0` because the *payload*
+never parsed to a nonzero type. A parse failure is a separate line
+(`Could not parse Command flatbuffer.`), so the ring distinguishes "type is
+absent" from "type is wrong".
+
+### The runtime's command table
+
+`libedgetpu_util.so` maps its command enum to VII element codes with a byte
+table at file offset `0x7a344` (entry *n* is a byte offset / 4 from
+`0x184b64`). Entries 1..23 land on the 12-byte stubs at `0x184ba0`-`0x184d70`,
+each `strh w8,[x0,#8]` with `w8` = 1..24: enum *n* writes element code *n*.
+Entry 0 does not: it jumps to `0x184b64`, a logging path that builds an error
+status, i.e. **type 0 is "not a command"** in the runtime. That is also the
+type the firmware reports for the runtime's own sync payload, which is why the
+gate and the runtime's `Sync VII command failed: error_code=9` agree.
+
+### New client mode: `cmdsweep`
+
+`tools/edgetpu-run.c` gains `cmdsweep [/vendor/payload.bin]`, one group, one
+cold boot:
+
+- **A** the captured runtime payload as the baseline (expect `type 0`);
+- **B** a Command flatbuffer with 32 declared fields, all set at once to
+  `(i % 24) + 1`, then to `((i * 7) % 24) + 1`. The firmware prints the value
+  of whichever vtable slot its schema reads as the type, so the two answers
+  name the field by elimination (the patterns collide only where the index is
+  congruent mod 24, and the second pattern separates those);
+- **C** with the field known, sweep its value 0..24 (the runtime's whole
+  command table). A setup type that clears the gate answers with a different
+  error and the firmware's own `No global scratches were provided in setup
+  command.` instead of `Setup is not done yet` — the definition of done for
+  this cycle;
+- **D** if B reads 0 for both patterns, each field alone with 1, which tells a
+  non-scalar type (a union offset, or a field outside the table) from a parse
+  failure.
+
+The client reads the answer from the firmware's own log ring (mmap
+`0x1B00000`), not from the response word: the gate runs before any dispatch,
+so the response is always `0xf000009` even when the type is finally right.
+
+Build (laptop, Android clang, bionic from the vendor chroot):
+
+```sh
+CL=~/.cache/omamobile/toolchain/clang-r596125/bin/clang
+C=out/vendor-chroot-edgetpu/root
+$CL --target=aarch64-linux-android30 -O2 -fPIE -pie -nostdlib -fuse-ld=lld \
+    -Wl,-e,_start -Wl,-dynamic-linker,/system/bin/linker64 \
+    -o out/tpu-client/edgetpu-run-new tools/edgetpu-run.c \
+    -L$C/apex/com.android.runtime/lib64/bionic -L$C/system/lib64 -L$C/vendor/lib64 \
+    -llog -lc -lm -ldl -ledgetpu_util -ldarwinn_hal
+```
+
+Result of this run: recorded below once the phone has been power-cycled.

@@ -1425,11 +1425,542 @@ static void typesweep_mode(void) {
   fwlog_scan_g(g_log);
 }
 
+// "e12sweep": submit the captured payload as DMA but sweep the element's u32
+// at +12 (never swept before; the HAL's one captured command had +12 =
+// 0x35614856). Also submits one element whose DMA iova is unmapped to see
+// whether the firmware logs a reachability/parse error instead of the gate.
+static void e12sweep_mode(const char *file) {
+  unsigned attr[5] = {24, 12, 48, 24, 0x58};
+  int ev[2] = {0, -1};
+  static unsigned char base[0x1000];
+  unsigned char elem[48];
+  unsigned char *page;
+  unsigned long map[4];
+  unsigned plen = 0;
+  int fd, efd, i, v;
+  long r;
+
+  fd = open("/dev/edgetpu", 2);
+  if (fd < 0)
+    return;
+  syscall(29, fd, 0xed1a, 0);
+  efd = (int)syscall(19, 0, 0);
+  ev[1] = efd;
+  ioctl(fd, 0x4008ed05, ev);
+  r = ioctl(fd, 0x4014ed06, attr);
+  put("e12sweep: create_group -> ");
+  putdec(r);
+  put("\n");
+  if (r)
+    return;
+  r = ioctl(fd, 0xed08, 0);
+  put("e12sweep: finalize -> ");
+  putdec(r);
+  put("\n");
+  if (r)
+    return;
+  page = mmap(0, 0x1000, 3, 0x22, -1, 0);
+  if ((long)page < 0)
+    return;
+  for (i = 0; i < 0x1000; i++)
+    page[i] = 0;
+  if (file) {
+    long fsz;
+    int ffd = (int)syscall(56, -100, file, 0, 0);
+
+    if (ffd >= 0) {
+      fsz = syscall(62, ffd, 0, 2);
+      syscall(62, ffd, 0, 0);
+      if (fsz > 0 && fsz <= 0x1000 && syscall(63, ffd, page, fsz) == fsz) {
+        plen = (unsigned)fsz;
+        for (i = 0; i < (int)plen; i++)
+          base[i] = page[i];
+      }
+      syscall(57, ffd);
+    }
+  }
+  if (!plen)
+    plen = 0x80;
+  map[0] = (unsigned long)page;
+  map[1] = 0x1000;
+  map[2] = 0;
+  map[3] = 0;
+  r = ioctl(fd, 0xc020ed00, map);
+  put("e12sweep: map_buffer -> ");
+  putdec(r);
+  put(" dev ");
+  puthex(map[2]);
+  put("\n");
+  if (r || !map[2])
+    return;
+  g_csr = mmap(0, 0x1000, 3, 1, fd, 0x1800000);
+  g_cq = mmap(0, 24 * 1024, 3, 1, fd, 0x1900000);
+  g_rq = mmap(0, 12 * 1024, 3, 1, fd, 0x1a00000);
+  g_kmsg = (int)syscall(56, -100, "/dev/kmsg", 0x800, 0);
+  g_log = mmap(0, 0x10000, 3, 1, fd, 0x1B00000);
+  if ((long)g_csr < 0 || (long)g_cq < 0 || (long)g_rq < 0)
+    return;
+  for (i = 0; i < (int)plen; i++)
+    page[i] = base[i];
+  make_elem(elem, 0, 11, map[2], plen);
+  submit_elem(elem);
+  for (v = 1; v <= 200 && g_idx < 240; v++) {
+    make_elem(elem, 0, 11, map[2], plen);
+    *(unsigned *)(elem + 12) = (unsigned)v;
+    submit_elem(elem);
+    if (*(unsigned *)(g_rq + ((g_idx - 1) % 512) * 24 + 8) != 0xf000009) {
+      put("e12sweep: v=");
+      putdec(v);
+      put(" response changed!\n");
+    }
+  }
+  /* unmapped iova: does the firmware log a reachability/parse error? */
+  make_elem(elem, 0, 11, 0xdeadbee000UL, 64);
+  submit_elem(elem);
+  put("e12sweep: unmapped-iova response word2 ");
+  puthex(*(unsigned *)(g_rq + ((g_idx - 1) % 512) * 24 + 8));
+  put("\n");
+  put("e12sweep: done, submissions ");
+  putdec(g_idx);
+  put("\n");
+  fwlog_scan_g(g_log);
+}
+
+// "gate2 [payload]": one boot, one device create, four phases against the
+// VII setup gate:
+//  A baseline: captured payload on a host MAP_BUFFER page, code 0 prio 11
+//  B element +12 swept as u32 v=1..200 with the same payload as DMA
+//  C one element with an unmapped iova (0xdeadbee000) to provoke a
+//    reachability/parse log line
+//  D the captured payload inside a dma-buf (dma_heap/system) mapped with
+//    EDGETPU_MAP_DMABUF (the runtime's 0xffeff000 address class)
+//  E a crafted Command flatbuffer (f0 u64 marker, f1..f15 u8 = v) inside the
+//    same dma-buf, swept v=1..200
+// Any response word2 != 0xf000009 or a changed ring line is reported.
+static void gate2_mode(const char *file) {
+  unsigned attr[5] = {24, 12, 48, 24, 0x58};
+  int ev[2] = {0, -1};
+  static unsigned char base[0x1000];
+  unsigned char elem[48];
+  unsigned char *page, *dbuf;
+  unsigned long map[4];
+  unsigned long dmap[5];
+  unsigned plen = 0;
+  int fd, efd, i, v, k, dfd = -1;
+  long r;
+
+  fd = open("/dev/edgetpu", 2);
+  if (fd < 0)
+    return;
+  syscall(29, fd, 0xed1a, 0);
+  efd = (int)syscall(19, 0, 0);
+  ev[1] = efd;
+  ioctl(fd, 0x4008ed05, ev);
+  r = ioctl(fd, 0x4014ed06, attr);
+  put("gate2: create_group -> ");
+  putdec(r);
+  put("\n");
+  if (r)
+    return;
+  r = ioctl(fd, 0xed08, 0);
+  put("gate2: finalize -> ");
+  putdec(r);
+  put("\n");
+  if (r)
+    return;
+  page = mmap(0, 0x1000, 3, 0x22, -1, 0);
+  if ((long)page < 0)
+    return;
+  for (i = 0; i < 0x1000; i++)
+    page[i] = 0;
+  if (file) {
+    long fsz;
+    int ffd = (int)syscall(56, -100, file, 0, 0);
+
+    if (ffd >= 0) {
+      fsz = syscall(62, ffd, 0, 2);
+      syscall(62, ffd, 0, 0);
+      if (fsz > 0 && fsz <= 0x1000 && syscall(63, ffd, page, fsz) == fsz) {
+        plen = (unsigned)fsz;
+        for (i = 0; i < (int)plen; i++)
+          base[i] = page[i];
+      }
+      syscall(57, ffd);
+    }
+  }
+  if (!plen)
+    plen = 0x80;
+  map[0] = (unsigned long)page;
+  map[1] = 0x1000;
+  map[2] = 0;
+  map[3] = 0;
+  r = ioctl(fd, 0xc020ed00, map);
+  put("gate2: map_buffer -> ");
+  putdec(r);
+  put(" dev ");
+  puthex(map[2]);
+  put("\n");
+  if (r || !map[2])
+    return;
+  g_csr = mmap(0, 0x1000, 3, 1, fd, 0x1800000);
+  g_cq = mmap(0, 24 * 1024, 3, 1, fd, 0x1900000);
+  g_rq = mmap(0, 12 * 1024, 3, 1, fd, 0x1a00000);
+  g_kmsg = (int)syscall(56, -100, "/dev/kmsg", 0x800, 0);
+  g_log = mmap(0, 0x10000, 3, 1, fd, 0x1B00000);
+  if ((long)g_csr < 0 || (long)g_cq < 0 || (long)g_rq < 0)
+    return;
+
+  /* phase A: baseline */
+  for (i = 0; i < (int)plen; i++)
+    page[i] = base[i];
+  make_elem(elem, 0, 11, map[2], plen);
+  submit_elem(elem);
+  put("gate2: A baseline rsp word2 ");
+  puthex(*(unsigned *)(g_rq + ((g_idx - 1) % 512) * 24 + 8));
+  put("\n");
+
+  /* phase B: element +12 swept as u32 */
+  for (v = 1; v <= 200 && g_idx < 260; v++) {
+    make_elem(elem, 0, 11, map[2], plen);
+    *(unsigned *)(elem + 12) = (unsigned)v;
+    submit_elem(elem);
+    if (*(unsigned *)(g_rq + ((g_idx - 1) % 512) * 24 + 8) != 0xf000009) {
+      put("gate2: B v=");
+      putdec(v);
+      put(" response changed!\n");
+    }
+  }
+  put("gate2: B done, submissions ");
+  putdec(g_idx);
+  put("\n");
+  fwlog_scan_g(g_log);
+
+  /* phase C: unmapped iova */
+  make_elem(elem, 0, 11, 0xdeadbee000UL, 64);
+  submit_elem(elem);
+  put("gate2: C unmapped rsp word2 ");
+  puthex(*(unsigned *)(g_rq + ((g_idx - 1) % 512) * 24 + 8));
+  put("\n");
+  fwlog_scan_g(g_log);
+
+  /* phase D: dma-buf mapped payload (runtime's address class) */
+  {
+    unsigned long alloc[3];
+    int hfd = (int)syscall(56, -100, "/dev/dma_heap/system", 2, 0);
+
+    if (hfd >= 0) {
+      alloc[0] = 0x1000;   /* len */
+      alloc[1] = ((unsigned long)0x80002 << 32); /* fd out (low), fd_flags O_RDWR|O_CLOEXEC (high) */
+      alloc[2] = 0;        /* heap_flags */
+      r = ioctl(hfd, 0xc0184200UL, alloc);
+      put("gate2: dma_heap alloc -> ");
+      putdec(r);
+      put(" fd ");
+      putdec((int)(alloc[1] & 0xffffffff));
+      put("\n");
+      if (r == 0) {
+        dfd = (int)(alloc[1] & 0xffffffff);
+        dbuf = mmap(0, 0x1000, 3, 1, dfd, 0);
+        put("gate2: dbuf mmap ");
+        puthex((unsigned long)dbuf);
+        put("\n");
+        if ((long)dbuf > 0) {
+          for (i = 0; i < 0x1000; i++)
+            dbuf[i] = 0;
+          for (i = 0; i < (int)plen; i++)
+            dbuf[i] = base[i];
+          dmap[0] = 0;        /* offset (ignored) */
+          dmap[1] = 0x1000;   /* size (ignored) */
+          dmap[2] = 0;        /* device_address out */
+          dmap[3] = (unsigned long)(unsigned)dfd; /* dmabuf_fd + flags(0) */
+          dmap[4] = 0;        /* die_index */
+          r = ioctl(fd, 0xc028ed11UL, dmap);
+          put("gate2: map_dmabuf -> ");
+          putdec(r);
+          put(" dev ");
+          puthex(dmap[2]);
+          put("\n");
+          if (r == 0 && dmap[2]) {
+            make_elem(elem, 0, 11, dmap[2], plen);
+            submit_elem(elem);
+            put("gate2: D dmabuf-payload rsp word2 ");
+            puthex(*(unsigned *)(g_rq + ((g_idx - 1) % 512) * 24 + 8));
+            put("\n");
+            fwlog_scan_g(g_log);
+            /* phase E: crafted Command in the dma-buf, f1..f15 = v */
+            for (v = 1; v <= 200 && g_idx < 500; v++) {
+              for (k = 0; k < 0x80; k++)
+                dbuf[k] = 0;
+              *(unsigned *)(dbuf + 0) = 0x40;         /* root -> table @0x40 */
+              *(unsigned short *)(dbuf + 4) = 36;     /* vtable size */
+              *(unsigned short *)(dbuf + 6) = 32;     /* table size */
+              *(unsigned short *)(dbuf + 8) = 8;      /* f0 u64 @ table+8 */
+              for (k = 1; k <= 15; k++)
+                *(unsigned short *)(dbuf + 8 + 2 * k) = 15 + k; /* f1..f15 */
+              *(unsigned *)(dbuf + 0x40) = 0x40 - 0x04; /* soffset to vtable */
+              *(unsigned long *)(dbuf + 0x48) = 0x1000 + v; /* f0 marker */
+              for (k = 0; k < 15; k++)
+                dbuf[0x50 + k] = (unsigned char)v;   /* f1..f15 */
+              make_elem(elem, 0, 11, dmap[2], 0x60);
+              submit_elem(elem);
+              if (*(unsigned *)(g_rq + ((g_idx - 1) % 512) * 24 + 8) != 0xf000009) {
+                put("gate2: E v=");
+                putdec(v);
+                put(" response changed!\n");
+              }
+            }
+            put("gate2: E done, submissions ");
+            putdec(g_idx);
+            put("\n");
+            fwlog_scan_g(g_log);
+          }
+        }
+      }
+      syscall(57, hfd);
+    } else {
+      put("gate2: no /dev/dma_heap/system\n");
+    }
+  }
+  put("gate2: done, submissions ");
+  putdec(g_idx);
+  put("\n");
+  fwlog_scan_g(g_log);
+}
+
+// The firmware's log is the only oracle for the payload schema: it parses the
+// 48-byte element's payload as a Command flatbuffer and logs the *parsed* type
+// ("Setup is not done yet received a command of type %d."), or "Could not
+// parse Command flatbuffer." when the payload does not verify. Identical lines
+// are deduplicated, so a changed type or a parse failure always shows up as a
+// new tail entry.
+static int hasat(const unsigned char *s, int n, const char *kw) {
+  int k;
+
+  for (k = 0; kw[k] && k < n; k++)
+    if (s[k] != (unsigned char)kw[k])
+      return 0;
+  return !kw[k];
+}
+
+// Scan the firmware ring for the newest "command of type N" and for the parse
+// error. Returns the last type printed this boot, or -1 when there is none.
+static int ring_type(int *parse_err) {
+  unsigned t;
+  int i, lim, last = -1;
+
+  if (parse_err)
+    *parse_err = 0;
+  if (!g_log)
+    return -1;
+  t = *(unsigned *)(g_log + 0x40);
+  lim = (int)(t & 0xffff);
+  if (lim < 128)
+    return -1;
+  if (lim > 0x10000)
+    lim = 0x10000;
+  for (i = 128; i < lim - 4; i++) {
+    if (hasat(g_log + i, lim - i, "command of type ")) {
+      int v = 0, k = i + 16;
+
+      while (k < lim && g_log[k] >= '0' && g_log[k] <= '9') {
+        v = v * 10 + (g_log[k] - '0');
+        k++;
+      }
+      last = v;
+      i = k;
+    } else if (parse_err && hasat(g_log + i, lim - i, "Could not parse")) {
+      *parse_err = 1;
+    }
+  }
+  return last;
+}
+
+// Build a Command flatbuffer with NFIELDS scalar fields, so the firmware's
+// "type %d" names whichever vtable slot its schema reads as the command type:
+// with every field set to i+1, the printed type is (field index + 1). The
+// fields are u16 (an 8-bit enum still reads its low byte). Layout: root uoffset
+// at 0, vtable at 4, table at 0x48, field i at table+4+4*i.
+#define CMD_NFIELDS 32
+#define CMD_TABLE 0x48
+#define CMD_VT 0x04
+#define CMD_LEN (CMD_TABLE + 4 + 4 * CMD_NFIELDS)
+static void cmd_build(unsigned char *b, int field, unsigned value) {
+  int i;
+
+  for (i = 0; i < CMD_LEN; i++)
+    b[i] = 0;
+  *(unsigned *)(b + 0) = CMD_TABLE;
+  *(unsigned short *)(b + CMD_VT + 0) = (unsigned short)(4 + 2 * CMD_NFIELDS);
+  *(unsigned short *)(b + CMD_VT + 2) = (unsigned short)(4 + 4 * CMD_NFIELDS);
+  for (i = 0; i < CMD_NFIELDS; i++)
+    *(unsigned short *)(b + CMD_VT + 4 + 2 * i) = (unsigned short)(4 + 4 * i);
+  *(unsigned *)(b + CMD_TABLE) = CMD_TABLE - CMD_VT;
+  if (field >= 0 && field < CMD_NFIELDS)
+    *(unsigned short *)(b + CMD_TABLE + 4 + 4 * field) = (unsigned short)value;
+}
+
+// "cmdsweep [payload]": locate the Command flatbuffer's type field and the
+// setup type in one group, with the firmware's own log line as the read-back.
+//   A  the captured runtime payload (baseline: expect "type 0")
+//   B  every field i = (i % 24) + 1, then i = (i * 7 % 24) + 1; the two answers
+//      name the type field by elimination
+//   C  the found field swept 0..24 (the runtime's whole command table); a setup
+//      type that clears the gate answers with a different error and the
+//      firmware's own strings ("No global scratches were provided in setup
+//      command.") instead of the gate line
+//   D  if B reads 0 for both patterns, each field alone with 1
+static void cmdsweep_mode(const char *file) {
+  unsigned attr[5] = {24, 12, 48, 24, 0x58};
+  int ev[2] = {0, -1};
+  static unsigned char base[0x1000];
+  unsigned char elem[48];
+  unsigned char *page;
+  unsigned long map[4];
+  unsigned plen = 0;
+  int t1, t2, pe, field = -1, fd, efd, i, v;
+  long r;
+
+  fd = open("/dev/edgetpu", 2);
+  put("cmdsweep: fd ");
+  putdec(fd);
+  put("\n");
+  if (fd < 0)
+    return;
+  syscall(29, fd, 0xed1a, 0);
+  efd = (int)syscall(19, 0, 0);
+  ev[1] = efd;
+  ioctl(fd, 0x4008ed05, ev);
+  r = ioctl(fd, 0x4014ed06, attr);
+  put("cmdsweep: create_group -> ");
+  putdec(r);
+  put("\n");
+  if (r)
+    return;
+  r = ioctl(fd, 0xed08, 0);
+  put("cmdsweep: finalize -> ");
+  putdec(r);
+  put("\n");
+  if (r)
+    return;
+  page = mmap(0, 0x1000, 3, 0x22, -1, 0);
+  if ((long)page < 0)
+    return;
+  for (i = 0; i < 0x1000; i++)
+    page[i] = 0;
+  map[0] = (unsigned long)page;
+  map[1] = 0x1000;
+  map[2] = 0;
+  map[3] = 0;
+  r = ioctl(fd, 0xc020ed00, map);
+  put("cmdsweep: map_buffer -> ");
+  putdec(r);
+  put(" dev ");
+  puthex(map[2]);
+  put("\n");
+  if (r || !map[2])
+    return;
+  g_csr = mmap(0, 0x1000, 3, 1, fd, 0x1800000);
+  g_cq = mmap(0, 24 * 1024, 3, 1, fd, 0x1900000);
+  g_rq = mmap(0, 12 * 1024, 3, 1, fd, 0x1a00000);
+  g_kmsg = (int)syscall(56, -100, "/dev/kmsg", 0x800, 0);
+  g_log = mmap(0, 0x10000, 3, 1, fd, 0x1B00000);
+  if ((long)g_csr < 0 || (long)g_cq < 0 || (long)g_rq < 0)
+    return;
+
+  /* A: the runtime's own sync payload, the baseline the firmware logs as 0 */
+  if (file) {
+    long fsz;
+    int ffd = (int)syscall(56, -100, file, 0, 0);
+
+    if (ffd >= 0) {
+      fsz = syscall(62, ffd, 0, 2);
+      syscall(62, ffd, 0, 0);
+      if (fsz > 0 && fsz <= 0x1000 && syscall(63, ffd, page, fsz) == fsz)
+        plen = (unsigned)fsz;
+      syscall(57, ffd);
+    }
+    if (plen) {
+      make_elem(elem, 0, 11, map[2], plen);
+      submit_elem(elem);
+      put("cmdsweep: A baseline ring type ");
+      putdec(ring_type(&pe));
+      put(pe ? " (parse error seen)\n" : "\n");
+    }
+  }
+
+  /* B: two patterns over 32 fields, all set at once */
+  cmd_build(page, -1, 0);
+  for (i = 0; i < CMD_NFIELDS; i++)
+    *(unsigned short *)(page + CMD_TABLE + 4 + 4 * i) =
+        (unsigned short)((i % 24) + 1);
+  make_elem(elem, 0, 11, map[2], CMD_LEN);
+  submit_elem(elem);
+  t1 = ring_type(&pe);
+  put("cmdsweep: B1 ring type ");
+  putdec(t1);
+  put(pe ? " (parse error seen)\n" : "\n");
+
+  cmd_build(page, -1, 0);
+  for (i = 0; i < CMD_NFIELDS; i++)
+    *(unsigned short *)(page + CMD_TABLE + 4 + 4 * i) =
+        (unsigned short)(((i * 7) % 24) + 1);
+  make_elem(elem, 0, 11, map[2], CMD_LEN);
+  submit_elem(elem);
+  t2 = ring_type(&pe);
+  put("cmdsweep: B2 ring type ");
+  putdec(t2);
+  put(pe ? " (parse error seen)\n" : "\n");
+
+  if (t1 > 0 && t1 <= CMD_NFIELDS && t2 > 0 && t2 <= 24) {
+    for (i = 0; i < CMD_NFIELDS; i++) {
+      if ((i % 24) + 1 == t1 && ((i * 7) % 24) + 1 == t2) {
+        field = i;
+        break;
+      }
+    }
+  }
+  put("cmdsweep: type field ");
+  putdec(field);
+  put("\n");
+
+  /* C: sweep the found field through the runtime's command table */
+  if (field >= 0) {
+    for (v = 0; v <= 24 && g_idx < 60; v++) {
+      cmd_build(page, field, (unsigned)v);
+      make_elem(elem, 0, 11, map[2], CMD_LEN);
+      submit_elem(elem);
+      put("cmdsweep: C v=");
+      putdec(v);
+      put(" ring ");
+      putdec(ring_type(&pe));
+      put("\n");
+      if (*(unsigned *)(g_rq + ((g_idx - 1) % 512) * 24 + 8) != 0xf000009)
+        put("cmdsweep: C response changed!\n");
+    }
+  } else {
+    /* D: no single-field answer; try each field alone with 1 */
+    for (i = 0; i < CMD_NFIELDS; i++) {
+      cmd_build(page, i, 1);
+      make_elem(elem, 0, 11, map[2], CMD_LEN);
+      submit_elem(elem);
+      put("cmdsweep: D field ");
+      putdec(i);
+      put(" ring ");
+      putdec(ring_type(&pe));
+      put("\n");
+    }
+  }
+  put("cmdsweep: done, submissions ");
+  putdec(g_idx);
+  put("\n");
+  fwlog_scan_g(g_log);
+}
+
 // Dumps the VII queues of the group the HAL created, from inside the same
 // process: the queues are per-fd, so only a thread that shares the HAL's fd can
 // see what it wrote before it blocked.
 extern int pthread_create(unsigned long *, const void *, void *(*)(void *),
-                           void *);
+                            void *);
 
 static void *queue_watch(void *arg) {
   struct {
@@ -1634,6 +2165,18 @@ int main(int argc, char **argv) {
   }
   if (argc > 1 && streq(argv[1], "typesweep")) {
     typesweep_mode();
+    return 0;
+  }
+  if (argc > 2 && streq(argv[1], "e12sweep")) {
+    e12sweep_mode(argv[2]);
+    return 0;
+  }
+  if (argc > 2 && streq(argv[1], "gate2")) {
+    gate2_mode(argv[2]);
+    return 0;
+  }
+  if (argc > 1 && streq(argv[1], "cmdsweep")) {
+    cmdsweep_mode(argc > 2 ? argv[2] : 0);
     return 0;
   }
   // "hal": dump the stock HAL function table and exit. Touches no device, so
