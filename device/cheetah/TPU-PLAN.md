@@ -2635,3 +2635,41 @@ firmware wants a DMA buffer of global scratches, which a KCI command carries in
 its `struct edgetpu_dma_descriptor`) or read the firmware's gate code, whose
 file/line `vii_handler_layer.cc:247` is in the image but whose address is not
 reachable by an absolute or movw/movt reference.
+
+### U19: the KCI side, first attempt (2026-11-07, `7.3.0-rc6-omamobile-push1-g29a7a9326bf0-dirty`)
+
+No KCI command carries a setup command: both driver headers run 0-5, skip 6, and
+continue at 7, and a KCI element's `dma` descriptor is exactly the shape a
+"global scratches" setup would need. So the driver gained a development-only
+debugfs hook (`/sys/kernel/debug/edgetpu/janeiro/kci_send`, write a decimal
+code; it allocates a page of coherent memory, points the element's DMA
+descriptor at it, calls `edgetpu_kci_send_cmd()` and logs the response):
+
+```
+[   13.280843] edgetpu janeiro: kci_send code 6 tpu_addr 0xfffff000 -> -110
+[   14.308794] edgetpu janeiro: kci_send code 15 tpu_addr 0xffffe000 -> -110
+...
+```
+
+All of 0..40 time out (`-110`), **including 4 and 7, which the driver itself
+sends successfully at run time**. So the hook as written runs before anything
+has opened the device and the response path is not live; this says nothing
+about code 6 yet. It needs to run with a client holding the device open (or
+from an ioctl on an already-open device).
+
+Two other checks the same day:
+
+- **Firmware gate address.** No reference to the gate string (`0xefbdc`), its
+  vaddr (`0x93efbdc`), the file string (`0xefa80`), or `Invalid command.`
+  (`0xefc14`) exists anywhere in the body as a 32-bit literal, absolute or
+  relative, at any alignment. The log records therefore address their strings
+  some other way (an index table, or a segment base other than `0x93000000`),
+  so a plain xref hunt cannot find the gate.
+- **Runtime/firmware version.** The runtime only ever says
+  `Unable to detect firmware version.`; it carries no expected-version
+  constant, so a version mismatch cannot be the gate (and the firmware, not
+  the runtime, would log a mismatch).
+
+After six KCI sends the client still ran normally in the same boot, so the hook
+does not wedge the device; a group created after it still answers `0xf000009`
+for element type 8 = 0..10.
