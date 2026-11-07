@@ -3476,3 +3476,46 @@ The direct-runtime route also removes any need for the vendor service chain for
 a first inference: `/vendor/bin/edgetpu-run` is the shortest path to the driver,
 and the servicemanager/VINTF work (U37-U41) is what the NNAPI HAL path needs
 later, for the benchmark against other backends.
+
+## U43 (2026-11-07): the power-up path is the blocker, and it says so
+
+`edgetpu-run` against the compiled model made the driver try to bring the TPU up,
+and dmesg names every step:
+
+    WARNING: drivers/iommu/iommu.c:2061 at iommu_set_fault_handler
+      lr : edgetpu_mmu_alloc_domain+0xa0/0x134 [janeiro]        <- iommu_set_fault_handler
+      edgetpu_device_group_alloc -> edgetpu_ioctl_create_group
+    edgetpu_platform 1ce00000.janeiro: Initial power state: 226000
+    edgetpu janeiro: Powering up
+    edgetpu janeiro: Set LPM0 failed: -110
+      (PSM0_STATUS=0x5644c13 PSM1_STATUS=0xe893 LPM_CONTROL=0x1240
+       AON_RESET=0xdeadfeed AON_CLK=0xdeadfeed AON_QUIESCE=0xdeadfeed
+       POWER_CONTROL=0xdeadfeed GSA state=0)
+    edgetpu janeiro: firmware handshake failed: -110
+    edgetpu janeiro: Powering down
+    edgetpu janeiro: finalize group: power on failed: -110
+
+Read together: `janeiro_lpm_up()` (`drivers/edgetpu/janeiro-pm.c`) writes
+`PSM0_START` and polls `PSM0_STATUS` for bit 0x80 with a 30 ms timeout. The poll
+fails (-110), and every AON register in the diagnostic prints the same
+`0xdeadfeed`, i.e. the AON half of the TPU block is not answering at all, while
+the PSM registers (`0x1c1888` etc.) do. `GSA state=0` means the GSA mailbox has
+not started the AON domain either, and the firmware handshake then times out
+because nothing is running. So this is the TPU's AON power/clock bring-up, not
+the IOMMU, not the userspace chain.
+
+Two candidate causes, in order:
+
+1. the AON registers are reached through a different resource than `regs.mem`
+   (`reg = <0x1CE00000 0x200000>, <0x1CCF0000 0x10000>` in `gs201.dtsi`, names
+   `"tpu"` and `"ssmt"`), and the vendor DT may carry an extra region for the AON
+   block that this node lacks;
+2. the AON domain must be started through GSA (`gsa_send_tpu_cmd(...,
+   GSA_TPU_START)`) before its registers answer, and the mainline path only
+   starts it after LPM0 succeeds - a chicken-and-egg that stock resolves by
+   letting GSA own the power-up.
+
+The iommu WARN is a separate, smaller issue: `edgetpu_mmu_alloc_domain()` calls
+`iommu_set_fault_handler()` on a domain the mainline IOMMU API does not support
+for that, and the warning is benign for this failure (the group is created, then
+the power-on fails).

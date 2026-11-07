@@ -8,10 +8,15 @@ the device-group finalize; the TPU never responds:
 
 So work in the kernel, on `~/omamobile-kernel/wt-tpu`:
 
-1. Boot and capture the janeiro probe splat verbatim (`dmesg | grep -B12 -A12
-   janeiro`). `edgetpu_device_add` -> `edgetpu_register_irq` warns today, and
-   `edgetpu_platform_setup_irq()` logs `failed to request irq %d: %d` when a DT
-   irq is wrong — either would explain completions that never arrive.
+1. The power-up is the blocker and dmesg names it (U43):
+   `Set LPM0 failed: -110 (... AON_RESET=0xdeadfeed AON_CLK=0xdeadfeed
+   AON_QUIESCE=0xdeadfeed POWER_CONTROL=0xdeadfeed GSA state=0)`, then
+   `firmware handshake failed: -110`. The PSM registers answer, the AON half of
+   the block does not. Compare the vendor DT's edgetpu node with
+   `gs201.dtsi`'s `janeiro@1ce00000` (reg regions, `gsa-device`, power
+   domains) and read `janeiro_lpm_up()`/`mobile-pm.c`: find out whether the AON
+   domain must be started through GSA (`GSA_TPU_START`) before its registers
+   answer, instead of after LPM0.
 2. Check what `tpu-enable.dtso` declares: the irq lines, the `ssmt` register
    base (`edgetpu_platform_parse_ssmt`), `memory-region`, and the power domains.
    Compare with the vendor DT for the same node (stock capture).
