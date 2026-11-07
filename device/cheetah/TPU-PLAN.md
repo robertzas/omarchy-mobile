@@ -3157,3 +3157,40 @@ Two chroot facts that cost time here: the chroot has no `/root` directory
 `/tmp/sysx/apex/...`, so an inline repro must set
 `LD_LIBRARY_PATH=/system/lib64:/vendor/lib64:/apex/com.android.runtime/lib64/bionic`
 exactly as the runner does.
+
+### U34 (2026-11-07): the service chain needs the vendor binder domain
+
+`uname -r` 7.3.0-rc6-omamobile-push1-g29a7a9326bf0-dirty.
+
+The vendor util library picks the Tachyon path only for a non-root uid above
+9984 whose `open("/dev/edgetpu")` fails with `EACCES`: at `0x1bf4f4` it takes
+the `getuid()` branch, and only uid>>4 > 0x270 with errno 13 reaches the
+`dlopen("libedgetpu_client.google.so")` helper at `0x1bf8a8`. Running the
+delegate as root always goes direct, which is why every earlier run hammered
+the VII gate. `RUN_UID=10000` in `tools/tpu-tachyon-run` runs it as an app uid
+(the binder nodes are opened up for that; `/dev/edgetpu` stays root-only).
+
+As uid 10000 the delegate now asks servicemanager for
+`com.google.edgetpu.IEdgeTpuAppService/default`, the service stock's Darwinn
+NNAPI HAL publishes, and reports "Failed to open device fd from EdgeTPU
+service". So the client side is in place; what is missing is the service.
+
+The chain is vendor-service (owns /dev/edgetpu) then tachyon-service then the
+Darwinn HAL. All three abort on registration:
+
+- Their own log says vendor binaries bind on `/dev/vndbinder`
+  ("Not able to get context object on /dev/vndbinder"), so the chain has to run
+  with `/vendor/lib64` first and a servicemanager started as
+  `servicemanager /dev/vndbinder`.
+- `registerLazyService` is answered `ENOTSUP` by that servicemanager
+  (`BR_FAILED_REPLY`, error 4294967201), and AidlLazyServiceRegistrar aborts on
+  any non-OK status. `tools/android-lazysvc-shim.c` interposes
+  `AServiceManager_registerLazyService*` and calls `AServiceManager_addService`
+  instead (marker `LAZYSVC-SHIM` proves interposition), but that call comes back
+  non-OK too.
+- The shim must not be preloaded into servicemanager itself: that binary links
+  libbinder (C++), not libbinder_ndk, so an unresolvable
+  `AServiceManager_addService` stops it from starting ("CANNOT LINK EXECUTABLE").
+
+Reading `AStatus` fields by hand faulted the service; the next probe uses the
+exported `AStatus_getExceptionCode` to name the failing status.
