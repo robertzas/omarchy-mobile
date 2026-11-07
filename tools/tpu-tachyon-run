@@ -100,7 +100,19 @@ echo "tachyon pid: $(pgrep -x com.google.edge)" >>"$LOG"
 
 log "delegate (system-property shim so the service lookup can finish)"
 DELEGATE_PRELOAD="/system/lib64/liblogstderr.so /system/lib64/libselinuxshim.so /system/lib64/libpropsshim.so"
-if [ "${BT:-0}" = "1" ]; then
+if [ "${GDB:-0}" = "1" ]; then
+	# Stop at the abort that happens right after OPEN_DEVICE and print the
+	# frames; the delegate is unstripped, so the smashed function is named.
+	gdb -batch -q \
+		-ex "set sysroot $R" \
+		-ex "set follow-exec-mode same" \
+		-ex "set environment LD_LIBRARY_PATH=$LD_LIBRARY_PATH" \
+		-ex "set environment LD_PRELOAD=$DELEGATE_PRELOAD" \
+		-ex "file /usr/bin/chroot" \
+		-ex "set args $R /vendor/bin/edgetpu-run /vendor/etc/model.tflite" \
+		-ex run -ex "bt 25" >>"$LOG" 2>&1
+	echo "gdb rc: $?" >>"$LOG"
+elif [ "${BT:-0}" = "1" ]; then
 	LD_PRELOAD="$DELEGATE_PRELOAD" chroot "$R" /vendor/bin/edgetpu-run /vendor/etc/model.tflite >>"$LOG" 2>&1 &
 	dpid=$!
 	sleep 6
