@@ -1,5 +1,23 @@
-# Next: make GSA's TPU_START succeed (it returns 2 today)
+# Next: do not poll PSM0 before the GSA has started the core
 
+Corrected reading (U49): `TPU cmd 1 (Trusty): 2` is `GSA_TPU_STATE_RUNNING`, so the
+TPU **does** start. The failing step is `janeiro_lpm_up()`'s PSM0 poll, and the log
+order shows why: it runs at 723.197, *before* the image load (723.198) and the GSA
+start (723.203). Polling LPM0 on a core that has not been started yet can only
+time out.
+
+So: make `mobile_power_up()` not treat a failed `lpm_up()` as fatal, or move it
+after the firmware start (matching the vendor order), then see whether the KCI
+handshake (`firmware handshake failed: -110`) succeeds once the core is running.
+The firmware image itself is loaded and accepted by GSA, so the handshake is the
+next thing to measure, not the power domain.
+
+Success: `edgetpu-run` prints the graph's tensor counts. Then the benchmark:
+`detect_edgetpu.tflite` on the 720p 10-object video against CPU (3.98 ms/frame at
+4 threads), GPU and the rest.
+
+Rules: slot B only, `pkill -x`, `modules-push` (janeiro is a module), announce
+screen-off before `poweroff`, no vendor blobs or identifiers, no `Signed-off-by`.
 The device tree is not the problem: Google's own `gs201-tpu.dtsi` has the same
 properties as ours and likewise no `clocks`/`power-domains` (U49). The TPU is
 started by the GSA, and our kernel's own log says the start fails:

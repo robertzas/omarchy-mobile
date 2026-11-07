@@ -3690,3 +3690,31 @@ So the next target is `drivers/soc/google/gsa.c`'s Trusty path for the TPU
 commands (`gsa_send_tpu_cmd()` and the firmware load/unload helpers) and what
 result 2 means there - a Trusty service that is not present, a wrong command id,
 or a rejected image - rather than any device-tree property.
+
+### U49 correction: `2` is GSA_TPU_STATE_RUNNING, not an error
+
+`gsa_send_tpu_cmd()` returns the **new TPU state**, and the enum is
+`INACTIVE=0, LOADED=1, RUNNING=2, SUSPENDED=3`. So the boot log line
+
+    google-gsa 17c90000.gsa: TPU cmd 1 (Trusty): 2
+
+means `GSA_TPU_START` **succeeded** and the GSA reports the TPU running (the
+shutdown that follows logs `TPU cmd 4 (Trusty): 1` = LOADED, also correct). U49's
+"GSA refuses to start" reading was wrong; the Trusty path is not a stub in this
+build (that stub is the `#else` branch for `CONFIG_GOOGLE_GSA=n`).
+
+The real order, from one failing attempt:
+
+    723.167 Powering up
+    723.197 Set LPM0 failed: -110        <- janeiro_lpm_up, before firmware
+    723.198 loading TPU image: header ... body ...
+    723.203 TPU cmd 1 (Trusty): 2        <- GSA started the core
+    724.224 firmware handshake failed: -110
+    724.229 Powering down
+
+So the core *is* started by GSA, and what fails is the driver's own LPM0 check
+(which runs before the firmware load and returns -110 immediately) plus the KCI
+handshake afterwards. Since `Set LPM0 failed` is what aborts `mobile_power_up`,
+the PSM0 poll is the gate to fix first - and it is being run before the GSA has
+started the core, which is exactly why it cannot succeed. The vendor order starts
+the firmware first; ours polls PSM0 first.
