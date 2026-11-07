@@ -3431,3 +3431,48 @@ that binary alone (the chroot is private, so running it under gdb is fine).
 Where this leaves the chain: servicemanager up, vendor service registering and
 dying in its cache cleanup, tachyon service up, Darwinn HAL dying on its driver
 provider. `/dev/janeiro` and janeiro's probe are not in question any more.
+
+## U42 (2026-11-07): userspace reaches the driver; the TPU does not answer
+
+There was no Edge TPU model anywhere in the tree and the compiler is x86-64 only,
+so the first thing to build was the model. Coral publishes the compiler as a
+self-contained bundle in its own repository (`compiler/x86_64/`: the binary plus
+its own `ld-linux` and libc++), which runs on any x86-64 Linux without apt:
+
+    /tmp/ecx/ld-linux-x86-64.so.2 --library-path /tmp/ecx /tmp/ecx/edgetpu_compiler \
+        out/bench/detect.tflite
+    Number of Edge TPU subgraphs: 1
+    Number of operations that will run on Edge TPU: 63   (of 64)
+
+That produced `detect_edgetpu.tflite` (4.65 MB). Feeding it to the stock runtime
+inside the chroot (`/vendor/bin/edgetpu-run`, which drives `libedgetpu_util.so`
+directly and needs no servicemanager) gets much further than the service chain
+ever did:
+
+    mmap fd -1 len 0x40000 off 0x0 -> 0xfffdc2809000   (x3)
+    E0000 file.cc:163] INTERNAL: Could not finalize device group:
+        master_fd=3 (Connection timed out)
+    create device status: 13
+
+So the whole userspace path now works: the runtime opens `/dev/edgetpu`
+(`/dev/janeiro`, char 502:0, janeiro loaded), maps the buffer pools, and issues
+the device-group finalize the driver forwards to the TPU. What times out is the
+TPU's own response.
+
+Where to look next is the driver, not the chroot:
+
+* `edgetpu_platform_setup_irq()` (`drivers/edgetpu/edgetpu-mobile-platform.c`)
+  requests each DT irq with `IRQF_ONESHOT` and logs `failed to request irq`;
+  a missing/incorrect irq in `tpu-enable.dtso` would leave every completion
+  unanswered, which is exactly a finalize timeout.
+* janeiro logged a WARN inside `edgetpu_device_add` -> `edgetpu_register_irq`
+  at boot on this kernel; the earlier splat is no longer in `dmesg` (it was
+  captured in the runner's kmsg copy), so a fresh boot with the splat quoted is
+  the next evidence to collect.
+* janeiro also prints `Powering down` immediately after `edgetpu initialized`,
+  which is worth reading as "the block was never brought out of reset".
+
+The direct-runtime route also removes any need for the vendor service chain for
+a first inference: `/vendor/bin/edgetpu-run` is the shortest path to the driver,
+and the servicemanager/VINTF work (U37-U41) is what the NNAPI HAL path needs
+later, for the benchmark against other backends.

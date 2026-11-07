@@ -1,26 +1,33 @@
-# Next: satisfy the Darwinn HAL's driver provider, and name the vendor abort
+# Next: make the TPU answer — the driver side of the finalize timeout
 
-Two named conditions are all that separate the chain from a published
-`com.google.edgetpu.IEdgeTpuAppService/default`:
+Everything above the driver now works. `/vendor/bin/edgetpu-run` in the vendor
+chroot opens `/dev/edgetpu` (`/dev/janeiro`), maps its buffer pools, and issues
+the device-group finalize; the TPU never responds:
 
-1. **HAL** (`android.hardware.neuralnetworks@service-darwinn-aidl`):
-   `INVALID_ARGUMENT: Incorrect driver provider is used for the current device`
-   (`file.cc:397`, status 4), after the socket-bind problem was fixed by creating
-   `/data/vendor/hal_neuralnetworks_darwinn` in the chroot. Find what it reads to
-   choose a provider: `strings vendor/bin/hw/android.hardware.neuralnetworks@service-darwinn-aidl
-   | grep -iE "provider|pcie|platform|ro\.|vendor\."`; the provider name is
-   probably a property or an `--provider` argument. Set it and rerun.
-2. **Vendor service**: registers, prints `Start cache cleanup.`, then SIGABRT
-   with **no** `ABORT-MSG`, so the abort is a libc++ verbose abort or a direct
-   `abort()`, not libbase. Run that one binary under gdb inside the chroot with
-   `catch signal SIGABRT` and `bt`, or interpose `abort`/`__libcpp_verbose_abort`
-   the way `tools/android-abort-msg.c` interposes `android_set_abort_message`.
+    E0000 file.cc:163] INTERNAL: Could not finalize device group: master_fd=3 (Connection timed out)
 
-The chain runner is `/root/tpu-tachyon-run` and everything logs to
-`/tmp/tpu-tachyon.log`; kill with `pkill -x` on 15-character names only, and keep
-`device/cheetah/tpu-vintf-manifest.xml` installed as
-`vendor/etc/vintf/manifest.xml` (package-scoped `<name>`, not the interface).
+So work in the kernel, on `~/omamobile-kernel/wt-tpu`:
 
-When the HAL stays up: one inference (`RUN_UID=10000 /root/tpu-tachyon-run`),
-then object detection on the 720p 10-object video against CPU (3.98 ms/frame at
-4 threads), GPU and the other backends.
+1. Boot and capture the janeiro probe splat verbatim (`dmesg | grep -B12 -A12
+   janeiro`). `edgetpu_device_add` -> `edgetpu_register_irq` warns today, and
+   `edgetpu_platform_setup_irq()` logs `failed to request irq %d: %d` when a DT
+   irq is wrong — either would explain completions that never arrive.
+2. Check what `tpu-enable.dtso` declares: the irq lines, the `ssmt` register
+   base (`edgetpu_platform_parse_ssmt`), `memory-region`, and the power domains.
+   Compare with the vendor DT for the same node (stock capture).
+3. Read the power-up path: janeiro prints `Powering down` right after
+   `janeiro edgetpu initialized`, i.e. the block may never leave reset. The
+   finalize timeout would follow from that alone.
+4. One change per boot, with the irq/power question first, since every other
+   failure (HAL provider, vendor service abort) is downstream of a TPU that
+   answers.
+
+When the finalize succeeds, `edgetpu-run` prints the graph's input/output tensor
+counts — that is the "TPU works" milestone. Then run the compiled
+`detect_edgetpu.tflite` over the 720p 10-object video and benchmark it against
+CPU (3.98 ms/frame at 4 threads, 10 detections/frame at 0.4), GPU and the rest.
+
+Build rules unchanged: export `KERNEL_DIR`/`KERNEL_OUT`, delete
+`$KERNEL_OUT/images` before `push`, `depmod -a $(uname -r)` after, slot B only,
+announce screen-off before `poweroff`, no vendor blobs or identifiers in commits,
+no `Signed-off-by`.
