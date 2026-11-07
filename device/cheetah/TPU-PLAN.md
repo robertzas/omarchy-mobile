@@ -2897,3 +2897,28 @@ Keep: the dma-buf heap node makes allocations succeed, and
 `tools/edgetpu-nometrics.c` clears the servicemanager wait. The captured
 `out/edgetpu-runtime/model.tflite` is a COCO detector (98 label strings), so it
 is the right model for the benchmark once the gate opens.
+
+### U26: two candidate host halves for the setup (2026-11-07)
+
+Strings in `libedgetpu_util.so` show the delegate does track a firmware setup:
+
+```
+Firmware setup failed for commands[%d], cluster_id_bitset in hex: %x.
+... RegisterCallbackPair(... firmware_setup_done_ = false ...)
+DarwinnApi2_Request_CreateViiCommand
+```
+
+and the vendor image ships a second, newer compute API beside the VII one:
+
+```
+libedgetpu_tachyon.google.so: TachyonComputeSession_setupCommandQueue,
+  TachyonComputeSession_setupResponseQueue, SetupCommandFmq, SetupResponseFmq
+com.google.edgetpu.tachyon-ndk.so
+com.google.edgetpu_vendor_service-V2-ndk.so
+```
+
+So the missing setup is one of two things: the VII "firmware setup" inside
+libedgetpu_util (per command and cluster, gated by `firmware_setup_done_`), or
+the Tachyon compute session, whose FMQ queues the vendor service uses. The
+delegate's Sync runs before either, or its setup failed silently; the HAL has
+to be made to say which, with glog verbosity.
