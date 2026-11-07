@@ -2796,3 +2796,38 @@ is the vendor HAL: it exports `DarwinnApi2_Request_CreateViiCommand`,
 firmware expects. Drive those and read the firmware ring: if the gate line
 disappears, the HAL performed the setup, and the queue can then be dumped to
 see what it wrote.
+
+### U23: the stock runtime finalizes the group, then hangs (2026-11-07)
+
+The vendor image carries `/vendor/bin/edgetpu-run MODEL`, which drives the
+stock delegate. Run as the **first** TPU operation of a boot, it reaches the
+furthest point yet:
+
+```
+edgetpu janeiro: loaded prod firmware (1.0 895567958)
+edgetpu janeiro: finalize: detachable 1 wakelock 1 context 1073741824
+edgetpu janeiro: edgetpu_mailbox_init_vii: pasid 1 mailbox 1
+edgetpu janeiro: edgetpu_mailbox_init_vii: mbox 1 cmdq iova=0x1015c000 dma=0x1015c000 rspq iova=0x10162000 ...
+edgetpu janeiro: OPEN_DEVICE: mailbox_map 0x2 priv 1 vcid 1 first 1 state_ret 0
+edgetpu janeiro: OPEN_DEVICE ret 0
+edgetpu janeiro: finalize: kci_finalized ret 0
+edgetpu janeiro: finalize: mailbox_attached 1 context 1
+```
+
+`edgetpu-run` then hangs inside `DarwinnDelegate_CreateVirtualDevice`, before
+it submits any VII command. The mailbox doorbell then fires every 15 s with
+status 1 and nothing consumes it. So:
+
+- the driver's open/create/set_eventfd/finalize path matches the stock runtime,
+  and the firmware accepts it (`OPEN_DEVICE ret 0`, `kci_finalized ret 0`);
+- the VII gate is never reached by the delegate, so the gate is not what hangs
+  it. The hang is a missing host-side response after finalize.
+
+Two operational facts, both cost a boot to learn:
+
+- **the TPU powers up once per boot.** After any power-down the next attempt
+  logs `TPU in GSA state 1, resetting`, `Set LPM0 failed: -110`, `firmware
+  handshake failed: -110`. Every experiment needs its own cold boot.
+- the chroot's `/dev` and `/vendor/etc` are recreated at boot: make
+  `dev/janeiro` (`c 502 0`) and `dev/edgetpu-soc` (`c 502 1`), and copy the
+  model in again each boot.
