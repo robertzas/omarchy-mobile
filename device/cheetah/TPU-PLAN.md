@@ -2702,3 +2702,30 @@ load on a phone running the kernel built from the commit before it
 Building with the tip moved back to the running kernel's commit (`git reset
 --soft HEAD~1`, changes stay staged, so `-dirty` still matches) produces a
 loadable module.
+
+### U20: KCI code 6 is implemented and answers (2026-11-07)
+
+With the device open and a group live, the debug-only ioctl now reaches the
+firmware:
+
+```
+[   12.485658] edgetpu janeiro: kci_send(ioctl) enter f_mode 0x408001f
+[   12.485778] edgetpu janeiro: kci_send(ioctl) code 4 -> 12
+[   12.485968] edgetpu janeiro: kci_send(ioctl) code 9 -> 3
+[   12.486095] edgetpu janeiro: kci_send(ioctl) code 6 -> 3
+```
+
+KCI response 3 is **failed precondition**. So code 6 — the one code both
+driver headers skip — is a real command: it answers instead of timing out.
+The firmware's own `No global scratches were provided in setup command.` fits
+the precondition exactly: the descriptor pointed at a zeroed page, which reads
+as an empty scratch list. That is the strongest lead so far.
+
+Two traps this cost, both now fixed:
+
+- the request number is `_IOW(0xed, 33, u32)` = **0x4004ed21**; 0x4001ed21
+  encodes size 1, the driver answers `ENOTTY` and never logs, and `ioctl()`
+  only shows -1 either way — log on entry, not just on success.
+- the VII responses after the KCI sends (`0xff0003`) are the tracker desync
+  (`Received command.seq 0x2, expected 0x100000002`), not a gate change; the
+  ring still holds one gate line per group.
