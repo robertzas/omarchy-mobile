@@ -9,8 +9,12 @@
 // the same visible result for our purposes: the name is published and stays
 // published, which is what a development session wants anyway.
 //
-// The marker on stderr proves the shim was actually interposed, rather than
-// the call being resolved inside libbinder_ndk.
+// The return value of AServiceManager_addService is NOT always an AStatus* in
+// this chroot: the vendor service received 0xffffff7f, which is -129
+// (EX_TRANSACTION_FAILED) as a value, and calling AStatus_getExceptionCode() on
+// it faulted at exactly that address. So the shim only ever *prints* the raw
+// value and never dereferences it: the registrar's own CHECK on the status is
+// what the caller does with it.
 //
 // Build: clang --target=aarch64-linux-android30 -shared -fPIC -nostdlib \
 //          -fno-stack-protector -o liblazysvc.so android-lazysvc-shim.c
@@ -30,24 +34,21 @@ static void mark(const char *what)
 	write(2, "\n", 1);
 }
 
-// Ask libbinder_ndk for the exception code: AStatus is opaque and reading its
-// fields directly faulted, so use the exported accessor.
-extern int32_t AStatus_getExceptionCode(AStatus *status);
-
-static void dump_status(AStatus *status)
+// Print the raw return value as hex. No accessor call: the value is not
+// guaranteed to be a pointer (see the comment above).
+static void dump_ret(const char *name, AStatus *status)
 {
 	static const char hex[] = "0123456789abcdef";
-	char line[] = "LAZYSVC-SHIM exception 0x00000000\n";
-	unsigned int v;
-	int i, at;
+	char line[] = "LAZYSVC-SHIM ret 0x0000000000000000\n";
+	unsigned long v = (unsigned long)status;
+	int i, at = 31, j;
 
-	if (!status) {
-		write(2, "LAZYSVC-SHIM exception null\n", 28);
-		return;
-	}
-	v = (unsigned int)AStatus_getExceptionCode(status);
-	for (i = 0, at = 27; i < 8; i++, at--)
-		line[at] = hex[(v >> (4 * i)) & 0xf];
+	for (i = 0; name[i] && i < 24; i++)
+		line[i] = name[i];
+	line[i] = ' ';
+	for (j = 31; j > 31 - 16; j--, v >>= 4)
+		line[j] = hex[v & 0xf];
+	line[15] = ' ';
 	write(2, line, sizeof(line) - 1);
 }
 
@@ -57,7 +58,7 @@ AStatus *AServiceManager_registerLazyService(AIBinder *binder, const char *insta
 
 	mark("registerLazyService");
 	status = AServiceManager_addService(binder, instance);
-	dump_status(status);
+	dump_ret("registerLazyService", status);
 	return status;
 }
 
@@ -69,7 +70,7 @@ AStatus *AServiceManager_registerLazyServiceWithFlags(AIBinder *binder,
 	mark("registerLazyServiceWithFlags");
 	(void)flags;
 	status = AServiceManager_addService(binder, instance);
-	dump_status(status);
+	dump_ret("registerLazyServiceWithFlags", status);
 	return status;
 }
 
@@ -77,7 +78,11 @@ AStatus *AServiceManager_registerLazyServiceWithCallback(AIBinder *binder,
 							 const char *instance,
 							 AIBinder *callback)
 {
+	AStatus *status;
+
 	mark("registerLazyServiceWithCallback");
 	(void)callback;
-	return AServiceManager_addService(binder, instance);
+	status = AServiceManager_addService(binder, instance);
+	dump_ret("registerLazyServiceWithCallback", status);
+	return status;
 }
