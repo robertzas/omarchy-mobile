@@ -3101,3 +3101,10 @@ abort is unchanged, so the corruption is either in libbinder's `isDeclared`
 fallback or in the delegate's own stats/perfetto path, not in the property
 name. Next is a gdb run that stops at SIGABRT, with the chroot follow-exec
 method that already worked for servicemanager.
+
+U31 addendum: gdb follows the delegate's exec but cannot load bionic symbols
+("Could not load symbols ... Do you need set sysroot?"), so the SIGABRT
+backtrace is `#0 0x0000fffff634ea10 in ?? ()` and `#1 0x...20`, i.e. libc's
+abort plus a garbage frame. The way to name the smashed function is an
+`LD_PRELOAD` `__stack_chk_fail` that writes its return address, paired with
+the delegate's load base from `/proc/self/maps`.

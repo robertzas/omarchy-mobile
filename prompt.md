@@ -1,55 +1,60 @@
-# Next: catch the delegate's SIGABRT and name the stack smash
+# Next: name the function whose stack was smashed
 
 State: the TPU powers up, loads firmware, opens the device and finalizes its
-mailbox; servicemanager and the Tachyon service run. With the
-`servicemanager.ready` property answered as `true`, the delegate's 500 MB
-busy loop is gone and it now aborts in about 0.1 s with
-`stack corruption detected (-fstack-protector)` right after
-`OPEN_DEVICE ret 0` (delegate rc 134, U31). It also logs a failed binder
-`isDeclared` for `android.frameworks.stats.IStats/default`
-(`FAILED_TRANSACTION`). No VII element is sent.
+mailbox. servicemanager and the Tachyon service run. The delegate passes the
+`servicemanager.ready` wait (answer `true`), then aborts in about 0.1 s with
+`stack corruption detected (-fstack-protector)` right after `OPEN_DEVICE ret 0`
+(delegate rc 134, U31). It also logs a failed binder `isDeclared` for
+`android.frameworks.stats.IStats/default` (`FAILED_TRANSACTION`). No VII element
+is sent.
+
+gdb follows the chroot exec but cannot load bionic symbols, so its SIGABRT
+backtrace is only `#0 libc` and a garbage frame. The next tool is a shim.
 
 Do not re-derive:
 
 - The stack: `tools/tpu-tachyon-run` (binderfs, servicemanager from the stock
-  system image, Tachyon service, three shims). `BT=1` starts the delegate in
-  the background and attaches gdb; that is how `wchan 0` was read.
-- The property shim `tools/android-props-stub.c` answers `servicemanager.ready`
-  with `true`, `ro.build.version.sdk` with `34`, everything else `1`, and
-  echoes the requested name from `find` to `read_callback`.
-- gdb on the phone can follow the chroot exec when run as
-  `gdb -batch -ex "set sysroot $R" -ex "set follow-exec-mode same"
-  -ex "set environment LD_LIBRARY_PATH=..." -ex "file /usr/bin/chroot"
-  -ex "set args $R /system/bin/linker64 <program>" -ex run -ex "bt 20"`.
-  That worked for servicemanager; the delegate is unstripped, so its frames
-  should resolve.
+  system image, Tachyon service, three shims). `GDB=1` runs the delegate under
+  gdb; `BT=1` starts it and attaches after 6 s.
+- `tools/android-props-stub.c` answers `servicemanager.ready` with `true`,
+  `ro.build.version.sdk` with `34`, everything else `1`, and echoes the
+  requested name from `find` to `read_callback`.
+- The delegate is unstripped, so `llvm-addr2line -e
+  out/vendor-chroot-edgetpu/root/vendor/bin/edgetpu-run <offset>` works once
+  the offset is known.
 
-Step 1 (phone, cold boot): stop at the abort.
-- Change the runner's delegate line to run under the gdb command above with
-  the delegate's `LD_PRELOAD` and `/vendor/bin/edgetpu-run /vendor/etc/model.tflite`.
-- Cold boot, run, and save the backtrace: the frame that calls
-  `__stack_chk_fail` names the function whose local buffer was smashed.
+Step 1 (laptop): add `tools/android-stackchk.c`, a freestanding `LD_PRELOAD`
+shim that overrides `__stack_chk_fail` and `__stack_chk_fail_local`:
+- write `"STACKCHK lr=0x%lx\n"` with `__builtin_return_address(0)` to fd 2,
+  then `_exit(134)`;
+- it must not call libc; use raw `svc` writes like the other shims.
+Build it for `aarch64-linux-android30`, deploy with the runner.
 
-Step 2: fix what the frame names.
-- If the frame is in `libbinder`'s `isDeclared` path, the fake `prop_info`
-  pointer is the suspect: return a pointer to a real-shaped 96-byte struct and
-  make `read_callback` fill name and value, or drop the C++ property shim and
-  give libbinder the real (empty) property area plus a `wait` that succeeds.
-- If the frame is in the delegate's own stats/perfetto path, disable that path
-  (env or `LD_PRELOAD` stub) so it never queries `IStats`.
-- If the frame is in the shim's `__system_property_get`, lower the copy bound
-  and return lengths like Android does.
+Step 2 (phone, cold boot): run the delegate with the stackchk shim in
+`LD_PRELOAD`, read `/proc/<pid>/maps` while it is alive (or log the base from a
+`dl_iterate_phdr` helper) so the address can be turned into a file offset.
+Then `llvm-addr2line` (or `llvm-objdump -d` around the offset) names the
+function and its caller.
 
-Step 3: after the abort is gone, the delegate either reaches the Tachyon
-service (then watch for a session/setup) or goes direct and answers
-`error_code=9`; either way record it in `device/cheetah/TPU-PLAN.md` as U32+
-with `uname -r`.
+Step 3: fix what it names.
+- If the frame is in libbinder's `isDeclared` fallback, the fake `prop_info`
+  pointer is the suspect: return a real-shaped 96-byte struct and fill name
+  and value, or give libbinder the real empty property area plus a `wait`
+  that succeeds.
+- If it is the delegate's stats/perfetto path, lossen that path so it never
+  queries `IStats`.
+- If it is in the shim's `__system_property_get`, bound the copy to the
+  caller's buffer like Android does.
 
-Rules: slot B only; announce screen-off before `poweroff`; one TPU power-up
-per cold boot (a failed attempt needs a cold boot before the next); never
-`rmmod` janeiro and never insmod over a loaded module; the runner caps its log
-(`ulimit -f 51200`) because a binder loop once wrote 500 MB in seconds; grep
-diffs for identifiers.
+Step 4: after the abort is gone the delegate either reaches the Tachyon service
+(watch for a session and the setup command) or goes direct and answers
+`error_code=9`; record it in `device/cheetah/TPU-PLAN.md` as U32+ with
+`uname -r`.
+
+Rules: slot B only; announce screen-off before `poweroff`; one TPU power-up per
+cold boot; never `rmmod` janeiro and never insmod over a loaded module; the
+runner caps its log (`ulimit -f 51200`) because a binder loop once wrote 500 MB;
+grep diffs for identifiers.
 
 After the gate opens: a real inference, CPU comparison, then the 720p 10+
 object benchmark (`tools/bench-object-detection.py`,
