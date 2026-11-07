@@ -1,32 +1,26 @@
-# Next: read the two vendor-side deaths now that registration works
+# Next: satisfy the Darwinn HAL's driver provider, and name the vendor abort
 
-Transport is healthy: servicemanager survives, the vendor service and the
-tachyon service both register (`registerLazySer …000`, VINTF "Found …"), and the
-tachyon service stays up. Two deaths remain inside the vendor binaries:
+Two named conditions are all that separate the chain from a published
+`com.google.edgetpu.IEdgeTpuAppService/default`:
 
-1. `vendor.google.edgetpu_vendor_service@1.0-service` registers, prints
-   `Start cache cleanup.`, then SIGABRTs. Get its abort message: it is started
-   with `/system/lib64/libabortshim.so` already, so read the *unfiltered* block
-   (`awk "/=== vendor edgetpu service/,/vendor pid:/" /tmp/tpu-tachyon.log`) and
-   `grep -a "ABORT-MSG\|Check failed\|cache cleanup" -A3`.
-2. `android.hardware.neuralnetworks@service-darwinn-aidl` exits with
-   `[Darwinn] Non-ok status from HAL: 2` then SIGTRAP — it comes from its own
-   `file.cc` checks, not binder. Grep its block for the file.cc line numbers and
-   the lines above the trace.
+1. **HAL** (`android.hardware.neuralnetworks@service-darwinn-aidl`):
+   `INVALID_ARGUMENT: Incorrect driver provider is used for the current device`
+   (`file.cc:397`, status 4), after the socket-bind problem was fixed by creating
+   `/data/vendor/hal_neuralnetworks_darwinn` in the chroot. Find what it reads to
+   choose a provider: `strings vendor/bin/hw/android.hardware.neuralnetworks@service-darwinn-aidl
+   | grep -iE "provider|pcie|platform|ro\.|vendor\."`; the provider name is
+   probably a property or an `--provider` argument. Set it and rerun.
+2. **Vendor service**: registers, prints `Start cache cleanup.`, then SIGABRT
+   with **no** `ABORT-MSG`, so the abort is a libc++ verbose abort or a direct
+   `abort()`, not libbase. Run that one binary under gdb inside the chroot with
+   `catch signal SIGABRT` and `bt`, or interpose `abort`/`__libcpp_verbose_abort`
+   the way `tools/android-abort-msg.c` interposes `android_set_abort_message`.
 
-Likely suspects, in order: the vendor service's cache cleanup needs
-`/data/vendor/edgetpu` (does the chroot have it? `mkdir -p` and check the code's
-path), and the HAL's status 2 is the vendor service answering a "device ready"
-query before it has powered the TPU. `/dev/janeiro` exists (`crw------- root
-502,0`) and janeiro logs `janeiro edgetpu initialized` on each boot, so the
-kernel side is no longer the question; the userspace handshake is.
+The chain runner is `/root/tpu-tachyon-run` and everything logs to
+`/tmp/tpu-tachyon.log`; kill with `pkill -x` on 15-character names only, and keep
+`device/cheetah/tpu-vintf-manifest.xml` installed as
+`vendor/etc/vintf/manifest.xml` (package-scoped `<name>`, not the interface).
 
-When the HAL stays up and publishes `com.google.edgetpu.IEdgeTpuAppService/default`,
-run one inference (`RUN_UID=10000 /root/tpu-tachyon-run`), then the 720p
-object-detection benchmark (CPU baseline 3.98 ms/frame at 4 threads, 10
-detections/frame at 0.4) against every other backend.
-
-Rules unchanged: slot B only, `pkill -x` never `pkill -f`, delete
-`$KERNEL_OUT/images` before `push`, `depmod -a $(uname -r)` after, announce
-screen-off before `poweroff`, never commit vendor blobs or identifiers, no
-`Signed-off-by`.
+When the HAL stays up: one inference (`RUN_UID=10000 /root/tpu-tachyon-run`),
+then object detection on the 720p 10-object video against CPU (3.98 ms/frame at
+4 threads), GPU and the other backends.

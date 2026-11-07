@@ -3400,3 +3400,34 @@ vendor binaries, where the abort-message shim (`tools/android-abort-msg.c`) and
 the runner's per-service logs are the tools: the vendor service's abort text is
 not in the filtered log tail yet, and `status 2` from the HAL is
 `android::base::Error`-style, i.e. its own check rather than binder's.
+
+## U41 (2026-11-07): the chroot needs /data/vendor, and the HAL names its provider
+
+Both deaths were missing path state, not protocol. The Darwinn HAL said it
+plainly:
+
+    INTERNAL: Socket server bind failed:
+      /data/vendor/hal_neuralnetworks_darwinn/NnapiHalSocketHalProcess errno [No such file or directory]
+
+The chroot had no `/data` at all. After `mkdir -p` of
+`data/vendor/hal_neuralnetworks_darwinn`, `data/vendor/edgetpu` and
+`data/edgetpu` (writable), the HAL gets past the socket and reports the next
+thing it cares about:
+
+    INVALID_ARGUMENT: Incorrect driver provider is used for the current device.
+    file.cc:397  (status 4)
+
+That is a real, nameable condition: the HAL picks a driver provider (PCIe vs.
+platform, or a board-specific one) and does not think this device matches the
+one it was built/defaulted for. It is decided inside the binary from device
+properties, so the next probe is `strings` on the HAL for the provider names and
+the property it reads, then set that property for the chroot's `env`.
+
+The vendor service still aborts one line after `Start cache cleanup.`, and not
+through libbase: no `ABORT-MSG` appears, so it is a libc++ `__libcpp_verbose_abort`
+or a direct `abort()`, and the next tool is gdb with `catch signal SIGABRT` on
+that binary alone (the chroot is private, so running it under gdb is fine).
+
+Where this leaves the chain: servicemanager up, vendor service registering and
+dying in its cache cleanup, tachyon service up, Darwinn HAL dying on its driver
+provider. `/dev/janeiro` and janeiro's probe are not in question any more.
