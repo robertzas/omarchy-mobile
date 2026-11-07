@@ -1,9 +1,10 @@
-# Next: boot the synthetic-security-context kernel and light the chain
+# Next: declare the TPU interfaces in a VINTF manifest, then light the chain
 
-The binder driver now gives a transaction the fixed context
-`u:object_r:system:s0` instead of none (U38). That is the one thing between
-servicemanager's `Did not get context from PID N` abort and a registered vendor
-service, so:
+The binder transaction now carries `u:object_r:system:s0`, servicemanager
+survives registration, and the vendor service's `registerLazyService` returns
+`0xfffffffd` (`-3`) because servicemanager cannot find
+`com.google.edgetpu.IEdgeTpuVendorService/default` in a VINTF manifest
+(`NULL VINTF MANIFEST!: device` / `framework`). Make that manifest exist:
 
 1. `bin/omamobile push` the build from `out-tpu` (delete `$KERNEL_OUT/images`
    first - `push` reuses stale images otherwise), `reboot-to omamobile`, then
