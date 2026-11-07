@@ -2754,3 +2754,45 @@ did establish, all worth keeping:
 
 Next cycle: replace that copy with the ioctl build, cold boot, and open the
 device **before** any `rmmod`; then run `kciv`.
+
+### U22: KCI is closed — code 6 is not a command (2026-11-07)
+
+`kcistate` sends code 6 right after open, then maps codes 0-15 with a zeroed
+page, then resends 6 after each group step. With the driver's own enum
+(`edgetpu-kci.h`) to name them:
+
+```
+code 0  ACK                 -> 0
+code 1  UNMAP_BUFFER        -> 0
+code 2  MAP_LOG_BUFFER      -> 0
+code 3  JOIN_GROUP          -> 12  (UNIMPLEMENTED)
+code 4  LEAVE_GROUP         -> 12  (UNIMPLEMENTED)
+code 5  MAP_TRACE_BUFFER    -> 0
+code 6  (not in the enum)   -> 3   (INVALID_ARGUMENT)
+code 7  SHUTDOWN            -> 0
+code 8  GET_DEBUG_DUMP      -> -110
+code 9  OPEN_DEVICE         -> -110
+code 10 CLOSE_DEVICE        -> -110
+code 11 FIRMWARE_INFO       -> -110
+code 12 GET_USAGE_V1        -> -110
+code 13 NOTIFY_THROTTLING   -> -110
+code 14 BLOCK_BUS_SPEED     -> -110
+code 15 (not implemented)   -> -110
+```
+
+Three conclusions:
+
+- the firmware implements only 0-7, and `JOIN_GROUP`/`LEAVE_GROUP` are
+  unimplemented in this branch, so group state is the driver's business;
+- **code 6 is not a setup command**: the enum skips it, and 3 is
+  INVALID_ARGUMENT, not "failed precondition". U20's reading was wrong;
+- one unimplemented code poisons the channel: after code 8's timeout every
+  later send answers -110 for the rest of the boot. Never sweep past 7.
+
+So the VII setup gate cannot be reached through KCI. The reference path left
+is the vendor HAL: it exports `DarwinnApi2_Request_CreateViiCommand`,
+`DarwinnApi2_VirtualDevice_CreateInferenceRequest` and
+`DarwinnApi2_RequestQueue_Submit`, which build exactly the VII commands the
+firmware expects. Drive those and read the firmware ring: if the gate line
+disappears, the HAL performed the setup, and the queue can then be dumped to
+see what it wrote.
