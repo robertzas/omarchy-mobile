@@ -3519,3 +3519,36 @@ The iommu WARN is a separate, smaller issue: `edgetpu_mmu_alloc_domain()` calls
 `iommu_set_fault_handler()` on a domain the mainline IOMMU API does not support
 for that, and the warning is benign for this failure (the group is created, then
 the power-on fails).
+
+## U44 (2026-11-07): ACPM does set the TPU state; PSM0 is what never comes up
+
+The driver's own debugfs (`/sys/kernel/debug/edgetpu/power/`) answered the ACPM
+question without a rebuild:
+
+    before: state=0        min=0  policy=1066000
+    after writing 226000:  state=226000  core=226000  ctl=226000
+
+So the ACPM shim (`drivers/edgetpu/edgetpu-acpm.c`) is fine: the TPU DVFS domain
+takes the request and reports it back. What does not happen is the block coming
+out of reset - `PSM0_STATUS=0x5644c13` has bit 0x80 clear, so `janeiro_lpm_up()`
+polls until the 30 ms timeout, and the AON registers still read `0xdeadfeed`
+while the PSM ones at 0x1CFCxxxx read real data.
+
+Pre-setting the state through debugfs and running again changes the failure and
+confirms the ordering:
+
+    finalize group: power on failed: -11      (was -110)
+    "is_block_down" loop exhausted: the driver insists on seeing the block
+    down before a cold power-up, and a pre-set state refuses that
+
+So the cold sequence is: ACPM state -> TPU_OFF -> (block down confirmed) -> ACPM
+state 226000 -> PSM0 start -> firmware. The break is at the PSM0 start: the TPU
+core does not acknowledge, which is why GSA's image load and `GSA_TPU_START`
+(cmd 1) are followed by `firmware handshake failed: -110`.
+
+Next candidates, narrowest first: the PSM0_CFG value the vendor driver writes
+before start (mainline writes it only after LPM0 succeeds), the AON clock enable
+(ACPM or the `aon` clock in the DT), and whether the vendor node carries extra
+regions or a `power-domains` link that our `janeiro@1ce00000` lacks. The vendor
+DT capture is not on this laptop (`~/android/reference` is empty), so the next
+run needs it from the phone's stock slot or the factory image.
