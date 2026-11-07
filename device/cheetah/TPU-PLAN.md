@@ -3654,3 +3654,14 @@ DTB section, read `janeiro@1ce00000`'s `clocks`/`power-domains`, add what the
 mainline tree lacks to `gs201.dtsi` (or a bring-up overlay), then re-test with the
 sysfs device node. Nothing about the TPU's blocker is unknown any more; it is one
 DTB read and one DT edit away.
+
+### U48 addendum: the whole 64 MB partition has no FDT header
+
+Read `vendor_boot_a` end to end (all 64 MB, not just the first 24 MB) and searched
+for the FDT magic: **zero occurrences**. So the stock DTB is not stored as a
+plain flattened tree anywhere in that partition either; it is inside the
+vendor_boot payload (compressed kernel/vendor ramdisk or the DTB section of a
+boot-image header this scan did not walk), and reading it needs a real
+boot-image unpacker rather than a magic scan. That is a laptop-side step with the
+project container's tooling or an `unpack_bootimg`-style parser, not something to
+iterate on the phone.
