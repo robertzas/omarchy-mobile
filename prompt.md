@@ -1,35 +1,28 @@
-# Next: enable the TPU AON island, the one thing still holding the core in reset
+# Next: give the janeiro node its clocks and power domains
 
-Established (U42-U45): a compiled model exists, the runtime reaches the driver,
-the device-group ioctl succeeds with the node taken from
-`/sys/class/edgetpu/janeiro/dev` (major changes per boot — never hard-code it),
-the TPU's mailbox interrupts arrive (`irq 163 idx 0 ... status 1`), ACPM accepts
-the TPU DVFS state, and reordering `PSM0_CFG` before `PSM0_START` changed
-nothing. Every failure reduces to one line:
+The blocker is now structural and small (U46): our `janeiro@1ce00000` has **no
+`clocks` and no `power-domains`** properties, which is exactly why every AON
+register reads `0xdeadfeed` and `PSM0_STATUS` never reports 0x80. DVFS works
+(ACPM accepts and reports the state), the mailbox works (irq 163 fires), the
+device node is right (from sysfs) — the island is simply unclocked.
 
-    Set LPM0 failed: -110 (PSM0_STATUS=0x5644c13 ... AON_RESET=0xdeadfeed
-      AON_CLK=0xdeadfeed AON_QUIESCE=0xdeadfeed POWER_CONTROL=0xdeadfeed GSA state=0)
+1. Read the stock node from the phone: `dd if=/dev/sda14 bs=4096 count=64 | dtc
+   -I dtb -O dts` (dtbo_a, read-only; never write slot A). Copy its
+   `clocks`, `clock-names`, `power-domains`, `power-domain-names`, extra `reg`
+   entries and `samsung,acpm-ipc` into `gs201.dtsi`'s janeiro node (or a
+   bring-up overlay), keeping the mainline names for anything the mainline clock
+   and PM-domain drivers already provide.
+2. If the vendor names a clock the mainline CMU driver does not expose yet, that
+   clock is the work: add it to the gs201 clock driver (a read-only gate is not
+   enough here; the TPU AON clock must be enable-able).
+3. Apply, rebuild, `modules-push` if only the module changed, and test with the
+   sysfs node and no stray clients: `timeout 60 chroot $R /vendor/bin/edgetpu-run
+   /vendor/detect_edgetpu.tflite`, then `dmesg | grep janeiro`.
 
-The PSM registers answer; the AON registers all read `0xdeadfeed`, i.e. that
-island is unclocked. So find and enable the AON clock/power in the driver:
+Success is `Set LPM0` gone and the tool printing the graph's tensor counts. Then
+the benchmark: `detect_edgetpu.tflite` over the 720p 10-object video against CPU
+(3.98 ms/frame at 4 threads, 10 detections/frame at 0.4), GPU and the rest.
 
-1. `drivers/edgetpu/edgetpu-mobile-platform.c` maps only `"tpu"` and `"ssmt"`;
-   check the vendor node for a third region (AON/`pmu`), a `clocks` list, and
-   `power-domains`. Stock's dtbo on slot A has the real node — fetch it read-only
-   (never write slot A).
-2. If AON is clocked through ACPM, look at what `exynos_acpm_set_rate` is
-   expected to do for `TPU_ACPM_DOMAIN` beyond DVFS (the shim only forwards
-   `dvfs.set_rate`, which is enough for `power/state` but may not gate AON).
-3. Test with the group ioctl only: create `/dev/janeiro` from sysfs, kill stray
-   `edgetpu-run` processes, then run under `timeout 60` and read `dmesg`.
-
-When LPM0 succeeds, `edgetpu-run` prints the graph's tensor counts, and the
-benchmark can run: compiled `detect_edgetpu.tflite` over the 720p 10-object
-video against CPU (3.98 ms/frame at 4 threads, 10 detections/frame at 0.4), GPU
-and the other backends.
-
-Rules: slot B only, `pkill -x`, delete `$KERNEL_OUT/images` before `push`,
-`depmod -a $(uname -r)` and `modules-push` when `modinfo -F srcversion janeiro`
-differs (the driver is a module, so a kernel rebuild alone ships nothing),
-announce screen-off before `poweroff`, no vendor blobs or identifiers, no
+Rules unchanged: slot B only, `pkill -x`, `depmod` + `modules-push` after a module
+change, announce screen-off before `poweroff`, no vendor blobs or identifiers, no
 `Signed-off-by`.

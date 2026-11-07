@@ -3589,3 +3589,30 @@ the PSM configuration order but the AON island itself: its clock/power enable.
 Operational note: a client that hangs on the 60 s timeout keeps the device and
 the TPU in a half-powered state, and stray `edgetpu-run` processes keep the irq
 line busy; kill them by exact name before each attempt.
+
+## U46 (2026-11-07): the janeiro node has no clocks or power domains at all
+
+The decisive structural finding came from one `ls` of the live tree:
+
+    /sys/firmware/devicetree/base/janeiro@1ce00000/
+      clocks:            absent
+      power-domains:     absent
+      samsung,acpm-ipc:  absent
+      reg:               absent      (reg is present as an unnamed property)
+
+Our `janeiro@1ce00000` carries `reg`, `interrupts`, `iommus`, `memory-region`,
+`gsa-device` and the DVFS table, but **no `clocks` and no `power-domains`**. Every
+AON register reading `0xdeadfeed` is exactly what an unclocked island returns, so
+this is the missing link rather than a subtlety of the PSM sequence: the driver
+asks ACPM for a DVFS state, which works, but nothing in the DT lets Linux (or the
+TPU's own AON block) gate its clock, and the PSM0 acknowledge never comes.
+
+The stock node is the source of truth and it is on the phone: `dtbo_a` is
+`/dev/sda14` (`dtbo_b` is `/dev/sda24`). Reading it is read-only and safe; the
+node in it lists the real `clocks`, `power-domains` and any extra regions, and
+those properties are what `tpu-enable.dtso` and `gs201.dtsi` need.
+
+Also fixed this round: the runner derived `/dev/edgetpu` only by symlink, so a
+stale node major silently broke every ioctl (U45). `/root/tpu-tachyon-run` now
+reads `/sys/class/edgetpu/janeiro/dev` and creates the node from it at every
+start.
