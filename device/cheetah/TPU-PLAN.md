@@ -2922,3 +2922,10 @@ libedgetpu_util (per command and cluster, gated by `firmware_setup_done_`), or
 the Tachyon compute session, whose FMQ queues the vendor service uses. The
 delegate's Sync runs before either, or its setup failed silently; the HAL has
 to be made to say which, with glog verbosity.
+
+U26 addendum: with `GLOG_v=3 GLOG_logtostderr=1`, the delegate's log holds
+exactly one error — `Sync VII command failed: error_code=9` — and **no setup
+attempt at all**. So the "firmware setup" path in libedgetpu_util is not
+entered by `edgetpu-run`; the host half the firmware wants is sent by something
+else on stock Android (the vendor service or the Tachyon compute session), not
+by the delegate.
