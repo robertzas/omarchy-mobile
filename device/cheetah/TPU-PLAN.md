@@ -2840,3 +2840,23 @@ spins on an event that never arrives, after the driver has already finalized
 the group and attached the mailbox. The binary is not stripped, so the next
 step is to read `/proc/<pid>/maps`, subtract the module base from the spinning
 PC and `addr2line` it — that names the exact function to fix.
+
+### U24: the delegate creates its virtual device, then needs a DMA-BUF heap (2026-11-07)
+
+With `tools/edgetpu-nometrics.c` preloaded, `DarwinnDelegate_CreateVirtualDevice`
+no longer spins in `AServiceManager_isDeclared` → `WaitForPropertyCreation`
+(that wait is an Android servicemanager property, and it never returns on a
+Linux userspace). The delegate then gets a virtual device, sets a second
+eventfd (`0x4008ed05 event_id 1 efd 11`) and dies allocating its tensors:
+
+```
+E file.cc:60] INTERNAL: Failed to open DMA-BUF heap: No such file or directory
+W :47] Failed to allocate tensor buffer: ... Attempting to allocate it with the next memory option if available.
+E file.cc:55] INTERNAL: Failed to allocate buffer after trying with all available memory options.
+F :54] Check failed: allocated_bytes_ == 0 (1048576 vs. 0)
+```
+
+So the next dependency is the Android DMA-BUF heap (`/dev/dma_heap/system`).
+The driver's own coherent allocator is not what the delegate reaches for: it
+asks the heap by Android's path. The kernel config and the phone must provide
+it, or the HAL must be given a memory option that does not need it.
