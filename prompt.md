@@ -1,46 +1,41 @@
-# Next: give binder a security-context answer, then register the TPU chain
+# Next: keep servicemanager alive, then let the vendor service register
 
-State (U35): the client side already works — `RUN_UID=10000 /root/tpu-tachyon-run`
-makes the delegate ask for `com.google.edgetpu.IEdgeTpuAppService/default` — and
-the blocker is now named exactly. The kernel's binder driver fails every
-transaction to a node published by Android's libbinder:
+State (U36): the binder transaction failure is fixed in the kernel — a node that
+asks for a security context now gets its transaction even when no LSM can
+translate a secid (`security_secid_to_secctx()` returns `-EOPNOTSUPP`), and dmesg
+counts 0 "failed to get security context" where it used to count 14. With that,
+`com.google.edgetpu.tachyon-service` stays alive, `/dev/janeiro` exists, and
+janeiro reports `janeiro edgetpu initialized. Build: 052da7097-dirty`.
 
-    binder: N:N failed to get security context
-    binder: N:N transaction call to ...:0 failed .../29201/-95 ... line 3376
+Still failing:
 
-because `FLAT_BINDER_FLAG_TXN_SECURITY_CTX` needs `security_secid_to_secctx()`,
-and no LSM on this kernel implements it (SELinux is not built in; the LSM list is
-`capability,landlock`). That -95 is the ENOTSUP the services saw through
-`registerLazyService` as well.
+- `servicemanager` aborts: `Fatal signal 6 (SIGABRT) ... tid (servicemanager)`.
+  Read its own stderr (`/tmp/tpu-tachyon.log`, the `=== servicemanager` block) for
+  the CHECK. It runs against `/dev/vndbinder` and links libbinder (C++), so an
+  empty security context on a client node is the first suspect: the chroot's
+  libbinder was byte-patched (0x505bc / 0x4ffac) to drop
+  `FLAT_BINDER_FLAG_TXN_SECURITY_CTX`, and the kernel fix makes that patch
+  unnecessary. The originals are `libbinder.so.orig` in both `vendor/lib64` and
+  `system/lib64`; restoring them is the first experiment, and it lets
+  servicemanager see the same node flags stock does.
+- `vendor.google.edgetpu_vendor_service@1.0-service` dies with
+  `SIGSEGV ... fault addr 0xffffff7f`. That is `-129` (`EX_TRANSACTION_FAILED`)
+  read as an `AStatus*`: `tools/android-lazysvc-shim.c` must not call
+  `AStatus_getExceptionCode()` on a value that is not a pointer. Print the
+  pointer/return value instead, and treat a small negative value as the status
+  code it is.
+- janeiro's probe logs a backtrace through `__setup_irq` / `edgetpu_register_irq`
+  (dmesg ~27 s). The device appears anyway, so this is a warning to identify
+  later, not the current blocker.
 
-Two routes, in order of cost:
+After the vendor service stays up, the chain is: it owns `/dev/edgetpu`, tachyon
+fronts it, and `android.hardware.neuralnetworks@service-darwinn-aidl` publishes
+`IEdgeTpuAppService/default` for the delegate (`RUN_UID=10000`). Then a real
+inference, then the 720p benchmark (`tools/bench-object-detection.py`; CPU
+baseline 3.98 ms/frame at 4 threads).
 
-1. **Find the last flag site in libbinder** (cheap, no reboot). `Parcel`'s
-   `isRequestingSid()` branch is already neutralised at 0x505bc
-   (`/system/lib64/libbinder.so`) and 0x4ffac (`/vendor/lib64/libbinder.so`,
-   the copy servicemanager maps); the count did not move, so look at
-   `ProcessState::becomeContextManager` (0x9cb50) and at `BpBinder`/`BBinder`
-   constructors: `grep -nE "mov\tw[0-9]+, #0x1[0-9a-f]{3}"` around those
-   addresses, and remember the flag can also be OR'd as `0x1100` or `0x117f`.
-   A run's dmesg is the oracle: `dmesg | grep -c "failed to get security context"`.
-
-2. **Build SELinux into the kernel** (definitive, one build + push + reboot).
-   Add to `kernel/configs/omamobile.config`:
-   `CONFIG_SECURITY_SELINUX=y` and
-   `CONFIG_LSM="landlock,lockdown,yama,integrity,selinux,bpf"`.
-   With no policy loaded, `security_sid_to_context_core()` still answers the
-   initial SIDs from `initial_sid_to_string`, so the binder driver gets "kernel"
-   and the transactions proceed; nothing enforces labels in this chroot. Build in
-   `~/omamobile-kernel/wt-tpu` with `out-tpu`, then `push` + `reboot-to` and run
-   `tools/phone-smoke` first, because an LSM in the list touches every boot path.
-   If the phone does not come back, the initramfs USB watchdog is the safety net.
-
-After the count reaches zero, expect `vendor pid`, `tachyon pid` and `hal pid` to
-stay alive in `/tmp/tpu-tachyon.log` and the delegate to get a real fd from the
-service instead of "Failed to open device fd". Then a real inference, then the
-720p benchmark (`tools/bench-object-detection.py`; CPU baseline 3.98 ms/frame at
-4 threads, 10 detections/frame).
-
-Rules unchanged: slot B only, one TPU power-up per boot, announce screen-off
-before `poweroff`, never `rmmod` janeiro, grep diffs for identifiers, no
-`Signed-off-by`.
+Build/run rules learned: delete `$KERNEL_OUT/images` after a kernel build or
+`push` ships the old images; `bin/omamobile initramfs` needs a writable `$WORK`;
+run `depmod -a $(uname -r)` on the phone after a module push. Slot B only, one
+TPU power-up per boot, never `rmmod` janeiro, announce screen-off before
+`poweroff`, grep diffs for identifiers, no `Signed-off-by`.

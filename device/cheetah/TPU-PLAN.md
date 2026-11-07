@@ -3234,3 +3234,39 @@ With no policy loaded SELinux still answers the initial SIDs from
 `initial_sid_to_string` (`security_sid_to_context_core`, services.c:1371), which is
 exactly the "no labels matter here" answer this chroot needs; it is a kernel
 build, a `push` and a reboot, so it needs its own gated run.
+
+## U36 (2026-11-07): the binder fix works; the blockers move to servicemanager and janeiro
+
+The kernel's binder driver now carries the fix this plan needs: when
+`security_secid_to_secctx()` answers `-EOPNOTSUPP` (no LSM here translates
+secids), `binder_transaction` sends the transaction without a context instead of
+failing it. Built at `29a7a9326` + that patch, `push`ed, and measured on the
+phone (`7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`):
+
+    secctx failures, before: 14   after: 0
+
+With the transactions actually arriving, `com.google.edgetpu.tachyon-service`
+**stays alive** (`tachyon pid: 3591`), which it never did before. Three new
+facts came out of the same run:
+
+- `vendor.google.edgetpu_vendor_service@1.0-service` still dies, and the fault
+  address is the same one U34 recorded: `SIGSEGV ... fault addr 0xffffff7f`,
+  which is `-129` (`EX_TRANSACTION_FAILED`) read as a pointer. Our
+  `android-lazysvc-shim` hands that value to `AStatus_getExceptionCode`, so the
+  shim must not assume `AServiceManager_addService` returns a real `AStatus`.
+- `servicemanager` itself aborts: `Fatal signal 6 (SIGABRT) ... in tid 3410
+  (servicemanager)`. Its own stderr is the next place to read (the AIDL
+  servicemanager CHECKs when a client dies mid-call).
+- janeiro probes now that `tpu-enable.dtso` is part of `DTB_OVERLAYS`:
+  `edgetpu_platform 1ce00000.janeiro: janeiro edgetpu initialized. Build:
+  052da7097-dirty`, then `Powering down`. The probe logs a backtrace through
+  `edgetpu_register_irq` (dmesg, ~27.3 s) and `/dev/janeiro` never appears, so
+  the IRQ registration is where to look next. `1cc40000.sysmmu` is present.
+
+Also learned the hard way, and worth keeping: `bin/omamobile push` reuses
+`$KERNEL_OUT/images` when it exists, so a kernel rebuild alone changes nothing on
+the phone -- delete that directory after building. `bin/omamobile initramfs`
+needs a writable `$WORK` (it defaults to `$HOME/android`, which is root-owned
+here), and `make modules_install` skipped depmod in the container, so
+`/usr/lib/modules/<release>/modules.dep` had to be regenerated on the phone
+(`depmod -a $(uname -r)`) before `modprobe janeiro` resolved its dependencies.
