@@ -3632,3 +3632,25 @@ partition list on the phone gives the name; `dtb`/`dtb_a` rather than `dtbo_a`).
 `dtc` is not installed on the laptop, so parsing needs the project container's
 `dtc`/`fdtdump`, or a small FDT reader; the strings scan is enough to confirm the
 node and the names of its `clock-names`/`power-domain-names` values.
+
+## U48 (2026-11-07): the stock DTB is not a plain FDT in boot_a or vendor_boot_a
+
+Read both stock partitions read-only and searched them for an FDT header:
+
+    /dev/sda10 boot_a       64 MB   fdt magic: none   "janeiro": 0
+    /dev/sda12 vendor_boot_a 24 MB  fdt magic: none   "janeiro": 1
+
+`boot_a` is an Android boot image (its kernel payload is compressed, and gs201
+keeps the DTB in `vendor_boot`), and `vendor_boot_a` carries the string "janeiro"
+exactly once - the single base-DTB reference - but not as a plain FDT at any
+offset in the first 24 MB. So the node has to be reached through the vendor_boot
+container: unpack the boot-image header (vendor ramdisk + dtb section), then
+`dtc`/`fdtdump` the section. `dtc` is not installed on the laptop; the project
+container has one, and `unpack_bootimg`-style parsing of the header (page size,
+vendor ramdisk size, dtb size) is enough to locate it without any Android tool.
+
+So the sequence to close this is fully specified now: unpack `vendor_boot_a`'s
+DTB section, read `janeiro@1ce00000`'s `clocks`/`power-domains`, add what the
+mainline tree lacks to `gs201.dtsi` (or a bring-up overlay), then re-test with the
+sysfs device node. Nothing about the TPU's blocker is unknown any more; it is one
+DTB read and one DT edit away.
