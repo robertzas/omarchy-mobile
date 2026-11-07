@@ -2392,3 +2392,42 @@ header dump at the last-consumed cmd-queue slot, payload dump cap raised 64 -> 5
 - Next: `typesweep` mode — a crafted Command flatbuffer with fields f1..f8 all set
   to a candidate value v, swept v=1..200, watching for the response word or ring
   line to leave `0xf000009` / "type 0".
+
+## U17. typesweep null: even a crafted Command table with f1..f8 set logs type 0 (2026-11-07)
+
+Kernel `7.3.0-rc6-omamobile-push1-g29a7a9326bf0-dirty`. New `typesweep` mode in
+tools/edgetpu-run.c builds a valid flatbuffer (root@0 -> table@0x20, vtable@0x04,
+9 fields: f0 u64 @+8, f1..f8 u8 @+16..+23) with f1..f8 all set to v and sweeps
+v = 1..200 (200 serialized submissions, one cold boot, script /root/tpu-tsweep.sh).
+Result: every response word2 = 0xf000009, every ring entry still
+"Setup is not done yet received a command of type 0" (ring head 0x1ea tail 0xab8,
+~26 deduped lines for 200 commands — the firmware dedups identical log lines, so
+per-submission types are not visible in the ring; only a *changed* type would log).
+
+Combined with U16 this leaves two live explanations:
+1. The firmware never DMAs our payload (host MAP_BUFFER page, dev addr
+   0xfffff000), so the parsed Command is empty and type defaults to 0. The gate
+   logs the type before any buffer-reachability check, so this is
+   indistinguishable from "type really is 0" with the gate failing first.
+   MAP_BUFFER flags we pass = 0 = MIRRORED (all dies) + TPU-CPU-accessible=yes
+   (bit3=0), same address class as the runtime's dmabuf 0xffeff000, so
+   reachability should be OK — but unverified from the firmware side.
+2. The type lives in a field layout none of our sweeps touched (element +12
+   was never swept; HAL's one command had +12 = 0x35614856).
+
+Vendor-lib string probe: no flatbuffer field names for the VII Command schema in
+libedgetpu_tachyon/util/hal (`global_scratch*` absent; only
+`DarwinnApi2_InferenceRequest_GetCommandType` and hal's
+`scratch_buffer_alignment_bytes` executable parameter). The runtime's setup path
+is the Tachyon AIDL session (libedgetpu_tachyon.google.so:
+TachyonComputeService_createSession@0x10bb0, setupCommandQueue@0xdf00,
+setupResponseQueue@0xdfd0, sendCommand@0xe0a0, receiveResponse@0xe170), which
+needs the vendor service environment; util builds per-cluster setup commands at
+libedgetpu_util.so 0x13befc, hal at libdarwinn_hal.so 0x14d9a24.
+
+Open driver/client bugs to fix next boot: (a) edgetpu-mailbox.c dump_schedule uses
+slot = REAL_INDEX(head) % size but the firmware already advanced head at IRQ time,
+so it dumps the empty next slot — use (REAL_INDEX(head)+size-1) % size; (b) fwlog
+scan must treat tail&0xffff < 128 as empty (observed tail 0x62 on a fresh boot).
+Phone state: last boot's TPU run spent (typesweep consumed the one run); next client
+run needs poweroff + Power.
