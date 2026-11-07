@@ -1,5 +1,27 @@
-# Next: do not poll PSM0 before the GSA has started the core
+# Next: find out why the firmware never answers the KCI handshake
 
+Corrected twice now (U49): `TPU cmd 1 (Trusty): 2` is `GSA_TPU_STATE_RUNNING`, and
+`lpm_up`'s -110 is ignored by `mobile_power_up()`. The attempt really ends in
+`edgetpu_firmware_restart_locked()`: GSA has started the core, the image is
+loaded, and the KCI handshake then times out (-110) and the driver powers down.
+
+1. Turn on the driver's debug output (`CONFIG_EDGETPU_DEBUG` /
+   `edgetpu.debug`) and capture the KCI send/receive lines around the handshake;
+   also read `/sys/kernel/debug/edgetpu/janeiro/kci_send` and `fw_tracing/*`
+   while a client holds the device. That tells you whether the driver sends and
+   the firmware is silent, or nothing is sent at all.
+2. If nothing is sent, the driver's KCI/mailbox init is the bug (compare with the
+   vendor driver's order: `edgetpu_chip_init` -> mailbox init -> `kci_reinit`).
+3. If it sends and the firmware is silent, the core is running without its AON
+   clock (the ignored `Set LPM0 failed`), and the PSM0 poll becomes the real fix
+   after all - then the AON clock source is the thing to find.
+
+Success: `edgetpu-run` prints the graph's tensor counts. Then the benchmark:
+`detect_edgetpu.tflite` on the 720p 10-object video against CPU (3.98 ms/frame at
+4 threads), GPU and the rest.
+
+Rules: slot B only, `pkill -x`, `modules-push` (janeiro is a module), announce
+screen-off before `poweroff`, no vendor blobs or identifiers, no `Signed-off-by`.
 Corrected reading (U49): `TPU cmd 1 (Trusty): 2` is `GSA_TPU_STATE_RUNNING`, so the
 TPU **does** start. The failing step is `janeiro_lpm_up()`'s PSM0 poll, and the log
 order shows why: it runs at 723.197, *before* the image load (723.198) and the GSA
