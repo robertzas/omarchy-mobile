@@ -6,9 +6,13 @@
 #
 # Why: the TPU firmware refuses every VII command until its one-time setup
 # command has run, and on stock Android that command comes from the vendor
-# service. That service is binder-only, so this mounts binderfs and runs a
-# servicemanager (from the stock system image) plus two LD_PRELOAD shims that
-# stand in for logd and SELinux. See device/cheetah/TPU-PLAN.md U27/U28.
+# service. That service is binder-only, so this mounts binderfs and runs
+# servicemanager plus LD_PRELOAD shims that stand in for logd and SELinux.
+# See device/cheetah/TPU-PLAN.md U27/U28/U34.
+#
+# The Edge TPU binaries live in /vendor, and vendor libbinder talks to
+# /dev/vndbinder (their own log says so), so the whole chain runs on the vendor
+# binder domain with /vendor/lib64 first.
 set -u
 
 R=/usr/lib/omamobile-vendor/edgetpu/root
@@ -66,11 +70,16 @@ log "binderfs"
 mkdir -p /dev/binderfs /dev/dma_heap
 mountpoint -q /dev/binderfs || run mount -t binder binder /dev/binderfs
 for n in binder hwbinder vndbinder; do ln -sfn /dev/binderfs/$n /dev/$n; done
+# RUN_UID runs the delegate as an app uid, which is the only way the vendor
+# util library takes its Tachyon client path (root always goes direct). The
+# binder nodes therefore have to be reachable from that uid. /dev/edgetpu must
+# stay root-only: EACCES on it is what selects the client path.
+chmod 666 /dev/binderfs/binder /dev/binderfs/hwbinder /dev/binderfs/vndbinder 2>/dev/null
 [ -e /dev/dma_heap/system ] || mknod /dev/dma_heap/system c 249 0
 ls -l /dev/binderfs /dev/dma_heap >>"$LOG" 2>&1
 
 log "chroot mounts"
-mkdir -p "$R/dev" "$R/proc" "$R/sys" "$R/vendor/etc"
+mkdir -p "$R/dev" "$R/proc" "$R/sys" "$R/vendor/etc" "$R/root"
 run mount --rbind /dev "$R/dev"
 mountpoint -q "$R/proc" || run mount -t proc proc "$R/proc"
 mountpoint -q "$R/sys" || run mount --rbind /sys "$R/sys"
@@ -80,27 +89,54 @@ cp /root/libselinux-shim.so "$R/system/lib64/libselinuxshim.so" 2>/dev/null
 cp /root/libpropsshim.so "$R/system/lib64/libpropsshim.so" 2>/dev/null
 cp /root/libstackchkshim.so "$R/system/lib64/libstackchkshim.so" 2>/dev/null
 cp /root/dlopenprobe.so "$R/system/lib64/dlopenprobe.so" 2>/dev/null
+cp /root/liblazysvc.so "$R/system/lib64/liblazysvc.so" 2>/dev/null
 
-export LD_LIBRARY_PATH=/system/lib64:/vendor/lib64:/apex/com.android.runtime/lib64/bionic
-# servicemanager needs both shims: without liblog-to-stderr its abort reason is
-# invisible, and without libselinux it dies in selinux_status_open.
-export LD_PRELOAD="/system/lib64/liblogstderr.so /system/lib64/libselinuxshim.so"
+# Vendor first: that is what makes libbinder pick /dev/vndbinder, the domain
+# the Edge TPU services and the delegate register and look up on.
+export LD_LIBRARY_PATH=/vendor/lib64:/system/lib64:/apex/com.android.runtime/lib64/bionic
+USPEC=
+[ -n "${RUN_UID:-}" ] && USPEC="--userspec=$RUN_UID:$RUN_UID"
+# servicemanager links libbinder (C++), not libbinder_ndk, so it must not get
+# the lazy-registration shim: that shim's AServiceManager_addService has no
+# provider there and the linker refuses to start the binary.
+export LD_PRELOAD="/system/lib64/liblogstderr.so /system/lib64/libselinuxshim.so /system/lib64/libpropsshim.so"
 
-log "servicemanager"
+log "servicemanager (vendor binder domain)"
 pkill -x servicemanager 2>/dev/null
 sleep 0.5
-setsid chroot "$R" /system/bin/servicemanager >>"$LOG" 2>&1 </dev/null &
+setsid chroot "$R" /system/bin/servicemanager /dev/vndbinder >>"$LOG" 2>&1 </dev/null &
 sleep 2
 echo "servicemanager pid: $(pgrep -x servicemanager)" >>"$LOG"
+
+# The stock servicemanager here answers registerLazyService with ENOTSUP, and
+# AidlLazyServiceRegistrar aborts the service on any non-OK status. The shim
+# turns that call into an eager addService, so a name is registered and kept.
+SVC_PRELOAD="/system/lib64/liblazysvc.so $LD_PRELOAD"
+
+# Stock's order: the vendor service owns /dev/edgetpu, the tachyon service
+# fronts it, and Darwinn's NNAPI HAL publishes IEdgeTpuAppService for clients.
+log "vendor edgetpu service"
+pkill -x vendor.google 2>/dev/null
+sleep 0.5
+setsid env LD_PRELOAD="$SVC_PRELOAD" chroot "$R" /vendor/bin/hw/vendor.google.edgetpu_vendor_service@1.0-service >>"$LOG" 2>&1 </dev/null &
+sleep 3
+echo "vendor pid: $(pgrep -f vendor.google.edgetpu_vendor | head -1)" >>"$LOG"
 
 log "tachyon service"
 pkill -x com.google.edge 2>/dev/null
 sleep 0.5
-setsid chroot "$R" /vendor/bin/hw/com.google.edgetpu.tachyon-service >>"$LOG" 2>&1 </dev/null &
+setsid env LD_PRELOAD="$SVC_PRELOAD" chroot "$R" /vendor/bin/hw/com.google.edgetpu.tachyon-service >>"$LOG" 2>&1 </dev/null &
 sleep 3
 echo "tachyon pid: $(pgrep -x com.google.edge)" >>"$LOG"
 
-log "delegate (system-property shim so the service lookup can finish)"
+log "darwinn nnapi hal"
+pkill -x android.hardwa 2>/dev/null
+sleep 0.5
+setsid env LD_PRELOAD="$SVC_PRELOAD" chroot "$R" /vendor/bin/hw/android.hardware.neuralnetworks@service-darwinn-aidl >>"$LOG" 2>&1 </dev/null &
+sleep 4
+echo "hal pid: $(pgrep -x android.hardwa)" >>"$LOG"
+
+log "delegate"
 DELEGATE_PRELOAD="/system/lib64/libstackchkshim.so /system/lib64/liblogstderr.so /system/lib64/libselinuxshim.so /system/lib64/libpropsshim.so"
 # PROBE=1 loads the vendor client libraries first, to tell a dlopen failure
 # apart from a choice the delegate makes.
@@ -118,7 +154,7 @@ if [ "${GDB:-0}" = "1" ]; then
 		-ex run -ex "bt 25" >>"$LOG" 2>&1
 	echo "gdb rc: $?" >>"$LOG"
 elif [ "${BT:-0}" = "1" ]; then
-	LD_PRELOAD="$DELEGATE_PRELOAD" chroot "$R" /vendor/bin/edgetpu-run /vendor/etc/model.tflite >>"$LOG" 2>&1 &
+	LD_PRELOAD="$DELEGATE_PRELOAD" chroot $USPEC "$R" /vendor/bin/edgetpu-run /vendor/etc/model.tflite >>"$LOG" 2>&1 &
 	dpid=$!
 	sleep 6
 	log "backtrace of $dpid"
@@ -128,7 +164,7 @@ elif [ "${BT:-0}" = "1" ]; then
 	wait "$dpid" 2>/dev/null
 else
 	LD_PRELOAD="$DELEGATE_PRELOAD" timeout 25 \
-		chroot "$R" /vendor/bin/edgetpu-run /vendor/etc/model.tflite >>"$LOG" 2>&1
+		chroot $USPEC "$R" /vendor/bin/edgetpu-run /vendor/etc/model.tflite >>"$LOG" 2>&1
 	echo "delegate rc: $?" >>"$LOG"
 fi
 
