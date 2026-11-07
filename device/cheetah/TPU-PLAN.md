@@ -2831,3 +2831,12 @@ Two operational facts, both cost a boot to learn:
 - the chroot's `/dev` and `/vendor/etc` are recreated at boot: make
   `dev/janeiro` (`c 502 0`) and `dev/edgetpu-soc` (`c 502 1`), and copy the
   model in again each boot.
+
+U23 addendum: the hang is a **userspace busy loop**, not a blocked syscall.
+While `edgetpu-run` hung, `/proc/<pid>/syscall` read `running` and
+`/proc/<pid>/wchan` read `0`; the process held fd 4 (`dev/janeiro`), fd 5 and
+fd 7 (eventfd), fd 6 (epoll) and fd 8 (timerfd). So `CreateVirtualDevice`
+spins on an event that never arrives, after the driver has already finalized
+the group and attached the mailbox. The binary is not stripped, so the next
+step is to read `/proc/<pid>/maps`, subtract the module base from the spinning
+PC and `addr2line` it — that names the exact function to fix.
