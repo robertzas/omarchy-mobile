@@ -2025,7 +2025,7 @@ static void bytesweep_mode(const char *file) {
 static int g_kci_probe; /* kcisweep: send the KCI codes once the group is live */
 
 /* Send the KCI codes the driver's command set does not implement, through the
-   driver's development-only ioctl (_IOW(0xed, 33, u32) = 0x4001ed21), with the
+   driver's development-only ioctl (_IOW(0xed, 33, u32) = 0x4004ed21), with the
    device open so the response path is live. 4 and 9 are the control: the
    driver sends those at run time, so they must answer. */
 static void kci_probe(int fd) {
@@ -2035,7 +2035,7 @@ static void kci_probe(int fd) {
 
   for (i = 0; i < (int)(sizeof(codes) / sizeof(codes[0])); i++) {
     unsigned c = codes[i];
-    r = ioctl(fd, 0x4001ed21, &c);
+    r = ioctl(fd, 0x4004ed21, &c);
     put("kci: code ");
     putdec(c);
     put(" -> ");
