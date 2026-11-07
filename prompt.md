@@ -1,63 +1,59 @@
-# Next: reach the running Tachyon service by shimming Android properties
+# Next: backtrace the delegate hang, then call Tachyon directly
 
 State: the TPU powers up, loads firmware, opens the device and finalizes its
-mailbox (U29). The vendor Tachyon service now runs on our Linux userspace
-(`tools/tpu-tachyon-run` mounts binderfs, runs `servicemanager` from the stock
-system image, and loads two shims). The delegate still cannot use it: without
-`tools/edgetpu-nometrics.so` it hangs in `DarwinnDelegate_CreateVirtualDevice`
-before any VII command (rc 124); with that shim it skips the service and gets
-`error_code=9` from the firmware. The difference is Android's property service.
+mailbox (`OPEN_DEVICE ret 0`, `kci_finalized ret 0`). servicemanager and the
+vendor Tachyon service both run (`tools/tpu-tachyon-run`), with three shims
+preloaded. The delegate still hangs: `timeout` 124 after `model bytes: 4749998`
+and its mmaps, with no VII element sent and no error. A property stub that
+answers every `__system_property_get` with `1` did not change that, so the spin
+is not a property wait (U30).
 
 Do not re-derive:
 
-- Kernel: `CONFIG_ANDROID_BINDER_IPC=y`, `CONFIG_ANDROID_BINDERFS=y`,
-  `CONFIG_SECURITY_SELINUX` not set. binderfs is mounted per boot and `binder`
-  is 507:1.
-- `servicemanager` extracted from `out/cp2a-system.img` needs both
-  `tools/android-log-stderr.c` and `tools/android-selinux-allow.c` preloaded;
-  with them it stays up and the Tachyon service starts and stays up.
-- `libedgetpu_tachyon.google.so`: `TachyonComputeService_create` calls
-  `AServiceManager_isDeclared` then `AServiceManager_waitForService`;
-  `TachyonComputeSession_setupCommandQueue` only calls `SetupCommandFmq` on a
-  session the service hands out. So a session is only reachable through binder.
-- Firmware gate: one VII setup command per firmware boot carrying the global
-  scratches; the delegate never sends it, and the service is the thing that
-  does on stock.
+- binderfs works (`mount -t binder binder /dev/binderfs`, `binder` 507:1);
+  servicemanager is from `out/cp2a-system.img`; shims are
+  `tools/android-log-stderr.c`, `tools/android-selinux-allow.c`,
+  `tools/android-props-stub.c`.
+- `SessionConfig` is 0x28 bytes: bool at 0, int32 at 4, 8, 0xc,
+  `shared_ptr<IGetFdsResponseCallback>` at 0x10, int32 at 0x20 and 0x24.
+  `TachyonComputeService_createSession(service, &config, &ret)` fills a
+  `CreateSessionReturn`; `TachyonComputeSession_setupCommandQueue(session,
+  &fd, &size)` yields the queue fd.
+- Run `TachyonComputeService_create` is a binder client
+  (`AServiceManager_isDeclared` + `waitForService`), so the service must be up.
+- Firmware gate: one VII setup command per firmware boot carrying global
+  scratches; the delegate never sends it.
 
-Step 1 (laptop, read-only): find what the property wait needs.
-- `nm -D --undefined-only` on `libbinder.so` / `libbinder_ndk.so` and
-  `libedgetpu_util.so` for `__system_property_*`, then disassemble
-  `AServiceManager_isDeclared` and its `WaitForPropertyCreation` caller.
-- Decide which functions to answer: likely `__system_property_find`,
-  `__system_property_read_callback`, `__system_property_wait`,
-  `__system_property_get`, and `__system_property_set`.
+Step 1 (phone, no reboot needed while it is up): find the exact spin.
+- Start the stack with `tools/tpu-tachyon-run` but replace the delegate line
+  with a background `chroot $R /vendor/bin/edgetpu-run ...` and, after 5 s,
+  `gdb -p <pid> -batch -ex "thread apply all bt 15"` (the delegate is
+  unstripped; capture the frame in `CreateVirtualDevice`).
+- Record the function and call it names in `device/cheetah/TPU-PLAN.md` U31.
 
-Step 2 (laptop): add `tools/android-props-stub.c` (same freestanding pattern as
-the other two shims) returning a fixed `ro.build.version.sdk=34` and an empty
-property set, with `wait` returning 0 immediately. Build it for
-aarch64-linux-android30, no libc.
+Step 2: act on that frame.
+- If it waits on a file descriptor, read `/proc/<pid>/fd` and the fd's peer;
+  the Tachyon service's queue fds and the driver's eventfds are the candidates.
+- If it waits on a mutex/condition in `libedgetpu_util`, the direct client in
+  Step 3 is the way around it.
 
-Step 3 (phone, cold boot): add it to the runner's `LD_PRELOAD` for the delegate
-only (servicemanager does not need it), run, and watch:
-- dmesg for `OPEN_DEVICE ret 0` and mailbox VII init;
-- the delegate log: it must get past `CreateVirtualDevice`, reach the service,
-  and then either a Sync with rc 0 or the firmware's setup message;
-- `/tmp/tpu-tachyon.log` and `dmesg | grep -i edgetpu` for the setup.
-Pass: a VII submission returns 0, or the firmware log says
-`Setup is already done`.
+Step 3: `tools/tachyon-client.c` (aarch64 bionic, no libc++):
+- `TachyonComputeService_create(&service, name)` against the running service;
+- build a zeroed 0x28-byte `SessionConfig`, set the bool at 0 to 1 (privileged)
+  and any int32 the AIDL `createSession` requires;
+- `TachyonComputeService_createSession(service, &config, &ret)`;
+- `TachyonComputeSession_setupCommandQueue` and
+  `..._setupResponseQueue`, then `..._sendCommand` with the model's first
+  command, and watch dmesg for a VII submission that does not answer 9.
 
-Step 4 (fallback): if the property shim is not enough, write
-`tools/tachyon-client.c` that calls `TachyonComputeService_create` and
-`TachyonComputeService_createSession` directly with the shims preloaded.
+Rules: slot B only; announce screen-off before `poweroff`; one TPU power-up
+per cold boot (a failed attempt needs a cold boot before the next); never
+`rmmod` janeiro and never insmod over a loaded module; record results in
+`device/cheetah/TPU-PLAN.md` as U31+ with `uname -r`; grep diffs for
+identifiers.
 
-Rules: slot B only; `poweroff` and `reboot-to` are pre-authorized (AGENTS
-§1.1) but announce screen-off; one TPU power-up per boot, so a failed attempt
-means a cold boot before the next; never `rmmod` janeiro and never insmod over
-a loaded module (the runner waits for the autoload); record results in
-`device/cheetah/TPU-PLAN.md` as U30+ with `uname -r`.
-
-After the gate opens: one real inference through the delegate, compare with CPU
-TFLite, then the 720p 10+-object benchmark against CPU/GPU. The harness is
-ready: `tools/bench-object-detection.py` with `out/bench/detect.tflite`,
-`out/bench/labelmap.txt`, `out/bench/mosaic720.mp4` (10 detections/frame,
-3.98 ms/frame on 4 CPU threads).
+After the gate opens: a real inference, CPU comparison, then the 720p 10+
+object benchmark (`tools/bench-object-detection.py`,
+`out/bench/detect.tflite`, `out/bench/labelmap.txt`,
+`out/bench/mosaic720.mp4`; CPU baseline 3.98 ms/frame at 4 threads,
+10 detections/frame).

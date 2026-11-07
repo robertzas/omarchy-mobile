@@ -47,11 +47,9 @@ static int is_name(const char *name, const char *want)
 
 int __system_property_get(const char *name, char *value)
 {
-	const char *v = empty_value;
+	const char *v = "1";
 
-	if (name && is_name(name, "servicemanager.ready"))
-		v = "1";
-	else if (name && name[0] == 'r' && name[1] == 'o')
+	if (name && is_name(name, "ro.build.version.sdk"))
 		v = sdk_value;
 	copy(value, v, 92);
 	return (int)str_len(v);
