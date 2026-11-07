@@ -2070,6 +2070,83 @@ static void kci_variant_probe(int fd) {
   put("\n");
 }
 
+static long kci_send_code(int fd, unsigned code, unsigned variant) {
+  unsigned spec = (code & 0xff) | (variant << 8);
+
+  return ioctl(fd, 0x4004ed22, &spec);
+}
+
+/* "kcistate": where does code 6's precondition live?  Send it right after
+   open, then after each group step, and map which codes 0-15 answer at all. */
+static void kci_state_mode(void) {
+  unsigned attr[5] = {24, 12, 48, 24, 0x58};
+  int ev[2] = {0, -1};
+  unsigned char *page;
+  unsigned long map[4];
+  int fd, efd, i;
+  long r;
+
+  fd = open("/dev/edgetpu", 2);
+  put("state: fd ");
+  putdec(fd);
+  put("\n");
+  if (fd < 0)
+    return;
+  put("state before_group code6 -> ");
+  putdec(kci_send_code(fd, 6, 0));
+  put("\n");
+  for (i = 0; i < 16; i++) {
+    put("state map code ");
+    putdec(i);
+    put(" -> ");
+    putdec(kci_send_code(fd, (unsigned)i, 0));
+    put("\n");
+  }
+  syscall(29, fd, 0xed1a, 0);
+  efd = (int)syscall(19, 0, 0);
+  ev[1] = efd;
+  ioctl(fd, 0x4008ed05, ev);
+  put("state set_eventfd code6 -> ");
+  putdec(kci_send_code(fd, 6, 0));
+  put("\n");
+  r = ioctl(fd, 0x4014ed06, attr);
+  put("state create_group -> ");
+  putdec(r);
+  put("\n");
+  if (r)
+    return;
+  put("state after_group code6 -> ");
+  putdec(kci_send_code(fd, 6, 0));
+  put("\n");
+  r = ioctl(fd, 0xed08, 0);
+  put("state finalize -> ");
+  putdec(r);
+  put("\n");
+  if (r)
+    return;
+  put("state after_finalize code6 -> ");
+  putdec(kci_send_code(fd, 6, 0));
+  put("\n");
+  page = mmap(0, 0x1000, 3, 0x22, -1, 0);
+  if ((long)page < 0)
+    return;
+  for (i = 0; i < 0x1000; i++)
+    page[i] = 0;
+  map[0] = (unsigned long)page;
+  map[1] = 0x1000;
+  map[2] = 0;
+  map[3] = 0;
+  r = ioctl(fd, 0xc020ed00, map);
+  put("state map_buffer -> ");
+  putdec(r);
+  put("\n");
+  if (r)
+    return;
+  put("state after_map code6 -> ");
+  putdec(kci_send_code(fd, 6, 0));
+  put("\n");
+}
+
 static void elemsweep_mode(const char *file) {
   static const int fields[] = {4, 12, 32, 36, 40, 44};
   unsigned attr[5] = {24, 12, 48, 24, 0x58};
@@ -2557,6 +2634,10 @@ int main(int argc, char **argv) {
   }
   if (argc > 1 && streq(argv[1], "elemsweep")) {
     elemsweep_mode(argc > 2 ? argv[2] : 0);
+    return 0;
+  }
+  if (argc > 1 && streq(argv[1], "kcistate")) {
+    kci_state_mode();
     return 0;
   }
   if (argc > 1 && streq(argv[1], "kciv")) {
