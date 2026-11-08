@@ -4284,3 +4284,15 @@ Installed in `/root/liblogstderr.so` and the chroot's `/system/lib64/`, the Tach
 The client's next result is `create: NOT-OK ... exception -8 service 13 "Failed to connect to the Tachyon Compute Service"`, with the service still alive; VLOG 1 shows only `TachyonCore_SetVlogLevel`. The service `create` is the next wall: the app service (root caller), the vendor service, or the binder domain. Next: `vendor.tachyon.log_level` 2 (VLOG 3 trips `Unknown platform ID on Android: 6`, so not 3), with the app-service and vendor sections of the same log; then the client with the app service stopped (U58 had `create: OK` without it) to tell whether its presence is the change.
 
 Phone state: up; TPU powered once (`tpu-hold`, pid 5147); servicemanager 11455, vendor service 11467, app service 11525, Tachyon service 12682. The fixed shim is in `/root` and the chroot; the delegate still stops at `Sync VII command failed: error_code=9`.
+
+## U61 (2026-11-08): create works, and the core wants a platform name
+
+`uname -r` 7.3.0-rc6-omamobile-push1-g052da70970d6-dirty.
+
+The client's `create` failure was a dead servicemanager, not the app service. After the delegate's run the vendor servicemanager takes `SIGILL` right after `A service was removed when there are clients` (the Tachyon service's `AidlLazyServiceRegistrar` notification); every later client gets `BR_DEAD_REPLY` and "Failed to connect to the Tachyon Compute Service". With a fresh chain the client's `create: OK`, and the service calls `TachyonCore_CreateClientSession`.
+
+That call then aborts in `edgetpu_android_property_util.cc:284`: `Unknown platform ID on Android: 6`. gdb shows the main thread in our `libabortshim.so`'s `abort`, which by design returns (`ABORT-SHIM returning`), so the client hangs instead of seeing the failure. The 6 is the utility's unknown sentinel, not the property's value: the `GetPlatformId` at `0xd5630` reads `ro.board.platform` (17 bytes) with `android::base::GetProperty`, and `0xd5598` hashes the string and switches on the hash's low 7 bits (cases 0-5, default 6); the helper at `0xd56ec` switches on the ID (cases 0-5, default fatal with the literal 6).
+
+So the Tachyon service needs the platform name its A17 core knows, not `mmio` (the driver-provider value the delegate needs). The shim must be process-aware: `mmio` for the delegate and client, the platform name for the Tachyon service. The names are not stored as strings; the mapper at `0xd5598` is the way to find which one maps to a known ID. That gdb call was ready when the phone's SSH failed: no agent is running, and `~/.ssh/id_ed25519` asks for its passphrase. The candidates (gs201, gs101, zuma, zumapro, tegu, gs401) have not been called yet.
+
+Next: unlock the phone key; call `base+0xd5598` with the candidates; give the Tachyon service the known name and the delegate `mmio`; rerun the client and then the delegate.
