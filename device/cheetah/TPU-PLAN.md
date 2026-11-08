@@ -4254,3 +4254,33 @@ chroot. The cheetah originals are saved as `*.cheetah` next to each file.
 `out/factory/tegu-cp21/` and `out/tegu-extract.sh` are scratch (gitignored).
 `tools/tpu-tachyon-client.c` now sets the get_fds callback and sleeps 120 s so
 a delegate can run while the session is alive.
+
+## U59 (2026-11-08): the app service publishes IEdgeTpuAppService
+
+`uname -r` 7.3.0-rc6-omamobile-push1-g052da70970d6-dirty.
+
+The tegu app service (`system_ext/bin/hw/vendor.google.edgetpu_app_service@1.0-service`) never exec'd: the chroot's linker stopped at `libcom.android.tethering.connectivity_native.so` (needed by `/system/lib64/libandroid.so`) and, behind it, `libicu.so` (needed by `libharfbuzz_ng.so`). The tethering library is in the tethering APEX: `out/tethering.apex` is a compressed APEX, so unpack `original_apex`, then `apex_payload.img`, then
+
+    debugfs -R 'dump /lib64/libcom.android.tethering.connectivity_native.so out/tethering-extract/libconnectivity_native.so' out/tethering-extract/apex_payload.img
+
+The result is 68,848 bytes; install it as `apex/com.android.tethering/lib64/libcom.android.tethering.connectivity_native.so` in the chroot.
+
+The app service's `libandroid.so` NEEDED is unused: its undefined symbols are the binder NDK and libc only, and none of its other libraries needs libandroid. Rewrite the dynstr string in place (14 bytes including the NUL; offset 9935) to `libc.so`; the file size and the auth patch at `0x10d44` stay:
+
+    b[off:off+14] = b'libc.so' + b'\0' * 7
+
+The app service then links, runs as uid 1000, and publishes `com.google.edgetpu.IEdgeTpuAppService/default`; its log says `Found ... in device VINTF manifest.` (pid 8431). The phone chroot's copy is sha256 `6e350d179079f046ae020a2f03f5b69f32e1f7d5d53d22aaf8e6f77425ecfaca`.
+
+With the app service up the chain is servicemanager, vendor service, Tachyon service and app service. The HAL still aborts; the delegate no longer opens `/dev/edgetpu` itself (no `runtime wakelock` line; `/dev/janeiro` is 0660 root:gid 1000) and reaches `Sync VII command failed: error_code=9`, `create device status: 13`, rc 1.
+
+## U60 (2026-11-08): the old log shim was the service's SIGSEGV
+
+The gdb PC of the Tachyon service's `SIGSEGV` is `liblogstderr.so+0xe64` (LR `+0xc24`), not the Tachyon core. The runner copies `/root/liblogstderr.so`, and that file was the old 9,752-byte shim; its formatter let a conversion misalign the va_list, so a later `%s` read a wild pointer — the crash `tools/android-log-stderr.c` now prevents by consuming every conversion's argument. The fixed build is `out/tpu-client/liblogstderr.so`, 13,240 bytes, sha256 `8bdfede1616c3810453569ee0715b819f79a49d37d6d7250e8c124b8c16ca526`:
+
+    $CL --target=aarch64-linux-android30 -shared -fPIC -nostdlib -o out/tpu-client/liblogstderr.so tools/android-log-stderr.c
+
+Installed in `/root/liblogstderr.so` and the chroot's `/system/lib64/`, the Tachyon service survives `createSession` (pid 12682) and registers `com.google.edgetpu.tachyon.IComputeService/default`.
+
+The client's next result is `create: NOT-OK ... exception -8 service 13 "Failed to connect to the Tachyon Compute Service"`, with the service still alive; VLOG 1 shows only `TachyonCore_SetVlogLevel`. The service `create` is the next wall: the app service (root caller), the vendor service, or the binder domain. Next: `vendor.tachyon.log_level` 2 (VLOG 3 trips `Unknown platform ID on Android: 6`, so not 3), with the app-service and vendor sections of the same log; then the client with the app service stopped (U58 had `create: OK` without it) to tell whether its presence is the change.
+
+Phone state: up; TPU powered once (`tpu-hold`, pid 5147); servicemanager 11455, vendor service 11467, app service 11525, Tachyon service 12682. The fixed shim is in `/root` and the chroot; the delegate still stops at `Sync VII command failed: error_code=9`.

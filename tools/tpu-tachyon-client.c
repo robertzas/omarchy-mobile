@@ -179,6 +179,54 @@ static void show_status(status_fn get, status_ok_fn ok, const char *what,
 
 extern unsigned int getuid(void);
 
+// The core verifies the first command as a flatbuffer CommandMessage before it
+// dispatches anything (tpu_actor_engine.cc:785). Its schema, recovered from the
+// core's verifier, is: uint64 command_id, bool privileged-ish flag, the union
+// type byte, then the union table. A zero-filled buffer has root offset 0 and
+// fails verification, so the core never reaches its own firmware-setup path.
+// This builds a minimal message: type 1 (a known union member) with an empty
+// table, which the verifier accepts (TPU-PLAN U59/U60).
+static void put16(unsigned char *p, unsigned v) {
+  p[0] = v & 0xff;
+  p[1] = (v >> 8) & 0xff;
+}
+
+static void put32(unsigned char *p, unsigned long v) {
+  p[0] = v & 0xff;
+  p[1] = (v >> 8) & 0xff;
+  p[2] = (v >> 16) & 0xff;
+  p[3] = (v >> 24) & 0xff;
+}
+
+static void put64(unsigned char *p, unsigned long v) {
+  int i;
+
+  for (i = 0; i < 8; i++) p[i] = (v >> (8 * i)) & 0xff;
+}
+
+static unsigned build_cmd(unsigned char *b) {
+  /* root table at 36, its vtable at 24; union vtable at 56, union table at 60 */
+  int i;
+
+  for (i = 0; i < 128; i++) b[i] = 0;
+  put32(b + 0, 36);
+  put16(b + 24, 0x0c);
+  put16(b + 26, 0x18);
+  put16(b + 28, 4);
+  put16(b + 30, 12);
+  put16(b + 32, 13);
+  put16(b + 34, 16);
+  put32(b + 36, 12);
+  put64(b + 40, 1);
+  b[48] = 1;  /* privileged, matching the session config */
+  b[49] = 1;  /* union type 1 (the core's first known command type) */
+  put32(b + 52, 8);
+  put16(b + 56, 4);
+  put16(b + 58, 4);
+  put32(b + 60, 4);
+  return 64;
+}
+
 // The tegu core refuses a SessionConfig without a get_fds callback. It is
 // called only for handles the client assigned to the core; this client
 // assigns none, so the stub logs any request and refuses it (fd -1), which is
@@ -305,6 +353,53 @@ int main(int argc, char **argv) {
     put("\n");
     show_status(0, status_ok, "setupResponseQueue", r);
   }
+  // The core sends the firmware's setup message lazily, before the first
+  // command it copies into the command FMQ. Send one zero-filled message so
+  // that setup runs before the delegate's own VII sync (TPU-PLAN U58).
+  // TachyonMessage is { uint64_t size; void *data; } passed in x1/x2; the
+  // wrapper's third argument is not a size (TPU-PLAN U59).
+  typedef void *(*send_fn)(void *, unsigned long, void *);
+  send_fn send_cmd =
+      (send_fn)dlsym(h, "TachyonComputeSession_sendCommand");
+  if (send_cmd) {
+    static unsigned char msg[128];
+    unsigned n = build_cmd(msg);
+
+    void *r = send_cmd(session, n, msg);
+    show_status(0, status_ok, "sendCommand", r);
+    /* The core answers on the response FMQ. Its answer says whether the
+     * command reached the actor that sends the firmware setup. */
+    struct tmsg {
+      unsigned long size;
+      void *data;
+    };
+    typedef void *(*recv_fn)(void *, struct tmsg *);
+    recv_fn recv_rsp =
+        (recv_fn)dlsym(h, "TachyonComputeSession_receiveResponse");
+    if (recv_rsp) {
+      static unsigned char rbuf[256];
+      struct tmsg rm;
+      unsigned i;
+
+      rm.size = sizeof rbuf;
+      rm.data = rbuf;
+      void *rr = recv_rsp(session, &rm);
+      show_status(0, status_ok, "receiveResponse", rr);
+      put("response size=");
+      putdec((long)rm.size);
+      put(" data=");
+      for (i = 0; i < rm.size && i < 64; i++) {
+        puthex(rbuf[i]);
+        put(" ");
+      }
+      put("\n");
+    } else {
+      put("receiveResponse symbol missing\n");
+    }
+  } else {
+    put("sendCommand symbol missing\n");
+  }
+
   // Keep the session (and the core that owns it) alive while a delegate run
   // tests the firmware gate; the stock service dies on client disconnect.
   put("sleeping for the service's setup\n");

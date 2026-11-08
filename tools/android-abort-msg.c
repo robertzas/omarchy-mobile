@@ -45,10 +45,9 @@ void android_set_abort_message(const char *msg)
 }
 
 // Do not let the abort take the process down before the message is flushed.
+// Return instead of exiting: a bring-up that wants to see what a HAL does
+// after a fatal check needs the process (and its published services) alive.
 void abort(void)
 {
-	puts_("ABORT-SHIM called\n");
-	sc3(94 /* exit_group */, 134, 0, 0);
-	for (;;)
-		;
+	puts_("ABORT-SHIM returning\n");
 }

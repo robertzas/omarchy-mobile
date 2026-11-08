@@ -64,6 +64,15 @@ if [ ! -e /dev/janeiro ]; then
 	exit 1
 fi
 ln -sfn janeiro /dev/edgetpu
+# The device must be root-only: as an app uid, EACCES on /dev/edgetpu is what
+# makes the vendor util library take its Tachyon client path (root always goes
+# direct). udev creates it 0666, so without this the delegate silently opens
+# the driver itself, no Tachyon session exists, and the firmware's setup
+# command is never sent. The app service itself runs as uid 1000 (stock's
+# system) and opens /dev/edgetpu to own the session, so the device ships 0660
+# system: group 1000 opens it, an app uid 10000 still gets EACCES.
+chown root:1000 /dev/janeiro 2>/dev/null
+chmod 660 /dev/janeiro
 run lsmod
 
 log "binderfs"
@@ -83,6 +92,14 @@ mkdir -p "$R/dev" "$R/proc" "$R/sys" "$R/vendor/etc" "$R/root"
 run mount --rbind /dev "$R/dev"
 mountpoint -q "$R/proc" || run mount -t proc proc "$R/proc"
 mountpoint -q "$R/sys" || run mount --rbind /sys "$R/sys"
+# The services need these before they start, not just before the delegate:
+# the vendor service's cache cleanup runs at startup and its cache path is
+# /data/vendor/edgetpu/cache/, and the Tachyon service takes tensors from
+# /dev/dma_heap/system. Both were being created after the vendor service had
+# already aborted in cache cleanup.
+chmod 666 /dev/dma_heap/system 2>/dev/null
+mkdir -p "$R/data/vendor/hal_neuralnetworks_darwinn" "$R/data/vendor/edgetpu/cache" "$R/data/edgetpu"
+chmod 777 "$R/data/vendor/hal_neuralnetworks_darwinn" "$R/data/vendor/edgetpu" "$R/data/vendor/edgetpu/cache" "$R/data/edgetpu"
 cp /root/model.tflite "$R/vendor/etc/model.tflite" 2>/dev/null
 cp /root/liblogstderr.so "$R/system/lib64/liblogstderr.so" 2>/dev/null
 cp /root/libselinux-shim.so "$R/system/lib64/libselinuxshim.so" 2>/dev/null
@@ -91,10 +108,12 @@ cp /root/libstackchkshim.so "$R/system/lib64/libstackchkshim.so" 2>/dev/null
 cp /root/dlopenprobe.so "$R/system/lib64/dlopenprobe.so" 2>/dev/null
 cp /root/liblazysvc.so "$R/system/lib64/liblazysvc.so" 2>/dev/null
 cp /root/libnosid.so "$R/system/lib64/libnosid.so" 2>/dev/null
+cp /root/libabortshim.so "$R/system/lib64/libabortshim.so" 2>/dev/null
+cp /root/libpermissionshim.so "$R/system/lib64/libpermissionshim.so" 2>/dev/null
 
 # Vendor first: that is what makes libbinder pick /dev/vndbinder, the domain
 # the Edge TPU services and the delegate register and look up on.
-export LD_LIBRARY_PATH=/vendor/lib64:/system/lib64:/apex/com.android.runtime/lib64/bionic
+export LD_LIBRARY_PATH=/apex/com.android.tethering/lib64:/system_ext/lib64:/vendor/lib64:/system/lib64:/apex/com.android.runtime/lib64/bionic
 USPEC=
 [ -n "${RUN_UID:-}" ] && USPEC="--userspec=$RUN_UID:$RUN_UID"
 # servicemanager links libbinder (C++), not libbinder_ndk, so it must not get
@@ -115,16 +134,27 @@ echo "servicemanager pid: $(pgrep -x servicemanager)" >>"$LOG"
 # Then the lazy-registration shim: the stock servicemanager answers
 # registerLazyService with ENOTSUP, and AidlLazyServiceRegistrar aborts the
 # service on any non-OK status.
-SVC_PRELOAD="/system/lib64/libnosid.so /system/lib64/liblazysvc.so $LD_PRELOAD"
+SVC_PRELOAD="/system/lib64/libnosid.so /system/lib64/liblazysvc.so /system/lib64/libpermissionshim.so /system/lib64/libabortshim.so $LD_PRELOAD"
 
 # Stock's order: the vendor service owns /dev/edgetpu, the tachyon service
 # fronts it, and Darwinn's NNAPI HAL publishes IEdgeTpuAppService for clients.
 log "vendor edgetpu service"
-pkill -x vendor.google 2>/dev/null
+pkill -x vendor.google.e 2>/dev/null
 sleep 0.5
 setsid env LD_PRELOAD="$SVC_PRELOAD" chroot "$R" /vendor/bin/hw/vendor.google.edgetpu_vendor_service@1.0-service >>"$LOG" 2>&1 </dev/null &
 sleep 3
 echo "vendor pid: $(pgrep -f vendor.google.edgetpu_vendor | head -1)" >>"$LOG"
+
+# The HAL enumerates with a detachable group and no wakelock, so the driver
+# powers the TPU down at finalize; the delegate's next group then makes the
+# second power-up of the boot, which wedges the PSM (U54:
+# PSM0_STATUS=0x5644c13, LPM_CONTROL=0x1240). Take the driver wakelock first:
+# the HAL's probe and every later group then reuse the one power-up.
+if ! pgrep -x tpu-hold >/dev/null; then
+	log "tpu hold (first power-up, keeps it on)"
+	setsid /root/tpu-hold >>"$LOG" 2>&1 </dev/null &
+	sleep 2
+fi
 
 log "tachyon service"
 pkill -x com.google.edge 2>/dev/null
@@ -133,15 +163,32 @@ setsid env LD_PRELOAD="$SVC_PRELOAD" chroot "$R" /vendor/bin/hw/com.google.edget
 sleep 3
 echo "tachyon pid: $(pgrep -x com.google.edge)" >>"$LOG"
 
-log "darwinn nnapi hal"
-pkill -x android.hardwa 2>/dev/null
+log "edgetpu app service"
+pkill -f 'vendor.google.edgetpu_app_service' 2>/dev/null
 sleep 0.5
-setsid env LD_PRELOAD="$SVC_PRELOAD" chroot "$R" /vendor/bin/hw/android.hardware.neuralnetworks@service-darwinn-aidl >>"$LOG" 2>&1 </dev/null &
+# The app service is the missing publisher of
+# com.google.edgetpu.IEdgeTpuAppService/default: the HAL and the delegate both
+# ask it for the device fd before they create a group. On stock it lives in
+# system_ext and runs as the system user; its init rc declares the AIDL
+# interface. It is not in the vendor image, so earlier runs had no host.
+setsid env LD_PRELOAD="$SVC_PRELOAD" chroot --userspec=1000:1000 "$R" /system_ext/bin/hw/vendor.google.edgetpu_app_service@1.0-service >>"$LOG" 2>&1 </dev/null &
+sleep 3
+echo "app service pid: $(pgrep -f vendor.google.edgetpu_app_service | head -1)" >>"$LOG"
+
+log "darwinn nnapi hal"
+pkill -x android.hardwar 2>/dev/null
+sleep 0.5
+# The HAL runs as the app uid, not root: as root the util library opens
+# /dev/edgetpu itself and builds its own group, where the setup payload has no
+# mapping. A non-root uid gets EACCES and takes the Tachyon client path through
+# the service that already owns the device.
+rm -f "$R/data/vendor/hal_neuralnetworks_darwinn/NnapiHalSocketHalProcess"
+setsid env LD_PRELOAD="$SVC_PRELOAD" chroot $USPEC "$R" /vendor/bin/hw/android.hardware.neuralnetworks@service-darwinn-aidl >>"$LOG" 2>&1 </dev/null &
 sleep 4
-echo "hal pid: $(pgrep -x android.hardwa)" >>"$LOG"
+echo "hal pid: $(pgrep -x android.hardwar)" >>"$LOG"
 
 log "delegate"
-DELEGATE_PRELOAD="/system/lib64/libstackchkshim.so /system/lib64/liblogstderr.so /system/lib64/libselinuxshim.so /system/lib64/libpropsshim.so"
+DELEGATE_PRELOAD="/system/lib64/libnosid.so /system/lib64/libnometrics.so /system/lib64/libstackchkshim.so /system/lib64/liblogstderr.so /system/lib64/libabortshim.so /system/lib64/libselinuxshim.so /system/lib64/libpropsshim.so"
 # PROBE=1 loads the vendor client libraries first, to tell a dlopen failure
 # apart from a choice the delegate makes.
 [ "${PROBE:-0}" = "1" ] && DELEGATE_PRELOAD="/system/lib64/dlopenprobe.so $DELEGATE_PRELOAD"

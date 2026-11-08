@@ -29,7 +29,20 @@ static void copy(char *dst, const char *src, unsigned long max)
 }
 
 static const char sdk_value[] = "34";
+/* The vendor Edge TPU runtime reads ro.board.platform and maps it to a Darwinn
+ * platform type; "1" makes it reject the device with "Incorrect driver
+ * provider is used for the current device" before it ever opens /dev/edgetpu.
+ * PlatformTypeFromString accepts mmio/reference/simulator/remote_simulator, so
+ * the hardware value is "mmio". Build with -DPLATFORM_VALUE='"..."' to try
+ * another value without editing this file. */
+#ifndef PLATFORM_VALUE
+#define PLATFORM_VALUE "mmio"
+#endif
+static const char platform_value[] = PLATFORM_VALUE;
 static const char empty_value[] = "";
+/* The tachyon service sets its core VLOG level from this property. Level 3
+ * logs the core's command and firmware-setup path (TPU-PLAN U59). */
+static const char tachyon_log_value[] = "1";
 
 static struct {
 	char name[32];
@@ -57,6 +70,10 @@ int __system_property_get(const char *name, char *value)
 		v = "true";
 	else if (name && is_name(name, "ro.build.version.sdk"))
 		v = sdk_value;
+	else if (name && is_name(name, "ro.board.platform"))
+		v = platform_value;
+	else if (name && is_name(name, "vendor.tachyon.log_level"))
+		v = tachyon_log_value;
 	copy(value, v, 92);
 	return (int)str_len(v);
 }
@@ -76,6 +93,10 @@ int __system_property_read_callback(const void *pi, void (*cb)(void *, const cha
 		value = "true";
 	else if (is_name(last_name, "ro.build.version.sdk"))
 		value = sdk_value;
+	else if (is_name(last_name, "ro.board.platform"))
+		value = platform_value;
+	else if (is_name(last_name, "vendor.tachyon.log_level"))
+		value = tachyon_log_value;
 	if (cb)
 		cb(cookie, last_name, value, 0);
 	return 0;
