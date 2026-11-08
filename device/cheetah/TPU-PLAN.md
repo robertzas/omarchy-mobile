@@ -4931,3 +4931,49 @@ element is not the core's type-1 setup with global scratches.
 the 48-byte element's byte 10 from 11 to 1 in the HAL's builder and re-run the
 full chain as system. The client session is no longer the problem: it reaches
 AUTHORIZED with a working command queue.
+
+## U75 (2026-11-08): the firmware's error 9 is its own status; the VII payload is dumped
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
+
+**Error 9 is the firmware's code, not a host or transport error.**
+`drivers/edgetpu/edgetpu-kci.h` names the whole table:
+`KCI_ERROR_OK = 0`, `…CANCELLED = 1`, `…UNKNOWN = 2`, `…INVALID_ARGUMENT = 3`,
+`…DEADLINE_EXCEEDED = 4`, `…NOT_FOUND = 5`, `…ALREADY_EXISTS = 6`,
+`…PERMISSION_DENIED = 7`, `…RESOURCE_EXHAUSTED = 8`,
+`KCI_ERROR_FAILED_PRECONDITION = 9`, then `…ABORTED = 10` and so on. So the
+firmware answered the setup sync with FAILED_PRECONDITION, and the runtime's
+`Sync VII command failed: error_code=%u` prints it from a `u16` in the response
+element. The same header also explains the "KCI tx code 21" heartbeat in
+`dmesg`: `KCI_CODE_GET_USAGE_V2 = 21` (and `KCI_CODE_FIRMWARE_INFO = 11`).
+
+**The element's field names matter.** `struct edgetpu_command_element` is
+`u64 seq; u16 code; u16 reserved[3]; struct edgetpu_dma_descriptor dma;`. The
+`u16` at byte 8 is `code`; the value U67 read as "type 11" at byte 10 is
+`reserved[0]`, not a type. The DMA descriptor's iova is at byte 16 and its size
+at byte 24, which is what the mailbox dump reads.
+
+**The driver dumps the setup payload.** `edgetpu-mailbox.c` has
+`edgetpu_vii_payload_dump` (a bring-up aid) that copies the element and its
+payload to `dmesg`. From the full-chain run as system, the 128 bytes the HAL's
+`SetupFirmware` submitted are:
+
+```
+vii-payload 0:   00000014 00000000 000a0000 00080012
+vii-payload 16:  000c0007 0000000a 05000000 00000030
+vii-payload 32:  0000000c 00060000 00040008 00000006
+vii-payload 48:  00000004 00000001 ffe80000 00000000
+vii-payload 64:  00080000 00000000 00000000 00000000
+```
+
+The first `u32` is 0x14, a flatbuffer-shaped root offset, but the table at 20
+does not parse as one (its vtable soffset lands on a zero size), so the layout
+is not the core's `CommandMessage` as built by `libtachyon_core.so`. That is the
+next thing to decode: the payload the HAL submits is host-built and is what the
+firmware rejects.
+
+**Next:** parse this 128-byte payload against the core's builder in
+`libtachyon_core.so` (log at `0xa4d5c`, push at `0xa4dec`, verifier `0xb9c48`),
+or replace it with the core's type-1 message built in the client and pushed
+through the AUTHORIZED session. The response element (`u16` status) is visible
+to the driver's IRQ handler, so every attempt can be read back.
