@@ -36,4 +36,20 @@
         <version>1</version>
         <fqname>IDevice/default</fqname>
     </hal>
+    <!--
+      The Power HAL refuses to register without these entries: servicemanager
+      answers "Could not find android.hardware.power.IPower/default in the
+      VINTF manifest" and the HAL then dies, so the Darwinn HAL and the
+      Tachyon core log "Unable to connect to Power HAL" (U71).
+    -->
+    <hal format="aidl">
+        <name>android.hardware.power</name>
+        <version>1</version>
+        <fqname>IPower/default</fqname>
+    </hal>
+    <hal format="aidl">
+        <name>google.hardware.power.extension.pixel</name>
+        <version>1</version>
+        <fqname>IPowerExt/default</fqname>
+    </hal>
 </manifest>
