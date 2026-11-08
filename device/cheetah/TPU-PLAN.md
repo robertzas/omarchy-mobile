@@ -5321,3 +5321,30 @@ device, and the three commands above answer `-ENOSYS`. No register is read or
 written, no firmware is loaded and no mailbox or CMU is touched.
 
 Build: the module compiles in the project container with the pinned Android clang and `ARCH=arm64` (`CONFIG_GXP=m`; `gxp.ko` produced, `modinfo` shows `of:google,gxp`, aarch64). The blockers were the skeleton's missing `miscdevice` member, the host's missing `bc`, and an `olddefconfig` without `ARCH=arm64` that pointed the out tree at the host arch. The build used `M=$K/drivers/gxp` (absolute), so its artifacts landed in the source tree and were removed.
+
+## U86: the gxp node probes and the ioctl lifetime runs (2026-11-08)
+
+`gxp-probe` is in `device.conf`'s `DTB_OVERLAYS`, and `push` with it boots a
+tree whose `/proc/device-tree/soc@0/gxp@25c00000/status` reads `okay`; the
+skeleton module then binds, maps `[mem 0x25c00000-0x26ffffff]` and registers
+`/dev/gxp` (10,258). No register is read and no firmware or mailbox is touched.
+
+The three decoded commands now have a real lifetime: create (`0x40086200`,
+the 8-byte argument is an input, libgxp passes 7) allocates an id and returns
+it (test: handle 1), release (`0x40086201`) frees it, and info (`0xc0184800`,
+24 bytes) answers `-EOPNOTSUPP` until its layout is known. On-phone run:
+`create: ok, arg is now 1`, `info: errno 95`, `release: ok`.
+
+The first create answered EINVAL because the xarray was `xa_init()`ed without
+`XA_FLAGS_ALLOC`: `__xa_alloc()` hits `WARN_ON_ONCE(!xa_track_free(xa))` and
+returns `-EINVAL`. `xa_init_flags(&gxp->devices, XA_FLAGS_ALLOC1)` fixes it.
+
+Getting the DTB onto the phone took the `push` path: `flash` needs fastboot,
+and ABL ignored the bootloader reason (the crash fallback booted Linux again),
+so it was left for the owner's buttons. `push` requires
+`modules-<release>.tar.zst`; it was built from the phone's own module tree plus
+`extra/gxp.ko` (22M, `OMAMOBILE_MODULES_REPLACE=1`) after pinning
+`CONFIG_LOCALVERSION` to the running kernel's exact string
+(`-omamobile-push1-g052da70970d6-dirty`, AUTO off), so the module's vermagic
+matches without `--force`.
+
