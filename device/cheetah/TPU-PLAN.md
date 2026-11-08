@@ -4999,3 +4999,23 @@ still answers FAILED_PRECONDITION. U67's note that the firmware names its own
 missing piece — `No global scratches were provided in setup command.` — is the
 next thing to match against these fields: the message carries the bitset (48)
 and a small value (5), but no scratch descriptors.
+
+## U76 (2026-11-08): the client's commands never reach the firmware; the HAL is the only VII writer
+
+The chain (`NO_DELEGATE=1`, `RUN_UID=10000`) plus the client at uptime 26262,
+two rounds: `createSession: OK`, `sendCommand: OK` both times,
+`receiveResponse: NOT-OK exception -8 service 8` with an all-zero 256-byte
+buffer. And `dmesg` over the client's window holds **no `vii-` and no
+`janeiro` line at all**; the `vii-elem` count is 0.
+
+So `sendCommand` only fills the session's command FMQ. The core's actor never
+syncs that queue to the TPU — it is waiting on the DSP actor (U65) — so the
+client path cannot reach VII no matter what message it builds. Every VII
+element seen in dmesg so far came through the HAL's own group: the delegate's
+`CreateDevice` (U75) and its setup sync (U55). The HAL is the only writer.
+
+That also settles the firmware's "command of type 0": it is the element's
+`code`, and the HAL's `SetupFirmware` sends a regular command, not a setup
+message. To get a type-1 element to the firmware the HAL's element has to carry
+it — either by patching where the HAL's command descriptor is built, or by
+rewriting the element between the build and the ioctl.
