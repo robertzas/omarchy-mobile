@@ -5394,3 +5394,25 @@ Next: log both commands' argument bytes in `gxp.c` and answer `-EOPNOTSUPP`
 until the layouts are decoded; the 20-byte command already carries the group's
 queue sizes (cmdq 12 KiB, rspq 6 KiB, cmd 48, rsp 24, flags 0x58).
 
+## U88: a clean boot powers the TPU and drives both drivers (2026-11-08)
+
+The 0xed commands in U87 are **janeiro's**, not GXP's: the
+`/dev/janeiro -> gxp` symlink had pointed the TPU driver's node at the wrong
+driver. With the symlink removed and `janeiro.ko` loaded from
+`/usr/lib/modules`, a cold boot with exactly one TPU power-up (`tpu-hold`)
+runs the stack:
+
+- janeiro's group create (`0x4014ed06`, the 20-byte attr: cmdq 12 KiB, rspq
+  6 KiB, cmd 48, rsp 24, flags 0x58) returns 0, as do the eventfd
+  registrations (`0x4008ed05`), `0xed08`, `0xed19`, `0x4004ed0e` and
+  `0x4028ed12`;
+- the Tachyon service exercises the GXP driver too: `0x40086200` (create) and
+  `0x40086201` (release) both return 0 on `/dev/gxp`;
+- dmesg shows KCI tx (code 10 seq 10, code 21 seq 11), so the firmware
+  handshake completed.
+
+What still fails: the delegate logs `create device status: 13` and exits 1,
+and dmesg carries a trace through `edgetpu_mmu_tpu_unmap_sgt` /
+`edgetpu_unmap_dmabuf` during teardown. The two 0xed cases added to `gxp.c`
+for U87 were removed: the driver knows only its own three commands.
+
