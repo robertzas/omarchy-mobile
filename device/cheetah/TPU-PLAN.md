@@ -4700,3 +4700,49 @@ process left no group. Next, in order:
    Google's `gxp` driver with `janeiro` blacklisted.
 3. Only after a real inference: the 720p object-detection benchmark
    (`tools/bench-object-detection.py`, `mosaic720.mp4`) on TPU, CPU and GPU.
+
+## U70 (2026-11-08): the HAL survives registration; the pool WARN and the unpublished IPower are the gates
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
+
+**The registration gate is down.** The Darwinn HAL imports
+`AServiceManager_addServiceWithFlags@LIBBINDER_NDK34` and tests its return as a
+32-bit status (`mov w19, w0`, then `cbz w19` at file offsets `0x2153c` and
+`0x21558`): a pointer is never zero, so the OK-filled `AStatus` that
+`tools/android-addservice-shim.c` returned first still logged "Could not
+register NNAPI IDevice service." and aborted. Returning `0` from that symbol
+lets the HAL reach `ABinderProcess_startThreadPool` and stay up
+(`ADDSVC-SHIM android.hardware.neuralnetworks.IDevice/google-edgetpu`, no
+abort, two HAL processes both uid 10000). The symbol is interposed into the
+HAL alone (`HAL_PRELOAD` in `tools/tpu-tachyon-run`); the services that must be
+visible never get it.
+
+**The `edgetpu_mmu_alloc_domain+0xa0` trace is a WARN, not an oops.**
+`/proc/sys/kernel/panic_on_warn` reads 0, and the trace's callee is
+`iommu_set_fault_handler()` (`drivers/iommu/iommu.c:2057`), which WARNs and
+returns when `domain->cookie_type != IOMMU_COOKIE_NONE`. A domain handed out
+from the pool a second time still carries `IOMMU_COOKIE_FAULT_HANDLER` from its
+first `edgetpu_init_etdomain()`, so every second group create in a boot prints
+the WARN. The group is still created and finalized
+(`finalize: detachable 1 wakelock 0 context 1073741824`), the phone stays up,
+and `panic_on_warn=0` means nothing dies. What is wrong is the stale
+`handler_token`: it points at the previous, freed `etdomain`, a latent
+use-after-free if the IOMMU ever faults. The fix is the pool's documented
+dynamic mode: `EDGETPU_NUM_PREALLOCATED_DOMAINS` (`janeiro/config.h`, today
+`EDGETPU_NUM_VCIDS`) set to 0, so `edgetpu_domain_pool_alloc()` returns a fresh
+`iommu_paging_domain_alloc()` domain every time and
+`edgetpu_domain_pool_free()` calls `iommu_domain_free()`.
+
+**The Power HAL still publishes nothing.** Started as uid 1000 with the real
+lazy-registration path (no `liblazysvc.so`), it logs "…with Extension is
+started." and no `IPower/default` registration; the HAL and the core still log
+`Unable to connect to Power HAL`. Stock servicemanager answers
+`registerLazyService*` with ENOTSUP (U68), so the real registrar cannot publish
+the name even for a uid it accepts. Publishing IPower needs an eager
+`AServiceManager_addService` for uid 1000 (the Tachyon service's lazy call
+succeeds for that uid) or a servicemanager that honours lazy registration.
+
+**Phone state:** fresh boot, TPU powered once by this run's `tpu-hold`; chain
+left up (servicemanager 4932, tachyon service 5017, HAL 5067/5069). The boot's
+dmesg holds two `WARNING` lines, both the pool-cookie WARN above. No inference,
+no benchmark.

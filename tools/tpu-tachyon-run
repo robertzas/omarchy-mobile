@@ -229,7 +229,10 @@ sleep 0.5
 # mapping. A non-root uid gets EACCES and takes the Tachyon client path through
 # the service that already owns the device.
 rm -f "$R/data/vendor/hal_neuralnetworks_darwinn/NnapiHalSocketHalProcess"
-setsid env LD_PRELOAD="$SVC_PRELOAD" chroot $USPEC "$R" /vendor/bin/hw/android.hardware.neuralnetworks@service-darwinn-aidl >>"$LOG" 2>&1 </dev/null &
+# HAL_PRELOAD is for the HAL alone: android-addservice-shim.c answers its
+# NNAPI registration with OK, which servicemanager refuses a uid-10000 caller.
+# The services that must really be visible never get it.
+setsid env LD_PRELOAD="${HAL_PRELOAD:-} $SVC_PRELOAD" chroot $USPEC "$R" /vendor/bin/hw/android.hardware.neuralnetworks@service-darwinn-aidl >>"$LOG" 2>&1 </dev/null &
 sleep 4
 echo "hal pid: $(pgrep -x android.hardwar)" >>"$LOG"
 # HAL_ONLY=1 stops here: the point is the HAL's own firmware setup, and the
