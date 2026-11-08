@@ -25,6 +25,7 @@ extern void *dlsym(void *, const char *);
 extern char *dlerror(void);
 extern void _exit(int) __attribute__((noreturn));
 extern unsigned int sleep(unsigned int);
+extern int usleep(unsigned int);
 
 #define RTLD_NOW 2
 #define RTLD_GLOBAL 0x100
@@ -265,6 +266,25 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  // The lib logged "The user of this library did not start a threadpool": the
+  // core calls back into the client (get_fds) over binder, and without a
+  // threadpool that call cannot be delivered. Stock's HAL starts one.
+  {
+    typedef void (*start_pool_fn)(void);
+    start_pool_fn start_pool =
+        (start_pool_fn)dlsym(h, "ABinderProcess_startThreadPool");
+
+    if (!start_pool)
+      start_pool = (start_pool_fn)dlsym(RTLD_DEFAULT,
+                                        "ABinderProcess_startThreadPool");
+    if (start_pool) {
+      start_pool();
+      put("threadpool started\n");
+    } else {
+      put("threadpool symbol missing\n");
+    }
+  }
+
   create_fn service_create =
       (create_fn)dlsym(h, "TachyonComputeService_create");
   config_create_fn config_create =
@@ -379,12 +399,25 @@ int main(int argc, char **argv) {
     if (recv_rsp) {
       static unsigned char rbuf[256];
       struct tmsg rm;
-      unsigned i;
+      unsigned i, tries;
+      void *rr = 0;
 
-      rm.size = sizeof rbuf;
-      rm.data = rbuf;
-      void *rr = recv_rsp(session, &rm);
+      // Service-specific error 8 means "the response FMQ holds fewer than
+      // 128 bytes": no answer yet, not a failure (the lib's
+      // ReceiveResponseMessage builds exactly that status). Poll instead of
+      // reading once, so a lazily produced answer is not missed.
+      for (tries = 0; tries < 100; tries++) {
+        rm.size = sizeof rbuf;
+        rm.data = rbuf;
+        rr = recv_rsp(session, &rm);
+        if (rr && status_ok && status_ok(rr) == 1)
+          break;
+        usleep(100000);
+      }
       show_status(0, status_ok, "receiveResponse", rr);
+      put("polled ");
+      putdec((long)tries);
+      put(" x 100ms\n");
       put("response size=");
       putdec((long)rm.size);
       put(" data=");

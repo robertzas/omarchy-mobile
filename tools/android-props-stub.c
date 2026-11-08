@@ -105,9 +105,10 @@ static const char *get_platform_value(void)
 	return is_tachyon_service() ? TACHYON_PLATFORM_VALUE : platform_value;
 }
 static const char empty_value[] = "";
-/* The tachyon service sets its core VLOG level from this property. Level 3
- * logs the core's command and firmware-setup path (TPU-PLAN U59). */
-static const char tachyon_log_value[] = "1";
+/* The tachyon service sets its core VLOG level from this property. Level 2
+ * logs the core's command dispatch and firmware-setup path; level 3 adds the
+ * per-mailbox detail (TPU-PLAN U59/U64). */
+static const char tachyon_log_value[] = "3";
 
 static struct {
 	char name[32];
