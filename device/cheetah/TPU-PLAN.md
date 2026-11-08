@@ -5106,3 +5106,33 @@ first field — two different numbers. The next probe is the HAL's command
 construction itself: the xref of the `Firmware setup failed` string names the
 function that walks `commands[]`, and its `cluster_id_bitset` and command type
 are what the firmware is actually judging.
+
+## U80 (2026-11-08): the HAL's setup runs and is the same pre-Tachyon message
+
+U67's patch at `0x14d9a48` (`mov w21, #0x21`) was found to **disable** the
+setup, not force it: the next gate is `tbz x21, #0x20` at `0x14d9cc0`, which
+tests bit 32, and `mov w21, #0x21` clears it, so `SetupFirmware` branches past
+its builder at `0x14d9ce4`. That is why every gdb breakpoint at the builder
+missed and why the element seemed to come from nowhere.
+
+Restoring the original `mov x21, x2` (`f5 03 02 aa`) and running the chain as an
+app uid (`RUN_UID=10000`, so the delegate goes through the HAL) makes the HAL's
+own setup run: three `create device status: 13` attempts, `delegate rc: 1`, and
+the same element three times — `code` 0, `0x0b` in `reserved[0]`, iova
+`0xffdff000`, size `0x80`, payload root offset 20 — exactly the pre-Tachyon
+`RequestAllocation` message the delegate's own runtime sends.
+
+So there is no bitset or type to fix in the HAL: both runtimes in the A17 image
+send the obsolete message, and the firmware wants the Tachyon setup that only
+the core implements. The core's actor needs the vendor `gxp` driver (U65), and
+nothing else in the image produces that message. The TPU is blocked on that
+producer, not on a number in the HAL.
+
+Options, in order of cost:
+
+1. **Hand-build the Tachyon setup message** from the firmware's parser (the
+   flatbuffer it accepts, with global scratches) — research, no producer needed.
+2. **Find another A17 producer**: the app-service APK/native side or another
+   library that carries the Tachyon setup rather than the obsolete one.
+3. **Run the CPU/GPU baseline** of the 720p benchmark now, so the comparison has
+   measured numbers even while the TPU side is blocked.
