@@ -5372,3 +5372,25 @@ T2 (only after T1 passes): read one AUR register the vendor driver reads in
 probe, one call. Stop: a hang, an abort, or a value that differs from the
 vendor driver's reset value.
 
+## U87: the Tachyon service reaches /dev/gxp (2026-11-08)
+
+With `/dev/janeiro -> gxp` (the runner's readiness check passes, and its
+`chown root:1000` on the symlink gives the service uid 1000 access),
+`/root/tpu-tachyon-run` starts servicemanager, the power HAL and
+`com.google.edgetpu.tachyon-service`; the service opens the node.
+
+Its first GXP commands are not the three libgxp ones decoded in U85:
+
+- `0xc018ed24` (24 bytes) -> ENOTTY;
+- `0x4014ed06` (20 bytes, logged as `attr cmdq_kb 12 rspq_kb 6 cmd 48 rsp
+  24 flags 0x58`) -> ENOTTY;
+
+and it stops at `INTERNAL: Could not create device group: master_fd=3
+(Inappropriate ioctl for device)`. `create device status: 13` appears before
+them, so the Tachyon client path sends a different command set than the HAL
+path that produced the U85 three.
+
+Next: log both commands' argument bytes in `gxp.c` and answer `-EOPNOTSUPP`
+until the layouts are decoded; the 20-byte command already carries the group's
+queue sizes (cmdq 12 KiB, rspq 6 KiB, cmd 48, rsp 24, flags 0x58).
+
