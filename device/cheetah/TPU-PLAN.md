@@ -3743,3 +3743,374 @@ Next measurement: enable the driver's own debug (`edgetpu.debug` /
 `firmware handshake failed`, and read `kci_send`/`fw_tracing` in
 `/sys/kernel/debug/edgetpu/janeiro/`; that separates "firmware never answers" from
 "driver never sends".
+
+## U50 (2026-11-07): `lpm_up` is the KCI handshake gate
+
+The 2026-11-07 boots failed at `KCI timeout code 11 ... head 0 doorbell 0` while
+GSA reported `TPU cmd 1 (Trusty): 2` (RUNNING), so the core was started but the
+firmware never consumed a command. The intermediate builds had removed
+`platform_pwr->lpm_up(etdev)` from `mobile_power_up()` on the theory that a
+PSM0 start before `GSA_TPU_START` wedged the AON island.
+
+That theory is wrong, and the T4-working module proves it. `/root/janeiro-bootstock.ko`
+(`srcversion 5121F420…`, built for `g29a7a9326bf0`) was loaded on the current
+`g052da70970d6` kernel after patching only its `vermagic` hash (both are the same
+length, `CONFIG_MODVERSIONS` and `CONFIG_MODULE_SIG` are off). As the first TPU
+access of a cold boot it still completes the handshake:
+
+    Powering up
+    TPU cmd 0 (Trusty): 0
+    loading TPU image: header 0x82e3e000 body 0x93000000
+    TPU cmd 1 (Trusty): 2
+    loaded prod firmware (1.0 895567958)
+
+and its `mobile_power_up` disassembly contains the indirect call our tree had
+deleted (`ldr x8, [x19, #0x398]; blr x8`, the `platform_pwr->lpm_up` pointer),
+while the failing module jumps straight to `edgetpu_chip_init`. Google's
+original `mobile-pm.c` has exactly that call before `edgetpu_chip_init`; our
+port had removed it.
+
+So the cold-boot order is the vendor order: ACPM state → `lpm_up` (PSM0/PSM1
+start, `LPM_CONTROL` = `0x1240`) → `edgetpu_chip_init` (GSA load and
+`GSA_TPU_START`) → KCI handshake. GSA starts the core either way, but without
+the LPM state machines the firmware never reads the KCI queue. The earlier
+`Set LPM0 failed: -110` runs were warm boots (GSA state LOADED / PSM already
+wedged), not evidence about a cold start.
+
+Also measured this round, read-only: the KCI queues live in the TPU carveout
+(`cmd tpu=0x10150000`, `resp tpu=0x10158000`), and at the timeout the command
+queue head and the response doorbell are both 0, i.e. the firmware had not
+taken the element. A diagnostic build that added reads of
+`EDGETPU_REG_CPUNS_TIMESTAMP`/`RESET_CONTROL` (0x1a00e0 / 0x190010) to the
+post-start dump reset the phone during the power-up; those reads were removed
+and the reset did not recur. The dump keeps only the previously safe PSM/AON
+reads.
+
+## U51 (2026-11-07): the firmware runs; only its one-time setup command is missing
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, `janeiro` srcversion
+`B651879D4EDBABC691FA642`, one true power cycle per attempt.
+
+**The KCI fix is confirmed.** Restoring `platform_pwr->lpm_up(etdev)` in
+`mobile_power_up()` (U50) gives the full cold-boot sequence:
+
+    TPU cmd 0 (Trusty): 0
+    loading TPU image: header 0x82e3e000 body 0x93000000
+    TPU cmd 1 (Trusty): 2
+    loaded prod firmware (1.0 895567958)
+    power-up ok: PSM0_STATUS=0x4b27091 LPM_CONTROL=0x148 POWER_CONTROL=0x54
+
+and every KCI command the driver sends is answered (codes 2, 5, 7, 9, 10, 21).
+The group create/finalize path is complete: `OPEN_DEVICE ret 0`,
+`kci_finalized ret 0`, `mailbox_attached 1`, and the VII IRQ fires.
+
+**The one remaining gate is the firmware's setup command.** Every client (the
+direct runtime, the stock delegate as root, and the stock delegate as uid 10000
+through the Tachyon service) submits the same first VII element and gets:
+
+    ERR vii_handler_layer.cc:247 - Setup is not done yet received a command of type 0.
+    vii-elem: ... 000b0000 ... ffeff000 ... 0x80 ...   (type 0, priority 11, dma 0xffeff000/0x80)
+
+with the same 128-byte flatbuffer payload at `0xffeff000` (U3). Response
+`0xf000009`, error 9.
+
+This round ruled out the cheap fixes:
+
+- **Forcing the runtime's setup call changes nothing.** `libedgetpu_util.so`
+  skips it at `0x13c2ec` (`ldrb w8,[x20,#0x130]`; `tbnz w8,#0,0x13c2fc`;
+  `bl 0x227918`). Patching the load to `mov w8, wzr` and running the client
+  produced a byte-identical first element, so the call is not the VII setup (U15:
+  setup is a Tachyon message with a cluster bitset and global scratches).
+- **The stock service chain is up but incomplete.** servicemanager runs; the
+  vendor service registers `com.google.edgetpu.IEdgeTpuVendorService/default`
+  and then SIGABRTs one line after `Start cache cleanup` (no ABORT-MSG; a libc++
+  abort, needs gdb). The tachyon service stays up; the Darwinn HAL still dies on
+  `Incorrect driver provider` (U41). The app-uid delegate reaches the driver
+  (`OPEN_DEVICE ret 0`, finalize, same VII element) after fixing two real
+  bring-up bugs: `chmod 666 /dev/dma_heap/system` (it died on
+  `Failed to open DMA-BUF heap: Permission denied`) and the writable
+  `/data/vendor/{hal_neuralnetworks_darwinn,edgetpu}` and `/data/edgetpu`
+  directories. Both are now in `tools/tpu-tachyon-run`.
+- `RUN_UID=10000` is required for the Tachyon client path (U34); as root the
+  util library always goes direct.
+
+**Next, in order:**
+
+1. Make the Tachyon session's setup run before the delegate's first sync:
+   `TachyonComputeSession::SetupCommandFmq` / `SetupResponseFmq` in
+   `libedgetpu_tachyon.google.so`, `firmware_setup_done_` and its wakelock
+   `RegisterCallbackPair` in `libedgetpu_util.so`, and
+   `TachyonComputeSession_setupCommandQueue` (exported, U15). The service that
+   owns `/dev/edgetpu` must send the setup message with the global scratches
+   (the firmware strings: `No global scratches were provided in setup command.`).
+2. Fix the vendor service abort and the HAL driver-provider property (U41); the
+   HAL is the stock path that builds the setup command.
+3. If the service remains unusable, reproduce the setup message bytes with
+   `tools/edgetpu-run.c`'s `scratch_mode`/`mapped` and send them to the VII
+   queue, watching for `No global scratches were provided` (type accepted) or
+   `Setup is already done` (setup ran).
+
+Once setup is accepted: register `detect_edgetpu.tflite`, run one inference,
+then the 720p benchmark against the recorded CPU baseline (x86 XNNPACK t4
+3.98 ms/frame, 10 detections/frame at threshold 0.4) and the phone's CPU/GPU
+backends.
+
+## U52 (2026-11-07): the vendor service was aborting on a missing cache dir; the provider check is the next gate
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`. This round was
+userspace-only; the TPU was not powered (no new `janeiro` PM log after 44.8 s).
+
+**The vendor service abort is fixed.** It was not a libc++ mystery: `CacheCleanup`
+walks `/data/vendor/edgetpu/cache/`, which did not exist, so it aborted
+immediately after `Start cache cleanup.`. With the directory present:
+
+    [] Start cache cleanup.
+    [] Cache cleanup is done.
+    [libbinder.AidlLazyServiceRegistrar] Registering service com.google.edgetpu.IEdgeTpuVendorService/default
+    [] registerLazyService took 2 milliseconds.
+
+and the process stays up. `tools/tpu-tachyon-run` created that directory only
+just before the delegate, after the vendor service had already started and died;
+the dma-heap chmod and all `/data` directories now run before servicemanager and
+the services.
+
+**The app-uid delegate was not using the client path.** udev leaves
+`/dev/janeiro` 0666, so uid 10000 opened the driver directly; the runner's
+comment said EACCES selects the client path but nothing enforced it. The runner
+now `chmod 600 /dev/janeiro`; the services run as root and still open it, while
+the delegate must go through the Tachyon/app service.
+
+**The `ld.so ... cannot be preloaded` lines are the host's glibc `chroot`, not
+the Android linker.** The Android linker inside loads the shims
+(`SHIM-LOADED`, `SELINUX-SHIM`, `LAZYSVC-SHIM registerLazyService`). No fix is
+needed; earlier notes that treated these as load failures were wrong.
+
+**servicemanager is not supervised.** Once it was gone, the vendor service got
+`DEAD_OBJECT` on `registerLazyService` and CHECK-failed (`status == STATUS_OK`),
+and the HAL spun on a missing `/dev/vndbinder` context object. Restart
+servicemanager before the chain (the runner does).
+
+**The property shim now builds and answers `ro.board.platform`.**
+`clang --target=aarch64-linux-gnu` needs `-fuse-ld=lld`; the host `ld` has no
+aarch64 emulation. The shim's default is now `mmio` (`-DPLATFORM_VALUE=...` for
+another). `DarwinnApi2_PlatformTypeFromString` (util `0xf8a28`) and
+`DarwinnApi2_ChipFamilyFromString` (`0xf8ab4`) both go through one helper
+(`0xf8b74`) that compares immediates, not string literals: the accepted
+platform values are `mmio`, `reference`, `simulator` and `remote_simulator`
+(lengths 4, 9, 9, 16). `gs201` is not one of them.
+
+**Still the gate: `Incorrect driver provider is used for the current device`
+(`libedgetpu_util.so` 0x66f18; HAL `file.cc:162`/`397`).** It happens before
+any `/dev/edgetpu` ioctl (no new dmesg) and with both `ro.board.platform=mmio`
+and `gs201`, so it is not that lookup. The HAL loads the util dynamically; the
+check compares the device resource's provider/platform type with
+`JaneiroDriverProvider` and rejects it. The next step is the call site of the
+error string (find the `adrp/add` for `0x66f18` and the compared value) and the
+vendor service's `EnumeratePhysicalResources`, plus the missing top-level
+`/vendor/etc/vintf/manifest.xml` (`NULL VINTF MANIFEST!: framework`).
+
+The phone is left up, TPU powered down, servicemanager restarted, vendor and
+HAL processes stopped. A full-chain test still needs one cold boot.
+
+## U53 (2026-11-07): the service chain is unstable; the provider check is not the platform property
+
+The vendor service fix from U52 holds: with `/data/vendor/edgetpu/cache/` present
+it registers and stays up. Two new facts.
+
+**servicemanager segfaults while serving the chain.** A fresh one registers the
+vendor service, then dies:
+
+    libc: Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid 9891 (servicemanager)
+    sm before: (empty)
+
+so the "reference"/"mmio" HAL runs that follow a dead servicemanager are
+inconclusive (the vendor service gets `DEAD_OBJECT` and CHECK-fails). The
+top-level VINTF manifest is still missing (`NULL VINTF MANIFEST!: framework`),
+and the property shim's `__system_property_find` returns a fake `prop_info` for
+every name; either can be the crash. Fix/stabilise servicemanager before judging
+the provider check.
+
+**The HAL's provider check survives every property value tested.** With a fresh
+servicemanager, a registered vendor service and `ro.board.platform` set to
+`mmio`, `gs201` and `reference`, the HAL still logs
+`INVALID_ARGUMENT: Incorrect driver provider is used for the current device`
+(`file.cc:162`/`397`) and exits with SIGTRAP, before any `/dev/edgetpu` ioctl
+(no new `janeiro` dmesg). So either the shim does not interpose for the HAL's
+property calls (the HAL links its own libcutils/libbase), or the value is not the
+input to this check.
+
+The util path to the error is now mapped: `0x107788: b.ne 0x107970` when the
+cached getter at `0x2240d4` returns something other than 1. `0x2240d4` reads
+`ro.board.platform` through `0x224a70` and calls `0x22403c`, which is a small
+hash/character-class switch (returns 0-6 from `x0 & 0x7f` after `0x224268`), not
+`DarwinnApi2_PlatformTypeFromString`. The `PlatformTypeFromString` immediates
+are `mmio`=0, `reference`=1, `remote_simulator`=2, `simulator`=3; the error
+path is not that parser. Next: disassemble `0x224268` and the HAL's
+`GetDarwinnHalFunctions`/`EdgeTpuServiceAppConnector::GetEdgeTpuFd`, and check
+whether the shim interposes versioned `__system_property_get`/`find` in the HAL
+(build a tiny client that prints `ro.board.platform` and `ro.build.version.sdk`).
+
+Phone state: up; servicemanager restarted; vendor/HAL stopped; TPU powered down.
+The default `mmio` shim is restored in `/root/libpropsshim.so` and the chroot.
+
+## U54 (2026-11-07): the provider gate is bypassed; the HAL reaches the TPU
+
+`libdarwinn_hal.so` `0x1569ae0` is the driver-provider getter. It must return 1
+for the on-device provider; `AbrolhosDriverProvider` checks it at `0x14b6368`
+(`cmp w0, #1; b.ne "Incorrect driver provider is used for the current
+device."`). Patching the getter to `mov w0, #1; ret` (dev-only; backups
+`out/vendor-chroot-edgetpu/root/vendor/lib64/libdarwinn_hal.so.orig` and
+`/root/libdarwinn_hal.so.orig`) removes the error.
+
+With the patch, servicemanager + vendor service + HAL ran past the check:
+`Non-ok status from HAL` changed to a real device path:
+`edgetpu_ioctl_create_group`, `Initial power state: 226000`, `Powering up`.
+It failed only because this boot had already powered the TPU once (the
+delegate run at 44 s). The second power-up reproduced the known wedge:
+`Set LPM0 failed: PSM0_STATUS=0x5644c13 PSM1_STATUS=0xe893
+LPM_CONTROL=0x1240`, KCI timeout code 11, SIGTRAP in the HAL. So the userspace
+gate is fixed; a cold boot is required for the first power-up.
+
+Servicemanager notes: it needs the props/selinux/log shims and a **fresh
+binderfs**; without the props shim it aborts on `servicemanager.ready`. The
+real `liblog.so` is restored; the log shim cannot stand in as `liblog.so`
+without versioned symbols. `libedgetpu_util.so` is unpatched.
+
+Next: cold boot, then `/root/tpu-tachyon-run` with `RUN_UID=10000` as the
+**first** TPU user; expect `Set LPM0` success (`PSM0_STATUS=0x4b27091`) and
+the firmware setup, not `Setup is not done yet`.
+
+## U55 (2026-11-07): the A14 stack sends the pre-Tachyon setup; test it with the A14 firmware
+
+The A14 HAL's `CreateDevice` is the first client seen to run the stock
+`SetupFirmware` path against this driver: it creates the group, finalizes,
+takes the wakelock, registers two eventfds (event ids 0 and 1), maps its
+buffers and submits one `EDGETPU_IOCTL_SYNC` (nr 16) element with `+10`
+priority 11, DMA `0xffcff000` and size `0x80`. The driver's payload dump shows
+the same 128-byte `RequestAllocation` flatbuffer the A17 runtime sends (root
+offset 20, soffset 10, three fields at 8/7/12), and the firmware answers
+`Setup is not done yet received a command of type 0` (error 9). The HAL then
+logs `Firmware setup failed for commands[0], cluster_id_bitset in hex: 0` and
+returns status 2. It is not the setup producer: it sends the pre-Tachyon setup
+command, which the A17 firmware does not accept.
+
+The A14 vendor image carries its own `google/edgetpu-janeiro.fw` (985344
+bytes, sha256 `145993a4e300c64d95f5d811008062f47c083f17ed649f5c046d44eb23160b21`,
+ImageConfig build 2/2; the A17 file is 1038272 bytes, build 2/3). The A14 HAL
+is the pair of that firmware, and the A14 setup command (`type 0`) is the one
+its gate should accept.
+
+Experiment (development, slot B, cold boot):
+1. Back up the A17 firmware to `/root/edgetpu-janeiro-a17.fw` (sha
+   `52c1ccc…`), write the A14 file to
+   `/lib/firmware/updates/google/edgetpu-janeiro.fw`, verify its sha256.
+2. `systemctl poweroff`; the owner presses Power. Expect SSH in about 20 s.
+3. `modprobe janeiro` (it is not autoloaded on the Arch root), wait for
+   `/dev/janeiro`, then as the first TPU user
+   `chroot $R /vendor/bin/tpu-a14-hal`. Pass: `create_device: 0`, `dev 0x…`,
+   no `Setup is not done yet` and no `Firmware setup failed`; the firmware
+   line names the A14 build.
+4. If the GSA refuses the image (no `loaded prod firmware`, a firmware load
+   error, or `/dev/janeiro` absent), restore `/root/edgetpu-janeiro-a17.fw`
+   and cold boot again.
+
+Rollback: the A17 file over the firmware path, then a cold boot.
+Risk: the first A14 attempt's worst case was assumed to be a TPU that does
+not come up. The second attempt showed the real worst case: the GSA load
+hangs the SoC and the watchdog resets the phone. The A17 file is restored;
+the path stays closed.
+
+First result (2026-11-07 19:39): the A14-firmware boot did not load the
+module (it is not autoloaded on the Arch root), so that attempt never touched
+the A14 image. Second attempt (19:41): with the A14 file in place,
+`modprobe janeiro` blocked in the probe and the phone reset by itself at
+19:42:26 (uptime 135 s, no pstore, the journal stops without an error line).
+The A14 image is not refused with an error: its GSA load hangs the SoC until
+the watchdog resets it. **The A14 firmware path is closed on this phone; do
+not load it again.** The A17 firmware is restored (sha `52c1ccc…`).
+
+## U56 (2026-11-07): the A17 userspace has no setup producer; the Tachyon core is a stub
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`. One cold boot per
+test, TPU used once, `power-up ok: PSM0_STATUS=0x4b27091`.
+
+**The HAL's obsolete setup is skipped, and that works.** `SetupFirmware`
+(`libdarwinn_hal.so` 0x14d9a24) starts with `ldarb w8,[x19+0x180]` (its
+`firmware_setup_done_` byte) and `tbz w8,#0,0x14d9a6c`; the fall-through is
+the stock "already set up" path that returns 1. Replacing that `tbz` at
+0x14d9a5c with `nop` (4 bytes, `36000088` → `d503201f`) makes the HAL send
+nothing and report success. With it, the HAL's `CreateDevice` creates group
+and context 1073741824 at 64.7 s and returns OK: no `Setup is not done yet`,
+no `Firmware setup failed`, no `Sync VII command failed` from the HAL. The
+provider patch from U54 (0x1569ae0) stays. Phone copy sha
+`c04ad3249d3c…`; backups `libdarwinn_hal.so.orig` (stock) and `.provider`
+(U54 only) in the chroot, stock also at `/root/libdarwinn_hal.so.orig`.
+
+**The Tachyon service needs the Power HAL.** Its `TachyonCore_CreateClientSession`
+first logged `Service android.hardware.power.IPower/default didn't start.
+Returning NULL` and `[Darwinn] Unable to connect to Power HAL`. The stock
+`android.hardware.power-service.pixel-libperfmgr` runs in the chroot (all its
+NEEDED libs are there). It reads its hint table from the path in
+`vendor.powerhal.config`; the props shim answers every property with `"1"`,
+so it wants `/vendor/etc/1`. `powerhint.json` was missing from the chroot and
+is now copied from the local extraction (57531 bytes), and `/vendor/etc/1` is
+a copy of it, so the service starts and parses 275 actions. The debug path
+`/data/vendor/etc/1` is not needed; the service falls back to `/vendor/etc/1`.
+Restart the tachyon service **after** the Power HAL is up: it caches a failed
+lookup, and a second `createSession` in the same process does not retry it.
+
+**Still status 12, and the reason is structural.** With the Power HAL live,
+app service and tachyon restarted in order, `createSession` still returns
+`exception -8 service 12 "Non-ok status from HAL."`. gdb on the daemon
+(`break TachyonCore_CreateClientSession`, `finish`) shows the core's own
+return is `x0 = 0xc`; the daemon maps any non-zero return to UNIMPLEMENTED
+with that message. The core links only liblog/libc/libm/libdl (no binder).
+
+`libtachyon_core.so` **is a stub in this image**: `TachyonCore_Start`
+(0x51590) stores its argument, calls a 3-instruction function that only
+returns, and returns; `CreateClientSession` (0x51078) references the string
+`InternalCreateClientSession is not implemented.` (0x19d67) at 0x51480 and
+returns 12. The vendor service's call site even ignores `TachyonCore_Start`'s
+return and builds an OK status (`bl TachyonCore_Start; bl AStatus_newOk`).
+The `libtachyon_core.so` in `out/factory/fw/img/vendor.img`
+(`out/vendor-libs/tachyon_core.img.so`, sha `47fb5f74…`) is byte-identical to
+the chroot's, so this is what the A17 image ships, not a bad extraction.
+The uid × privileged matrix (1000, 10000, 10123 × privileged 0/1) fails
+identically, so it is not the caller's identity either.
+
+**`com.google.edgetpu.dba-service` cannot be used.** The binary in the chroot
+needs `com.google.edgetpu.dba-V1-ndk.so`, which is not in `/lib64` of the A17
+`vendor.img` (the image ships the app service's V3 only). It is an orphan in
+the extraction and fails at link time, so the Darwinn2 DBA path is not part of
+this image's TPU stack.
+
+Not the gate either: the HAL's VII-version check
+(`Firmware VII version [%d] does not match runtime VII version [%d]`,
+`libdarwinn_hal.so` 0x1525624) never logs on this firmware, so the type-0
+setup is the HAL's normal path, not a fallback it takes after a mismatch.
+
+**Conclusion:** on this A17 userspace no vendor component can produce the
+firmware's setup command — the HAL sends the pre-Tachyon type 0 that the A17
+firmware refuses, and the only Tachyon producer, `libtachyon_core.so`, is
+compiled as a stub. The TPU stays at `Setup is not done yet` until one of
+these changes.
+
+Next, in order:
+1. Look for a userspace that carries a real `libtachyon_core.so`: check the
+   A17 `system.img` APEXes (e.g. `com.google.android.neuralnetworks.apex`)
+   and any newer OTA, and compare `TachyonCore_CreateClientSession` for the
+   `InternalCreateClientSession is not implemented.` reference before
+   spending a boot on it.
+2. If none exists, treat the setup as protocol work: the firmware wants a
+   Tachyon setup message with a cluster bitset and global scratches (its own
+   strings: `No global scratches were provided in setup command.`).
+   `libedgetpu_tachyon.google.so` builds the queues (`SetupCommandFmq`,
+   `SetupResponseFmq`) but the message comes from the stubbed core, so this
+   needs the message layout from a firmware or a working userspace.
+3. Do not retry the A14 firmware (U55), and do not expect the direct runtime
+   or the HAL to change their first element: both send type 0.
+
+Phone state: up, TPU powered by `tpu-hold`; servicemanager, vendor service
+and app service left running, the spinning Darwinn HAL and the debug clients
+stopped. `/vendor/etc/powerhint.json` and `/vendor/etc/1` are in the chroot;
+`out/tpu-step.sh` is scratch (gitignored `out/`).
