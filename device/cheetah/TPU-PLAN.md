@@ -5082,3 +5082,27 @@ Next: recover that message. `libtachyon_core.so`'s push is at `0xa4d5c` with
 the builder at `0xa4dec` and the verifier at `0xb9c48`; the same library
 exports no setup symbol, so the call is either by address from a chroot
 program (dlopen + base + `0xa4d5c`) or through the app service's own path.
+
+## U79 (2026-11-08): the setup producer is the HAL's runtime, not the core
+
+Searching every removed library for the setup strings puts them here:
+
+```
+libdarwinn_hal.so:    0x4b8c71  Firmware setup failed for commands[%d], cluster_id_bitset in hex: %x.
+libedgetpu_util.so:   0x67ce7   (same string)
+```
+
+and the `firmware_setup_done_` wakelock lambda beside it. **Neither string is
+in `libtachyon_core.so`.** Disassembling U67's `0xa4d5c` shows it inside a
+hash/lookup helper starting at `0xa4d54` (it hashes two `w` arguments through a
+virtual call and returns a small object), not a message builder, so that
+address was a log site read out of context, not the push.
+
+So the runtime that builds a firmware-setup command is the HAL's own
+`libdarwinn_hal.so`, which does call the firmware setup and logs
+`commands[0], cluster_id_bitset in hex: 0` when the firmware refuses. Its
+command list's bitset is 0, and the payload it builds carries `0x30` in the
+first field — two different numbers. The next probe is the HAL's command
+construction itself: the xref of the `Firmware setup failed` string names the
+function that walks `commands[]`, and its `cluster_id_bitset` and command type
+are what the firmware is actually judging.
