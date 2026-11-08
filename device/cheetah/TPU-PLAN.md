@@ -5170,3 +5170,23 @@ runtime that exists on that image.
 detections per frame, so the "10+ objects" target is not met by this clip as
 decoded at 300x300; a clip with more simultaneous objects (or a lower threshold,
 which must be reported as such) is needed for that part of the request.
+
+## U82 (2026-11-08): the firmware blob is not aarch64, and its code section is not readable
+
+The driver loads `/lib/firmware/updates/google/edgetpu-janeiro.fw` (1,038,272
+bytes). Pulled to `out/fw/` for local analysis (never committed). Its rodata is
+plaintext: `Setup is not done yet received a command of type %d.` at 0xefbdc and
+`No global scratches were provided in setup command.` at 0xefe18.
+
+The blob is not a plain image: zero `\x7fELF` occurrences, no aarch64 `ADRP`+`ADD`
+xref to 0xefe18 (and no `stp x29, x30` prologues), no qword or dword pointer to
+the string either. Entropy per 256 KiB is 7.19, 7.22, 7.21 and 6.53, so the code
+section is compressed or encrypted while the string table sits in the lower-
+entropy tail. Reading the setup parser therefore needs the container format and
+its key, not just a disassembler.
+
+With U81 this makes three walls on the VII side: the HAL and the delegate's
+runtime both send the obsolete message, the only Tachyon producer in the image
+needs `/dev/gxp`, and the firmware that would define the new message cannot be
+read. The realistic paths left are a gxp kernel driver (large, out of scope for
+this bring-up) or Google's Tachyon host stack with the kernel side it expects.
