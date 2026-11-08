@@ -10,6 +10,9 @@
 
 extern void *AServiceManager_getService(const char *instance);
 extern int AIBinder_isAlive(const void *binder);
+extern void *AServiceManager_addService(void *binder, const char *instance);
+extern int AStatus_isOk(const void *status);
+extern int AStatus_getExceptionCode(const void *status);
 
 static long sys_write(int fd, const void *buf, unsigned long len)
 {
@@ -37,15 +40,66 @@ static void out(const char *s)
 }
 
 static const char *const names[] = {
+	"android.hardware.power.IPower/default",
+	"google.hardware.power.extension.pixel.IPowerExt/default",
 	"com.google.edgetpu.tachyon.IComputeService/default",
-	"com.google.edgetpu.tachyon.IComputeService",
 	"android.frameworks.stats.IStats/default",
 };
+
+static void putdec(long v)
+{
+	char b[24];
+	int i = 23, neg = v < 0;
+	unsigned long u = neg ? (unsigned long)-v : (unsigned long)v;
+
+	b[i--] = 0;
+	do {
+		b[i--] = '0' + u % 10;
+		u /= 10;
+	} while (u);
+	if (neg)
+		b[i--] = '-';
+	out(&b[i + 1]);
+}
+
+static void probe_add(void)
+{
+	void *st;
+	void *b;
+
+	/* servicemanager logs its VINTF hit before it looks at the binder. If a
+	 * NULL binder is what the Power HAL passes, this reproduces the
+	 * "Found ..." line with a failed status and no service. */
+	st = AServiceManager_addService(0, "android.hardware.power.IPower/default");
+	out("ADD null ok=");
+	out(st && AStatus_isOk(st) ? "1" : "0");
+	out(" ex=");
+	putdec(st ? AStatus_getExceptionCode(st) : -999);
+	out("\n");
+
+	/* The same add with a real (proxy) binder: if this one is found below,
+	 * servicemanager's path is fine and the Power HAL's binder is the
+	 * difference. */
+	b = AServiceManager_getService("com.google.edgetpu.tachyon.IComputeService/default");
+	out("ADD proxy binder=");
+	if (!b) {
+		out("no binder\n");
+		return;
+	}
+	st = AServiceManager_addService(b, "android.hardware.power.IPower/default");
+	out("ok=");
+	out(st && AStatus_isOk(st) ? "1" : "0");
+	out(" ex=");
+	putdec(st ? AStatus_getExceptionCode(st) : -999);
+	out("\n");
+}
 
 static void probe(void)
 {
 	unsigned long i;
 
+	/* probe_add() crashes client-side on a NULL binder (fault 0xfffffffd),
+	 * which is itself the finding: see TPU-PLAN U71. */
 	for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
 		void *b = AServiceManager_getService(names[i]);
 

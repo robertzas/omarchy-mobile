@@ -222,7 +222,9 @@ log "darwinn nnapi hal"
 if [ "${NO_DELEGATE:-0}" = "1" ]; then
 	echo "hal skipped (NO_DELEGATE=1)" >>"$LOG"
 else
-pkill -x android.hardwar 2>/dev/null
+# comm is 15 chars, so -x android.hardwar also matches the Power HAL
+# (android.hardware.power-service...): match the full command line instead.
+pkill -f 'android.hardware.neuralnetworks@service-darwinn-aidl' 2>/dev/null
 sleep 0.5
 # The HAL runs as the app uid, not root: as root the util library opens
 # /dev/edgetpu itself and builds its own group, where the setup payload has no
