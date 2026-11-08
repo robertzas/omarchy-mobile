@@ -4977,3 +4977,25 @@ firmware rejects.
 or replace it with the core's type-1 message built in the client and pushed
 through the AUTHORIZED session. The response element (`u16` status) is visible
 to the driver's IRQ handler, so every attempt can be read back.
+
+**The element and its payload parse.** From the same run (dmesg, `vii-elem`):
+
+```
+00000000 00000000 000b0000 00000000 ffdff000 00000000 00000080
+00000000 00000000 00000002 00000000 00000100
+```
+
+as `struct edgetpu_command_element`: `seq = 0`, `code = 0` (u16 at 8),
+`reserved[0] = 11` (u16 at 10, the value U67 read as a type), `dma.iova =
+0xffdff000` (u64 at 16), `dma.size = 0x80` (u32 at 24), then `2` at byte 36 and
+`0x100` at byte 44.
+
+The 128 bytes at that iova are a flatbuffer after all, read as bytes rather than
+as printed words: root uoffset `0x14` at 0 → table at 20; at 20 a soffset of 10
+→ vtable at 10; the vtable is `size 10, table size 18`, with fields at `+8`
+(value 48), `+7` (value 5) and `+12` (a uoffset to 44, where the `u32` is 6).
+So the HAL does send one command message with three fields, and the firmware
+still answers FAILED_PRECONDITION. U67's note that the firmware names its own
+missing piece — `No global scratches were provided in setup command.` — is the
+next thing to match against these fields: the message carries the bitset (48)
+and a small value (5), but no scratch descriptors.
