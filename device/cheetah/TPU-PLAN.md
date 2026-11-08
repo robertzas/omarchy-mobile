@@ -4340,3 +4340,66 @@ The service then dies: every later lookup prints `Since 'com.google.edgetpu.tach
 The delegate's run in the same chain still ends `device: 0x0`, `delegate rc: 1`, with `samsung-iommu.c:726 unmap_slpt` warnings from `edgetpu_unmap_dmabuf`; that is the delegate's teardown, not the client's session path.
 
 Next: restart the chain (the tpu-hold keeps the one power-up), run the client, and gdb the Tachyon service to get the crash PC (the runner's `BT=1` path stops the delegate early enough, or attach after the client's first command); patch the null callback or give the service a real one, then rerun the client and watch for the firmware setup.
+
+## U64 (2026-11-08): the service does not die; the core holds the command in CREATED
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, phone uptime 2:04.
+
+Three corrections to U63, each with the mechanism behind it:
+
+- **The Tachyon service does not crash after the command.** The client's later
+  lookups failed because `AidlLazyServiceRegistrar` shuts a service down when
+  it has no clients, and the client had already exited: one
+  `receiveResponse` read, 120 s of sleep, then `timeout`. With the delegate
+  skipped the service stays up for the whole client run and logs its exit
+  only after the client leaves: `ClientSession … STOPPING to STOPPED`, then
+  `Process has 0 (of 1 available) client(s)` and `Unregistered all clients
+  and exiting`. The earlier "service dies" was that shutdown, not the
+  callback SIGSEGV (which U60's log shim fixed).
+- **`receiveResponse`'s `exception -8 service 8` means "no answer yet".**
+  `ComputeSession::ReceiveResponseMessage` (`libedgetpu_tachyon.google.so`,
+  `0xf2c0`) asks the response FMQ for its available bytes and, when the count
+  is `<= 0x7f`, returns
+  `AStatus_fromServiceSpecificErrorWithMessage(8, …)`. A 100 × 100 ms poll
+  loop never sees a different status, so the queue really stays empty; it is
+  not a failed transaction and not a crash.
+- **The Tachyon core needs the Power HAL before it is started.** The service
+  logged `Service android.hardware.power.IPower/default didn't start.
+  Returning NULL` and `[Darwinn] Unable to connect to Power HAL`, because the
+  runner never started it; U56 had started it by hand. `tools/tpu-tachyon-run`
+  now starts `vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr`
+  from the chroot before the vendor and Tachyon services. Its libperfmgr node
+  writes fail (our kernel has no `devfreq_mif` interactive or
+  `/proc/vendor_sched` nodes), which is expected and harmless.
+
+The client also starts the binder threadpool the Tachyon library asks for
+(`ABinderProcess_startThreadPool`, the lib's "The user of this library did
+not start a threadpool"), so the core's `get_fds` callback can be delivered.
+It is never called, and no response arrives.
+
+Where the command stops: with a live session, `/proc/<tachyon>/task` holds
+`MainTpuActor` in `do_epoll_wait`, `HighPriWorker`, `MedPriWorker` and
+`LowPriWorker` in `futex_wait`, two `vndbinder` threads and the main thread
+in `binder_ioctl_write_read`. The service has no `/dev/janeiro` fd of its
+own; the app service owns the device and the group. The core's own strings
+name the gate: `ClientSessionFmqCommandReady received event but it is not in
+STARTED or AUTHORIZED state. Hold.` and `Failed to push firmware setup
+command due to VII command queue is full`. So the command sits in the
+command FMQ because the session never reaches STARTED, and the setup the
+firmware wants is pushed only from a started session.
+
+Next: the fd-assignment path. The client API also exports
+`TachyonComputeSession_sendFileDescriptors`,
+`begin/commitCommandQueueWrite`, `setSessionType` and `setClientVersion`,
+none of which the probe calls; the core exports
+`TachyonCore_SendClientAssignedFds` and
+`TachyonCore_RequestFdsForGivenHandles`, and the setup command is the one
+that carries the global scratches. Disassemble
+`TachyonComputeSession_sendFileDescriptors` and the core's
+`ClientSessionStart` to learn what the stock client assigns before its first
+command, then assign the same from the probe.
+
+Phone state: up, TPU powered once (`tpu-hold`, pid 5147). Chain left down
+after the run; `tools/tpu-tachyon-run`, `tools/tpu-tachyon-client.c` and
+`tools/android-props-stub.c` carry this round's changes. `core_pattern` is
+still `/core.%e.%p` (the old value is in `/tmp/tpu-core-pattern.old`).

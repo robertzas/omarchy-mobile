@@ -22,6 +22,20 @@ LOG=/tmp/tpu-tachyon.log
 # spin cannot fill userdata.
 ulimit -f 51200 2>/dev/null || true
 
+# CORES=1 makes a crashing service leave a core. The kernel's core_pattern is
+# systemd's here, so point it at a file in the chroot's root for this run and
+# put the old value back on exit. An attach has already killed the Tachyon
+# service once (U62); a core answers "where did it die" without one.
+if [ "${CORES:-0}" = "1" ]; then
+	ulimit -c unlimited 2>/dev/null || true
+	CORE_OLD=$(cat /proc/sys/kernel/core_pattern)
+	echo "core_pattern: $CORE_OLD -> /core.%e.%p" >>"$LOG"
+	echo '/core.%e.%p' >/proc/sys/kernel/core_pattern
+	# No trap: the services outlive this script, and the crash we want may
+	# come later. Save the old value so it can be put back by hand.
+	echo "$CORE_OLD" >/tmp/tpu-core-pattern.old
+fi
+
 log() {
 	echo "=== $*" >>"$LOG"
 }
@@ -136,6 +150,23 @@ echo "servicemanager pid: $(pgrep -x servicemanager)" >>"$LOG"
 # service on any non-OK status.
 SVC_PRELOAD="/system/lib64/libnosid.so /system/lib64/liblazysvc.so /system/lib64/libpermissionshim.so /system/lib64/libabortshim.so $LD_PRELOAD"
 
+# The Tachyon core connects to android.hardware.power.IPower/default while it
+# creates a session and caches a failed lookup, so the Power HAL has to be up
+# first (TPU-PLAN U56). Without it the core logs "Unable to connect to Power
+# HAL", the session stays in CREATED, and no command is ever dispatched: the
+# client's receiveResponse answers "no response" forever (U64).
+log "power hal"
+pkill -f 'android.hardware.power-service' 2>/dev/null
+sleep 0.5
+POWER_HAL=$(ls "$R"/vendor/bin/hw/android.hardware.power-service* 2>/dev/null | head -1)
+if [ -n "$POWER_HAL" ]; then
+	setsid env LD_PRELOAD="$SVC_PRELOAD" chroot "$R" "${POWER_HAL#"$R"}" >>"$LOG" 2>&1 </dev/null &
+	sleep 3
+	echo "power hal: ${POWER_HAL##*/} pid $(pgrep -f 'android.hardware.power-service' | head -1)" >>"$LOG"
+else
+	echo "power hal: no binary in the chroot" >>"$LOG"
+fi
+
 # Stock's order: the vendor service owns /dev/edgetpu, the tachyon service
 # fronts it, and Darwinn's NNAPI HAL publishes IEdgeTpuAppService for clients.
 log "vendor edgetpu service"
@@ -188,6 +219,17 @@ sleep 4
 echo "hal pid: $(pgrep -x android.hardwar)" >>"$LOG"
 
 log "delegate"
+# NO_DELEGATE=1 leaves the chain up for a client run: the delegate's teardown
+# takes the vendor servicemanager down with it (U61), and then no later client
+# can find the Tachyon service.
+if [ "${NO_DELEGATE:-0}" = "1" ]; then
+	echo "delegate skipped (NO_DELEGATE=1)" >>"$LOG"
+	log "dmesg"
+	dmesg | grep -iE 'edgetpu|janeiro|tachyon' | tail -20 >>"$LOG"
+	log "done"
+	tail -n 40 "$LOG"
+	exit 0
+fi
 DELEGATE_PRELOAD="/system/lib64/libnosid.so /system/lib64/libnometrics.so /system/lib64/libstackchkshim.so /system/lib64/liblogstderr.so /system/lib64/libabortshim.so /system/lib64/libselinuxshim.so /system/lib64/libpropsshim.so"
 # PROBE=1 loads the vendor client libraries first, to tell a dlopen failure
 # apart from a choice the delegate makes.
