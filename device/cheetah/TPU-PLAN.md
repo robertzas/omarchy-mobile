@@ -5438,3 +5438,33 @@ interface-version query returns to libgxp; the published gxp.h defines that
 command as `_IOR(0xEE, 26, struct gxp_interface_version_ioctl)` with major 1,
 minor 3.
 
+## U90: the Tachyon client exists and its Ping round-trips (2026-11-08)
+
+`/vendor/bin/tpu-tachyon-client` is the vendor's Tachyon protocol client (a
+13 KiB C program that dlopens `libedgetpu_tachyon.google.so`). With the app
+service and the Tachyon service up it creates a session, sets up the command
+and response queues, sends a Ping and receives the 88-byte response; the
+service logs `received command seq no: 1 of type : Ping`. Its own messages
+show a fixed `sleep(120)` (`0x6094`) "for the service's setup" between the
+first command and the rounds, so every earlier run that ended before 120 s
+only saw the client's own wait.
+
+`edgetpu-delegate` is not a Tachyon client: it is a second copy of the VII
+delegate (`usage: edgetpu-run MODEL`, the same ioctls and the same status
+13). The VII route stays closed.
+
+The service only answers when it is in the state the boot-time vendor service
+left it in. A service restarted by the runner with `NO_DELEGATE=1` logs the
+session states but never `received command`; the client's rounds then fail
+with `exception -8 service 8` and a 256-byte zero buffer. Next: find the
+service's setup gate and what the vendor service does once at boot.
+
+The published `gxp.h` ABI (`0xEE` base, `GXP_GET_INTERFACE_VERSION` 26) is
+not what this libgxp uses: the service asks `0x40086200`, `0xc0184800` and
+`0x40086201`, which our driver already answers. Adding the published command
+would be a guess, so it stays out until a caller asks for it.
+
+The two IOMMU warnings are fixed on `omamobile-tpu`: a domain may replace its
+own fault handler (the pooled domain case), and unmapping an empty L1 entry
+is a no-op instead of a warning.
+
