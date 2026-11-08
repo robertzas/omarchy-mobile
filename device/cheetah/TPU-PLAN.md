@@ -4526,3 +4526,43 @@ disconnect enp0s20f0u5` first.
 
 Phone state: up, TPU powered once (`tpu-hold` 4054), cheetah's HAL and
 libdarwinn restored, chain left down.
+
+## U67 (2026-11-08): the KCI code-6 lead is dead; the HAL bitset is patched for a clean run
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
+
+**KCI code 6 is not the setup command.** U20 inferred it from one precondition
+answer; the driver's `kci_send_v` variant sweep (ioctl `0x4004ed22`, eight
+scratch layouts plus controls) answers 3 for every code-6 variant, and code 9
+(GET_USAGE) answers 3 too. So 3 is a generic firmware precondition (setup not
+done), not the global-scratch check; U20's conclusion is retracted, and the KCI
+path is closed.
+
+**The stock HAL's bitset can be forced.** `SetupFirmware` receives its
+`cluster_id_bitset` in `x21` (`mov x21, x2` at file offset `0x14d9a48`; the
+library maps vaddr == file offset), and the setup call is gated on bit `0x20`
+(`tbz x21, #0x20` at `0x14d9cc0`). Patching `0x14d9a48` to `mov w21, #0x21`
+(bytes `35 04 80 52`) forces the call with cluster 0 plus the gate bit. The
+backup is `$R/vendor/lib64/libdarwinn_hal.so.bitset-orig`.
+
+**The first patched run never reached the setup:** it oopsed in
+`edgetpu_mmu_alloc_domain+0xa0` from `edgetpu_device_group_alloc` because the
+kciv client's group had leaked an IOMMU domain (U65's failure mode). Rebooted.
+
+On the fresh boot the module load logs a `__setup_irq` WARNING from
+`edgetpu_chip_setup_mmu`, recovers, and powers up
+(`power-up ok: PSM0_STATUS=0x4b27091 ...`). The patched HAL then started but its
+log ends at `[Darwinn] Unable to connect to Power HAL`, with no setup line; the
+HAL (pid 4186) was still running when the runner's 4 s window closed, and
+`tpu-hold` (4109) holds the boot's one power-up. So the patched run has not been
+evaluated yet: it needs the power HAL up and a longer settle.
+
+**Host traps, again.** The OnePlus 8T re-took `172.16.42.1` after the reboot
+(the key rejection is its sshd); disconnect `enp0s20f0u5` and set its profile
+`connection.autoconnect no` by UUID (the profile name is duplicated). The
+chroot root had become mode 0700, so the uid-10000 client could not exec or
+read its preloads; `chmod 755 $R` fixes it. The delegate runs as root.
+
+Phone state: up, TPU powered once (`tpu-hold` 4109), cheetah's HAL patched
+(`.bitset-orig` backup) and the HAL service still up (4186); the Tachyon and
+app services stopped after the runner.
