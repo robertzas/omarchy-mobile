@@ -63,9 +63,15 @@ started session, and it is the message that carries the global scratches.
 3. When a response arrives, watch for the firmware setup: the delegate run
    should stop answering `Sync VII command failed: error_code=9`, and dmesg
    should show the VII element the driver logs.
-4. Then one int8 inference on `detect_edgetpu.tflite` against CPU TFLite,
+4. Fallback if the proprietary core's start path is not reachable: extract
+   tegu's own Darwinn HAL from `out/factory/tegu-cp21/system_ext.img`
+   (`/system_ext/lib64/libdarwinn_hal.so` plus its AIDL) and let it create
+   the session against the tegu Tachyon service, instead of our probe. It is
+   the component that builds the stock config on the device the core was
+   written for.
+5. Then one int8 inference on `detect_edgetpu.tflite` against CPU TFLite,
    recording `uname -r` and latency in TPU-PLAN.md.
-5. Then the 720p 10+-object benchmark against XNNPACK CPU and Mesa/panthor
+6. Then the 720p 10+-object benchmark against XNNPACK CPU and Mesa/panthor
    GPU (`tools/bench-object-detection.py`).
 
 ## Hard rules
