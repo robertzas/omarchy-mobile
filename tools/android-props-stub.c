@@ -29,16 +29,81 @@ static void copy(char *dst, const char *src, unsigned long max)
 }
 
 static const char sdk_value[] = "34";
-/* The vendor Edge TPU runtime reads ro.board.platform and maps it to a Darwinn
- * platform type; "1" makes it reject the device with "Incorrect driver
- * provider is used for the current device" before it ever opens /dev/edgetpu.
- * PlatformTypeFromString accepts mmio/reference/simulator/remote_simulator, so
- * the hardware value is "mmio". Build with -DPLATFORM_VALUE='"..."' to try
- * another value without editing this file. */
+/* The vendor Edge TPU runtime reads ro.board.platform. The delegate needs
+ * "mmio": PlatformTypeFromString accepts mmio/reference/simulator/
+ * remote_simulator, and any other value makes it reject the device with
+ * "Incorrect driver provider is used for the current device" before it opens
+ * /dev/edgetpu. The Tachyon service's core hashes the same property into its
+ * Darwinn platform type (GetPlatformId); "gs201" is the Pixel 7 generation's
+ * ID (CityHash64 low 7 bits 0x77 -> platform 1), and gs201 is the TPU we
+ * drive. Give the Tachyon service gs201 and every other process mmio. Build
+ * with -DPLATFORM_VALUE or -DTACHYON_PLATFORM_VALUE to override. */
 #ifndef PLATFORM_VALUE
 #define PLATFORM_VALUE "mmio"
 #endif
+#ifndef TACHYON_PLATFORM_VALUE
+#define TACHYON_PLATFORM_VALUE "gs201"
+#endif
 static const char platform_value[] = PLATFORM_VALUE;
+
+/* Freestanding syscalls: a preloaded shim cannot rely on libc here. */
+static long syscall4(long n, long a, long b, long c, long d)
+{
+	register long x8 __asm__("x8") = n;
+	register long x0 __asm__("x0") = a;
+	register long x1 __asm__("x1") = b;
+	register long x2 __asm__("x2") = c;
+	register long x3 __asm__("x3") = d;
+
+	__asm__ volatile("svc #0" : "+r"(x0)
+			 : "r"(x8), "r"(x1), "r"(x2), "r"(x3) : "memory");
+	return x0;
+}
+
+static int contains(const char *hay, const char *needle)
+{
+	unsigned long i = 0;
+
+	while (hay[i]) {
+		unsigned long j = 0;
+
+		while (needle[j] && hay[i + j] == needle[j])
+			j++;
+		if (!needle[j])
+			return 1;
+		i++;
+	}
+	return 0;
+}
+
+/* The Tachyon service is the one process whose core maps ro.board.platform to
+ * a Darwinn platform type. Read the process's own cmdline, never argv. */
+static int is_tachyon_service(void)
+{
+	static int cached = -1;
+	char buf[256];
+	long fd, n;
+
+	if (cached >= 0)
+		return cached;
+	cached = 0;
+	fd = syscall4(56 /* openat */, -100 /* AT_FDCWD */,
+		      (long)"/proc/self/cmdline", 0, 0);
+	if (fd < 0)
+		return 0;
+	n = syscall4(63 /* read */, fd, (long)buf, sizeof(buf) - 1, 0);
+	syscall4(57 /* close */, fd, 0, 0, 0);
+	if (n <= 0)
+		return 0;
+	buf[n] = 0;
+	cached = contains(buf, "com.google.edgetpu.tachyon-service");
+	return cached;
+}
+
+static const char *get_platform_value(void)
+{
+	return is_tachyon_service() ? TACHYON_PLATFORM_VALUE : platform_value;
+}
 static const char empty_value[] = "";
 /* The tachyon service sets its core VLOG level from this property. Level 3
  * logs the core's command and firmware-setup path (TPU-PLAN U59). */
@@ -71,7 +136,7 @@ int __system_property_get(const char *name, char *value)
 	else if (name && is_name(name, "ro.build.version.sdk"))
 		v = sdk_value;
 	else if (name && is_name(name, "ro.board.platform"))
-		v = platform_value;
+		v = get_platform_value();
 	else if (name && is_name(name, "vendor.tachyon.log_level"))
 		v = tachyon_log_value;
 	copy(value, v, 92);
@@ -94,7 +159,7 @@ int __system_property_read_callback(const void *pi, void (*cb)(void *, const cha
 	else if (is_name(last_name, "ro.build.version.sdk"))
 		value = sdk_value;
 	else if (is_name(last_name, "ro.board.platform"))
-		value = platform_value;
+		value = get_platform_value();
 	else if (is_name(last_name, "vendor.tachyon.log_level"))
 		value = tachyon_log_value;
 	if (cb)

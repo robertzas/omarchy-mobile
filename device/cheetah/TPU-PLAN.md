@@ -4296,3 +4296,24 @@ That call then aborts in `edgetpu_android_property_util.cc:284`: `Unknown platfo
 So the Tachyon service needs the platform name its A17 core knows, not `mmio` (the driver-provider value the delegate needs). The shim must be process-aware: `mmio` for the delegate and client, the platform name for the Tachyon service. The names are not stored as strings; the mapper at `0xd5598` is the way to find which one maps to a known ID. That gdb call was ready when the phone's SSH failed: no agent is running, and `~/.ssh/id_ed25519` asks for its passphrase. The candidates (gs201, gs101, zuma, zumapro, tegu, gs401) have not been called yet.
 
 Next: unlock the phone key; call `base+0xd5598` with the candidates; give the Tachyon service the known name and the delegate `mmio`; rerun the client and then the delegate.
+
+## U62 (2026-11-08): the platform is gs201 (1), evaluated offline
+
+`uname -r` 7.3.0-rc6-omamobile-push1-g052da70970d6-dirty. Phone uptime 1:20 and `tpu-hold` (5147) alive, so the earlier USB drop was the host's cdc_ncm watchdog, not a phone reset.
+
+The gdb mapper call did not answer: the injected call at `base+0xd5598` faulted at its first instruction (`str x30, [sp, #-0x10]!`), the detach delivered the SIGSEGV, and the Tachyon service died; the vendor (17897) and app (17932) services and the tpu-hold survived. The base was right (`0xffff996c7000`, the first LOAD is R E) and the phone's core hash equals the host's disassembled file.
+
+So the mapper was evaluated offline. `0xd57d8` is CityHash64 (constant 0x9ae16a3b2f90404f; the 8-16 and 4-8 paths match); recomputing it in Python and taking the low 7 bits the mapper switches on gives:
+
+- gs101 -> 0x3b -> platform 0
+- gs201 -> 0x77 -> platform 1
+- zuma -> 0x13 -> platform 2
+- zumapro -> 0x1e -> platform 3
+- (0x37 -> 4 and 0x5b -> 5 are two more names)
+- mmio, tegu, gs401, android, cheetah -> 6 (unknown).
+
+So the Tachyon service's `ro.board.platform` must be `gs201`, the Pixel 7 generation's ID, while the delegate keeps `mmio` (the driver-provider value). `tools/android-props-stub.c` now reads `/proc/self/cmdline` with raw `openat`/`read`/`close` syscalls and returns `gs201` only for `com.google.edgetpu.tachyon-service`; built with `clang --target=aarch64-linux-android30 -shared -fPIC -nostdlib` (6,824 bytes in `out/tpu-client/libpropsshim.so`).
+
+The push is blocked: after the failed key offers, the phone's sshd refuses the key (`publickey,password,keyboard-interactive`) even after a 75 s wait; the key is unencrypted (`ssh-keygen -y -P ''` succeeds, comment `omamobile`), the host reaches the phone (ping), and sudo needs a password, so the serial console is not usable from the host.
+
+Next: restore SSH (a phone reboot clears it; the authorized key is on userdata), push the shim to `/root` and the chroot's `/system/lib64`, restart the chain (the tpu-hold keeps the one power-up), and run the client; `createSession` should now pass the platform check.
