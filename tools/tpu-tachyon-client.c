@@ -179,6 +179,30 @@ static void show_status(status_fn get, status_ok_fn ok, const char *what,
 
 extern unsigned int getuid(void);
 
+// The tegu core refuses a SessionConfig without a get_fds callback. It is
+// called only for handles the client assigned to the core; this client
+// assigns none, so the stub logs any request and refuses it (fd -1), which is
+// enough to pass the config check (TPU-PLAN U58).
+typedef void (*get_fds_cb_fn)(void *, int *, long *, int, long);
+
+static void get_fds_cb(void *cookie, int *fds, long *handles, int count,
+                       long session_id) {
+  int i;
+
+  (void)cookie;
+  put("get_fds: count=");
+  putdec(count);
+  put(" session=");
+  putdec(session_id);
+  put("\n");
+  for (i = 0; i < count; i++) {
+    put("  handle=");
+    puthex((unsigned long)handles[i]);
+    put("\n");
+    fds[i] = -1;
+  }
+}
+
 int main(int argc, char **argv) {
   /* argv[1] "0" asks for an unprivileged session; default is privileged
    * (the config the app service uses). */
@@ -207,6 +231,9 @@ int main(int argc, char **argv) {
       (queue_fn)dlsym(h, "TachyonComputeSession_setupResponseQueue");
   status_fn status_get = (status_fn)dlsym(h, "TachyonStatus_getAStatus");
   status_ok_fn status_ok = (status_ok_fn)dlsym(RTLD_DEFAULT, "AStatus_isOk");
+  typedef void (*set_fds_cb_fn)(void *, get_fds_cb_fn, void *);
+  set_fds_cb_fn config_set_fds_cb =
+      (set_fds_cb_fn)dlsym(h, "TachyonComputeSessionConfig_setGetFdsResponseCallback");
 
   if (!service_create || !config_create || !config_set || !create_session) {
     put("dlsym: missing core symbol\n");
@@ -232,6 +259,12 @@ int main(int argc, char **argv) {
     return 1;
   }
   config_set(config, privileged);
+  if (config_set_fds_cb) {
+    config_set_fds_cb(config, get_fds_cb, 0);
+    put("get_fds_callback set\n");
+  } else {
+    put("get_fds_callback setter missing\n");
+  }
   put("uid=");
   putdec((long)getuid());
   put(" privileged=");
@@ -272,8 +305,10 @@ int main(int argc, char **argv) {
     put("\n");
     show_status(0, status_ok, "setupResponseQueue", r);
   }
+  // Keep the session (and the core that owns it) alive while a delegate run
+  // tests the firmware gate; the stock service dies on client disconnect.
   put("sleeping for the service's setup\n");
-  sleep(15);
+  sleep(120);
   put("done\n");
   return 0;
 }
