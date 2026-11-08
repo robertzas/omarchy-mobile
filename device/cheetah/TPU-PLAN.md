@@ -4801,3 +4801,52 @@ name is the difference.
 
 **Phone state:** chain up (servicemanager 9599, tachyon service 9673, Darwinn
 HAL 9724/9726, Power HAL 9615 as root). No inference, no benchmark.
+
+## U72 (2026-11-08): the runner was killing the Power HAL; its service still misses
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
+
+**A bug of ours, not of the HAL: `pkill -x android.hardwar`.** The runner killed
+the old Darwinn HAL by its comm before starting a new one, and Linux truncates
+comm to 15 characters, so `android.hardware.power-service.pixel-libperfmgr` has
+the same comm, `android.hardwar`. Starting the HAL therefore killed the Power
+HAL, and servicemanager dropped its service with the process. It is now
+`pkill -f 'android.hardware.neuralnetworks@service-darwinn-aidl'`, and the Power
+HAL stays up ("…with Extension is started.", pid 16920/17279).
+
+**Its service is still not in the map.** `tools/svclookup-check.c` now looks up
+the power names too; on a live chain started with `NO_DELEGATE=1` it prints, as
+root: `SVC android.hardware.power.IPower/default NULL`,
+`SVC …IPowerExt/default NULL`,
+`SVC com.google.edgetpu.tachyon.IComputeService/default FOUND alive=1`. So
+servicemanager serves the Tachyon service but never gets IPower, while the Power
+HAL is alive. servicemanager logs `Caller(pid=<power hal>) Found
+android.hardware.power.IPower/default in device VINTF manifest.`, and the
+Darwinn HAL still logs `[Darwinn] Unable to connect to Power HAL`.
+
+**The forwarder now reaches the real symbol but cannot read its status.**
+`dlsym(RTLD_NEXT, …)` never resolves here; `dlopen("libbinder_ndk.so",
+RTLD_NOW)` + `dlsym` does, and the run prints
+`ADDSVC-REAL android.hardware.power.IPower/default ex=0xfffffffffffffc19`,
+which is -999, the shim's "status was NULL or the accessor was missing" value.
+The library does export both `AServiceManager_addService@@LIBBINDER_NDK` and
+`AStatus_getExceptionCode@@LIBBINDER_NDK`, so the real call returned a NULL
+status to the wrapper although servicemanager saw and VINTF-checked the call.
+That needs one more field printed (the status pointer itself, and `AStatus_isOk`)
+before any conclusion.
+
+**The chroot has only the framework `libbinder_ndk`.** There is no
+`/vendor/lib64/libbinder_ndk.so`; the framework one links `libbinder.so`, so the
+NDK and C++ paths share one `ProcessState` and one binder device. That rules out
+a simple device split between the Power HAL's add and the HAL's lookup.
+
+**Probe caveat:** a standalone probe must preload `libnosid.so`; without it a
+uid 1000/10000 lookup returns NULL for every name (the same reason the services
+need it), so the earlier "uid 10000 finds nothing" result says nothing about
+permissions. Root's result above is without preloads and is the meaningful one.
+
+**Next:** print the status pointer and `AStatus_isOk` in the forwarder; then try
+a registration through the C++ `defaultServiceManager()` from a shim, which
+publishes on the same device the HAL and the core read from. Independently of
+this, the firmware setup does not need the Power HAL: the client path with the
+type-1 message and the HAL's `SetupFirmware` remain the direct routes (U67).

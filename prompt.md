@@ -1,54 +1,51 @@
-# Prompt: get the Edge TPU to its first inference, then benchmark 720p detection
+# Prompt: make the Edge TPU inference, then benchmark 720p detection
 
-Goal: one real Edge TPU inference on `cheetah` under mainline Linux, then object
-detection on a 720p video (10+ objects per frame) measured against CPU, GPU and
-every other working path with `tools/bench-object-detection.py` and
-`mosaic720.mp4`. Numbers only from runs that happened.
+Goal: one real Edge TPU inference on `cheetah`, then object detection on
+`mosaic720.mp4` (10+ objects per frame) measured against CPU, GPU and every
+other working path with `tools/bench-object-detection.py`. Only numbers from
+runs that happened.
 
-Read `device/cheetah/TPU-PLAN.md` (U27-U71) first.
+Read `device/cheetah/TPU-PLAN.md` U27-U72 first.
 
-## Where it stands (2026-11-08, U71)
+## Where it stands (2026-11-08, U72)
 
 - Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`; `/dev/janeiro` up,
-  one power-up per cold boot (`tpu-hold`).
-- Darwinn HAL: registration passes with `tools/android-addservice-shim.c`
-  returning `0` from `AServiceManager_addServiceWithFlags`; HAL stays up.
-- `edgetpu_mmu_alloc_domain+0xa0` is a WARN (`panic_on_warn=0`) from
-  `iommu_set_fault_handler` on a reused pooled domain, not an oops. Fix:
-  `EDGETPU_NUM_PREALLOCATED_DOMAINS` = 0 in `janeiro/config.h`.
-- Power HAL: was refused by the VINTF manifest, now declared in
-  `device/cheetah/tpu-vintf-manifest.xml` (`IPower/default`, `IPowerExt/default`)
-  and installed in the chroot; servicemanager answers "Found … in device VINTF
-  manifest", the HAL logs "is started" and stays up as uid 1000 and as root.
-  **But the Darwinn HAL's lookup still fails**: "Waiting for service
-  'android.hardware.power.IPower/default' on '/dev/vndbinder'" → "didn't start.
-  Returning NULL", after the Power HAL logs "Thread Pool max thread count is 0.
-  Cannot cache binder".
-- Setup: still never pushed; the client reaches AUTHORIZED, `get_fds` never
-  called. The core's DSP actor needs `/dev/gxp` (U65), so the setup must come
-  from the HAL's `SetupFirmware` (U67 bitset patch) or a type-1
-  `CommandMessage` built by the client.
+  one power-up per boot (`tpu-hold`).
+- Darwinn HAL: registration passes with the `int 0` shim; the HAL stays up.
+- Power HAL: a runner bug (`pkill -x android.hardwar` matched it) was killing it;
+  fixed. It now stays up, but `android.hardware.power.IPower/default` is still
+  NULL for a root probe while the Tachyon service is FOUND. servicemanager logs
+  the VINTF hit from the Power HAL's pid. The forwarder reaches the real
+  `AServiceManager_addService` through `dlopen("libbinder_ndk.so")` but gets a
+  NULL status (prints -999), and the library does export `AStatus_getExceptionCode`.
+- The chroot has no `/vendor/lib64/libbinder_ndk.so`; the framework one links
+  `libbinder.so`, so NDK and C++ share one binder device.
+- Setup: never pushed. No inference, no benchmark.
 
 ## Do these in order
 
-1. Explain the lost registration with a tiny root probe in the chroot: call
-   `ABinderProcess_startThreadPool()`, then `AServiceManager_addService()` of a
-   test name and `AServiceManager_getService()` of it in the same process, print
-   both `AStatus` codes. If the lookup fails there too, servicemanager drops the
-   add after the VINTF check; if it succeeds, the Power HAL's binder or instance
-   name differs. `tools/android-addsvc-real.c` shows `dlsym(RTLD_NEXT, …)` is
-   NULL here; use `dlopen("/system/lib64/libbinder_ndk.so")` + `dlsym`.
-2. Re-run `HAL_ONLY=1 RUN_UID=10000` and confirm `Unable to connect to Power
-   HAL` is gone, then watch for `Sending firmware-setup VII command. type: 1`
-   and `get_fds` in `/tmp/tpu-tachyon.log` and VII/KCI lines in `dmesg`.
-3. If the setup still does not run, recover the type-1 `CommandMessageT` layout
-   from `libtachyon_core.so` (builder/log at `0xa4d5c`, push helper at
-   `0xa4dec`, verifier `0xb9c48`; the core prints "Sending firmware-setup VII
-   command. type: ", "PushFirmwareSetupCmdToVII failed", "Failed to push
-   firmware setup command due to VII command queue is full") and build it in
-   `tools/tpu-tachyon-client.c` instead of the placeholder `build_cmd`.
-4. After a real inference, benchmark `mosaic720.mp4` for TPU, CPU and GPU and
-   record measured ms/frame and detections/frame in the plan.
+1. Print the status pointer and `AStatus_isOk` in
+   `tools/android-addsvc-real.c` and run it on the Power HAL again. A NULL
+   pointer from a function that must return an `AStatus*` means our wrapper is
+   calling the wrong entry (check the disassembly of `AServiceManager_addService`
+   at 0x248e0), not that servicemanager refused.
+2. If the status is real, read its exception code. EX_ILLEGAL_ARGUMENT there
+   plus the VINTF log means servicemanager rejected the binder itself, not the
+   name; then publish through the C++ `defaultServiceManager()` from a shim
+   (`libbinder.so`, same device as the HAL's lookup) and check the probe again.
+3. Independently of the Power HAL, push the firmware setup: run the client path
+   (`NO_DELEGATE=1` chain, then `chroot --userspec=1000:1000 $R
+   /vendor/bin/tpu-tachyon-client` with `DELAY=5 ROUNDS=3`), and watch
+   `/tmp/tpu-tachyon.log` for `Sending firmware-setup VII command. type: 1` and
+   `get_fds`, plus `dmesg | grep -iE 'janeiro|edgetpu'` for VII activity. If the
+   setup is still absent, the type-1 `CommandMessageT` layout must be recovered
+   from `libtachyon_core.so` (builder 0xa4d5c, push helper 0xa4dec, verifier
+   0xb9c48) and built in `tools/tpu-tachyon-client.c`; the current `build_cmd`
+   is a placeholder.
+4. Fix `EDGETPU_NUM_PREALLOCATED_DOMAINS` (set 0 in `janeiro/config.h`), rebuild
+   and push the module, then re-run.
+5. After a real inference, benchmark TPU vs CPU vs GPU on `mosaic720.mp4` and
+   record measured ms/frame and detections/frame.
 
 ## Rules (unchanged)
 
@@ -56,9 +53,7 @@ Read `device/cheetah/TPU-PLAN.md` (U27-U71) first.
   `vbmeta`, unsuffixed `fastboot flash`.
 - Never load A14 firmware or vendor blobs; never commit firmware, blobs,
   MAC/Bluetooth addresses, serials, IMEIs or `getprop` dumps.
-- One TPU power-up per cold boot; an oops or hang ends the boot (reboot,
-  record, do not retry).
+- One TPU power-up per cold boot; an oops or hang ends the boot.
 - Screen/sound/feel changes get a one-line notice first.
-- Kernel commits upstream-style, no `Signed-off-by`; repo commits use
-  `TPU-PLAN: …`.
+- Kernel commits upstream-style, no `Signed-off-by`; repo commits `TPU-PLAN: …`.
 - Fix causes, never weaken a check to make a run look clean.

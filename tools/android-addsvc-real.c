@@ -1,21 +1,41 @@
 // SPDX-License-Identifier: MIT
-// android-addsvc-real: report (and forward) the Power HAL's real registration.
+// Forward AServiceManager_addService to the real libbinder_ndk and print what
+// servicemanager answers. The Power HAL ignores the status, so a refused
+// registration looks the same as a successful one from outside; this shim is
+// the only way to read the code.
 //
-// The Power HAL imports the plain AServiceManager_addService@LIBBINDER_NDK, so
-// neither the lazy shim nor the flag-taking shim ever saw it, and nothing said
-// whether servicemanager accepts a uid-1000 caller. Forward the call to the
-// real implementation and log its AStatus, so "Unable to connect to Power HAL"
-// can be traced to a refused registration or to the lookup side.
-#include <stdint.h>
+// dlsym(RTLD_NEXT) finds nothing here (the preload is the first object and the
+// chroot's linker config is missing), so open the library by name instead.
+//
+// Build: clang --target=aarch64-linux-android30 -shared -fPIC -nostdlib \
+//          -fno-stack-protector -o libaddsvcreal.so android-addsvc-real.c
 
 typedef struct AIBinder AIBinder;
 typedef struct AStatus AStatus;
 
+extern void *dlopen(const char *name, int flags);
 extern void *dlsym(void *handle, const char *symbol);
-extern int AStatus_isOk(const AStatus *status);
 extern long write(int fd, const void *buf, unsigned long count);
 
-#define RTLD_NEXT ((void *)-1l)
+#define RTLD_NOW 2
+
+static void *libbinder(void)
+{
+	static void *h;
+
+	if (!h)
+		h = dlopen("libbinder_ndk.so", RTLD_NOW);
+	return h;
+}
+
+static void put(const char *s)
+{
+	unsigned long n = 0;
+
+	while (s[n])
+		n++;
+	write(2, s, n);
+}
 
 static void puthex(unsigned long v)
 {
@@ -30,27 +50,29 @@ static void puthex(unsigned long v)
 	write(2, b, 19);
 }
 
-static void mark(const char *what, const AStatus *status, int ok)
+static void mark(const char *what, const AStatus *status, int code)
 {
-	write(2, "ADDSVC-REAL ", 12);
-	while (*what)
-		write(2, what++, 1);
-	write(2, ok ? " ok ex=" : " REFUSED ex=", ok ? 8 : 13);
-	/* AStatus starts with its exception code (0 == OK). */
-	puthex(status ? (unsigned long)*(const int *)status : 0xdeadUL);
+	put("ADDSVC-REAL ");
+	put(what);
+	put(" ex=");
+	puthex((unsigned long)code);
 }
 
 AStatus *AServiceManager_addService(AIBinder *binder, const char *instance)
 {
-	static AStatus *(*real)(AIBinder *, const char *);
+	typedef AStatus *(*add_fn)(AIBinder *, const char *);
+	typedef int (*code_fn)(const AStatus *);
+	add_fn real = (add_fn)dlsym(libbinder(), "AServiceManager_addService");
+	code_fn code = (code_fn)dlsym(libbinder(), "AStatus_getExceptionCode");
 	AStatus *status;
-	int ok;
+	int exc;
 
-	if (!real)
-		real = (AStatus *(*)(AIBinder *, const char *))
-			dlsym(RTLD_NEXT, "AServiceManager_addService");
-	status = real ? real(binder, instance) : (AStatus *)0;
-	ok = status && AStatus_isOk(status);
-	mark(instance ? instance : "(null)", status, ok);
+	if (!real) {
+		put("ADDSVC-REAL no symbol\n");
+		return 0;
+	}
+	status = real(binder, instance);
+	exc = status && code ? code(status) : -999;
+	mark(instance ? instance : "(null)", status, exc);
 	return status;
 }
