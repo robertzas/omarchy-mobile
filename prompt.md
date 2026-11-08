@@ -1,72 +1,62 @@
-# Next cycle: the type-1 setup payload
+# Next cycle: force the firmware setup from the patched HAL
 
-Goal: the Pixel 7 Pro's Edge TPU (`cheetah`, gs201) runs one inference on
-mainline `janeiro`, then a 720p object-detection benchmark against CPU and GPU.
+Goal unchanged: the Pixel 7 Pro's Edge TPU (`cheetah`, gs201) runs one
+inference on mainline `janeiro`, then a 720p object-detection benchmark against
+CPU and GPU, each row recorded in `device/cheetah/TPU-PLAN.md` with `uname -r`
+and the exact log lines. A benchmark that was not run is reported as not run.
 
-Read `device/cheetah/TPU-PLAN.md` U55–U66 first. Slot B only; never load the
-A14 firmware; the TPU powers up once per cold boot (a second power-up wedges
-the PSM, and only `systemctl poweroff` plus a human Power press clears it).
+Read TPU-PLAN U55–U67 first. Slot B only; never load the A14 firmware; the TPU
+powers up once per cold boot; a reboot clears a leaked IOMMU domain.
 
-## Where it stands (U66)
+## Where it stands (U67)
 
-Everything up to the firmware's one-time setup is working: firmware load, KCI,
-`/dev/janeiro`, MMU, a clean power-up, and the vendor services under binder.
+The KCI lead is dead: every code-6 scratch variant (and code 9) answers 3, so 3
+is a generic "setup not done" precondition, not the global-scratch check.
 
-Every producer of the setup has now been eliminated with evidence:
-
-- **cheetah's HAL** (A14/A17) sends the legacy command (`type 0`) and the A17
-  firmware answers `Setup is not done yet received a command of type 0`.
-- **tegu's HAL** (extracted to `out/tegu-hal/`) is the same legacy producer
-  (`Firmware setup failed for commands[%d]` in its 57 MB library) and dies
-  with `SIGILL, ILL_ILLOPC` before it creates a group on our CPU.
-- **tegu's Tachyon core** is real and authorizes sessions, but its DSP actor
-  needs stock's `gxp` driver (`/dev/gxp`, `/sys/class/gxp`) and dies at
-  `gxp_main_actor.cc:286` before it pushes the setup.
-
-The firmware wants a **type-1 setup command carrying `global scratches`**;
-the core's hint path prints the type from a byte the code sets to 1. That
-payload is the missing piece.
+Cheetah's stock HAL is patched at file offset `0x14d9a48` from `mov x21, x2` to
+`mov w21, #0x21` (bytes `35 04 80 52`), which forces the `SetupFirmware` call
+its `tbz x21, #0x20` gate otherwise skips; the original is
+`$R/vendor/lib64/libdarwinn_hal.so.bitset-orig`. The patched run has not been
+evaluated: the first attempt oopsed on a leaked IOMMU domain, and the
+fresh-boot attempt stopped at `[Darwinn] Unable to connect to Power HAL` before
+the setup, inside the runner's 4 s window.
 
 ## Order of work
 
-1. **Recover the type-1 payload from the tegu core**
-   (`libtachyon_core.patched.so`, vaddr == file offset). The push failures
-   log at `0x7531c` and `0xd36e0`; the setup command is built before the push
-   and `0xd35c8` mmaps a firmware-scratch region in 24-byte entries from an
-   fd (prot 3, offset `0x1a00000`). Find the builder, decode the flatbuffer
-   fields (union type, `global_scratches` vector, `cluster_id_bitset`) and
-   the scratch allocation it expects.
-2. **Send it directly through the driver** on a cold boot, from
-   `tools/edgetpu-run.c` (which already creates a group and submits VII
-   elements) or the tachyon client: map the scratches, build the type-1
-   message, submit, and read the response. Success is no `error_code=9` and
-   `Setup is already done` on a second setup attempt; then run one int8
-   model.
+1. **Run the patched HAL as the first group on a clean boot.** Start the chain
+   with the power HAL up (`vendor/bin/hw/android.hardware.power-service.pixel-
+   libperfmgr`, which the runner starts; check it is alive), then run
+   `HAL_ONLY=1 /root/tpu-tachyon-run` and give the HAL 20–30 s instead of 4.
+   Watch `/tmp/tpu-tachyon.log` for `Sending firmware-setup VII command. type:`
+   and `Firmware setup failed for commands[%d]`, and the firmware ring for
+   `Setup is already done`. If the gate opens, run the delegate on
+   `/vendor/etc/model.tflite` in the same boot.
+2. **If the HAL still sends type 0 or fails, recover the type-1
+   `CommandMessage` layout** from `libtachyon_core.patched.so`: the builder is
+   inlined near the `0xa4d5c` log site (the type byte is at `[sp,#0xa0]`), the
+   verifier at `0xb9c48` checks the cluster bitset (the string at `0x139f4`),
+   and the class is
+   `platforms::darwinn::tachyon::command::CommandMessageT`. Build it in
+   `tools/edgetpu-run.c` and submit it on a mapped buffer.
 3. **Fallback: build Google's `gxp` driver** for gs201 against the phone's
-   kernel, blacklist `janeiro`, and let tegu's Tachyon service start the DSP
-   actor, which sends the setup itself. The module tree is the one under
-   `~/omamobile-kernel/edgetpu-janeiro`; the `gxp` driver is in Google's gs201
-   module source, not in that checkout.
-4. Then one int8 inference on `detect_edgetpu.tflite`, then the 720p 10+
-   object benchmark through `tools/bench-object-detection.py`.
+   kernel, blacklist `janeiro`, and let the tegu Tachyon service start the DSP
+   actor that pushes the setup itself.
 
 ## Current facts
 
-- Phone: up 2200+ s, `tpu-hold` (pid 4054) holds the boot's one power-up,
-  services down, cheetah's HAL and `libdarwinn_hal.so` restored (tegu's copies
-  are in `out/tegu-hal/`; `.cheetah` backups were consumed by the restore).
-- `tools/tpu-tachyon-run` has `HAL_ONLY=1` (stops after the HAL), `NO_DELEGATE=1`
-  (skips the HAL, keeps the chain for clients) and `CORES=1`.
-- Host SSH: export `OMAMOBILE_SSH_KEY=~/.ssh/id_ed25519`; bind with
-  `ssh -B enp0s20f0u4` because the OnePlus's DHCP keeps stealing
-  `172.16.42.1`. `tools/phone-ssh` does not pass `-B`.
-- CPU baseline measured (U27): XNNPACK 11.52 ms/frame at 1 thread, 3.98 ms at
-  4, 10 detections/frame at threshold 0.4 on `mosaic720.mp4`. GPU and TPU
-  rows are missing; do not report them until measured.
+- Phone: up since the reboot, TPU powered once (`tpu-hold` 4109), cheetah's
+  HAL patched (backup on the phone) and the HAL service still up (4186).
+- The chroot root is `/usr/lib/omamobile-vendor/edgetpu/root` and must be mode
+  755 for the uid-10000 client; the delegate runs as root.
+- The OnePlus 8T re-takes `172.16.42.1` after every reconnect: disconnect
+  `enp0s20f0u5` and set its profile `connection.autoconnect no` by UUID before
+  every phone command. `OMAMOBILE_SSH_KEY=~/.ssh/id_ed25519`.
+- CPU baseline (U27): XNNPACK 11.52 ms/frame at 1 thread, 3.98 ms at 4, 10
+  detections/frame at threshold 0.4 on `mosaic720.mp4`. GPU and TPU rows are
+  still missing.
 
 ## Definition of done
 
 The setup is accepted, one inference produces detections on the TPU, and the
 same 720p clip is benchmarked on TPU, CPU and GPU with the numbers recorded in
-TPU-PLAN.md, each with `uname -r` and the exact log lines. A benchmark that
-was not run is reported as not run.
+TPU-PLAN.md, each with `uname -r` and the exact log lines.
