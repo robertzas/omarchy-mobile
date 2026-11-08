@@ -4895,3 +4895,39 @@ carrying `global scratches`; the HAL writes a different type (its element has
 or drive it through the client's `CommandMessage` (whose `build_cmd` is still a
 placeholder). The client session being AUTHORIZED means the AIDL and FMQ sides
 are no longer the blocker.
+
+## U74 (2026-11-08): the HAL's setup element is not the firmware's setup
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
+
+**The forced setup call and what follows it.** In `libdarwinn_hal.so` the gate
+is `0x14d9cc0: tbz x21, #0x20, 0x14d9cf0`; the U67 patch (`mov w21, #0x21` at
+`0x14d9a48`) makes it fall through to `0x14d9ce4: bl 0x15179fc`, the setup
+builder. It allocates a **48-byte** element (`0x1517a50: mov w0, #0x30`), fills
+it from a 16-byte source plus the bitset, and returns. After the call the HAL
+sets `0x14d9cf4: mov w9, #1; 0x14d9cf8: stlrb w9, [x19, #0x180]` — that is
+`firmware_setup_done_`. So the HAL **marks setup done even when the sync
+fails**, which is why a second delegate run can skip it and why the flag is not
+evidence that the firmware accepted anything.
+
+**Error 9 is a precondition failure, not a transport error.**
+`libdarwinn_hal.so` and `libdarwinn_dba_hal_runtime.so` carry the canonical
+gRPC names (`FAILED_PRECONDITION`, `INVALID_ARGUMENT`, `UNIMPLEMENTED`,
+`ABORTED`, `RESOURCE_EXHAUSTED`, `NOT_FOUND`, `PERMISSION_DENIED`), and the
+runtime logs `Sync VII command failed: error_code=%u`. In that enumeration 9 is
+FAILED_PRECONDITION, which matches the firmware's `Setup is not done yet`
+answer: the element was delivered and answered, it just does not perform the
+setup the firmware wants.
+
+**The shape of the mismatch.** U67 recorded the HAL's element as
+`00000000 00000000 000b0000 00000000 ffeff000 00000000 00000080` then zeros —
+a `u16` 11 at byte 10. The core's own push logs `Sending firmware-setup VII
+command. type: ` and, in the recorded runs, a type of **1**. The HAL's 48-byte
+element is not the core's type-1 setup with global scratches.
+
+**Next:** recover the core's type-1 setup element from `libtachyon_core.so`
+(the push helper and the flatbuffer builder/verifier recorded in U67:
+`0xa4dec`, `0xa4d5c`, `0xb9c48`), or, if the difference is only the type, patch
+the 48-byte element's byte 10 from 11 to 1 in the HAL's builder and re-run the
+full chain as system. The client session is no longer the problem: it reaches
+AUTHORIZED with a working command queue.

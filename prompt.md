@@ -1,43 +1,42 @@
-# Prompt: make the Edge TPU's firmware setup be accepted, then benchmark
+# Prompt: give the firmware the setup element it accepts, then benchmark
 
 Goal: one real Edge TPU inference on `cheetah`, then object detection on
 `mosaic720.mp4` (10+ objects per frame) measured against CPU, GPU and every
 other working path with `tools/bench-object-detection.py`. Only numbers from
 runs that happened.
 
-Read `device/cheetah/TPU-PLAN.md` U27-U73 first.
+Read `device/cheetah/TPU-PLAN.md` U27-U74 first.
 
-## Where it stands (2026-11-08, U73)
+## Where it stands (2026-11-08, U74)
 
 - Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`; `/dev/janeiro` up,
-  one power-up per boot (`tpu-hold`), no oops.
-- The vendor stack runs: servicemanager, Power HAL, vendor service, Tachyon
-  service; the client reaches `AUTHORIZED` and both FMQs, and `sendCommand`
-  succeeds (no response yet). `libdarwinn_hal.so` has the U67 forced bitset
-  (`0x14d9a48` = `35 04 80 52`).
-- The setup is now attempted and **refused by the firmware**:
-  `INTERNAL: Sync VII command failed: error_code=9` (`file.cc:1506`),
-  `create device status: 13`, with `KCI tx code 10 seq 65` in dmesg. The
-  delegate exits 1.
+  one power-up per boot, no oops.
+- The vendor stack runs and the client reaches AUTHORIZED with both FMQs and a
+  working `sendCommand`.
+- The HAL's forced setup call (`0x14d9ce4: bl 0x15179fc`, 48-byte element)
+  runs and the firmware answers `Sync VII command failed: error_code=9`,
+  `create device status: 13`. In the runtime's gRPC-style code table 9 is
+  FAILED_PRECONDITION, i.e. "setup is not done yet". The HAL then sets
+  `firmware_setup_done_` anyway (`0x14d9cf8`).
+- The HAL's element has `u16 11` at byte 10; the core's setup is type 1 with
+  global scratches.
 - No inference, no benchmark.
 
 ## Do these in order
 
-1. Decode `error_code=9`: find the enum or string table in the vendor libs
-   (`libdarwinn_hal.so`, `libedgetpu_tachyon.google.so`) around `file.cc:1506`
-   and the VII response element for `seq 65` (the driver's 48-byte dump). Map
-   9 to the firmware's status name and read what the response bytes say.
-2. Compare the element the HAL wrote with what the firmware wants. U67 has the
-   recorded element (`00000000 00000000 000b0000 00000000 ffeff000 00000000
-   00000080` then zeros: `u16 11` at byte 10, payload at byte 16) and the note
-   that the firmware accepts a **type-1** setup with `global scratches`. If the
-   type/payload is the mismatch, patch the HAL's setup element (the call site
-   is near `0x14d9cc0`) or build the type-1 message in
-   `tools/tpu-tachyon-client.c` (`build_cmd` is a placeholder) and push it
-   through the client session.
-3. Re-run the full chain as system (`HAL_PRELOAD=… RUN_UID=1000
-   /root/tpu-tachyon-run`) and look for a response instead of error 9; then run
-   the delegate for a real inference.
+1. Recover the core's type-1 setup element: disassemble `libtachyon_core.so`
+   around the push helper `0xa4dec` and the builder/log `0xa4d5c`, and the
+   verifier `0xb9c48`, and write the flatbuffer fields into the plan. Compare
+   its bytes with the HAL's 48-byte element.
+2. If the only difference is the type, patch the HAL's element byte 10 from 11
+   to 1 in the builder and re-run the full chain as system
+   (`HAL_PRELOAD=/system/lib64/libaddsvc.so RUN_UID=1000
+   /root/tpu-tachyon-run`). Watch for the setup line, a response instead of
+   error 9, and the delegate creating a device.
+3. If the payload differs, build the core's element in
+   `tools/tpu-tachyon-client.c` (its `build_cmd` is a placeholder) and push it
+   through the AUTHORIZED client session, which already has a working command
+   and response queue.
 4. Fix `EDGETPU_NUM_PREALLOCATED_DOMAINS` (0 in `janeiro/config.h`) and push the
    module once the setup is accepted.
 5. After a real inference, benchmark TPU vs CPU vs GPU on `mosaic720.mp4` and
