@@ -24,6 +24,7 @@ typedef struct AIBinder AIBinder;
 typedef struct AStatus AStatus;
 
 extern AStatus *AServiceManager_addService(AIBinder *binder, const char *instance);
+extern void ABinderProcess_joinThreadPool(void);
 extern long write(int fd, const void *buf, unsigned long count);
 
 static void mark(const char *what)

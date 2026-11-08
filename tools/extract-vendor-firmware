@@ -27,6 +27,7 @@
 #   vendor/firmware/R-cs35l41-dsp1-spk-prot.bin  -> cirrus/cs35l41-dsp1-spk-prot-cheetah-bottom.bin  (bottom speaker tuning)
 #   vendor/firmware/fast_switch3.txt   -> cirrus/cs35l41-cheetah-top-media-delta.txt     (stock media "Bypass FIR" delta, top)
 #   vendor/firmware/fast_switch4.txt   -> cirrus/cs35l41-cheetah-bottom-media-delta.txt  (the same, bottom)
+#   vendor/firmware/google/edgetpu-janeiro.fw -> google/edgetpu-janeiro.fw  (the Edge TPU's signed firmware, if present; GSA-authenticated)
 #
 # <board> is the first string of the DT root compatible ("google,gs201-cheetah"),
 # which brcmfmac and btbcm both try before the generic name. The CS40L26 files
@@ -407,10 +408,35 @@ dest="$new/$DEST_REL"
 for entry in "${MAP[@]}"; do
   from=${entry%%|*} to=${entry#*|}
   mkdir -p "$dest/$(dirname "$to")"
-  get_file "$from" "$dest/$to" || die "/vendor/$from is missing from this image or could not be copied"
+  if ! get_file "$from" "$dest/$to"; then
+    case $from in
+      firmware/cs40l26-dvl.bin)
+        say "note: /vendor/$from is not in this image; skipped (the driver does not load it yet)"
+        continue
+        ;;
+      *) die "/vendor/$from is missing from this image or could not be copied" ;;
+    esac
+  fi
   chmod 0644 "$dest/$to"
   printf '  /vendor/%-28s -> /%s/%s\n' "$from" "$DEST_REL" "$to"
 done
+
+# The Edge TPU's signed firmware (device/cheetah/TPU-PLAN.md): the GSA
+# authenticates it and janeiro requests google/edgetpu-janeiro.fw. Android 14
+# keeps it at /vendor/firmware/google/edgetpu-janeiro.fw; older images may have
+# it unprefixed. A missing file is a note, not an error: the rest of the
+# extraction is still useful, and the TPU stays unusable until the user
+# supplies the file. Only the gs201 phones have it.
+if [[ $DEVICE == cheetah || $DEVICE == panther ]]; then
+  mkdir -p "$dest/google"
+  if get_file firmware/google/edgetpu-janeiro.fw "$dest/google/edgetpu-janeiro.fw" ||
+     get_file firmware/edgetpu-janeiro.fw "$dest/google/edgetpu-janeiro.fw"; then
+    chmod 0644 "$dest/google/edgetpu-janeiro.fw"
+    printf '  /vendor/%-28s -> /%s/%s\n' "firmware/google/edgetpu-janeiro.fw" "$DEST_REL" "google/edgetpu-janeiro.fw"
+  else
+    say "no /vendor/firmware/google/edgetpu-janeiro.fw in this image; Edge TPU firmware not copied"
+  fi
+fi
 
 # The AoC's sensor registry (which sensors this board has, their buses and
 # settings), read by omamobile-sensor-proxy; without it only virtual sensors.
@@ -475,17 +501,28 @@ if [[ $DEVICE == cheetah || $DEVICE == panther ]]; then
   done
 fi
 if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu ]]; then
-  for f in cs40l26.bin cs40l26-svc.bin cs40l26-dvl.bin; do
+  for f in cs40l26.bin cs40l26-svc.bin; do
     [[ "$(head -c4 "$dest/$f")" == WMDR ]] || die "$f is not a WMDR coefficient file"
   done
+  if [[ -f "$dest/cs40l26-dvl.bin" ]]; then
+    [[ "$(head -c4 "$dest/cs40l26-dvl.bin")" == WMDR ]] || die "cs40l26-dvl.bin is not a WMDR coefficient file"
+  else
+    say "note: cs40l26-dvl.bin is not in this image; skipped"
+  fi
 fi
 
 ver=$(grep -ao 'Version=[0-9.]* ([^)]*)' "$brcm/$FW_BASE.$BOARD.bin" | head -1)
 bt=""
 [[ -z $BT_CHIP ]] || bt=$(grep -ao "$BT_CHIP [^[]*" "$brcm/BCM.$BOARD.hcd" | head -1)
-(cd "$dest" && find . -type f -printf '%P\n' | LC_ALL=C sort | xargs sha256sum -- > "$new/vendor-firmware.sha256")
-# The checksum list names exactly the mapped files
-for entry in "${MAP[@]}"; do printf '%s\n' "${entry#*|}"; done | LC_ALL=C sort > "$stage/expected"
+(cd "$dest" && find . -type f -printf '%P\n' | sort | xargs sha256sum -- > "$new/vendor-firmware.sha256")
+# The checksum list names exactly the mapped files, except cs40l26-dvl.bin:
+# it is optional (the driver does not load it yet), so an image without it
+# leaves it out of the list too.
+for entry in "${MAP[@]}"; do
+  to=${entry#*|}
+  [[ -e $dest/$to ]] || continue
+  printf '%s\n' "$to"
+done | sort > "$stage/expected"
 cut -c67- "$new/vendor-firmware.sha256" | cmp -s - "$stage/expected" ||
   die "the staged firmware is not exactly the mapped files"
 

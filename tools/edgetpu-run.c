@@ -27,6 +27,7 @@ extern long write(int, const void *, size_t);
 extern void *malloc(size_t);
 extern void _exit(int);
 extern void *dlsym(void *, const char *);
+extern void *dlopen(const char *, int);
 extern long syscall(long, ...);
 extern int ioctl(int, unsigned long, ...);
 
@@ -36,7 +37,22 @@ extern int ioctl(int, unsigned long, ...);
 // with an out pointer and entry [3] with the service object. "hal" mode just
 // dumps the table so the entries can be mapped to file offsets; "halcall" then
 // calls entries in that table.
-extern void *GetDarwinnHalFunctions(void);
+// The HAL is a debug-only dependency (hal/halcall modes). Resolve it lazily so
+// the normal delegate path does not load the 37 MB library, whose startup
+// re-runs the stock driver-provider check.
+typedef void *(*hal_functions_fn)(void);
+static void *g_hal_functions;
+static int g_hal_tried;
+
+static void *hal_functions(void) {
+  if (!g_hal_tried) {
+    void *h = dlopen("/vendor/lib64/libdarwinn_hal.so", 2 /* RTLD_NOW */);
+
+    if (h) g_hal_functions = dlsym(h, "GetDarwinnHalFunctions");
+    g_hal_tried = 1;
+  }
+  return g_hal_functions ? ((hal_functions_fn)g_hal_functions)() : 0;
+}
 
 // A 16-byte std::shared_ptr<Buffer> as the C API passes it.
 typedef struct {
@@ -80,28 +96,54 @@ int __system_property_get(const char *name, char *value) {
 
 // The runtime creates its metrics logger inside CreateVirtualDevice, and the
 // logger asks Android's servicemanager whether the stats service is declared.
-// A chroot has no servicemanager, and libbinder's defaultServiceManager() waits
+// A chroot has no stats service, and libbinder's defaultServiceManager() waits
 // for one in a sleep(1) loop forever, which stalls CreateVirtualDevice before
-// any TPU setup. Answer the NDK service-manager queries so the logger gives up
-// quickly and the TPU path continues.
-int AServiceManager_isDeclared(const char *instance) {
-  (void)instance;
+// any TPU setup. Answer only that one query locally; every other lookup (the
+// Edge TPU app and vendor services, which hand out the device fd) must reach
+// the real libbinder_ndk that the vendor client library loads.
+static int has(const char *s, const char *kw) {
+  size_t i, k;
+
+  for (i = 0; s[i]; i++) {
+    for (k = 0; kw[k] && s[i + k] == kw[k]; k++)
+      ;
+    if (!kw[k]) return 1;
+  }
   return 0;
+}
+
+static int (*real_is_declared)(const char *);
+static void *(*real_get_service)(const char *);
+static void *(*real_check_service)(const char *);
+static void *(*real_wait_service)(const char *);
+
+int AServiceManager_isDeclared(const char *instance) {
+  if (instance && has(instance, "stats")) return 0;
+  if (!real_is_declared)
+    real_is_declared = (int (*)(const char *))dlsym(
+        (void *)-1, "AServiceManager_isDeclared");
+  return real_is_declared ? real_is_declared(instance) : 0;
 }
 
 void *AServiceManager_getService(const char *instance) {
-  (void)instance;
-  return 0;
+  if (!real_get_service)
+    real_get_service = (void *(*)(const char *))dlsym(
+        (void *)-1, "AServiceManager_getService");
+  return real_get_service ? real_get_service(instance) : 0;
 }
 
 void *AServiceManager_checkService(const char *instance) {
-  (void)instance;
-  return 0;
+  if (!real_check_service)
+    real_check_service = (void *(*)(const char *))dlsym(
+        (void *)-1, "AServiceManager_checkService");
+  return real_check_service ? real_check_service(instance) : 0;
 }
 
 void *AServiceManager_waitForService(const char *instance) {
-  (void)instance;
-  return 0;
+  if (!real_wait_service)
+    real_wait_service = (void *(*)(const char *))dlsym(
+        (void *)-1, "AServiceManager_waitForService");
+  return real_wait_service ? real_wait_service(instance) : 0;
 }
 
 // bionic's crt is not in the vendor chroot; __libc_init does its job. It
@@ -2453,7 +2495,7 @@ static void *queue_watch(void *arg) {
 // /dev/edgetpu and sends the firmware setup the app runtime never sends, it is
 // in this path. "call N A0 A1 A2" reaches any other entry by index.
 static void halcall_mode(int argc, char **argv) {
-  void **t = GetDarwinnHalFunctions();
+  void **t = hal_functions();
   unsigned long h = 0, s = 0;
   long r;
 
@@ -2661,8 +2703,8 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (argc > 1 && streq(argv[1], "hal")) {
-    void **t = GetDarwinnHalFunctions();
-    unsigned long base = (unsigned long)GetDarwinnHalFunctions - 0x16946ecUL;
+    void **t = hal_functions();
+    unsigned long base = (unsigned long)g_hal_functions - 0x16946ecUL;
     int i;
 
     put("hal table ");

@@ -52,12 +52,45 @@ static void emit_tagged(const char *tag, const char *text)
 	emit(buf);
 }
 
-// Minimal formatter: %s, %d, %u, %x and %% only. Enough for log lines.
+static void put_hex(char *buf, int *n, unsigned long v, int prefix)
+{
+	char tmp[24];
+	int k = 0;
+
+	if (prefix && *n < 998) {
+		buf[(*n)++] = '0';
+		buf[(*n)++] = 'x';
+	}
+	do {
+		tmp[k++] = "0123456789abcdef"[v & 15];
+		v >>= 4;
+	} while (v && k < 20);
+	while (k > 0 && *n < 1000)
+		buf[(*n)++] = tmp[--k];
+}
+
+static void put_dec(char *buf, int *n, unsigned long v, int base)
+{
+	char tmp[24];
+	int k = 0;
+
+	do {
+		tmp[k++] = "0123456789abcdef"[v % base];
+		v /= base;
+	} while (v && k < 20);
+	while (k > 0 && *n < 1000)
+		buf[(*n)++] = tmp[--k];
+}
+
+// Formatter for log lines. It is not libc's printf: it consumes every
+// conversion's argument, including %p, length modifiers and * width/precision,
+// so a format the shim does not print cannot misalign the va_list and turn a
+// later %s into a wild pointer (the tachyon service crashed exactly that way).
 static void vemit(const char *tag, const char *fmt, va_list ap)
 {
 	char buf[1024];
 	int n = 0;
-	int i;
+	int i = 0;
 
 	if (tag) {
 		buf[n++] = '[';
@@ -66,34 +99,102 @@ static void vemit(const char *tag, const char *fmt, va_list ap)
 		buf[n++] = ']';
 		buf[n++] = ' ';
 	}
-	for (i = 0; fmt && fmt[i] && n < 1000; i++) {
+	i = 0;
+	while (fmt && fmt[i] && n < 1000) {
+		char conv;
+		int lmod = 0;
+
 		if (fmt[i] != '%') {
-			buf[n++] = fmt[i];
+			buf[n++] = fmt[i++];
 			continue;
 		}
 		i++;
-		if (fmt[i] == 's') {
+		if (fmt[i] == '%') {
+			buf[n++] = '%';
+			i++;
+			continue;
+		}
+		while (fmt[i] == '-' || fmt[i] == '+' || fmt[i] == ' ' ||
+		       fmt[i] == '#' || fmt[i] == '0')
+			i++;
+		if (fmt[i] == '*') {
+			(void)va_arg(ap, int);
+			i++;
+		} else {
+			while (fmt[i] >= '0' && fmt[i] <= '9')
+				i++;
+		}
+		if (fmt[i] == '.') {
+			i++;
+			if (fmt[i] == '*') {
+				(void)va_arg(ap, int);
+				i++;
+			} else {
+				while (fmt[i] >= '0' && fmt[i] <= '9')
+					i++;
+			}
+		}
+		for (;;) {
+			if (fmt[i] == 'l' && fmt[i + 1] == 'l') {
+				lmod = 2;
+				i += 2;
+			} else if (fmt[i] == 'l' || fmt[i] == 'z' ||
+				   fmt[i] == 'j' || fmt[i] == 't') {
+				lmod = 1;
+				i++;
+			} else if (fmt[i] == 'h') {
+				lmod = 1;
+				i++;
+				if (fmt[i] == 'h')
+					i++;
+			} else {
+				break;
+			}
+		}
+		conv = fmt[i];
+		if (!conv)
+			break;
+		i++;
+		if (conv == 's') {
 			const char *s = va_arg(ap, const char *);
+
 			while (s && *s && n < 1000)
 				buf[n++] = *s++;
-		} else if (fmt[i] == 'd' || fmt[i] == 'u' || fmt[i] == 'x') {
-			unsigned long v = va_arg(ap, unsigned long);
-			char tmp[24];
-			int k = 0, base = (fmt[i] == 'x') ? 16 : 10;
-			int neg = (fmt[i] == 'd' && (long)v < 0);
+		} else if (conv == 'c') {
+			int v = va_arg(ap, int);
 
-			if (neg)
-				v = -(long)v;
-			do {
-				tmp[k++] = "0123456789abcdef"[v % base];
-				v /= base;
-			} while (v && k < 20);
-			if (neg)
-				buf[n++] = '-';
-			while (k > 0 && n < 1000)
-				buf[n++] = tmp[--k];
-		} else if (fmt[i] == '%') {
-			buf[n++] = '%';
+			if (n < 1000)
+				buf[n++] = (char)v;
+		} else if (conv == 'd' || conv == 'i') {
+			long v = va_arg(ap, long);
+
+			if (v < 0) {
+				if (n < 1000)
+					buf[n++] = '-';
+				put_dec(buf, &n, (unsigned long)-v, 10);
+			} else {
+				put_dec(buf, &n, (unsigned long)v, 10);
+			}
+		} else if (conv == 'u' || conv == 'x' || conv == 'X' ||
+			   conv == 'o') {
+			unsigned long v = va_arg(ap, unsigned long);
+
+			put_dec(buf, &n, v, (conv == 'o') ? 8 :
+				(conv == 'u' ? 10 : 16));
+		} else if (conv == 'p') {
+			put_hex(buf, &n, (unsigned long)va_arg(ap, void *), 1);
+		} else if (conv == 'f' || conv == 'e' || conv == 'g' ||
+			   conv == 'a' || conv == 'A' || conv == 'E' ||
+			   conv == 'F' || conv == 'G') {
+			(void)va_arg(ap, double);
+			if (n < 1000)
+				buf[n++] = '?';
+		} else {
+			// Unknown conversion: keep the character, consume no argument
+			// (the format is already beyond what the shim understands).
+			(void)lmod;
+			if (n < 1000)
+				buf[n++] = conv;
 		}
 	}
 	buf[n] = 0;
@@ -146,7 +247,9 @@ void __android_log_assert(const char *cond, const char *tag, const char *fmt, ..
 	va_start(ap, fmt);
 	vemit(tag, fmt, ap);
 	va_end(ap);
-	__builtin_trap();
+	// No trap: a vendor HAL's fatal check is often the state a bring-up needs
+	// to look past, and the stock liblog's abort would take the process (and
+	// any service it already published) down. Log it and let the caller go on.
 }
 
 // The rest of liblog's API, so this file can stand in for liblog.so itself.
@@ -198,7 +301,7 @@ void __android_log_call_aborter(const char *msg)
 {
 	if (g_aborter)
 		g_aborter(msg ? msg : "abort");
-	__builtin_trap();
+	emit_tagged(0, msg ? msg : "abort");
 }
 
 int __android_log_set_minimum_priority(int prio)
