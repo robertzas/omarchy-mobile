@@ -4756,3 +4756,48 @@ publisher path is something else (an eager `addService`
 /`addServiceWithFlags`, or a registration that never happens). The Darwinn HAL
 and the core still log `Unable to connect to Power HAL`; publishing IPower
 needs the Power HAL's actual call site, not another lazy shim.
+
+## U71 (2026-11-08): the Power HAL's registration was a VINTF gate; the lookup still misses it
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
+
+**The refusal was the VINTF manifest.** servicemanager logged
+`Caller(pid=…,uid=1000,sid=u:object_r:system:s0) Could not find
+android.hardware.power.IPower/default in the VINTF manifest. No alternative
+instances declared in VINTF.` and the Power HAL then died with `Fatal signal 11
+… fault addr 0xfffffffd`. The chroot's `vendor/etc/vintf/manifest.xml` had no
+`android.hardware.power` entry at all. `device/cheetah/tpu-vintf-manifest.xml`
+now declares `android.hardware.power` (`IPower/default`) and
+`google.hardware.power.extension.pixel` (`IPowerExt/default`); installed in the
+chroot it makes servicemanager answer `Found
+android.hardware.power.IPower/default in device VINTF manifest.`
+
+**The Power HAL now survives**, both as uid 1000 and as root: it logs "…with
+Extension is started." and stays up. The Darwinn HAL's lookup still fails:
+`[libbinder.ServiceManagerCppClient] Waiting for service
+'android.hardware.power.IPower/default' on '/dev/vndbinder'…`, then `Service
+android.hardware.power.IPower/default didn't start. Returning NULL`, then
+`[Darwinn] Unable to connect to Power HAL`. On its side the Power HAL prints
+`[libbinder.BackendUnifiedServiceManager] Thread Pool max thread count is 0.
+Cannot cache binder as linkToDeath cannot be implemented. serviceName:
+android.hardware.power.IPower/default` right after the VINTF check, then reports
+itself started, and servicemanager logs no further refusal. So either the
+addService transaction fails after the manifest check and the Power HAL ignores
+the status, or the service is published somewhere the C++ lookup does not look.
+
+**The forwarder cannot call the real symbol.** `tools/android-addsvc-real.c`
+overrides `AServiceManager_addService` and calls `dlsym(RTLD_NEXT, …)`; that
+returns NULL in this chroot (the mark reads `REFUSED ex=0xdead`, our "status was
+NULL" value), so nothing was forwarded and the probe told us nothing about the
+real status. Use `dlopen("/system/lib64/libbinder_ndk.so", RTLD_NOW)` +
+`dlsym(handle, …)` if a probe still needs it.
+
+**Next probe:** a tiny root client in the chroot that starts the binder thread
+pool, registers a test service with `AServiceManager_addService`, and looks the
+same name up with `AServiceManager_getService` in the same process, printing
+both `AStatus` codes. If the lookup fails there too, servicemanager drops the
+add after the VINTF check; if it succeeds, the Power HAL's binder or instance
+name is the difference.
+
+**Phone state:** chain up (servicemanager 9599, tachyon service 9673, Darwinn
+HAL 9724/9726, Power HAL 9615 as root). No inference, no benchmark.
