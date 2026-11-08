@@ -5228,3 +5228,53 @@ producer is a userspace GXP server with no `/dev/gxp`, and the firmware's code
 section is compressed or encrypted so its parser cannot define the message. The
 TPU needs a gxp kernel driver (plus its DT description) before any inference is
 possible; no TPU benchmark number exists and none is claimed.
+
+## U84 (2026-11-08): the A17 gxp node recovered from the factory image
+
+The project already holds the A17 factory image (`out/factory/cheetah-factory.zip`,
+build `cheetah-cp2a.260705.006`). Its inner image zip carries
+`vendor_kernel_boot.img`, and that image holds three DTBs with a `google,gxp`
+node (file offsets 0x5f3000, 0x63a8d6 and 0x683be1; extracted to
+`out/stock-a17/vkb/`, never committed). Read with a small FDT reader
+(`out/stock-a17/fdt.py`; this host has no dtc):
+
+```
+/gxp@25C00000 {
+    compatible = "google,gxp";
+    reg-names = "aur", "mailbox0", "mailbox1", "mailbox2", "mailbox3",
+                "cmu", "ssmt_idma", "ssmt_inst_data";
+    reg = <0x0 0x25c00000 0x1400000>,   /* aur */
+          <0x0 0x18380000 0x1000>,      /* mailbox0 */
+          <0x0 0x183a0000 0x1000>,      /* mailbox1 */
+          <0x0 0x183c0000 0x1000>,      /* mailbox2 */
+          <0x0 0x183e0000 0x1000>,      /* mailbox3 */
+          <0x0 0x25a00000 0x1000>,      /* cmu */
+          <0x0 0x25ad0000 0x10000>,     /* ssmt_idma */
+          <0x0 0x25ae0000 0x10000>;     /* ssmt_inst_data */
+    interrupts = <0 0x4f 4>, <0 0x50 4>, <0 0x51 4>, <0 0x52 4>, <0 0x83 1>;
+    iommus = <0xc7 0xc8>;  samsung,iommu-group = <0xc9>;
+    gxp-fw-region = <0xca>;         /* gxp_fw@98000000, 0x400000, no-map */
+    gxp-scratchpad-region = <0xcb>; /* gxp_scratchpad@98400000, 0x100000 */
+    tpu-device = <0xc6>;  gsa-device = <0xb>;
+    gxp-tpu-mbx-offset = <0xc0000>;
+    pasid-num-bits = <3>;
+    dma-window = <0x1000 0xfffff000>;
+    gcip-dma-window = <0x30000000 0xc0000000>;
+    gcip-reserved-map = <0x80000000 0x1000>;
+    gxp-memory-per-core = <0x200>;
+    gcip-dvfs-table = <7 entries of frequency/voltage pairs>;
+};
+/gxp-cooling { #cooling-cells = <2>; };
+```
+
+So the register base the last round said was missing exists: the AUR block at
+0x25c00000, mailboxes at 0x18380000-0x183e0000, CMU at 0x25a00000, the two SSMT
+windows, SPIs 0x4f-0x52 and a PPI. What still has to come from stock is the
+iommu group wiring and the phandle targets (0xc6 TPU, 0xb GSA), which our tree
+must express with its own labels.
+
+The node's `reg` is the first hard requirement for a driver; the second is
+`libgxp.so`'s ioctl contract on `/dev/gxp`. A direct ADRP+ADD xref to the
+`/dev/gxp` string (vaddr 0x38a11) finds none, so the library reaches it through
+a pointer table; locating that table and the `ioctl` call sites is the next
+step.
