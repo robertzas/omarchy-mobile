@@ -4597,3 +4597,106 @@ lookup fails and the session never dispatches a command.
 - Next: give the Power HAL an `IStats` server (a stub, or `statsd`), or patch
   `libperfmgr.so` so its wait returns without blocking, then confirm the core
   no longer logs `Unable to connect to Power HAL`.
+
+## U69 (2026-11-08): the IStats wait is in the Power HAL binary and is gone; the HAL's registration is the next gate
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, one cold boot, one TPU
+power-up (`power-up ok: PSM0_STATUS=0x4b378d0 PSM1_STATUS=0xe893
+LPM_CONTROL=0x148 GSA state=2`), held by `tpu-hold`.
+
+**U68's `libperfmgr.so` lead is wrong: the wait is in the service binary.**
+`libperfmgr.so` imports no binder symbol at all (its only `wait` is
+`pthread_cond_timedwait`). The wait is in
+`vendor/bin/hw/android.hardware.power-service.pixel-libperfmgr`, which NEEDs
+`android.frameworks.stats-V2-ndk.so` and imports
+`AServiceManager_waitForService@LIBBINDER_NDK31`. Its PLT stub is at `0x48da0`
+with two callers, `0x1f584` (IStats) and `0x35f60` (IThermal). Both follow the
+call with `str x0,[sp]` and `cbz x0,<error path>`, so a null return is a path
+the binary already handles ("Cannot get IStats binder!").
+
+Patch, one instruction, reversible: at file offset `0x1f584`
+(`07 a6 00 94`, `bl 0x48da0`) write `00 00 80 d2` (`mov x0, xzr`). The IStats
+wait returns null immediately and the HAL continues; the IThermal call site is
+untouched. Phone backup `...power-service.pixel-libperfmgr.orig` (sha256
+`19dd2e4c…`), patched file sha256 `4b0a7e2c…`.
+
+Result, with the runner's environment and shims:
+
+    [libperfmgr] Pixel Power HAL AIDL Service with Extension is started.
+    [powerhal-libperfmgr] Cannot get IStats binder!
+
+and zero `Waited one second for android.frameworks.stats.IStats/default` lines.
+`Failed to write to node: /proc/vendor_sched/…` remains, expected (U64).
+
+**`tools/tpu-tachyon-run`'s `USPEC` never reached the Power HAL.** Its line
+started `chroot "$R"` with no `$USPEC`, so `RUN_UID=10000` left that service as
+root while the Darwinn HAL and the delegate got the app uid. It now passes
+`$USPEC` like the HAL line. `chroot --userspec=10000:10000` is confirmed on the
+phone (a static uid probe prints `uid=10000 euid=10000`), so the flag was the
+only bug.
+
+**With the Power HAL live the Darwinn HAL gets past "Unable to connect to Power
+HAL" and reaches the TPU**, then dies at its NNAPI registration:
+
+    [EdgetpuTachyonHalService] Loading Tachyon Hal interface...
+    [Darwinn] CompilerSpawner: Started Loop. PID: ...
+    [Darwinn] Could not register NNAPI IDevice service.
+    libc++abi: terminating / ABORT-MSG terminating / ABORT-SHIM returning
+    FORTIFY: pthread_mutex_lock called on a destroyed mutex
+    libc: Fatal signal 6 (SIGABRT) ... (android.hardwar)
+    [dmesg] edgetpu janeiro: finalize: detachable 1 wakelock 0 context 1073741824
+
+so it created and finalized its group/context (the TPU stays powered) but never
+opens a Tachyon session. The registration is refused because the HAL runs as
+uid 10000: servicemanager only lets root and system register services, and
+`Could not register` is the HAL's own check on the returned status. The abort
+shim survives the abort, but the thread teardown then locks a destroyed mutex
+and the process dies.
+
+**Running it as system (uid 1000) gets past registration but not startup.** With
+`--userspec=1000:1000` and `/dev/janeiro` masked (`chmod 000`) for its first 4 s
+so it takes the Tachyon path, there is no `Could not register`, but:
+
+    [Darwinn] Non-ok status from HAL: 2
+    ABORT-MSG Check failed: hal_ != nullptr
+    [Darwinn] Unable to connect to Power HAL
+
+The Power HAL it started with had already exited (its `AidlLazyServiceRegistrar`
+shuts it down when the Tachyon service's client goes away), so this run does not
+separate "uid 1000 breaks the Power HAL lookup" from "the Power HAL was gone".
+That is the next experiment: start the Darwinn HAL as system inside the runner's
+settle window, while the Power HAL is certainly alive.
+
+**The Tachyon client gets a full session, and still no setup.** On the same
+chain (`tools/tpu-tachyon-client`, uid 1000):
+
+    create: OK
+    createSession: OK
+    setupCommandQueue: OK fds=11,12
+    setupResponseQueue: OK fds=14,15
+    sendCommand: OK
+    [Main TPU Actor] received ClientSession::Start
+    [ClientSession …].state CREATED to STARTED
+    [ClientSession …].state STARTED to AUTHORIZED
+    receiveResponse: NOT-OK exception -8 service 8   (empty queue, U64)
+
+No `Sending firmware-setup VII command.` line appears, the `get_fds` callback is
+never called, and `dmesg` shows only the `tpu-hold` heartbeat (KCI code 21), no
+VII command. So an AUTHORIZED session with a queued command is not enough: the
+core's setup push is the DSP/GXP actor's, and that actor cannot set up without
+the vendor `gxp` driver (U65).
+
+No inference ran and no benchmark was measured this round.
+
+Phone state: up, TPU powered once (`tpu-hold`), chain stopped; the HAL's aborted
+process left no group. Next, in order:
+1. Start the Darwinn HAL as system inside the runner's window, while the Power
+   HAL is certainly alive, and watch for `Sending firmware-setup VII command.
+   type: 1`; if it still reports `Non-ok status from HAL: 2`, read that status
+   site with the uid-10000 run as the control.
+2. If the HAL path stays closed, do the fallback: recover the type-1
+   `CommandMessageT` layout from `libtachyon_core.patched.so` (builder near
+   `0xa4d5c`, verifier at `0xb9c48`) and build the setup in the client, or port
+   Google's `gxp` driver with `janeiro` blacklisted.
+3. Only after a real inference: the 720p object-detection benchmark
+   (`tools/bench-object-detection.py`, `mosaic720.mp4`) on TPU, CPU and GPU.

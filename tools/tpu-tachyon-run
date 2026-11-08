@@ -160,7 +160,10 @@ pkill -f 'android.hardware.power-service' 2>/dev/null
 sleep 0.5
 POWER_HAL=$(ls "$R"/vendor/bin/hw/android.hardware.power-service* 2>/dev/null | head -1)
 if [ -n "$POWER_HAL" ]; then
-	setsid env LD_PRELOAD="$SVC_PRELOAD" chroot "$R" "${POWER_HAL#"$R"}" >>"$LOG" 2>&1 </dev/null &
+	# $USPEC for the same reason as the Darwinn HAL below: RUN_UID must
+	# reach every service the runner starts, or a run "as the app uid"
+	# still starts this one as root.
+	setsid env LD_PRELOAD="$SVC_PRELOAD" chroot $USPEC "$R" "${POWER_HAL#"$R"}" >>"$LOG" 2>&1 </dev/null &
 	sleep 3
 	echo "power hal: ${POWER_HAL##*/} pid $(pgrep -f 'android.hardware.power-service' | head -1)" >>"$LOG"
 else
