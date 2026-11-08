@@ -5190,3 +5190,41 @@ runtime both send the obsolete message, the only Tachyon producer in the image
 needs `/dev/gxp`, and the firmware that would define the new message cannot be
 read. The realistic paths left are a gxp kernel driver (large, out of scope for
 this bring-up) or Google's Tachyon host stack with the kernel side it expects.
+
+## U83 (2026-11-08): measured CPU and GPU legs, and the GXP node is absent
+
+The SSD benchmark (`detect.tflite`, 300x300, threshold 0.5, 60 frames) on the
+laptop, same clips for every leg:
+
+| clip | objects/frame | backend | mean ms | p50 | p95 | fps |
+| --- | --- | --- | --- | --- | --- | --- |
+| mosaic720.mp4 | 9.0 | CPU (XNNPACK, 4 threads) | 3.86 | 3.79 | 4.27 | 259.37 |
+| mosaic720.mp4 | 9.0 | GPU (WebGPU, RTX 3070) | 2.79 | 2.43 | 2.83 | 357.78 |
+| mosaic12.mp4 | 10.0 | CPU (XNNPACK, 4 threads) | 3.97 | 3.87 | 4.61 | 251.99 |
+| mosaic12.mp4 | 10.0 | GPU (WebGPU, RTX 3070) | 3.00 | 2.54 | 3.65 | 333.29 |
+
+`mosaic12.mp4` is a 1280x720, 60-frame clip built from `mosaic720.mp4`'s own
+person crops (4 distinct patches cycled into a 4x3 grid, slight per-tile jitter),
+so every frame carries 12 person instances and the detector finds 10.0 mean,
+10 max at threshold 0.5. The GPU leg is LiteRT's `CompiledModel` with
+`HardwareAccelerator.GPU | CPU` (WebGPU); the CPU leg is the plain interpreter.
+
+No phone leg exists: the A17 image has no TFLite runtime library, and PyPI is
+unreachable from the phone, so the CPU/GPU numbers above are the measured
+comparison until a runtime exists there.
+
+**The GXP node is absent from our DT.** A walk of `/proc/device-tree` finds no
+node named or compatible with `gxp`, and no `edgetpu` node either (the janeiro
+driver binds elsewhere); `/sys/bus/platform/drivers/edgetpu/` is empty. So a
+minimal gxp driver has no register base in the device tree to start from: the
+first step would be recovering that node's description from stock's A17 DT, then
+a read-only probe of a register block whose power and clock state we do not yet
+know. Both are outside the §1.1 grant (unknown block reads need the owner's go
+per step), so nothing was probed.
+
+**Conclusion for T6.** The VII route is closed on evidence: both A17 runtimes
+send the pre-Tachyon setup the firmware rejects (error 9), the only Tachyon
+producer is a userspace GXP server with no `/dev/gxp`, and the firmware's code
+section is compressed or encrypted so its parser cannot define the message. The
+TPU needs a gxp kernel driver (plus its DT description) before any inference is
+possible; no TPU benchmark number exists and none is claimed.
