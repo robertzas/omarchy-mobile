@@ -5136,3 +5136,37 @@ Options, in order of cost:
    library that carries the Tachyon setup rather than the obsolete one.
 3. **Run the CPU/GPU baseline** of the 720p benchmark now, so the comparison has
    measured numbers even while the TPU side is blocked.
+
+## U81 (2026-11-08): the producer hunt and the first measured baseline
+
+**The hunt.** No binary in the A17 image carries `global scratch` or
+`RequestAllocation`; the only scratch string anywhere is `scratch_capacity >=
+min_capacity` inside `libtachyon_dsp_core.so`. That library is the GXP **server**
+(`gxp_tachyon_server`, virtual devices, command packets), and its own paths go
+through `libgxp.so` to `/dev/gxp`; `libgxp.so` checks `Expected gxp kernel
+driver version` and `Device creation failed`. The kernel tree has no
+`drivers/gxp`, so the DSP side is closed on mainline for the same reason as U65,
+not a separate bug.
+
+So the two runtimes that do reach VII (`libdarwinn_hal.so` and
+`libedgetpu_util.so`) both speak the pre-Tachyon message, and the only Tachyon
+producer is a userspace server that cannot open its device. There is no
+shortcut left in the image: the setup message must be hand-built, or a gxp
+driver written.
+
+**The baseline.** `tools/bench-object-detection.py` on `out/bench/` with
+`detect.tflite` (SSD MobileNet, 300x300), `mosaic720.mp4`, 60 frames, CPU
+XNNPACK, 4 threads:
+
+- mean 3.86 ms, p50 3.79 ms, p95 4.27 ms, 259.37 fps
+- detections: mean 9.0, max 9.0; person 420, teddy bear 120
+
+The same run on the phone (LiteRT pip install) could not be done: PyPI is not
+reachable from the phone within 5 s, so the install was abandoned and cleaned
+up. The laptop CPU number is measured; the phone CPU and GPU legs still need a
+runtime that exists on that image.
+
+**What this means for the comparison.** The 60-frame clip has a mean of 9.0
+detections per frame, so the "10+ objects" target is not met by this clip as
+decoded at 300x300; a clip with more simultaneous objects (or a lower threshold,
+which must be reported as such) is needed for that part of the request.
