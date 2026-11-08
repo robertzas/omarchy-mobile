@@ -4566,3 +4566,34 @@ read its preloads; `chmod 755 $R` fixes it. The delegate runs as root.
 Phone state: up, TPU powered once (`tpu-hold` 4109), cheetah's HAL patched
 (`.bitset-orig` backup) and the HAL service still up (4186); the Tachyon and
 app services stopped after the runner.
+
+## U68 (2026-11-08): the Power HAL waits for IStats and never publishes IPower
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
+
+On the fresh boot the runner came up, but the patched HAL still stopped at
+`[Darwinn] Unable to connect to Power HAL`. The cause is the Power HAL itself:
+`android.hardware.power-service.pixel-libperfmgr` starts, loads its nodes, and
+then blocks in `AServiceManager_waitForService("android.frameworks.stats.IStats/default")`
+(`Waited one second for android.frameworks.stats.IStats/default` 33 times and
+counting, after `NodeLooperThread will wait for 500000000ns`). It never reaches
+`addService` for `android.hardware.power.IPower/default`, so the Tachyon core's
+lookup fails and the session never dispatches a command.
+
+- The chroot has no `statsd`, `/system/bin/service` or `dumpsys`, so registration
+  can only be observed from a process (the core's log) or after extracting
+  `service`. `android.hardware.power.stats-service.pixel` is present but is a
+  client of IStats, not its server.
+- A manual start needs the runner's `LD_LIBRARY_PATH`
+  (`/apex/com.android.tethering/lib64:/system_ext/lib64:/vendor/lib64:/system/lib64:/apex/com.android.runtime/lib64/bionic`);
+  without it the binary cannot even link `libc.so`.
+- The runner starts the HAL as root (`USPEC` stays empty unless `RUN_UID` is
+  set), although its comment says the HAL must run as the app uid. As root the
+  util library opens `/dev/edgetpu` itself and allocates its own group, which
+  oopsed in `edgetpu_mmu_alloc_domain+0xa0` from `edgetpu_device_group_alloc`
+  twice (the leaked-domain oops of U65). It must run with `RUN_UID=10000`.
+- A new group will fail for the rest of this boot: reboot before the next
+  attempt and bring the Power HAL fully up before the tachyon service.
+- Next: give the Power HAL an `IStats` server (a stub, or `statsd`), or patch
+  `libperfmgr.so` so its wait returns without blocking, then confirm the core
+  no longer logs `Unable to connect to Power HAL`.
