@@ -190,7 +190,11 @@ fi
 log "tachyon service"
 pkill -x com.google.edge 2>/dev/null
 sleep 0.5
-setsid env LD_PRELOAD="$SVC_PRELOAD" chroot "$R" /vendor/bin/hw/com.google.edgetpu.tachyon-service >>"$LOG" 2>&1 </dev/null &
+# Stock's init rc runs it as user/group system with rlimit rtprio 99 and
+# SYS_NICE/IPC_LOCK. As root the core's GXP main actor fails to set up (its
+# scoped eventfd comes back empty) and the service dies at startup (U65), so
+# run it as system, like stock.
+setsid env LD_PRELOAD="$SVC_PRELOAD" chroot --userspec=1000:1000 "$R" /vendor/bin/hw/com.google.edgetpu.tachyon-service >>"$LOG" 2>&1 </dev/null &
 sleep 3
 echo "tachyon pid: $(pgrep -x com.google.edge)" >>"$LOG"
 
@@ -207,6 +211,14 @@ sleep 3
 echo "app service pid: $(pgrep -f vendor.google.edgetpu_app_service | head -1)" >>"$LOG"
 
 log "darwinn nnapi hal"
+# The HAL is needed only by the delegate path (it publishes the NNAPI driver the
+# delegate uses). For a client-only run it is worse than useless: it builds a
+# group as the app uid and aborts before finalizing it, and that leaked group
+# makes the next edgetpu_mmu_alloc_domain fail with an oops (U65). Skip it when
+# no delegate will run.
+if [ "${NO_DELEGATE:-0}" = "1" ]; then
+	echo "hal skipped (NO_DELEGATE=1)" >>"$LOG"
+else
 pkill -x android.hardwar 2>/dev/null
 sleep 0.5
 # The HAL runs as the app uid, not root: as root the util library opens
@@ -217,6 +229,7 @@ rm -f "$R/data/vendor/hal_neuralnetworks_darwinn/NnapiHalSocketHalProcess"
 setsid env LD_PRELOAD="$SVC_PRELOAD" chroot $USPEC "$R" /vendor/bin/hw/android.hardware.neuralnetworks@service-darwinn-aidl >>"$LOG" 2>&1 </dev/null &
 sleep 4
 echo "hal pid: $(pgrep -x android.hardwar)" >>"$LOG"
+fi
 
 log "delegate"
 # NO_DELEGATE=1 leaves the chain up for a client run: the delegate's teardown

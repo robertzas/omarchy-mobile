@@ -26,6 +26,7 @@ extern char *dlerror(void);
 extern void _exit(int) __attribute__((noreturn));
 extern unsigned int sleep(unsigned int);
 extern int usleep(unsigned int);
+extern char *getenv(const char *);
 
 #define RTLD_NOW 2
 #define RTLD_GLOBAL 0x100
@@ -87,6 +88,14 @@ static void putdec(long v) {
   } while (u);
   if (neg) b[i--] = '-';
   put(&b[i + 1]);
+}
+
+static long parse_dec(const char *s) {
+  long v = 0;
+
+  if (!s) return 0;
+  while (*s >= '0' && *s <= '9') v = v * 10 + (*s++ - '0');
+  return v;
 }
 
 // A chroot has no Android property service; the lib asks for the chip family.
@@ -327,6 +336,36 @@ int main(int argc, char **argv) {
     return 1;
   }
   config_set(config, privileged);
+  // The AIDL SessionConfig carries a session type (offset 4) and the client's
+  // version (offsets 8 and 0xc); CreateComputeSession passes exactly the two
+  // version ints to ComputeSession::Create. Both default to 0, which the core
+  // may treat as unknown and refuse to start. Stock sets them (TPU-PLAN U65).
+  {
+    typedef void (*set_type_fn)(void *, int);
+    typedef void (*set_ver_fn)(void *, unsigned, unsigned);
+    set_type_fn set_type = (set_type_fn)dlsym(
+        h, "TachyonComputeSessionConfig_setSessionType");
+    set_ver_fn set_ver = (set_ver_fn)dlsym(
+        h, "TachyonComputeSessionConfig_setClientVersion");
+    long type = parse_dec(getenv("STYPE"));
+    long major = parse_dec(getenv("CVER_MAJOR"));
+    long minor = parse_dec(getenv("CVER_MINOR"));
+
+    if (set_type) {
+      set_type(config, (int)type);
+      put("session type=");
+      putdec(type);
+      put("\n");
+    }
+    if (set_ver) {
+      set_ver(config, (unsigned)major, (unsigned)minor);
+      put("client version=");
+      putdec(major);
+      put(".");
+      putdec(minor);
+      put("\n");
+    }
+  }
   if (config_set_fds_cb) {
     config_set_fds_cb(config, get_fds_cb, 0);
     put("get_fds_callback set\n");
@@ -381,56 +420,77 @@ int main(int argc, char **argv) {
   typedef void *(*send_fn)(void *, unsigned long, void *);
   send_fn send_cmd =
       (send_fn)dlsym(h, "TachyonComputeSession_sendCommand");
-  if (send_cmd) {
-    static unsigned char msg[128];
-    unsigned n = build_cmd(msg);
+  struct tmsg {
+    unsigned long size;
+    void *data;
+  };
+  typedef void *(*recv_fn)(void *, struct tmsg *);
+  recv_fn recv_rsp =
+      (recv_fn)dlsym(h, "TachyonComputeSession_receiveResponse");
 
-    void *r = send_cmd(session, n, msg);
-    show_status(0, status_ok, "sendCommand", r);
-    /* The core answers on the response FMQ. Its answer says whether the
-     * command reached the actor that sends the firmware setup. */
-    struct tmsg {
-      unsigned long size;
-      void *data;
-    };
-    typedef void *(*recv_fn)(void *, struct tmsg *);
-    recv_fn recv_rsp =
-        (recv_fn)dlsym(h, "TachyonComputeSession_receiveResponse");
-    if (recv_rsp) {
-      static unsigned char rbuf[256];
-      struct tmsg rm;
-      unsigned i, tries;
-      void *rr = 0;
+  // The core moves a new session CREATED to STARTED to AUTHORIZED on its own
+  // actor, and an event that arrives before STARTED is held and never
+  // re-examined. The stock caller therefore does not send its first command
+  // in the same breath as createSession. DELAY gives the actor that time;
+  // ROUNDS sends the command again if the first one was dropped (U65).
+  {
+    long delay = parse_dec(getenv("DELAY"));
+    long rounds = parse_dec(getenv("ROUNDS"));
 
-      // Service-specific error 8 means "the response FMQ holds fewer than
-      // 128 bytes": no answer yet, not a failure (the lib's
-      // ReceiveResponseMessage builds exactly that status). Poll instead of
-      // reading once, so a lazily produced answer is not missed.
-      for (tries = 0; tries < 100; tries++) {
-        rm.size = sizeof rbuf;
-        rm.data = rbuf;
-        rr = recv_rsp(session, &rm);
-        if (rr && status_ok && status_ok(rr) == 1)
-          break;
-        usleep(100000);
-      }
-      show_status(0, status_ok, "receiveResponse", rr);
-      put("polled ");
-      putdec((long)tries);
-      put(" x 100ms\n");
-      put("response size=");
-      putdec((long)rm.size);
-      put(" data=");
-      for (i = 0; i < rm.size && i < 64; i++) {
-        puthex(rbuf[i]);
-        put(" ");
-      }
-      put("\n");
-    } else {
-      put("receiveResponse symbol missing\n");
+    if (delay > 0 && delay <= 60) {
+      put("waiting ");
+      putdec(delay);
+      put("s before the first command\n");
+      sleep((unsigned)delay);
     }
-  } else {
-    put("sendCommand symbol missing\n");
+    if (rounds <= 0 || rounds > 4) rounds = 2;
+    if (!send_cmd) {
+      put("sendCommand symbol missing\n");
+    } else if (!recv_rsp) {
+      put("receiveResponse symbol missing\n");
+    } else {
+      static unsigned char msg[128];
+      unsigned n = build_cmd(msg);
+      long round;
+
+      for (round = 1; round <= rounds; round++) {
+        static unsigned char rbuf[256];
+        struct tmsg rm;
+        unsigned i, tries;
+        void *rr = 0;
+        void *r = send_cmd(session, n, msg);
+
+        put("round ");
+        putdec(round);
+        put(" ");
+        show_status(0, status_ok, "sendCommand", r);
+        // Service-specific error 8 means "the response FMQ holds fewer than
+        // 128 bytes": no answer yet, not a failure (the lib's
+        // ReceiveResponseMessage builds exactly that status). Poll instead of
+        // reading once, so a lazily produced answer is not missed.
+        for (tries = 0; tries < 60; tries++) {
+          rm.size = sizeof rbuf;
+          rm.data = rbuf;
+          rr = recv_rsp(session, &rm);
+          if (rr && status_ok && status_ok(rr) == 1)
+            break;
+          usleep(100000);
+        }
+        show_status(0, status_ok, "receiveResponse", rr);
+        put("polled ");
+        putdec((long)tries);
+        put(" x 100ms\n");
+        put("response size=");
+        putdec((long)rm.size);
+        put(" data=");
+        for (i = 0; i < rm.size && i < 64; i++) {
+          puthex(rbuf[i]);
+          put(" ");
+        }
+        put("\n");
+        if (rr && status_ok && status_ok(rr) == 1) break;
+      }
+    }
   }
 
   // Keep the session (and the core that owns it) alive while a delegate run

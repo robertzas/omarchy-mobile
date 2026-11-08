@@ -4403,3 +4403,77 @@ Phone state: up, TPU powered once (`tpu-hold`, pid 5147). Chain left down
 after the run; `tools/tpu-tachyon-run`, `tools/tpu-tachyon-client.c` and
 `tools/android-props-stub.c` carry this round's changes. `core_pattern` is
 still `/core.%e.%p` (the old value is in `/tmp/tpu-core-pattern.old`).
+
+## U65 (2026-11-08): the Tachyon service dies in the GXP main actor; stock's `gxp` driver is the missing part
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, phone rebooted for a
+clean TPU (uptime 150 s at the first test), TPU powered once by `tpu-hold`
+(`power-up ok: PSM0_STATUS=0x4b27091 PSM1_STATUS=0xe893 LPM_CONTROL=0x148`).
+
+**The session failure in this round is not the session config.** With a clean
+boot, the client's `create` succeeds and then the Tachyon service dies before
+`createSession`; the client sees `exception -129` and
+`unlinkToDeath … DEAD_OBJECT`. The service's own log:
+
+    I gxp_main_actor.cc:204 Loaded GXP Tachyon Server library with rapid
+      version zpr_dsp_20260302.0.0 …
+    E gxp_main_actor.cc:286 Could not setup the main actor.
+    E scoped_eventfd.cc:34 INTERNAL: RET_CHECK failure … !fd.IsEmpty()
+    E gxp_main_actor.cc:297 Failed to trigger exit loop event fd.
+    libc: Fatal signal 11 … fault addr 0x0
+    audit: … comm="com.google.edge" … sig=11
+
+so the GXP (DSP) actor cannot set up and its teardown dereferences the empty
+fd. The actor is created on the **first client connection**, which is why the
+death looks like a `createSession` failure.
+
+**Four things that are not the cause**, each tried on the live phone:
+
+- the user: stock's rc runs the service as `user system`, so the runner now
+  does too (`--userspec=1000:1000`); as root the same line appears;
+- the DSP firmware: the chroot had no `/vendor/firmware` at all; tegu's
+  `gxp_callisto_fw_core0/1/2` (296,960 bytes each) are now installed, no
+  change;
+- the device permissions: `/dev/edgetpu-soc` is now `0660 root:system`, as
+  stock's ueventd makes it;
+- `/dev/gxp`: stock's ueventd creates it `0666 system:camera`, and a symlink
+  to `janeiro` changes nothing.
+
+**The structural reason:** the GXP Tachyon Server is a client of the **vendor
+`gxp` driver** (`/dev/gxp`; stock's gxp rc owns
+`/sys/class/gxp/gxp/device/dsp_usage_0..2`, `preempt_count`,
+`context_switch_count`). Our kernel has the mainline `janeiro` driver and no
+`gxp` driver, no `/dev/gxp`, no `/sys/class/gxp`, so the A17 Tachyon DSP
+server cannot start here. That is a harder wall than U56's stub core: the
+tegu core is real, but its DSP half needs a driver we do not have.
+
+**The way around it is the setup command itself.** The probe already owns the
+command FMQ and can push any message the firmware accepts. In
+`libtachyon_core.patched.so` (vaddr == file offset):
+
+- `Sending firmware-setup VII command. type: ` at 0xcf73, logged at 0xa4d5c
+  (`adrp x1,0xc000; add x1,x1,#0xf73`, length 0x2a) with the type byte from
+  `[sp,#0xa0]`;
+- `PushFirmwareSetupCmdToVII failed` at 0x8b7e, logged at 0xa4d84 from the
+  push helper's return;
+- `Failed to push firmware setup command due to VII command queue is full`
+  at 0x111fd.
+
+So the setup is a `CommandMessage` with a typed union member built next to
+0xa4d5c and pushed by the helper at 0xa4dec. Recover its flatbuffer layout
+(fields, union type, global scratches, cluster bitset) and build it in
+`tools/tpu-tachyon-client.c` instead of the placeholder `build_cmd`; the
+firmware's own rejections name the missing pieces (`No global scratches were
+provided in setup command.`).
+
+**The runner also learned not to leak an IOMMU domain.** On the previous boot
+the HAL's aborted group creation left one behind and the next group
+allocation oopsed: `edgetpu_mmu_alloc_domain+0xa0`, LR
+`edgetpu_device_group_alloc+0xf4`, via `edgetpu_ioctl_create_group`; the
+Tachyon service then took SIGSEGV. `NO_DELEGATE=1` runs therefore skip the
+Darwinn HAL.
+
+Phone state: up, TPU powered once (`tpu-hold`, pid 4054); services stopped
+after the client left. `/dev/gxp -> janeiro` and the three
+`/vendor/firmware/gxp_callisto_fw_core*` are installed in the chroot (test
+state, reversible). `core_pattern` is the systemd default.
