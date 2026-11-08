@@ -229,6 +229,16 @@ rm -f "$R/data/vendor/hal_neuralnetworks_darwinn/NnapiHalSocketHalProcess"
 setsid env LD_PRELOAD="$SVC_PRELOAD" chroot $USPEC "$R" /vendor/bin/hw/android.hardware.neuralnetworks@service-darwinn-aidl >>"$LOG" 2>&1 </dev/null &
 sleep 4
 echo "hal pid: $(pgrep -x android.hardwar)" >>"$LOG"
+# HAL_ONLY=1 stops here: the point is the HAL's own firmware setup, and the
+# delegate would take the same group (U55) or crash the servicemanager (U61).
+if [ "${HAL_ONLY:-0}" = "1" ]; then
+echo "hal only: leaving the chain up" >>"$LOG"
+log "dmesg"
+dmesg | grep -iE 'edgetpu|janeiro|tachyon' | tail -20 >>"$LOG"
+log "done"
+tail -n 40 "$LOG"
+exit 0
+fi
 fi
 
 log "delegate"

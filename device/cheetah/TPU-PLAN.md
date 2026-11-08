@@ -4477,3 +4477,52 @@ Phone state: up, TPU powered once (`tpu-hold`, pid 4054); services stopped
 after the client left. `/dev/gxp -> janeiro` and the three
 `/vendor/firmware/gxp_callisto_fw_core*` are installed in the chroot (test
 state, reversible). `core_pattern` is the systemd default.
+
+## U66 (2026-11-08): TeGu's HAL is the same legacy producer and SIGILLs; the setup type is the open question
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, phone up 2000+ s,
+TPU held by `tpu-hold` (4054, the boot's one power-up).
+
+**TeGu's vendor image carries the A17 NNAPI HAL and its library.** Its root is
+the vendor partition (`/bin`, `/lib64`, `/firmware`), so:
+
+    debugfs -R "dump /bin/hw/android.hardware.neuralnetworks@service-darwinn-aidl out/tegu-hal/darwinn-hal" out/factory/tegu-cp21/vendor.img
+    debugfs -R "dump /lib64/libdarwinn_hal.so out/tegu-hal/libdarwinn_hal.so" out/factory/tegu-cp21/vendor.img
+
+The HAL is 838,984 bytes and the library 57,764,584 bytes; the HAL NEEDs
+`com.google.edgetpu_app_service-V6-ndk.so` (the chroot already has it) and is
+otherwise the same NEEDED set as cheetah's. But tegu's library contains the
+same `Firmware setup failed for commands[%d], cluster_id_bitset in hex: %x.`
+string, so it is the **same legacy setup producer**, not a Tachyon-specific
+one: the Tachyon setup lives in `libtachyon_core` (a stub on cheetah, real on
+tegu) and is pushed by the core's DSP actor.
+
+**Running tegu's HAL against `janeiro` does not work.** On the held power-up it
+starts and links, then dies before any group:
+
+    libc: Fatal signal 4 (SIGILL), code 1 (ILL_ILLOPC), fault addr 0xaaaac21301c4
+
+so it never reaches `SetupFirmware`; `dmesg` shows only the `tpu-hold`
+heartbeat (KCI code 21). Cheetah's HAL and library are restored, and
+`tools/tpu-tachyon-run` gained `HAL_ONLY=1` to stop after the HAL for this
+kind of experiment.
+
+**What the firmware's own words now narrow:** a normal command is type 0
+(the A14 HAL's sync and the delegate both send it and get `Setup is not done
+yet received a command of type 0`); the core's hint path prints the setup
+message type from a byte the code sets to **1**; and the setup must carry
+`global scratches`. So the missing piece is a **type-1 setup payload**, not
+another producer binary. The core's push sites are `0x7531c` and `0xd36e0`
+(`PushFirmwareSetupCmdToVII failed`), and `0xd35c8` mmaps a region in 24-byte
+entries (likely the scratch list) from a firmware-scratch fd.
+
+**Host access, learned the hard way this round.** `tools/phone-ssh` without
+`OMAMOBILE_SSH_KEY` offers every agent key and the phone refuses it ("Too
+many authentication failures"); export
+`OMAMOBILE_SSH_KEY=~/.ssh/id_ed25519`. The OnePlus 8T's DHCP hands out
+`172.16.42.2/24` and steals `172.16.42.1` again after every reconnect, so
+bind the connection to the Pixel (`ssh -B enp0s20f0u4`) or `nmcli device
+disconnect enp0s20f0u5` first.
+
+Phone state: up, TPU powered once (`tpu-hold` 4054), cheetah's HAL and
+libdarwinn restored, chain left down.
