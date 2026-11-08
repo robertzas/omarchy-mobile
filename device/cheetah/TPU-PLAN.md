@@ -4114,3 +4114,143 @@ Phone state: up, TPU powered by `tpu-hold`; servicemanager, vendor service
 and app service left running, the spinning Darwinn HAL and the debug clients
 stopped. `/vendor/etc/powerhint.json` and `/vendor/etc/1` are in the chroot;
 `out/tpu-step.sh` is scratch (gitignored `out/`).
+
+## U57 (2026-11-07): no producer in either current stock image; KCI 15/16/20 and the firmware ISA
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`; no cold boot was
+spent on this round (the probe ran on the boot U56 left up).
+
+**The newer stock image has the same stub.** `cheetah-cp3a.261005.002.a1`
+(October 2026) is cached in `~/omamobile-kernel/downloads/`. Its
+`vendor.img`'s `libtachyon_core.so` is byte-identical to cp2a's
+(sha `47fb5f742638b5baf1e83f5ec81fe5c0c2da4cdd5b589c045e3757dab7895d49`,
+`TachyonCore_Start` the same no-op, `CreateClientSession` the same
+"not implemented" path), and its `system_ext.img` has the same app-service
+libs only: no `libtachyon_core`, no `dba-V1-ndk`, no `dba-service`. The cp3a
+firmware differs (1,039,168 bytes, sha `7ea9100f…`, vs 1,038,272 /
+`52c1ccc…`) but carries the same setup strings at +0x3d0 in the file
+(`Setup is not done yet…` 0xefefc, `No global scratches…` 0xf0138).
+`com.google.android.neuralnetworks.apex` holds only `libneuralnetworks.so`
+(4,823,528 bytes, 75 `ANeuralNetworks*` exports), so the APEX source is closed.
+
+**Raw KCI 15/16/20 do not set up the firmware.** With a client holding
+`/dev/janeiro` on the already-powered U56 boot, `EDGETPU_IOCTL_KCI_SEND_V`
+(33 callers; `_IOW(0xed, 34, u32)`, base 0xED) gave
+
+    code 6  -> 3   (INVALID_ARGUMENT)
+    code 15 -> 3
+    code 16 -> 3
+    code 17 -> 12  (UNIMPLEMENTED)
+    code 18 -> 12
+    code 20 -> 0   (OK)
+
+but the delegate run right after still logged `Sync VII command failed:
+error_code=9`: code 20 is implemented and harmless, not the setup. The tool is
+`tools/tpu-kci-probe.c` (built into `out/tpu-client/tpu-kci-probe`). This
+extends U22 (which had 0..15): the implemented-but-unexplained codes are 15,
+16 and 20, and none of them changes the VII gate.
+
+**The firmware is 32-bit ARM, and a plain xref cannot find the gate.** Its own
+flatbuffers strings say `size_t = unsigned int`, the body is a mix of ARM and
+Thumb (`e92d` pushes 814, `bx lr` 978), and the ImageConfig at file 0x560
+reports `firmware_base 0x93000000`, `firmware_size 0xfd000`, versions 2/3
+(the body starts at file 0x1000, so the setup strings sit at VA
+0x930eebdc/0x930eeddc/0x930eee18). A capstone sweep of the body for ADRP/ADR,
+`ldr rX,[pc,#imm]` literals, `movw/movt` pairs and 32-bit absolute or
+file-relative values found **no reference** to any of the four strings; that
+matches U19, where the log ring addresses its strings from an index table, not
+from code literals. So the gate is not reachable by a string xref and would
+have to be found by pattern (the `vii_handler_layer.cc:247` dispatch) instead.
+
+**Conclusion:** both A17 stock images ship a stubbed Tachyon core and the
+legacy stack, and the firmware rejects the legacy setup. The producer exists
+only where the Tachyon stack is real (a device image whose core is not the
+stub). Next: inspect the Pixel 9a (tegu) A17 build's `libtachyon_core.so`; if
+it has a real `CreateClientSession`, run it against cheetah's A17 firmware
+(the protocol is host-side and the VII version is not checked before setup).
+Download started to `out/factory/tegu-cp21.zip` (the stable A17 build;
+QPR2 and QPR3 betas are the fallbacks).
+
+Phone state: up, TPU powered, `tpu-hold` and the vendor/app services running;
+the Darwinn NNAPI HAL and Power HAL were started for the registration test and
+left in place. `tools/tpu-kci-probe.c` is new and uncommitted.
+
+## U58 (2026-11-07): tegu ships the real Tachyon core; the session now needs a get_fds callback
+
+The Pixel 9a's stable A17 image (`tegu_beta-cp21.260330.011`, 4.22 GB,
+`out/factory/tegu-cp21.zip`) has what cheetah does not:
+
+- `vendor/lib64/libtachyon_core.so` is **1,538,440 bytes** and exports 11
+  `TachyonCore_*` symbols (`CreateClientSession`, `Start`, `Shutdown`,
+  `SendClientAssignedFds`, `RequestFdsForGivenHandles`,
+  `SendFdsForRequestedHandles`, `SetNpuManagerStatus`, `SetVlogLevel` and the
+  NPU scheduling calls), against cheetah's four-symbol 1,015,720-byte stub.
+- the stub is shipped beside it as `fake_libtachyon_core.so` (35,824 bytes),
+  which is why cheetah's `libtachyon_core.so` looked like a real library.
+- its tachyon service, `com.google.edgetpu.tachyon-service`, is 120,368 bytes
+  against cheetah's 70,024, and links the V6 app-service AIDL and the dsp core.
+
+**Tegu's libraries assume ARMv9 and crash on gs201.** The client library's
+first call died with `SIGILL` at `retaa` (ARMv8.3 pointer authentication is
+undefined on Cortex-X1/A78), then at `ldapur` (ARMv8.4 RCpc). Patching the
+`.text` of the tegu client, core, service, NDK and dsp libraries fixes both:
+`retaa`/`retab` -> `ret`, `paciasp`/`autiasp`/`pacibsp`/`autibsp` and the data
+PAC/AUT forms -> `nop`, and LDAPUR/STLUR B/H/W/X -> LDUR/STUR (same `imm9`
+layout; the acquire ordering is lost, which is acceptable for this bring-up).
+After the patch the client connects, `create` returns OK, and the tegu service
+parses the full session config (the "config smaller than core" warning is
+gone).
+
+**The remaining gate is the fd callback.** `createSession` now answers
+`NOT-OK exception -3 "Missing get_fds_callback in SessionConfig"`, and the
+service logs `[EdgetpuTachyonHalService] createSession rejected:
+get_fds_callback is null`. The tegu client library exports the setters
+`TachyonComputeSessionConfig_setGetFdsResponseCallback` and
+`TachyonComputeSession_setCallbackForGetFdsResponse`, and the AIDL interface
+`com.google.edgetpu.tachyon.IGetFdsResponseCallback` with
+`BnGetFdsResponseCallback::onGetFds(vector<FileDescriptorWithId>, int64_t)`.
+The next step is to run tegu's app service (which implements that callback on
+stock) or to supply a callback from the client.
+
+### Result: the core runs and authorizes a session
+
+The C setter's signature is `void (*)(void *cookie, int *fds, long *handles,
+int count, long session)` (from `ComputeSession::SetCallbackForGetFdsResponse`,
+`EPFvPvPiPlilE`), set through
+`TachyonComputeSessionConfig_setGetFdsResponseCallback(config, fn, cookie)`.
+With it the client gets:
+
+    create: OK
+    get_fds_callback set
+    createSession: OK
+    setupCommandQueue: OK fds=11,12
+    setupResponseQueue: OK fds=14,15
+    [ClientSession ...].state CREATED to STARTED to AUTHORIZED
+
+So the real tegu core runs on gs201, accepts the full config and authorizes a
+client session. Two limits remain:
+
+- **Creating a session does not send the firmware setup.** A delegate run
+  alongside the live session still answers `Sync VII command failed:
+  error_code=9`. The core must initialize the NPU lazily, on the first command
+  through the command FMQ (fds 11/12), so the setup is a Tachyon command, not
+  a side effect of `CreateClientSession`.
+- **The tegu service dies right after the reply.** `SIGSEGV, fault addr 0x1`
+  in the service thread, after `createSession` returns and before the client's
+  next call. It is not the client's teardown: with
+  `ABinderProcess_startThreadPool()` in the client the crash moved earlier,
+  and without it the session is created and the service still dies. The fault
+  is a null-pointer dereference on the callback path, not an ARMv9 instruction.
+
+Next: read the service's faulting PC with gdb (the chroot gdb follows exec but
+cannot load bionic symbols, so use the PC plus `/proc/<pid>/maps`), or run
+tegu's Darwinn NNAPI HAL, which submits the first command on stock. The PSM has
+been powered for hours across many failed sessions, so the next TPU series
+starts from a cold boot.
+
+Phone state: up, TPU powered once by `tpu-hold`; the tachyon service is now
+the patched tegu binary, with the tegu core, dsp core and V6 AIDL in the
+chroot. The cheetah originals are saved as `*.cheetah` next to each file.
+`out/factory/tegu-cp21/` and `out/tegu-extract.sh` are scratch (gitignored).
+`tools/tpu-tachyon-client.c` now sets the get_fds callback and sleeps 120 s so
+a delegate can run while the session is alive.
