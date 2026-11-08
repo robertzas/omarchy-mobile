@@ -5348,3 +5348,27 @@ so it was left for the owner's buttons. `push` requires
 (`-omamobile-push1-g052da70970d6-dirty`, AUTO off), so the module's vermagic
 matches without `--force`.
 
+## T-runbook: the first AUR register read (owner-gated, not run)
+
+Preparation only; no step here has been executed. The AUR block's power and
+clock state is not established: the bootloader leaves the GXP node present and
+our driver only maps it, so a read of an unpowered AUR block can abort the SoC
+(AGENTS.md, "Read only blocks that are known powered and clocked"). The
+vendor kernel's GXP driver is the source for the power-on sequence, the CMU
+gate that proves the block is up, and the first safe register; it must be read
+before this runbook is filled in. Each step below needs the owner's explicit
+go, one register per call, under `--watchdog`, with USB on the dead-man switch.
+
+T0 (read-only, no phone write): record `uname -r`, `dmesg | grep -i gxp`, the
+node's `status`, `/dev/gxp` and the module's refcount; confirm `oops: 0`.
+Stop: any oops or a missing device.
+
+T1 (waiting on the vendor driver): read the CMU register that gates the GXP
+block, one 32-bit read at the address the vendor driver uses. Expect the gate
+on. Stop: any value that does not match the vendor driver's "on" bit, or a
+hang.
+
+T2 (only after T1 passes): read one AUR register the vendor driver reads in
+probe, one call. Stop: a hang, an abort, or a value that differs from the
+vendor driver's reset value.
+
