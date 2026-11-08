@@ -4317,3 +4317,26 @@ So the Tachyon service's `ro.board.platform` must be `gs201`, the Pixel 7 genera
 The push is blocked: after the failed key offers, the phone's sshd refuses the key (`publickey,password,keyboard-interactive`) even after a 75 s wait; the key is unencrypted (`ssh-keygen -y -P ''` succeeds, comment `omamobile`), the host reaches the phone (ping), and sudo needs a password, so the serial console is not usable from the host.
 
 Next: restore SSH (a phone reboot clears it; the authorized key is on userdata), push the shim to `/root` and the chroot's `/system/lib64`, restart the chain (the tpu-hold keeps the one power-up), and run the client; `createSession` should now pass the platform check.
+
+## U63 (2026-11-08): createSession passes the platform check
+
+`uname -r` 7.3.0-rc6-omamobile-push1-g052da70970d6-dirty, phone uptime 1:43.
+
+The SSH refusals after 08:29 were the other phone: the OnePlus 8T's NCM interface (`enp0s20f0u5`) took `172.16.42.1` with a metric-0 /32 route and answered with its own key list. `tools/phone-usb` pins the Pixel (`enp0s20f0u4`, 172.16.42.3/32); the OnePlus profile is now `connection.autoconnect no` and the Pixel was reachable again.
+
+With the process-aware `libpropsshim.so` installed, the Tachyon service reports `gs201`, and the tegu client (uid 10000) gets:
+
+    create: OK
+    createSession: OK
+    setupCommandQueue: OK fds=11,12
+    setupResponseQueue: OK fds=14,15
+    sendCommand: OK
+    receiveResponse: NOT-OK ... exception -8 service 8
+
+The `Unknown platform ID on Android: 6` abort is gone.
+
+The service then dies: every later lookup prints `Since 'com.google.edgetpu.tachyon.IComputeService/default' could not be found ...`, and `pgrep -x com.google.edge` is empty. That is the callback-path SIGSEGV at fault addr 0x1 from U18/U50-U58, now the first blocker again: after the client's first command the service's response callback dereferences a null pointer. The client then sleeps "for the service's setup" and never sees it.
+
+The delegate's run in the same chain still ends `device: 0x0`, `delegate rc: 1`, with `samsung-iommu.c:726 unmap_slpt` warnings from `edgetpu_unmap_dmabuf`; that is the delegate's teardown, not the client's session path.
+
+Next: restart the chain (the tpu-hold keeps the one power-up), run the client, and gdb the Tachyon service to get the crash PC (the runner's `BT=1` path stops the delegate early enough, or attach after the client's first command); patch the null callback or give the service a real one, then rerun the client and watch for the firmware setup.
