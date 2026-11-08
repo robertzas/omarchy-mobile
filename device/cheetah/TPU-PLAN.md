@@ -5019,3 +5019,40 @@ That also settles the firmware's "command of type 0": it is the element's
 message. To get a type-1 element to the firmware the HAL's element has to carry
 it — either by patching where the HAL's command descriptor is built, or by
 rewriting the element between the build and the ioctl.
+
+## U77 (2026-11-08): the VII element is not built by the 0x15179fc store
+
+A gdb breakpoint set just after the element store (`0x1517a70` in
+`libdarwinn_hal.so`, at `base + 0x1517a74`) was attached to **every** process
+that maps the library — 26 of them, both `android.hardwar` LWPs, the vendor
+service, the Tachyon core and their threads. The delegate ran and the mailbox
+still dumped the same element at uptime 3705:
+
+```
+vii-elem: 00000000 00000000 000b0000 ... ffdff000 ... 00000080 ...
+```
+
+with `code` 0 at byte 8, and **not one gdb hit**. So the VII element is not
+assembled by that builder at all: the runtime writes it directly into the
+mapped command queue and only `EDGETPU_SYNC_BUFFER` (nr 16) reaches the driver.
+The 0x15179fc function belongs to a different message path (U67's call site
+still explains the HAL's call, but not this element).
+
+Two instruments are left, in this order:
+
+1. **Userspace, no reboot.** Catch `EDGETPU_SYNC_BUFFER` (`_IOW(0xED, 16, 24)`
+   = `0x4018ed10`) with gdb, and in that stopped process find the 48-byte
+   element by its dumped bytes in the mapped queue, then rewrite byte 8 to 1
+   before the doorbell. The element's bytes are known exactly from the dump, so
+   `find` over the process's mappings is enough; the device address
+   (`0xffdff000`) is the queue's TPU address, not a userspace one.
+2. **Kernel, one dev build.** In `drivers/edgetpu/edgetpu-mailbox.c`, the VII
+   receive path that schedules `edgetpu_vii_payload_dump` sees the element
+   before the firmware does. A development-only rewrite of the first element's
+   `code` to 1 there, then a module rebuild and a reboot, answers the same
+   question without gdb.
+
+If the firmware accepts a type-1 element, its next error names the next missing
+field; if it still says "setup not done", the type is not the element code and
+the core's message layout has to be recovered instead. `oops: 0` after all
+three gdb runs.
