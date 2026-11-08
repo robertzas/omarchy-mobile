@@ -4850,3 +4850,48 @@ a registration through the C++ `defaultServiceManager()` from a shim, which
 publishes on the same device the HAL and the core read from. Independently of
 this, the firmware setup does not need the Power HAL: the client path with the
 type-1 message and the HAL's `SetupFirmware` remain the direct routes (U67).
+
+## U73 (2026-11-08): the setup command runs and the firmware refuses it (error 9)
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, no oops this boot.
+
+**The client path now runs end to end.** With `NO_DELEGATE=1` and the client as
+uid 1000 (`LD_PRELOAD` without `liblazysvc.so`, which references
+`AServiceManager_addService` that a non-service binary does not import):
+`createSession: OK`, `setupCommandQueue: OK fds=11,12`,
+`setupResponseQueue: OK fds=14,15`, and the core logs
+`state UNINITIALIZED to CREATED`, `CREATED to STARTED`, `STARTED to
+AUTHORIZED`. `sendCommand: OK` three times; every `receiveResponse` is
+`NOT-OK exception -8 service 8` (the empty-FMQ error), so no answer is
+produced. No `Sending firmware-setup VII command` line appears and `get_fds`
+is never called. This confirms U65/U66 from the client side: an AUTHORIZED
+session with a queued command is not enough, because the core's setup push is
+the DSP/GXP actor's and that actor has no vendor `gxp` driver.
+
+**The HAL's setup path does run, and the firmware rejects it.**
+`libdarwinn_hal.so` at `0x14d9a48` already reads `35 04 80 52`
+(`mov w21, #0x21`, the U67 forced bitset), and no `.orig` copy was present, so
+the patch was still in place. The HAL alone as system only allocates and
+finalizes a group (`edgetpu_device_group_alloc+0xf4` in the dmesg trace) and
+runs no setup. The full chain as system (HAL plus `/vendor/bin/edgetpu-run`)
+does reach it: the delegate logs
+
+```
+INTERNAL: Sync VII command failed: error_code=9
+file.cc:1506
+create device status: 13
+```
+
+and `dmesg` shows `KCI tx code 10 seq 65` followed by `KCI tx code 21 seq 66`
+and two mailbox IRQs. So the setup element is written to the queue, the
+firmware answers it, and the answer is an error (9) that the lib reports as a
+failed sync; the delegate then exits 1 (`delegate rc: 1`).
+
+**Next:** decode `error_code=9` at `file.cc:1506` and the matching VII
+response element (the driver's 48-byte dump), then give the firmware the
+payload it accepts. U67 records that the firmware wants a **type-1** setup
+carrying `global scratches`; the HAL writes a different type (its element has
+`u16 11` at byte 10). Either build the type-1 payload for the HAL's setup call
+or drive it through the client's `CommandMessage` (whose `build_cmd` is still a
+placeholder). The client session being AUTHORIZED means the AIDL and FMQ sides
+are no longer the blocker.
