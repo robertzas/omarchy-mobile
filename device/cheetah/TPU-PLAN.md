@@ -5320,4 +5320,4 @@ AUR window with `devm_ioremap_resource`, registers `/dev/gxp` as a misc
 device, and the three commands above answer `-ENOSYS`. No register is read or
 written, no firmware is loaded and no mailbox or CMU is touched.
 
-Build: the module does not compile in this tree yet (last error: `asm/types.h` missing after `modules_prepare`); the source is in place and the next round finishes the build.
+Build: the module compiles in the project container with the pinned Android clang and `ARCH=arm64` (`CONFIG_GXP=m`; `gxp.ko` produced, `modinfo` shows `of:google,gxp`, aarch64). The blockers were the skeleton's missing `miscdevice` member, the host's missing `bc`, and an `olddefconfig` without `ARCH=arm64` that pointed the out tree at the host arch. The build used `M=$K/drivers/gxp` (absolute), so its artifacts landed in the source tree and were removed.
