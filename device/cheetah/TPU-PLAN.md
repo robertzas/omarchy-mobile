@@ -5290,3 +5290,34 @@ through a GOT/PLT path or built at runtime. Next: dump the `.plt` stubs and the
 `ioctl` GOT relocation, find the `bl` sites to that stub, and read the command
 numbers and struct sizes from the argument setup around each call. That is the
 contract a driver must satisfy before any register access.
+
+## U85 (2026-11-08): the gxp ioctl contract, the node, and the skeleton driver
+
+**The ioctl contract.** `libgxp.so` imports `ioctl` through its PLT; the stub
+for the GOT slot at 0x1e0eb8 sits at 0x1cd8b0, and exactly three calls reach it
+(decoded with capstone, since this host's binutils cannot disassemble aarch64):
+
+- 0x12c1f8: cmd **0x40086200** (`_IOW('b', 0, u64)`), 8-byte argument at
+  `sp+0x68`, fd from `[x19, #0xa8]`;
+- 0x12e28c: cmd **0xc0184800** (`_IOWR('H', 0, 24)`), 24-byte argument at
+  `sp+0x18`, fd in `w22`;
+- 0x12e3d4: cmd **0x40086201** (`_IOW('b', 1, u64)`), pointer argument in
+  `x2`, fd in `w25`.
+
+The first is followed by the third on the error path, so the pair brackets a
+virtual device's life; the middle one carries 24 bytes of device information.
+
+**The node.** The base tree now carries `gxp: gxp@25c00000` with the recovered
+reg/reg-names/interrupts, `gsa-device`, `tpu-device`, the mailbox offset and
+the per-core memory, `status = "disabled"`. `device/cheetah/overlays/gxp-probe.dtso`
+enables it. Compiled with the tree's `dtc` 1.7.2 and applied with `fdtoverlay`
+onto a cpp+dtc build of `gs201-cheetah.dts`: the overlaid tree has the node
+with `status = "okay"` and the eight register windows.
+
+**The skeleton.** `drivers/gxp/` (`gxp.c`, `Kconfig`, `Makefile`), hooked into
+`drivers/Kconfig` and `drivers/Makefile` under `CONFIG_GXP`: probe maps the
+AUR window with `devm_ioremap_resource`, registers `/dev/gxp` as a misc
+device, and the three commands above answer `-ENOSYS`. No register is read or
+written, no firmware is loaded and no mailbox or CMU is touched.
+
+Build: the module does not compile in this tree yet (last error: `asm/types.h` missing after `modules_prepare`); the source is in place and the next round finishes the build.

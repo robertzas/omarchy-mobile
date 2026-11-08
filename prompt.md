@@ -1,4 +1,4 @@
-# prompt.md — the gxp driver: DT node first, then libgxp's ioctl contract
+# prompt.md — gxp: green module, then the create-device command
 
 Do the suggested followups, then this prompt, then replace it and run the new
 one.
@@ -8,32 +8,34 @@ one.
 - Slot B only: `boot_b`, `init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b`,
   `dtbo_b`, `userdata` through the tools. Never bootloader, radio, `devinfo`,
   `persist`, `efs*`, `modem*`, `vbmeta`; no unsuffixed `fastboot flash`.
-- Never load the A14 firmware or A14 vendor blobs. The A17 blob may be read
-  locally for analysis, never committed.
-- One TPU power-up per cold boot (`tpu-hold` first).
-- Reads of blocks not known powered and clocked, `devmem` writes, PMU register
-  access and any gxp/register probe are the owner's call per step (§1.1).
-- No `Signed-off-by`; repo commits `TPU-PLAN: …`; only measured numbers.
+- Never load the A14 firmware or A14 vendor blobs.
+- One TPU power-up per cold boot (`tpu-hold` first). An oops or hang ends the
+  boot.
+- Register reads of a block not known powered/clocked stay the owner's call per
+  step. Mapping a window is not a read.
+- No `Signed-off-by`; kernel commits upstream-style; repo commits `TPU-PLAN: …`.
 
-## Where it stands (U76-U84)
+## Where it stands (U83-U85)
 
-- The A17 `google,gxp` node is recovered (U84): AUR 0x25c00000+0x1400000,
-  mailboxes 0x18380000-0x183e0000, CMU 0x25a00000, SSMT 0x25ad0000/0x25ae0000,
-  SPIs 0x4f-0x52, fw 0x98000000 and scratchpad 0x98400000, phandles to TPU and
-  GSA. Extracted under `out/stock-a17/`, never committed.
-- VII is closed (U80-U82). No TPU inference has run; no TPU number exists.
+- `/gxp@25c00000` is in the tree disabled, with the A17 reg/interrupts, and
+  `gxp-probe.dtso` enables it (verified `status = "okay"` after fdtoverlay).
+- `drivers/gxp` maps AUR and registers `/dev/gxp`; the three libgxp commands are
+  decoded: `0x40086200` create (8 bytes), `0xc0184800` info (24 bytes),
+  `0x40086201` release (8 bytes).
+- Module build: see TPU-PLAN U85's last line.
 - Measured CPU/GPU: mosaic12 (10.0 detections) CPU 3.97 ms, GPU 3.00 ms.
 
 ## This round, in order
 
-1. **Write the gxp DT overlay** for our tree: the node above with our labels for
-   the TPU and GSA and the iommu group, `status = "disabled"` in the base and an
-   overlay that enables it, per the one-change-per-boot rule. Validate with
-   `dt-validate` and `make dtbs`.
-2. **Map `libgxp.so`'s ioctl contract**: find the pointer table that holds
-   `/dev/gxp` (vaddr 0x38a11) and the `ioctl` call sites (svc #0, x8=29), list
-   the command numbers and the struct sizes they pass, and write them into
-   TPU-PLAN before writing any driver code.
-3. **Skeleton driver** `drivers/gxp/` with probe, the register window mapping,
-   `/dev/gxp`, and the version ioctl `libgxp.so` checks first; no register
-   writes until the owner approves the one read-only probe step.
+1. **Get `gxp.ko` green.** `modules_prepare` with the pinned clang, then
+   `make M=drivers/gxp LLVM=1 modules`; the missing `asm/types.h` in U85 means
+   the out tree's generated headers are incomplete, not that the source is wrong.
+2. **Implement `0x40086200` and `0x40086201` honestly**: the create command gets
+   the 8-byte argument libgxp passes, returns a handle, and the release frees it;
+   no register access, and unknown fields return `-EOPNOTSUPP` with a `dev_dbg`
+   line rather than a guess.
+3. **Run `libgxp.so` against `/dev/gxp`** in the chroot with the module loaded
+   (dev grant: module load on slot B), and record the first command it sends and
+   the error it gets. That tells us the version check and the next struct.
+4. Only then plan the first read-only register probe with the owner, one
+   register per step under `--watchdog`.

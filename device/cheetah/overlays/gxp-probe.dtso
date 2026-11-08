@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up (TPU-PLAN.md, U84-U85): the GXP DSP that hosts the Tachyon stack.
+ * The base tree carries the node disabled; this overlay turns it on for a
+ * probe. It enables no mailbox path and no firmware load on its own: the
+ * driver's probe only maps the AUR window and reports what it found.
+ *
+ * Paths, not labels, so the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/gxp@25c00000} {
+	status = "okay";
+};
