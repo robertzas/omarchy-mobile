@@ -4746,3 +4746,13 @@ succeeds for that uid) or a servicemanager that honours lazy registration.
 left up (servicemanager 4932, tachyon service 5017, HAL 5067/5069). The boot's
 dmesg holds two `WARNING` lines, both the pool-cookie WARN above. No inference,
 no benchmark.
+
+**Addendum (same boot): the Power HAL does not call the lazy symbols.**
+`tools/android-lazysvc-eager.c` interposes
+`AServiceManager_registerLazyService{,WithFlags}` and calls the real eager
+`AServiceManager_addService` (preloaded into the Power HAL, which runs as uid
+1000). It printed no mark: the Power HAL never calls either symbol, so its
+publisher path is something else (an eager `addService`
+/`addServiceWithFlags`, or a registration that never happens). The Darwinn HAL
+and the core still log `Unable to connect to Power HAL`; publishing IPower
+needs the Power HAL's actual call site, not another lazy shim.
