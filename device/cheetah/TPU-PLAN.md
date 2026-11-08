@@ -5278,3 +5278,15 @@ The node's `reg` is the first hard requirement for a driver; the second is
 `/dev/gxp` string (vaddr 0x38a11) finds none, so the library reaches it through
 a pointer table; locating that table and the `ioctl` call sites is the next
 step.
+
+### U84 follow-up: the libgxp scan
+
+`libgxp.so` imports `open`, `close`, `read`, `write`, `ioctl` and `mmap` (LIBC),
+so the device contract is reachable from its call sites. The `/dev/gxp` string
+at vaddr 0x38a11 has no ADRP+ADD pair (the first scan's ADD mask was wrong,
+which is fixed; the corrected scan still finds none), no 8-byte pointer to it in
+any section, and no relocation with it as an addend. So the string is reached
+through a GOT/PLT path or built at runtime. Next: dump the `.plt` stubs and the
+`ioctl` GOT relocation, find the `bl` sites to that stub, and read the command
+numbers and struct sizes from the argument setup around each call. That is the
+contract a driver must satisfy before any register access.
