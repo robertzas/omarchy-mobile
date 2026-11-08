@@ -5468,3 +5468,21 @@ The two IOMMU warnings are fixed on `omamobile-tpu`: a domain may replace its
 own fault handler (the pooled domain case), and unmapping an empty L1 entry
 is a no-op instead of a warning.
 
+## U91: the service's command path is not up on a fresh boot (2026-11-08)
+
+A cold boot with `NO_DELEGATE=1` powers the TPU cleanly
+(`PSM0_STATUS=0x4b27091`, `LPM_CONTROL=0x148`) and the client creates a
+session, but every round answers `exception -8 service 8` with a 256-byte
+zero buffer; the service logs `TachyonCore_CreateClientSession` and never
+`received command`. Restarting only the Tachyon service on that boot gives
+the same result.
+
+The one good Ping (U90) happened on a service restart on a boot where the
+vendor service had been up for half an hour and had already created its
+group. So the missing piece is the service's transport setup, not the client:
+its command queue is set up, but the service's actor never sees the Ping.
+
+Also: `pkill -f "<service name>"` matches the SSH shell that carries the
+pattern in its own command line and kills the session; use
+`pkill -f "tachyon[.]service"`.
+

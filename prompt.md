@@ -1,18 +1,17 @@
-# Next: the Tachyon service's setup gate and the first inference command
+# Next: exception -8 / service 8 in the Tachyon command path
 
-State (TPU-PLAN U90): `tpu-tachyon-client` round-trips a Ping (88-byte
-response, the service logs the command) when the service runs in the state
-the boot-time vendor service left it; a freshly restarted service never logs
-`received command` and the rounds fail with `exception -8 service 8`.
+State (TPU-PLAN U91): a fresh boot powers the TPU cleanly, the client creates
+a session and sets up both queues, but the service never logs `received
+command`; each round returns `exception -8 service 8` with zeros. The one
+good Ping came on a service restart after the vendor service had been up and
+had created its group.
 
-1. On a fresh boot run `/root/tpu-tachyon-run` with `HAL_ONLY=1`, keep
-   `/tmp/tpu-tachyon.log`, and diff the vendor service's one-time setup from a
-   run where the Ping works. Find what the setup changed (queues, a kernel
-   node, /dev/gxp state) and make a service restart reproduce it.
-2. Find the inference command: `tpu-tachyon-client` only sends Ping. Look for
-   the Execute/executable opcodes in `libedgetpu_tachyon.google.so` and its
-   NDK headers, and for a vendor binary that runs a model through
-   `IComputeService`.
-3. Keep one TPU power-up per boot (`tpu-hold`); never a second.
-4. The IOMMU fixes on `omamobile-tpu` are built but not pushed; push and
-   re-test the teardown warnings when the next boot happens.
+1. Decode AStatus exception code 8 and service-specific error 8 in the NDK
+   headers and in `libedgetpu_tachyon.google.so` (the client prints both).
+2. Compare the vendor service's state in the two cases: its janeiro group
+   create, its one-time setup command, and whether the app service published
+   `IEdgeTpuAppService`. Keep the vendor service's log tail from a fresh boot.
+3. Try the client on a boot where the vendor service has run for minutes
+   (`HAL_ONLY=1`, wait, then run the client without restarting the Tachyon
+   service).
+4. One TPU power-up per boot (`tpu-hold`); never a second.
