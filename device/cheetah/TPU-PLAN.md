@@ -5416,3 +5416,25 @@ and dmesg carries a trace through `edgetpu_mmu_tpu_unmap_sgt` /
 `edgetpu_unmap_dmabuf` during teardown. The two 0xed cases added to `gxp.c`
 for U87 were removed: the driver knows only its own three commands.
 
+## U89: the app-uid delegate still fails on VII (2026-11-08)
+
+Running the runner with `RUN_UID=10000` (the app uid whose EACCES on
+`/dev/edgetpu` is supposed to select the Tachyon client path) changes nothing:
+the delegate still logs `Sync VII command failed: error_code=9` three times,
+then `create device status: 13` and `delegate rc: 1`. The Tachyon service is
+up and janeiro's group create is 0, so the failing VII command is issued
+inside the client path, not by a root delegate opening the node directly.
+
+The same run repeats a kernel warning in the teardown path:
+`iommu_set_fault_handler` (drivers/iommu/iommu.c:2061) and
+`samsung-iommu.c:726 unmap_slpt`, reached through
+`edgetpu_mmu_tpu_unmap_sgt` -> `dmabuf_map_callback_release` ->
+`edgetpu_unmap_dmabuf`. It is a janeiro/samsung-iommu bug, not gxp's, and it
+should be fixed before the next protocol step.
+
+Next: find whether the Tachyon service ever issues the firmware's one-time
+setup command (the VII error 9 is the pre-setup answer), and what the GXP
+interface-version query returns to libgxp; the published gxp.h defines that
+command as `_IOR(0xEE, 26, struct gxp_interface_version_ioctl)` with major 1,
+minor 3.
+
