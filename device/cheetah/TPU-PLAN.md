@@ -5056,3 +5056,29 @@ If the firmware accepts a type-1 element, its next error names the next missing
 field; if it still says "setup not done", the type is not the element code and
 the core's message layout has to be recovered instead. `oops: 0` after all
 three gdb runs.
+
+## U78 (2026-11-08): the element is not in userspace; the type-0 path is closed
+
+Scanning every readable mapping of the HAL, the vendor service, the Tachyon
+core and servicemanager twice during a live delegate run, for the element's
+full 48 bytes (including `iova 0xffdff000`, `size 0x80`, the `2` and the
+`0x100`), found **nothing**. The element exists only in the driver's coherent
+command queue (`group->vii.cmd_queue_mem`), which userspace maps uncached and
+`/proc/<pid>/mem` will not read. So:
+
+- a userspace rewrite before the doorbell is not possible;
+- a kernel rewrite has no hook before the doorbell either — the dump runs from
+  the IRQ after the firmware advanced the head, and the doorbell itself is a
+  userspace store to the mapped CSR page.
+
+And even a `code` of 1 would not be a setup message: the element is the HAL's
+ordinary sync over an 0x80-byte command flatbuffer with no scratch descriptors,
+which is exactly what the firmware's own string says it needs. The element-code
+hypothesis is closed; U55/U67 stand: **the setup must come from the Tachyon
+core's type-1 message**, and the core's actor cannot run without the vendor
+`gxp` driver.
+
+Next: recover that message. `libtachyon_core.so`'s push is at `0xa4d5c` with
+the builder at `0xa4dec` and the verifier at `0xb9c48`; the same library
+exports no setup symbol, so the call is either by address from a chroot
+program (dlopen + base + `0xa4d5c`) or through the app service's own path.
