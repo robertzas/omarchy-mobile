@@ -1,17 +1,16 @@
-# Next: RegisterGraph with the compiled model
+# Next: RegisterGraph with the compiled model's graph
 
-Measured (TPU-PLAN U98): AllocateTpu succeeds and retires, and the virtual
-device stays INITIALIZED for the session. RegisterGraph is sent with seq 2
-but its answer arrives after the client's poll window or not at all.
+Measured (TPU-PLAN U99): AllocateTpu returns in 0.1 s and retires;
+RegisterGraph with an empty table is received and its command is created
+but never completes within 30 s. Transport and sequencing are done; the
+payload is the work.
 
-1. Read the actor log after the AllocateTpu RETIRED lines for
-   "received command seq no: 2 of type : RegisterGraph". If it is absent,
-   the second ring is not waking the actor (ring the command eventfd again
-   after commit or re-open the queue's fd ordering as in round 1).
-2. Build the RegisterGraph table: the compiled model's Edge TPU custom-op
-   metadata is the graph; recover the table fields from the core's verifier
-   and the vendor builder in `libedgetpu_client.google.so`.
-3. Then ImportMemoryFromFd with a real dma-buf (`/dev/dma_heap/system`),
-   the Bind* commands and Invoke (union 11).
-4. Measure the inference, then run the 720p CPU/GPU/TPU object-detection
+1. Parse `/vendor/etc/model.tflite`'s Edge TPU custom-op metadata (the
+   `edgetpu-custom-op` section) into the graph flatbuffer RegisterGraph
+   expects; recover the table fields from the core's verifier switch and
+   the vendor builder in `libedgetpu_client.google.so`.
+2. Send TYPES=2,7 with the graph payload and read the response; then
+   ImportMemoryFromFd with a dma-buf (`/dev/dma_heap/system`), the Bind*
+   commands and Invoke (union 11).
+3. Measure the inference, then run the 720p CPU/GPU/TPU object-detection
    comparison.
