@@ -6681,3 +6681,68 @@ there instead — that object is the parsed command.
 `+0x7fd4c` in the session/setup builder region. Break at `+0xe1930` first,
 confirm `$x21` holds handle 2 and tag 7, then watch `*(long *)($x21+0x38)`
 while the client sends `ORDER2=SSIISS UORDER=HDXGG`.
+
+## U136 (2026-11-09): `+0x38` is never written, and the core's `252` is a message offset
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, five boots
+(`tpu-u132` … `tpu-u135b`), slot B.
+
+**The gdb base rule.** `/proc/PID/maps` lists `fake_libtachyon_core.so`
+before the real library, and a grep for `libtachyon_core.so` matches the
+fake first: the breakpoint then lands in no mapping ("Cannot insert
+breakpoint 1"). Match the path end, `grep -E '/libtachyon_core\.so$'`, and
+take that `r-xp` line; with file offset 0 the base is its start
+(`0xffff7ec14000` in the run below).
+
+**The client's chroot start.** `linker64 --library-path` is glibc syntax and
+the Android linker rejects it (`expected absolute path`). The working form
+is the runner's own environment:
+
+    env LD_LIBRARY_PATH=$L LD_PRELOAD="$P" chroot --userspec=1000:1000 \
+        "$R" /vendor/bin/tpu-tachyon-client.ring
+
+with `L=/apex/com.android.tethering/lib64:/system_ext/lib64:/vendor/lib64:/system/lib64:/apex/com.android.runtime/lib64/bionic`.
+The `ld.so: object … cannot be preloaded` lines are the host's glibc
+`chroot` seeing the Android paths; they are noise. Rounds 1-3 (type 2 and
+two type 5 imports) answer with 64-byte responses; round 4 (type 7,
+RegisterGraph) is the one that fails.
+
+**The fault is the dereference, not the field load.** The code at
+`core+0x59680` is `ldr x8, [x21, #56]` (`+0x38`), then `add x0, sp, #0x50`,
+`add x1, sp, #0x78`, and at `+0x5968c` `ldr x8, [x8]`. At the breakpoint
+`x8` already holds the loaded value (`nil`), so writing `+0x38` changes
+nothing; `set $x8` is the patch that gets past it (U126). With `$x8`
+pointing at a u64 2, the builder completes and the client receives a
+200-byte error response, `Dependent memory handle was not added: 252.` The
+service survives that error.
+
+**Nothing writes `+0x38`.** The command object is the 224-byte allocation
+at `core+0x622e0` (`mov w0, #0xe0`; `bl 0x167c04`), and `x0` at
+`core+0x622e8` is the object. A hardware watchpoint on
+`*(long *)(obj+0x38)`, armed at that instruction and left through all four
+rounds, **never fired**: the field is zero from allocation to the crash.
+The constructor at `0x6384c` writes `+0x00..+0x18`, `+0x20`, `+0x28`,
+`+0x40`, `+0x50..+0x60`, `+0x70`, `+0x78`, `+0x80` and `+0xa0`, but not
+`+0x38`; this command path never initializes it. No `ORDER2` letter can fix
+that, which ends the flatbuffer-shape sweep.
+
+**252 is a message offset.** The parsed "buffers" at `[x21+0x10]` and
+`[x21+0x18]` begin with `0xfc` (252) and `0x28`. At the stop, patching
+those first words to the imported handles (graph 1, scratch 2) and setting
+`$x8` to a u64 2 changes the response not at all: still 252. 252 is the
+byte offset at which the client builds the graph-container table in the
+512-byte message, so the core is using a flatbuffer position where a
+memory handle belongs: it is not converting our Buffer table to
+`{handle, offset, size}`. The defect is the **Buffer encoding the core
+expects**, not a missing field index.
+
+**Next: take Google's own bytes.** Run the stock app service
+(`/system_ext/bin/hw/vendor.google.edgetpu_app_service@1.0-service`) in the
+chroot and dump the command it writes (the handler at `core+0x622a4`
+receives it; `x1`/`x2` carry the message), or follow the constructor
+`0x6384c`'s caller to the Buffer reader and read the vtable slot it uses.
+Encode that layout in the client, then CreateExecution (9), bind (12/13),
+Invoke (11) and the benchmark.
+
+Phone after the last run: up, service alive (the patched command returned a
+response), chain up; the TPU power-up for this boot is spent.
