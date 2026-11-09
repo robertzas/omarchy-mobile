@@ -7077,3 +7077,39 @@ image load/start are no-ops and whatever setup the bootloader did survives;
 here the first access sees GSA state 0 and starts a fresh image. The type-1
 setup therefore has to come from outside the driver: the bootloader's
 `hwmgr`/`tpu-image` code or the stock vendor service's device spec.
+
+## U157 (2026-11-09): the bootloader's TPU image manager, and why the xrefs need a PC-relative pass
+
+The ABL bundle `out/factory/cheetah-abl/cheetah-cp2a.260705.006/bootloader-cheetah-cloudripper-17.0-15199429.img`
+is an `FBPK 2.0` container (`gs201`, `cloudripper-17.0-15199429`). Its
+embedded ELFs are at file offsets `0x270ffe`, `0x273e00`, `0x284e00`,
+`0x3d8e00`, `0x4e6b00`, `0x523580`, `0x632d00`, `0x6a8000`, `0x6b0d00`,
+`0x6bd400`, `0x6c9000`, `0x6da000`, `0x6eda00`, `0x793400`, `0x79d000`,
+`0x7a8000`, `0x7db800`, `0x7dd000`, `0x7e5000`, `0x7fbe00`, `0x80b800`.
+
+* **GSA firmware**: the ELF32 ARM image at **0x7fbe00** (65 536 B, entry
+  `0x13005`, stripped; `.text` `0x13000`-`0x1e8d4`, `.rodata`
+  `0x10118`-`0x127f8`). Its strings are the TPU image manager:
+  `sz >= sizeof(tpu_img_config)` (`0x102fb`), `TPU fw is already loaded`
+  (`0x10855`), `tpu_set_dvfs_opp` (`0x10990`), `TPU is already running`
+  (`0x10c02`), `TPU mmap failed` (`0x10cca`), `failed to init TPU image
+  manager` (`0x10e05`), `tpu-mgr` (`0x11827`), `tpu-image.c` (`0x1182f`),
+  `tpu_get_img_config` (`0x1214f`), `TPUF` (`0x12538`), and
+  `req_cmd == GSA_MB_CMD_AUTH_IMG` (`0x114aa`).
+* **Trusty apps**: the aarch64 `hwmgr` at **0x6bd400** carries
+  `com.android.trusty.gsa.hwmgr.tpu` and `tpu-mbox`; the aarch64 app at
+  **0x7db800** carries `tpu-mbox`/`tpu-mgr`.
+
+The kernel side has no scratch list to borrow: `mobile_image_config`
+(stock and port, identical) holds `mappings[23]` and `ns_iommu_mappings[5]`
+but no scratches, so the global scratch/bitset setup lives in the GSA
+firmware's image manager.
+
+The string addresses are **not** absolute little-endian literals in
+`.text` (a scan for `0x102fb` etc. finds none), so this ARM32 image
+resolves them PC/base-relative or is relocated. The next pass disassembles
+around the `.rodata` offsets with `llvm-objdump --triple=armv7` and the
+`adr`/`add` PC-relative sequences, then reads `tpu_get_img_config`'s size
+check and field accesses. The A14 vendor image has no `/vendor/etc/edgetpu`
+and only the TPU libraries in `/lib64`, so there is no model or device spec
+to borrow either.
