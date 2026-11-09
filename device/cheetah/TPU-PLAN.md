@@ -6781,3 +6781,26 @@ command whose buffer descriptor the core accepts, so it is a working schema
 sample. Capture its raw bytes and the parsed object (break at the
 constructor `0x6384c`, `finish`, dump `$x0`), then encode RegisterGraph's
 container and scratch the same way.
+
+## U138 (2026-11-09): `0x6384c` builds the log record, not the parsed command
+
+One boot (`tpu-u139`), slot B. With `TYPES=2,5` and a break at the
+constructor's return site `core+0x6231c`, the object is `x22` (the
+constructor stores it: `str x22, [x19]`), and it is a **log/event record**,
+not the request: its `+0x00`/`+0x08` are string sizes (`0x39`/`0x30` for
+AllocateTpu, `0x49`/`0x40` for ImportMemory) and its `+0x10` points at the
+heap string `Session on … [Cmd 1] AllocateTpu` (type 2) or `… [Cmd 2]
+ImportMemoryFromFd` (type 5). So `core+0x6384c` is the constructor of the
+command's human-readable description; the U129-U137 watchpoint was armed on
+that record's `+0x38` and could never fire.
+
+The request object the VII builder reads is the one at `$x21` in the fault
+(`{2, 1, ptr, ptr, …}`), built by a different path. Its `+0x10` pointee
+begins `252 / 40 / 32` — a flatbuffer table position and sizes — which is
+the value the core then reports as a memory handle. The request parser, not
+the log record, is the missing piece.
+
+**Next:** break at the VII-builder entry (`core+0x59608`) for a
+RegisterGraph run and read `$x30` (the caller's return address); walk up to
+the command handler, then find where it allocates and fills `$x21`. Set the
+watchpoint on that object's `+0x10` and `+0x38` instead.
