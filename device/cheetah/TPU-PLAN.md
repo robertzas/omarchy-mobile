@@ -5990,3 +5990,18 @@ string (`7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`) for the build and put
 back afterwards. Log: `CC [M] gxp.o`, `LD [M] gxp.ko`; the earlier silent
 no-ops were `auto.conf` still holding `# CONFIG_GXP is not set`.
 
+## U112: the matching vermagic needs the stale release files deleted (2026-11-08)
+
+Pinning  with
+ off is not enough on its own:  and  are only regenerated when
+they are missing, so the tree kept producing  while
+the phone runs . Delete both, run  and the
+ build, and the module reports
+
+
+
+ and  now stay pinned in
+, so later module builds match the running kernel without the
+release-file swap. The built module carries the answered info ioctl
+().
+
