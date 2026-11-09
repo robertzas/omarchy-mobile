@@ -6503,3 +6503,62 @@ table offsets. The builder's `+0x38` read is the only remaining null.
 
 Phone: up, Tachyon service dead after the `CISSS` crash, chain down; a
 reboot before the next register.
+
+## U125 (2026-11-09): the descriptor's vectors never parse; stop guessing and read the parse under gdb
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, slot B. Five
+register probes (`CSSSS`, `SSISS`, `SSJSS`, `SSIISS`, plus the U124 runs)
+and one re-test of the stock delegate.
+
+**The parse stops at the first field it cannot read.** In every run the
+faulting object is `{2, 1, <ptr>, <ptr>, 0, 0, ...}`: `+0x10`/`+0x18` fill
+with two heap words (a `shared_ptr`-like pair, as U124 saw), and **`+0x20`,
+the first vector, is always zero** — so the descriptor never reaches the
+single buffer at `+0x38`. That also explains the earlier runs: with
+`CISSS`, `CSI` and `CSSSS` the parser stopped before the field that would
+have filled `+0x38`.
+
+**No vector we build is accepted.** Descriptor fields 2-4 as single
+tables (`CSSSS`, `SSISS`), as a vector of table offsets (`I`), and as a
+vector of inline 24-byte structs (`J`) all leave `+0x20` empty. The `J`
+encoding was 8-byte misaligned (data at `388`); it is fixed (length at
+`388`, data at `392`) and still does not fill the vector, so alignment was
+not the only problem.
+
+**`+0x38` is a required single buffer.** The VII builder reads
+`(*(desc+0x38))[0]` (the handle), then inserts the vector at `+0x20`
+(24-byte elements), then the vectors at `+0x40` and `+0x58`, with a bool
+at `+0x70` (`libtachyon_core.so+0x59650`-`0x59718`). Only `+0x38` is
+dereferenced without a null check, which is why it is the one that kills
+the service.
+
+**The core parses the command fine.** The log reads `received command seq
+no: 4 of type : RegisterGraph` and `[Cmd 4][RegisterGraph Handle 2]
+Command created`, and then nothing: no flatbuffer or verifier error, no
+`Sending firmware-setup`. The failure is in the VII build, after the
+request parse.
+
+**The stock delegate is still closed on this kernel.**
+`TPU_VLOG=5 /root/tpu-tachyon-run` (delegate path, service alive) logs
+`Sync VII command failed: error_code=9`, three `create device status: 13`
+and `delegate rc: 1`, the same U103 shape: the payload mapping, not the
+userspace. The Tachyon client remains the route.
+
+**Why the sweep ends here.** Three vector encodings and five field shapes
+all die at `+0x5968c`, so the remaining unknown is not a field index to
+permute: it is the parser's own member layout. The next step reads it
+directly instead of inferring it:
+
+1. attach gdb to `com.google.edge` (tachyon-service) and let the client
+   reach the fault; gdb stops on the SIGSEGV before the shim's handler;
+2. dump `$x21` (the parsed descriptor), `*(void **)$x2` (the command) and
+   the caller frame — that names the parse and its field order;
+3. at the fault, point `$x8` at the container's own `BufferDescriptor`
+   (`*(void **)($x21+0x10)`) and continue: if RegisterGraph completes, the
+   `+0x38` buffer is the firmware scratch and only its flatbuffer slot is
+   left to find;
+4. kill and restart the service instead of rebooting, so one boot carries
+   several probes (the firmware never sees an aborted command).
+
+Phone: up, Tachyon service dead after the `SSIISS` register crash, chain
+down; a reboot before the next attempt.
