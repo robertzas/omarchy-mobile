@@ -6005,3 +6005,61 @@ the phone runs . Delete both, run  and the
 release-file swap. The built module carries the answered info ioctl
 ().
 
+## U113: the gxp info echo works, the service never asks, and the core's setup sender is located (2026-11-08)
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, phone up 15 490 s,
+TPU held by `tpu-hold` (3905).
+
+**The vermagic recipe.** The pinned `CONFIG_LOCALVERSION` was already right,
+but `make kernelrelease` alone leaves `include/generated/utsrelease.h` stale,
+so `gxp.mod.c` kept the old `g594acaf97960` string and `insmod` refused the
+module. What works, in the project container:
+
+```sh
+rm -f /out/include/config/kernel.release /out/include/generated/utsrelease.h
+make O=/out ARCH=arm64 LLVM=1 modules_prepare
+rm -f /src/drivers/gxp/gxp.ko /src/drivers/gxp/gxp.mod.o /src/drivers/gxp/gxp.mod.c
+make -j$(nproc) O=/out ARCH=arm64 LLVM=1 M=/src/drivers/gxp modules
+```
+
+With `utsrelease.h` regenerated the module reports
+`7.3.0-rc6-omamobile-push1-g052da70970d6-dirty` and installs (sha
+`6eeb3b4f13b2`).
+
+**The info echo is live.** gxp is a software-only skeleton (it maps the AUR
+window and touches no register), so it was swapped on the running boot:
+`rmmod gxp; insmod /root/gxp-info.ko` logged `AUR at [mem
+0x25c00000-0x26ffffff]`. A Python client (`fcntl.ioctl`) sent `0xc0184800`
+with `{0, 0, 0x00080002, 0}` and got the same six words back (`info rc=0`),
+while `0x40086200`/`0x40086201` still round-trip (handle 1). The 24-byte
+command is therefore an in/out echo, as U110 intended.
+
+**The vendor service chain does not query it.** `NO_DELEGATE=1
+/root/tpu-tachyon-run` restarted servicemanager (89888), the power HAL
+(89911), the vendor service (89932), the Tachyon service (89962) and the app
+service (89988). The 16 481-line log has no gxp line, and dmesg holds only
+the Python test's `device info: in ...`. The only libgxp consumer in the
+chroot is `libedgetpu_util.so` (`grep -rl libgxp.so` over the vendor trees),
+i.e. the util/delegate path. So a Tachyon-service restart cannot reach the
+info command; it needs a client that loads `libedgetpu_util.so`.
+
+**The core's setup sender.** Pulled the real core to
+`out/edgetpu-runtime/libtachyon_core.so` (1 538 440 B, sha
+`d1602625abb0…`) and disassembled it. The `Sending firmware-setup VII
+command. type: ` log site is `0x7fc20`; the type it prints is
+`[x19+0x1c1]`, set just above (`cmp w0, #3` / `#6` + `csel`) to **11
+(0xb)** or **15 (0xf)**, and `[x19+0x1c0]` gets the same value. The
+`PushFirmwareSetupCmdToVII failed` string is at `0x7531c`. The log is behind
+a global verbosity byte (`[*(0x172ed0)] & 1`), so its absence does not by
+itself prove the send never happened; but the firmware still logs `Setup is
+not done yet` and the service log names no setup at all, so the trigger is
+not reached.
+
+**Next:** find the function containing `0x7fb5c` and its `bl` callers to
+identify the state that gates the call (`PENDING_FIRMWARE_SETUP`,
+`Unexpected firmware setup status: `), then test the hypothesis that the
+core skips setup because `tpu-hold` already woke the firmware: one cold boot
+with `HOLD=0` and the delegate as the first and only TPU user, watching
+`vii-payload` in dmesg for the setup element. The driver's own payload
+hexdump is the capture oracle.
+
