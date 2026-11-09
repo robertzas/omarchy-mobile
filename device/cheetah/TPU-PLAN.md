@@ -7173,3 +7173,25 @@ element. The next iteration reads the stock util's setup builder
 (`libedgetpu_util.so`/`libdarwinn_hal.so`, the plan's U51 addresses) and the
 tegu core's setup at `0x7f9c4`, then builds the element and submits it
 through the ring client.
+
+## U160 (2026-11-09): the tegu core's setup producer, and why the cheetah HAL is the right builder
+
+The tegu core (`out/edgetpu-runtime/libtachyon_core.so`, 1 538 440 B,
+aarch64, stripped) does carry a firmware-setup producer:
+
+* `PushFirmwareSetupCmdToVII failed` (`.rodata` `0x8b7e`), referenced at
+  `0x7531c`, `0xa479c` and `0xd36e0`; `Multiple intermediate buffers
+  provided, only using the first one for DIVE model info scratch.`
+  (`0x7a2f`) at `0x89600`; `...firmware_setup_status_ ==
+  VirtualDevice::FirmwareSetupStatus::NOT_STARTED` (`0x5b7d`).
+* The caller at `0xa4748` walks a component list (`ldr x0, [x1]`; `ldrb
+  w8, [x0, #0x30]`; `ldr w8, [x0, #0xa8]`; `cmp w8, #0x1`) and calls
+  `0xab0c4` once per component, then `0xa4954`; the failure is logged at
+  `0x701bc` with the `PushFirmwareSetupCmdToVII failed` string (`w3=0x20`,
+  `w4=4`). So **`0xab0c4`** is the per-component setup push.
+
+That is the **tegu's** multi-component/DIVE path, not the cheetah's
+single-core one. The cheetah's userspace runtime is embedded in the A14/A17
+`libdarwinn_hal.so` (49 MB / the A17 HAL in the phone's chroot), so the
+cheetah's setup command type and scratch layout must be read there, not
+from the tegu core.
