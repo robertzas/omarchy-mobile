@@ -148,6 +148,12 @@ cp /root/dlopenprobe.so "$R/system/lib64/dlopenprobe.so" 2>/dev/null
 cp /root/liblazysvc.so "$R/system/lib64/liblazysvc.so" 2>/dev/null
 cp /root/libnosid.so "$R/system/lib64/libnosid.so" 2>/dev/null
 cp /root/libabortshim.so "$R/system/lib64/libabortshim.so" 2>/dev/null
+# Names a SIGSEGV's fault address and backtrace; the Tachyon core dies in
+# MainTpuActor without a log line (TPU-PLAN U122).
+cp /root/libsegvshim.so "$R/system/lib64/libsegvshim.so" 2>/dev/null
+# TPU_VLOG raises the core's vlog level before it parses any command, so the
+# log says why a register is refused (android-vlog-shim.c).
+cp /root/libvlogshim.so "$R/system/lib64/libvlogshim.so" 2>/dev/null
 cp /root/libpermissionshim.so "$R/system/lib64/libpermissionshim.so" 2>/dev/null
 
 # Vendor first: that is what makes libbinder pick /dev/vndbinder, the domain
@@ -181,7 +187,8 @@ echo "servicemanager pid: $(pgrep -x servicemanager)" >>"$LOG"
 # Then the lazy-registration shim: the stock servicemanager answers
 # registerLazyService with ENOTSUP, and AidlLazyServiceRegistrar aborts the
 # service on any non-OK status.
-SVC_PRELOAD="/system/lib64/libnosid.so /system/lib64/liblazysvc.so /system/lib64/libpermissionshim.so /system/lib64/libabortshim.so $LD_PRELOAD"
+SVC_PRELOAD="/system/lib64/libsegvshim.so /system/lib64/libnosid.so /system/lib64/liblazysvc.so /system/lib64/libpermissionshim.so /system/lib64/libabortshim.so $LD_PRELOAD"
+[ -n "${TPU_VLOG:-}" ] && SVC_PRELOAD="/system/lib64/libvlogshim.so $SVC_PRELOAD"
 
 # The Tachyon core connects to android.hardware.power.IPower/default while it
 # creates a session and caches a failed lookup, so the Power HAL has to be up

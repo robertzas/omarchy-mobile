@@ -6319,3 +6319,110 @@ buffers (12/13) and Invoke (11), and only then the 720p comparison.
 
 Phone: up, TPU held by `tpu-hold` (3905), chain down; `/tmp/tpu-tachyon.log`
 has the graph-import/register log.
+
+## U122 (2026-11-08): the RegisterGraph descriptor passes the verifier; the core dies after it sends the VII
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, phone up, TPU held
+by `tpu-hold` (3905); no cold boot, chain down.
+
+**The request schema.** `RegisterGraph` is `{command handle, device id,
+GraphDescriptor}`. The descriptor's first three fields are
+BufferDescriptor tables: the graph container (memory 1, offset 0, size
+4,726,868), the firmware scratch (memory 2, offset 0, size 1 MiB), and the
+intermediate buffers (one, the same memory). The client sends 236 or 288
+bytes; `sendCommand` accepts both, so the 128-byte cap assumed in U121 was
+the firmware setup message, not the FMQ's.
+
+**Both pass the verifier, then the core dies.** The actor logs `received
+command seq no: 4 of type : RegisterGraph` and `[Cmd 4][RegisterGraph
+Handle 2] Command created`; then the service is gone (client
+`DEAD_OBJECT`), with no `Check failed` line. The empty intermediate list
+was not the cause: one intermediate gives the same crash, and so does a
+fourth field (a 16-byte location struct, offset 0, size 4,726,868).
+
+**The executable's header.** Root 4048 (base 8, root offset 0xfc8 at +8,
+vtable 4028, 8 slots): version 12; serialized_model 4,722,688 bytes;
+model_info empty; scratch_size 0; slot 4 a 3-element vector
+(`0x2f6c63`, 0, `0x481000`); slot 7 = 4. The firmware scratch the core
+checks is 0, so the 1 MiB scratch is ample.
+
+**The firmware did receive a command.** dmesg shows
+`edgetpu janeiro: KCI tx code 21 seq 912` and the mailbox irq around the
+register, so the core built and sent the VII before it died; the crash is
+after the send.
+
+**Next:** the core's crash. Its fourth field is likely the external
+parameter buffer (`external_buffer_descriptor`; the `libedgetpu_util`'s
+`RegisterGraphByBufferWithExternalParameter`), and the handler may
+dereference a null `graph`/`external_buffer_descriptor`. Capture the
+service's stderr tail and a tombstone, disassemble the tegu core around
+the `graph_container_descriptor`/`external_buffer_descriptor` strings, and
+retry with the external buffer or a separate intermediate memory. Then
+CreateExecution (9), bind (12/13), Invoke (11).
+
+Phone: up, TPU held by `tpu-hold` (3905), chain down;
+`/tmp/tpu-tachyon.log` is this round's service log.
+
+## U123 (2026-11-09): the crash is the core's VII builder; the graph header parses and its scratch is not the null
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, as in U122. The
+phone was rebooted at 00:54 (`reboot-to tpu-vlog`) and is up again with
+`tpu-hold` running; slot B only.
+
+**The service needed a cold boot.** After the ~20 register crashes the
+chain stopped coming up: the client got `create: NOT-OK`, `BR_DEAD_REPLY`,
+`service=0x0` and "Failed to connect to the Tachyon Compute Service", and
+no `com.google.edge…` process existed. `/tmp/tpu-v2.log` had only preload
+noise, and `tpu-hold` was still alive. A `reboot-to` brought the chain
+back, so the TPU, not the harness, was wedged. A core crash that kills the
+service now means a reboot before the next attempt.
+
+**The builder's crash, from the disassembly.** `+0x5968c` is
+`ldr x8,[x8]`, and `x8` came from `[[payload+0x38]]`. The builder appends
+`[[payload+0x10]]` (the graph container location), then `[[payload+0x38]]`,
+then walks 24-byte-element vectors at `+0x20`, `+0x40` and `+0x58`, the
+last two allowed to be null by the bool at `+0x70`, and allocates 384 B,
+so the payload must carry a non-null location pointer at `+0x38`.
+
+**Layouts swept (all crash at `+0x5968c`):** descriptor orders `CILS`,
+`CISL`, `CSLI`, `CSXIL`, `CSIXL`, `CIXLS`, `CSI`; the old builder; `RH=1`;
+`SAME=1`; both; the stock `/root/model.tflite` DWN1; inline 24-byte
+location structs (`ORDER2=csi`, `cs`, `Csi`, `cSi`); command fields 3 and 4
+as a table (`HDGX`, `HDGXX`), as u64 (`HDGM`, `HDGK`), as vectors of
+handles (`HDGV`, `HDGW`, `HDGVV`) and as a 24-byte inline struct (`HDGS`).
+None of them fills `+0x38`.
+
+**The graph header, parsed correctly.** The root table is at file offset
+4048, and the uoffset at +8 is absolute, not relative to +8 (the earlier
+`8+4048` read garbage). Slots: 0 version 12; 1 serialized_model uoffset
+44; 2 36; 3 **0** (scratch size); 4 20; 5 0; 7 4. Patching slot 3 to
+1 MiB (`out/edgetpu-runtime/graph-scratch.bin`, pushed as
+`/vendor/etc/graph-scratch.bin`) changed nothing, so the null at `+0x38`
+is not the firmware-scratch location; the core's
+`GetFwScratchBufferSize() >=` check passes with the 1 MiB scratch the
+descriptor already carries.
+
+**Responses.** A 64-byte reply carries kind 2 or 3 (success); the 80-byte
+reply carries kind 19 and the `Device id must be %d` text, which is how
+the command layout was proved: `{handle, device_id, graph_descriptor}`.
+
+**The vlog shim still has not loaded.** `TPU_VLOG=5` produces no
+`vlog:set`, and `/tmp/tpu-v4.log` shows `ld.so: object
+'/system/lib64/liblogstderr.so' from LD_PRELOAD cannot be preloaded`: the
+service is started outside the chroot while the preload list uses
+chroot-absolute paths. Preload the shim by the path the service's own
+linker sees (`$R/system/lib64/libvlogshim.so`) and confirm `vlog:set`
+before trusting any core log line.
+
+**Reference client.** `libedgetpu_util.so` exports
+`DarwinnApi2_VirtualDevice_RegisterGraph*` (`…ByBuffer`,
+`…WithExternalParameter`, `…WithIntermediateBuffers`, `…WithLargeBuffers`),
+and every `ByBuffer` thunk funnels into `0x6f87f4`; disassembling that
+function is the shortest way to the field order the vendor client writes.
+
+**Next:** get `vlog:set`, then either the core's own log or `0x6f87f4`
+names the `+0x38` field; then CreateExecution (9), bind (12/13), Invoke
+(11).
+
+Phone: up, `tpu-hold` running, chain down; `/tmp/tpu-w.log` is this
+round's log (the scratch-patch run).
