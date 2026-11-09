@@ -5697,3 +5697,26 @@ still `create device status: 13`, `delegate rc: 1`, and no
 `TachyonCore_CreateClientSession` in the log, so the vendor util path stays
 closed and the Tachyon client stays the route.
 
+## U101: the DIVE image is a DWN1 container, but not the master schema (2026-11-08)
+
+libedgetpu publishes `executable/executable.fbs` with `file_identifier
+"DWN1"`, which identifies the blob: the 4,726,868-byte custom_options is an
+8-byte header followed by a flatbuffer (root offset 0xfc8, so the root
+table sits at 4048, and "DWN1" at +4 of the base at 8).
+
+Its field order is older than the published master schema, though. The
+root's vtable is 20 bytes (8 slots) and the executable version reads 12;
+slot 1 carries a uoffset to a ~4.72 MB vector (4722688 bytes, the
+`serialized_model`), not the `name` string the master schema puts there.
+So the public file only confirms the container; the field mapping belongs to
+the core's own copy of the schema.
+
+That is enough: the core parses the DIVE image itself, so RegisterGraph only
+has to hand it the bytes. The remaining unknown is the Tachyon request
+schema, which is private. The next round captures one from the HAL:
+LD_PRELOAD a hook over `TachyonComputeSession_sendCommand` and
+`sendFileDescriptors`, drive the HAL's NNAPI device with a tiny client, and
+hexdump the RegisterGraph it builds. If the HAL sends nothing, the core's
+own log line "Register graph Litebuf command buffer info: vii_cmd size=%d,
+dive_cmd size=%d, total=%d" is the oracle for a field-layout sweep.
+
