@@ -5772,3 +5772,30 @@ puts in the VII command. Either the map is keyed by the dma-buf's own
 device address instead of the client iova, or that ioctl path never inserts
 into `dmabuf_mappings` on this kernel.
 
+## U104: the mapped dma-buf and the VII payload address do not coincide (2026-11-08)
+
+`/sys/kernel/debug/edgetpu/janeiro/mappings` after a delegate run shows one
+dma-buf mapping for the group:
+
+```
+group 39 ...: dma-buf buffer mappings (1):
+  <system> die 0: iova=0x00000000fff00000 pages=256 rw
+```
+
+The payload the VII layer failed on was `0xffefe000`, exactly 8 KiB below
+that map's base, and `edgetpu_mapping_find_locked()` only matches a map whose
+`device_address` equals the iova (`compare()` returns non-zero otherwise).
+So a payload address that is an offset into a large mapping can never be
+found; the earlier "no mapping" is consistent with that.
+
+In a later run the payload copy did succeed (`vii-payload 64: 00080000 ...`,
+offsets up to 112) and dmesg still holds six "Setup is not done yet" lines,
+and the delegate still ends with `create device status: 13`, `device: 0x0`,
+`delegate rc: 1`. So both statements can be true: some payloads are copied,
+the setup command's payload is not, and the device is never created.
+
+Next: correlate the two numbers in one run (the driver already logs both the
+map and the payload iova), decide whether the delegate's setup buffer is the
+map base or an offset into it, and make the lookup find the containing
+mapping rather than an exact address.
+
