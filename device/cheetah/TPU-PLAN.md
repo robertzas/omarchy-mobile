@@ -6104,3 +6104,16 @@ site.
 condition that reaches the handler (the setup send's return path). Then one
 cold boot with `HOLD=0`, delegate first, and capture `vii-payload` as before.
 
+
+## U116: the failure handler's two callees (2026-11-08)
+
+`0x750a0` is `bl 0x144084`; its result is stored at `[sp+0x40]` and a null
+result jumps to the stack-check path (`0x75354`). The non-null path builds a
+four-argument call at `0x750c8`-`0x750dc` (`bl 0x5a460`) using the object at
+`[x21+0xc0..0xc8]`, then reaches the `PushFirmwareSetupCmdToVII failed`
+formatting block at `0x7531c`. So the next two functions to read are
+`0x144084` (the value tested) and `0x5a460` (what consumes it); neither is
+the setup submit itself.
+
+**Next:** read those two, then the cold boot with `HOLD=0` to capture
+`vii-payload`. The type bytes remain builder-only (`0x7fbb8`/`0x7fbdc`).
