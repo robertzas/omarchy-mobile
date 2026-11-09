@@ -6826,6 +6826,28 @@ ImportMemory's accepted descriptor as the reference, aiming for a non-null
 `[x21+0x38]` and a first value that is a real imported handle rather than a
 table position.
 
-**Next:** vary `b[49]` over 0-12 and the payload layout behind it in one
-client binary, log the handler's two values for each, and keep the tag that
-makes both non-null and resolvable.
+## U142-U143 (2026-11-09): the parsed payload at the crash site
+
+`0x59680` stops immediately before the null dereference, with `x21` already
+the tag-7 payload. The conditional and `ignore` approaches before it missed
+for two reasons: `x1` is not the command type, and the handler runs more
+than once per client command. At `0x59680` the payload is:
+
+    x21 = {+0x00: 2, +0x08: 1, +0x10: ptrA, +0x18: ptrB, ..., +0x38: 0}
+    ptrA -> {+0x00: 0xfc (252), +0x08: 40, +0x10: 32, +0x18: 0}
+
+So the core holds the **graph-container table's position and size**
+(`{252, 40, 32}`) where a dependent memory handle belongs, and the second
+reference (`+0x38`) is null: the scratch field never arrives. `x22` has
+been reused by that point, so the message object needs its own capture. The
+client's C table is intact (vtable at 240, table at 252 with `soffset` 12,
+handle 1 at 260, offset 0, size at 276), so the parser is keeping a table
+reference instead of the table's handle.
+
+**Next:** capture the vendor path's real RegisterGraph bytes. The delegate
+builds and sends commands before the VII fails, and `libcmddump.so`
+interposes `TachyonComputeSession_sendCommand` into
+`/data/local/tmp/tpu-cmds.bin`; if the delegate never reaches RegisterGraph,
+dump the frames of the client the app service itself uses. Decode the
+GraphDescriptor field positions from a real message and encode ours the
+same way.
