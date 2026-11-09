@@ -6854,7 +6854,50 @@ message cannot be captured this way. The intercept point has to move into
 the process that actually builds the message: the util library's own
 `CreateVirtualDevice` path, or the core's command entry in the service.
 
-**Next:** find the util library's RegisterGraph builder by symbol and
-string reference (`RegisterGraph`, `Desc]`, the graph descriptor's field
-names), and if the delegate cannot be made to run, decode the core's
-parser statically from the handler's callers.
+## U145-U147 (2026-11-09): the union fields are memory handles
+
+U145 stopped at `0x59620` on the tag-7 path and captured the parsed message
+before the prologue reuses `x2`:
+
+    m = {0x41, 0x3b, ptr, 0, vtable, fn, self, d, d2, seq, 4, 1}
+    d = {4, 1, 7, payload}
+    payload = {2, 1, ptrA, ptrB, ..., +0x38: 0}
+    ptrA -> {252, 40, 32, 0}
+
+The decisive reading: **252 and 40 are the raw uoffset values of the
+client's `X` and `G` fields**, not addresses. With `UORDER=HDXGG` the
+payload held `{252, 40}`; with `UORDER=HDXG` it held `{252, 40, 0}`; with
+`UORDER=MDMK` (`M`/`K` write the imported handles) it held **`{1, 2}`**. So
+the union table's fields are read as **memory handles** and resolved
+directly. Our `G` field was a flatbuffer table offset (`144 - fld` = 40)
+because the client wrote the descriptor that way; the core took 40 as a
+handle.
+
+The client also had a real vtable bug: with five union fields the vtable at
+60 is 14 bytes and overlaps the table at 72, corrupting the fifth entry and
+the table's soffset. Four fields (12 bytes) fit exactly; that changed the
+payload from two recorded handles to a single vector `{1, 2}`.
+
+The remaining null is **`payload+0x38`**, the second buffer the handler
+resolves (the first is `+0x10`, handle 1). The four union fields fill only
+the first; the handler reads `+0x38` unconditionally, so the graph command
+needs a second handle there (the scratch) or the variant that fills it.
+
+## U148-U149 (2026-11-09): device id validation, and type 8 is UnregisterGraph
+
+`UORDER=MKMK` (union fields 1, 2, 1, 2) produced a clean 80-byte error
+instead of the null-dereference crash: **`Device id must be 1`**. So union
+field 1 is the device id, and the core validates it before resolving the
+buffers; field 0 is the command handle. The remaining null in the type-7
+payload is still `+0x38`, the second buffer.
+
+With the new `TAG` override, type 8 turned out to be **UnregisterGraph**,
+not RegisterGraphByBuffer: the core logged `received command ... of type :
+UnregisterGraph` and answered `Release graph handle not found: 2`. The enum
+so far: 2 AllocateTpu, 5 ImportMemoryFromFd, 7 RegisterGraph,
+8 UnregisterGraph, 9 CreateExecution, 11 Invoke. The ByBuffer variant must
+be another number.
+
+**Next:** enumerate the remaining type numbers in one session (the core logs
+each name before processing), then send the ByBuffer variant with the
+descriptor's C/S tables and check its response.
