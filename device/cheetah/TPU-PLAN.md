@@ -5857,3 +5857,22 @@ next step is to recover that command's element type and payload from the
 vendor core (`libdarwinn_hal.so`) or to get the core/app-service path to send
 it for the client's device.
 
+## U107: the delegate runs an unpatched HAL; U56's setup-skip patch was never re-applied (2026-11-08)
+
+U56 measured that `SetupFirmware` in `libdarwinn_hal.so` can be neutralized
+with one instruction: `tbz` at `0x14d9a5c` (`36000088`) replaced by `nop`
+(`d503201f`). With it, the A14 HAL's `CreateDevice` created group and context
+1073741824 and returned OK, with no `Setup is not done yet`, no `Firmware
+setup failed` and no `Sync VII command failed` from the HAL.
+
+The delegate's current log shows exactly those failures
+(`Sync VII command failed: error_code=9` three times, then `create device
+status: 13`), because the chroot's library was restored after the tegu
+experiments (U66: "Cheetah's HAL and library are restored"). So the delegate
+has been running the stock, unpatched `libdarwinn_hal.so` since.
+
+Next: re-apply the two dev-only patches to the chroot copy (provider gate at
+`0x1569ae0` -> `mov w0, #1; ret`; setup skip at `0x14d9a5c` -> `nop`), run the
+delegate as the boot's first TPU user, and see whether device creation now
+returns 0 and whether RegisterGraph/Invoke get past the firmware gate.
+
