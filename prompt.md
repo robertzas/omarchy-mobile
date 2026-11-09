@@ -1,17 +1,17 @@
-# Next: build the command tables and reach Invoke
+# Next: RegisterGraph with the compiled model
 
-Measured (TPU-PLAN U96): the union map is known, the actor answers every
-command type, and each command must be sent once per session. Ping returns
-OK; the empty tables return structured errors ("Virtual device failure",
-"Invalid client assigned fd handle: 0").
+Measured (TPU-PLAN U98): AllocateTpu succeeds and retires, and the virtual
+device stays INITIALIZED for the session. RegisterGraph is sent with seq 2
+but its answer arrives after the client's poll window or not at all.
 
-1. Recover the request table layout for AllocateTpu: disassemble the
-   verifier switch at `tpu_actor_engine.cc:785` in the core and the vendor
-   builder in `libedgetpu_client.google.so` / `libedgetpu_util.so`.
-2. Send AllocateTpu with the fields the verifier requires, then
-   ImportMemoryFromFd with a real dma-buf fd handle, RegisterGraph with the
-   compiled model's graph, CreateExecution, the Bind* commands and Invoke.
-3. Keep one session for the whole sequence; the actor kills it on an
-   invalid command.
-4. Then measure the inference and run the 720p CPU/GPU/TPU
-   object-detection comparison.
+1. Read the actor log after the AllocateTpu RETIRED lines for
+   "received command seq no: 2 of type : RegisterGraph". If it is absent,
+   the second ring is not waking the actor (ring the command eventfd again
+   after commit or re-open the queue's fd ordering as in round 1).
+2. Build the RegisterGraph table: the compiled model's Edge TPU custom-op
+   metadata is the graph; recover the table fields from the core's verifier
+   and the vendor builder in `libedgetpu_client.google.so`.
+3. Then ImportMemoryFromFd with a real dma-buf (`/dev/dma_heap/system`),
+   the Bind* commands and Invoke (union 11).
+4. Measure the inference, then run the 720p CPU/GPU/TPU object-detection
+   comparison.

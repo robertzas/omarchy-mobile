@@ -78,6 +78,10 @@ if [ ! -e /dev/janeiro ]; then
 	exit 1
 fi
 ln -sfn janeiro /dev/edgetpu
+# The Tachyon core opens /dev/edgetpu-soc for its VII kernel interface
+# (ioctl_kernel_if.cc:123). Without the node the virtual device goes to
+# IN_ERROR with "Virtual device failure" before any ioctl reaches janeiro.
+ln -sfn janeiro /dev/edgetpu-soc
 # The device must be root-only: as an app uid, EACCES on /dev/edgetpu is what
 # makes the vendor util library take its Tachyon client path (root always goes
 # direct). udev creates it 0666, so without this the delegate silently opens
