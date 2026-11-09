@@ -5799,3 +5799,34 @@ map and the payload iova), decide whether the delegate's setup buffer is the
 map base or an offset into it, and make the lookup find the containing
 mapping rather than an exact address.
 
+## U105: KCI 6 is answered 3, and the delegate's first VII is a Sync that fails (2026-11-08)
+
+`echo 6 > /sys/kernel/debug/edgetpu/janeiro/kci_send` returns 0 and the driver
+sends it, logging the firmware's answer:
+
+```
+KCI tx code 6 seq 283 ...
+kci_send code 6 tpu_addr 0xffefd000 -> 3
+...
+kci_send code 6 tpu_addr 0xffeff000 -> 3
+```
+
+So code 6 is accepted by the driver and answered with 3, twice. After the
+second send the firmware still logged `Setup is not done yet received a
+command of type 0.` (10761.556335), so KCI 6 does not complete the setup.
+
+The delegate's own log names its first failure: `INTERNAL: Sync VII command
+failed: error_code=9`, then `create device status: 13`, `device: 0x0`. The
+first VII command is a Sync (element type 0), which is exactly what the
+firmware refuses until setup is done.
+
+The driver does have a setup hook: `mobile-firmware.c` implements
+`mobile_firmware_setup_buffer()` (line 349) and registers it as
+`.setup_buffer` (line 520); `edgetpu-firmware.c:104` calls it while loading
+the firmware. So the firmware-load path has a setup-buffer step, and the
+question is whether the VII setup command carries that buffer's address and
+who is supposed to send it (the core's `PushFirmwareSetupCmdToVII`).
+
+Counts of "Setup is not done" in dmesg are not usable as before/after
+evidence: the ring buffer drops lines (8 before one run, 6 after the next).
+
