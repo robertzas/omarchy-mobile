@@ -6674,3 +6674,10 @@ at *its return address* (or `si` past it) so `$x0` is the returned value;
 then `watch -l *(long *)($x0+0x38)`. If `$x0` is still not a pointer, find
 the constructor that stores the RegisterGraph tag (7) at `+0x80` and break
 there instead — that object is the parsed command.
+
+**Candidate tag stores** (static, `/tmp/core-stock.dis`): `+0xe1930` and
+`+0xe19b4` (`str w8`/`w24, [x21, #0x80]`, same function, the shape a
+`{7, 1, 7, 0}` word would take), `+0xf025c`/`+0xf032c` (`[x22, #0x80]`), and
+`+0x7fd4c` in the session/setup builder region. Break at `+0xe1930` first,
+confirm `$x21` holds handle 2 and tag 7, then watch `*(long *)($x21+0x38)`
+while the client sends `ORDER2=SSIISS UORDER=HDXGG`.
