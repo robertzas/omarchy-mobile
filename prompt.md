@@ -1,19 +1,18 @@
-# Next: give RegisterGraph the DWN1 graph
+# Next: capture a real RegisterGraph, then replay it
 
-Measured (TPU-PLAN U99-U100): the transport, session and command
-sequencing work (AllocateTpu retires in 0.1 s; RegisterGraph is received
-and its command is created), but an empty graph table never completes.
-The model's `edgetpu-custom-op` custom_options is a 4,726,868-byte **DWN1**
-container (`out/edgetpu-runtime/graph.bin`, head `31 00 34 00 … 44 57 4e
-31`), not a flatbuffer.
+Measured (U101): the DIVE blob is a DWN1 container whose field order is older
+than the published `executable.fbs` (version 12, 8-slot vtable), so the core
+must parse it itself. The private piece is the Tachyon RegisterGraph request.
 
-1. Recover the RegisterGraph request table from the core: the union type
-   table at `.data.rel.ro` 0x16c2f8 (entry 7), and the vendor builder in
-   `libedgetpu_client.google.so`; find the field that carries the graph
-   bytes and its type (vector of u8 or a nested table).
-2. Encode the DWN1 blob into that field, send TYPES=2,7 and read the
-   response. If the verifier rejects it, read the core's error log
-   (VLOG 3) and match it to the verifier branch.
-3. Then ImportMemoryFromFd (`/dev/dma_heap/system`), CreateExecution (9),
-   BindInput/Output (12/13), Invoke (11); measure; then the 720p
-   CPU/GPU/TPU object-detection comparison.
+1. Write an LD_PRELOAD hook over `TachyonComputeSession_sendCommand` and
+   `TachyonComputeSession_sendFileDescriptors` that hexdumps every buffer and
+   fd set. Run it in the vendor HAL (app uid) and drive the HAL's NNAPI
+   device with the smallest possible client, so it prepares the model and
+   builds RegisterGraph for it.
+2. If the HAL sends nothing, sweep the union table layout with the core's log
+   as the oracle: "Register graph Litebuf command buffer info: vii_cmd
+   size=..., dive_cmd size=..." appears only for a request the core accepts.
+3. With the graph registered, send ImportMemoryFromFd (a `/dev/dma_heap/system`
+   dma-buf holding the executable), CreateExecution (9), BindInput- and
+   OutputBuffersToTensors (12/13) and Invoke (11). Measure it, then run the
+   720p CPU/GPU/TPU object-detection comparison.
