@@ -6624,3 +6624,25 @@ must fill `+0x38`.
 
 Phone: up, Tachyon service dead after the `HDXGX` crash, chain down; a
 reboot before the next attempt.
+
+## U128 (2026-11-09): an empty vector at field 2 changes nothing; the sweep is done
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, one boot
+(`tpu-e1`), slot B. `ORDER2=SSESS` declares field 2 as an **empty** vector
+(a valid vector of any element type) and field 3 as a single. Result: the
+same fault at `libtachyon_core.so+0x5968c`, the same zero members at
+`+0x20`/`+0x38`. Either the core rejects an empty vector or field 2 is not
+a vector at all; either way, no descriptor shape we can build fills the
+required buffer, and the black-box sweep is finished.
+
+**Next: catch the parse itself.** The parsed command object is larger than
+`0xb8` bytes and is heap-allocated just before the VII build. Find the
+allocation site (`mov w0, #0xb8` / `#0xc0` in `libtachyon_core.so`), break
+there with gdb before the client sends RegisterGraph, and once the object
+exists set a watchpoint on `*(long *)(cmd + 0x38)`. If a store exists, gdb
+names the instruction and the field it comes from; if the watchpoint never
+fires, `+0x38` is not a descriptor field and the parse's own field table,
+read from the caller chain, is the answer.
+
+Phone: up, Tachyon service dead after the `SSESS` crash, chain down; a
+reboot before the next attempt.
