@@ -6424,5 +6424,21 @@ function is the shortest way to the field order the vendor client writes.
 names the `+0x38` field; then CreateExecution (9), bind (12/13), Invoke
 (11).
 
+**Addendum (same day).** The vlog shim does load: copied into the chroot
+with `TPU_VLOG=5`, the log shows `TachyonCore_SetVlogLevel called with
+log_level: 5`, `vlog:set`, and then the service's own call lowering it to
+3. (The `ld.so: object … cannot be preloaded` lines are the host `chroot`
+process resolving the chroot-absolute path, not the service.) The register
+log ends at `[Cmd 4][RegisterGraph Handle 2] Command created`, and the
+segv shim then reports **SIGBUS at `libtachyon_core.so+0x59658`**
+(`lr +0x87b94`): `ldr x8,[x21,#0x10]; ldr x8,[x8]` with
+`[x21+0x10] == 0`. The descriptor object the core parsed starts
+`{2, 1, 0, 0, …}`: two counts and then a null first location, which the
+builder dereferences without the null check it applies to the two later
+locations. So the field still missing is the descriptor's first location,
+not the graph's contents or its scratch size. The 512-byte descriptor
+builder already encodes the intermediate field as a one-element vector
+(`I`), so that encoding is covered too.
+
 Phone: up, `tpu-hold` running, chain down; `/tmp/tpu-w.log` is this
 round's log (the scratch-patch run).
