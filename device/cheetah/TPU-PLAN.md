@@ -6189,3 +6189,23 @@ not a single number to 0.01 ms. The phone itself has no leg: its Python is
 3.14 and no aarch64 `ai-edge-litert` wheel exists for that ABI, so there is no
 TFLite runtime on the image. The comparison is therefore laptop CPU/GPU only;
 the TPU row has no number and none is claimed.
+
+
+## U119 (2026-11-08): the core gets past its platform check, then the zeroed session config crashes it
+
+The core aborts at load with `Unknown platform ID on Android: 6` because the
+property shim returns `mmio` to every process except the Tachyon service. A
+shim built with `-DPLATFORM_VALUE='"gs201"'` (a copy under
+`out/tpu-client/libpropsshim-gs201.so`, preloaded for this client only) gets
+past that check, and `TachyonCore_CreateClientSession` is reached.
+
+A direct call with a zeroed `0xb8`-byte config aborts with
+`stack corruption detected (-fstack-protector)` before it returns, with or
+without a preceding `TachyonCore_SetNpuManagerStatus(1)`; the
+`SetNpuManagerStatus` call alone also corrupts the stack. A zeroed config is
+therefore not a valid input, and the status flag is not safely settable out of
+order. The next input must be a **real** session config captured from the
+delegate or the Tachyon service (the AIDL `ClientSessionConfig` /
+`TachyonCore_CreateClientSession` call), not a synthetic one. The client is
+`tools/tpu-core-session.c`; its only useful result so far is the platform-check
+fix.
