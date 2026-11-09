@@ -619,7 +619,8 @@ int main(int argc, char **argv) {
         // 128 bytes": no answer yet, not a failure (the lib's
         // ReceiveResponseMessage builds exactly that status). Poll instead of
         // reading once, so a lazily produced answer is not missed.
-        for (tries = 0; tries < 60; tries++) {
+        /* RegisterGraph and Invoke take longer than a Ping: poll 30 s. */
+        for (tries = 0; tries < 300; tries++) {
           rm.size = sizeof rbuf;
           rm.data = rbuf;
           rr = recv_rsp(session, &rm);
@@ -650,6 +651,7 @@ int main(int argc, char **argv) {
         }
         put("\n");
         if (rr && status_ok && status_ok(rr) == 1 && ntypes == 0) break;
+        if (ntypes > 0 && round < rounds) sleep(1);
       }
     }
   }

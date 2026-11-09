@@ -5668,3 +5668,15 @@ The client now takes `TYPES=2,7,...` to send a sequence of union members in
 one session, using the round number as the sequence number, and no longer
 breaks the loop after the first success.
 
+## U99: RegisterGraph arrives but never completes with an empty table (2026-11-08)
+
+A two-command session now reaches RegisterGraph: the actor logs
+`received epoll event: 1 on fd 11`, `received command seq no: 2 of type :
+RegisterGraph` and `[Cmd 2][RegisterGraph Handle 0] Command created`. No
+response arrives within 30 s (300 polls), so the empty table leaves the
+command pending; AllocateTpu's response came back in 0.1 s.
+
+Transport, session and sequencing are all working. What remains is the
+request payload: RegisterGraph needs the compiled graph from the model's
+Edge TPU metadata, and then CreateExecution and Invoke.
+
