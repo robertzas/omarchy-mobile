@@ -1,37 +1,36 @@
-# TPU bring-up: next iteration (2026-11-09, after U149)
+# TPU bring-up: next iteration (2026-11-09, after U150)
 
-Read `device/cheetah/TPU-PLAN.md` U126-U149 and `AGENTS.md` first. Phone:
-up, chain up, Tachyon service alive; the boot's one TPU power-up is spent,
-so reboot before a client run (`reboot-to`, slot B, under the grant), then
+Read `device/cheetah/TPU-PLAN.md` U139-U150 and `AGENTS.md` first. Phone:
+up, Tachyon service dead; the boot's one TPU power-up is spent, so reboot
+before a client run (`reboot-to`, slot B, under the grant), then
 `TPU_VLOG=5 NO_DELEGATE=1 /root/tpu-tachyon-run`.
 
-**State.** Type 7 RegisterGraph parses the union table's fields as memory
-handles: `UORDER=MDMK` (fields 1,1,1,2) gives payload `{1, 2}`; field 1 is
-the device id and must be 1 (`UORDER=MKMK` returns a clean
-`Device id must be 1`); field 0 is the command handle. The handler then
-resolves `payload+0x10` (handle 1) and `payload+0x38`, which is **null** and
-crashes at `0x5968c`. Type 8 is UnregisterGraph, not ByBuffer. The client's
-`TAG` env now sets the root command type, and types 7 and 8 both use
-`build_reg3`.
+**State.** RegisterGraph now passes the core's dependency check:
+`UORDER=MDMK` (union fields as handles 1,1,1,2) plus a gdb patch at
+`core+0x5968c` (`set {unsigned long}($x21+8)=2; set $x8=$x21+8`) advances
+the command to `PENDING_FIRMWARE_SETUP`. The core wakes the firmware and
+sends `Sending firmware-setup VII command. type: 1 seq: 0`, then the setup
+fails: the element is `code 0`, payload fields 48/5/6 (the same legacy
+message the HAL sends, U75), and the firmware answers `Setup is not done
+yet received a command of type 0.` The core shuts the firmware down; the
+client gets `Virtual device failure`.
 
-1. **Enumerate the command types.** Send the remaining numbers in one
-   session (`TYPES=2,5,5,3,4,6,9,10`; eight is the client's limit) and read
-   the core log: it prints `received command seq no: N of type : NAME`
-   before processing, so every name is captured even if a later command
-   crashes. A second session covers the rest (11, 12, 13, 14, 15). Find
-   RegisterGraphByBuffer.
-2. **Send ByBuffer.** With its type number, build the descriptor
-   (`ORDER2=CS`, `UORDER=HDG`) so the `G` field points at the table with the
-   container `C` and scratch `S`; check the response and the log for a
-   registration success rather than the `+0x38` null.
-3. **If the handler is shared**, stop at `core+0x59620` and confirm
-   `payload+0x10`/`payload+0x38` are the two handles before letting it run.
-4. **Pipeline and measure.** CreateExecution (9), bind input/output (12/13),
-   Invoke (11) on the SSD 300x300 int8 model; 60 frames of
-   `out/bench/mosaic12.mp4` through `tools/bench-object-detection.py`; fill
-   the TPU row in U118 (CPU 4t 4.28 ms/233.9 fps, GPU WebGPU 3.00 ms/333.3
-   fps, both 10.0 detections/frame), record U150 with the date and
-   `uname -r`, replace this prompt, and commit.
+1. **Patch the setup element's code/type.** Find where the core writes the
+   element's `code` (0) for the setup submit (the driver's dump shows it;
+   the core's setup builder is at `0x7f9c4`, the submit handler around
+   `0x750a0`). Patch it to 1, or interpose the element in the mapped queue
+   before the doorbell. Re-run and read `dmesg`'s `vii-elem` /
+   `vii-payload` and the firmware's answer.
+2. **If the firmware names the global scratches**, build the setup payload
+   with the graph descriptor's scratch (the model's slot 3) and the
+   cluster bitset, then re-run. If it accepts, the firmware setup is done.
+3. **Then the pipeline.** CreateExecution (9), BindInputBuffers (12),
+   BindOutputBuffers (13), Invoke (11) on the SSD 300x300 int8 model;
+   run 60 frames of `out/bench/mosaic12.mp4` through
+   `tools/bench-object-detection.py`; fill the TPU row in U118 (CPU 4t
+   4.28 ms/233.9 fps, GPU WebGPU 3.00 ms/333.3 fps, both 10.0
+   detections/frame), record the result with the date and `uname -r`,
+   replace this prompt, and commit.
 
 Do not add `Signed-off-by`. Scan the diff for identifiers before the
 commit.
