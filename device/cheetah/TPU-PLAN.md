@@ -5876,3 +5876,29 @@ Next: re-apply the two dev-only patches to the chroot copy (provider gate at
 delegate as the boot's first TPU user, and see whether device creation now
 returns 0 and whether RegisterGraph/Invoke get past the firmware gate.
 
+## U108: the setup-skip patch was already applied, and the delegate still fails (2026-11-08)
+
+Before touching anything, the chroot's `libdarwinn_hal.so` sha256 was
+`c04ad3249d3c389da58b6d1a7f680692036be10d244c17092a29da88f2430e5b` — the
+exact "phone copy" sha U56 recorded for its patched library. Its bytes at
+`0x14d9a5c` were already `1f2003d5` (the setup-skip `nop`) and at `0x1569ae0`
+already `mov w0, #1; ret`. So both dev patches were still in place.
+
+With them, the delegate run still ends the same way:
+
+```
+INTERNAL: Sync VII command failed: error_code=9   (three attempts)
+create device status: 13
+device: 0x0
+delegate rc: 1
+```
+
+So U56's result ("CreateDevice returns OK") belongs to the A14 HAL's own
+service path, not to the delegate: the delegate sends a Sync VII command
+first, and the firmware refuses it with the setup error no matter what
+`SetupFirmware` does. The setup has to be sent for real, as a type-1 element
+carrying global scratches (U66), before any delegate command will be accepted.
+
+The library was restored to U56's exact bytes (`c04ad3249d3c…`) so the known
+state is intact; `.orig` holds the stock file (`f3064911cc7c…`).
+
