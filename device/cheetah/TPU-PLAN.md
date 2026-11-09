@@ -5680,3 +5680,20 @@ Transport, session and sequencing are all working. What remains is the
 request payload: RegisterGraph needs the compiled graph from the model's
 Edge TPU metadata, and then CreateExecution and Invoke.
 
+## U100: the compiled graph is a DWN1 container, not a flatbuffer (2026-11-08)
+
+The model is a single `edgetpu-custom-op` whose `custom_options` is
+4,726,868 bytes: the compiled graph. It is not a bare flatbuffer. Its head
+is `31 00 34 00 00 20 48 00 c8 0f 00 00 44 57 4e 31` — a "14" version
+pair, `0x482000` (4,726,784, the file length less 84), `0xfc8`, then the
+magic `DWN1`, and the payload carries the string `beagle`.
+
+So RegisterGraph's graph field has to carry this DWN1 blob (or the core's
+own parser of it), not a table built from the tflite ops. Extracted to
+`out/edgetpu-runtime/graph.bin`.
+
+The vendor delegate was re-tested after U98 with a working virtual device:
+still `create device status: 13`, `delegate rc: 1`, and no
+`TachyonCore_CreateClientSession` in the log, so the vendor util path stays
+closed and the Tachyon client stays the route.
+
