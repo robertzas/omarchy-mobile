@@ -7241,7 +7241,54 @@ flag with `stlrb #1, [x19+0x180]`, and logs the failure at `0x14d9d40`
 with the count and bitset. So the setup is built locally from the Janeiro
 config, not from the delegate's default spec.
 
-**Next:** decode `0x14d9a00`-`0x14da260` and `0x14e3300`-`0x14e3500`
-(the 24-byte entry layout, the bitset argument, the Janeiro config
-fields and the setup flatbuffer), then build the type-1 setup element for
-the ring client. Nothing on the phone changed this iteration.
+## U162 (2026-11-09): the type-1 serializer's field map, and the core Start is a stub
+
+Static pass over the A17 HAL (`out/a17-edgetpu/libdarwinn_hal.so`, sha
+`edf6abfb…`) and core (sha `47fb5f74…`). Nothing on the phone changed.
+
+* **The core is not the producer.** `TachyonCore_Start` (`0x51590`) calls
+  `0x515b4`, which only returns, and `TachyonCore_CreateClientSession`
+  (`0x51078`) builds a 0x58-byte session config and takes the known
+  "InternalCreateClientSession is not implemented" path at `0x51480`.
+  The A17 core has no setup strings and no setup code.
+* **The HAL's setup builder sends a type-1 VII command.** The per-command
+  send `0x14d9eac` calls the builder/sender at `0x14de9cc`: it initializes
+  a flatbuffer builder (1024 bytes, the 16-byte constant at `.rodata`
+  `0x4fb760`), serializes the command through `0x14deed8`, and submits it
+  through the provider's vtable at `[x20+0x170]` (method `+0x18`) with
+  `w1` = the builder's size. The status check is `0x14e3388`, and the
+  success flag is `stlrb #1, [x19+0x180]` (the `firmware_setup_done_`
+  byte U56 saw).
+* **The command's type byte selects the serializer.** `0x14deed8` reads
+  the command entry's payload vector with `0x14dfe8c` (8-byte elements,
+  empty → a default at `0x2371000+0xa78`), the type byte at `+0x18`, and
+  dispatches through `0x14dfea8` to one of seven serializers; type 1 is
+  `0x14e0380` (types 2/4/5/6/7 are `0x14e0de4`, `0x14e0c98`, `0x14e0d98`,
+  `0x14e0b8c`, `0x14e0e40`).
+* **The type-1 table's field map.** `0x14e0380` calls `0x14e04c8`, whose
+  setters pass the FlatBuffers field offsets `4, 6, 8, 10, 20, 22, 24,
+  26, 28`, i.e. field ids `0, 1, 2, 3, 8, 9, 10, 11, 12`. Fields 2 and 3
+  are the two vectors (setters `0x14e0654` from `[x20+0x30]` and
+  `0x14e0640` from `[x20+0x38]`); the serializer builds one vector with
+  16-byte elements (`0x14e049c`, `w3=0x10`) and one with 64-byte elements
+  (`w3=0x40`). Fields 0/1/10 are 4-byte (`0x14e06ac`, `0x14e069c`,
+  `0x14e068c`), fields 8/9 bytes (`0x14e06d0`, `0x14e06bc`), and fields
+  11/12 16-bit (`0x14e0678`, `0x14e0668`). The command object's
+  `[x20+0x40]`/`[x20+0x42]` supply the 16-bit values, `[x20+0x48]` feeds
+  the field-10 table, and `[x20+0x60]` the last argument.
+* **The stock NN service is present but not runnable yet.** The chroot has
+  `vendor/bin/hw/android.hardware.neuralnetworks@service-darwinn-aidl`
+  (814 328 B, links `libdarwinn_hal.so` directly) and the A17 NNAPI AIDL
+  libs, but no `libneuralnetworks.so` runtime (only
+  `libneuralnetworks_packageinfo.so`). Its HAL is the exact type-1
+  producer; without the runtime, the ring client is the shorter path.
+* The chroot's HAL/util/core are patched copies (HAL
+  `c04ad3249d3c…`, util `1985659e20e5…`, core `d1602625abb0…`), with
+  `.orig` backups; the A17 originals are in `out/a17-edgetpu/`.
+
+**Next:** add a type-1 setup table to the ring client with fields 2 and 3
+as the vectors (the 16-byte scratch ranges first: the U159 mapping table
+`0x10000000`+16 MiB, `0x11000000`+64 KiB, `0x11010000`+64 KiB, and an
+empty resource vector), then the scalar fields, and read the firmware's
+answer. If it accepts, send `TYPES=2,5,5,7 UORDER=MDMK` plus the gdb
+patch and continue to RegisterGraph/CreateExecution/Invoke.
