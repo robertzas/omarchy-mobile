@@ -6962,3 +6962,19 @@ Next: build the type-1 setup message itself (the firmware's handler wants
 the cluster bitset and the global scratch list) and submit it as the setup
 element, or recover the message from a userspace that has the real setup
 producer. The RegisterGraph command path is otherwise correct.
+
+## U152 (2026-11-09): the stock delegate's tachyon path hits the same setup
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, one boot (`u153`),
+slot B. The chain (`NO_DELEGATE=1`) plus the stock delegate
+(`edgetpu-run /vendor/etc/model.tflite`, uid 10000, the tachyon client path)
+opens a session and sends the same setup **three times**: the delegate logs
+`create device status: 13` and `device: 0x0`. `dmesg` shows three
+`OPEN_DEVICE` lines, each followed by `Setup is not done yet received a
+command of type 0.` and the same payload (root `0x14`, fields 48/5/6).
+
+No `RegisterGraph` reached the core (gdb at `0x59620` never hit), and the
+`libcmddump.so` file is 0 bytes: the delegate fails at the virtual device,
+before it sends any command through the client library. So the stock
+client's session config does not carry the missing scratches either; the
+setup message belongs to the core, not the client.
