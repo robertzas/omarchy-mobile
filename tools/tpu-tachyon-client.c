@@ -30,6 +30,7 @@ extern long readlink(const char *, char *, size_t);
 extern int *__errno(void);
 extern char *getenv(const char *);
 extern void *memcpy(void *, const void *, size_t);
+extern long syscall(long, ...);
 
 #define RTLD_NOW 2
 #define RTLD_GLOBAL 0x100
@@ -217,11 +218,40 @@ static void put64(unsigned char *p, unsigned long v) {
   for (i = 0; i < 8; i++) p[i] = (v >> (8 * i)) & 0xff;
 }
 
+// HANDLE is the command's memory handle; FDH is the client-assigned fd handle
+// that sendFileDescriptors assigns. ImportMemoryFromFd validates the second:
+// with only HANDLE set it names Handle 1 but still reports fd handle 0.
+static unsigned long g_handle;
+static unsigned long g_fd_handle;
+
 static unsigned build_cmd(unsigned char *b, int type, long seq) {
   /* root table at 36, its vtable at 24; union vtable at 56, union table at 60 */
   int i;
 
   for (i = 0; i < 128; i++) b[i] = 0;
+  if ((g_handle || g_fd_handle) && (type == 5 || type == 6 || type == 7)) {
+    /* union vtable at 64, union table at 72, handle at 80, fd handle at 88 */
+    put32(b + 0, 36);
+    put16(b + 24, 0x0c);
+    put16(b + 26, 0x18);
+    put16(b + 28, 4);
+    put16(b + 30, 12);
+    put16(b + 32, 13);
+    put16(b + 34, 16);
+    put32(b + 36, 12);
+    put64(b + 40, (unsigned long)seq);
+    b[48] = 1;  /* privileged, matching the session config */
+    b[49] = (unsigned char)type;
+    put32(b + 52, 20);  /* union table at 72 */
+    put16(b + 64, 8);   /* vtable size */
+    put16(b + 66, 24);  /* table size */
+    put16(b + 68, 8);   /* field 0 at table+8 */
+    put16(b + 70, 16);  /* field 1 at table+16 */
+    put32(b + 72, 8);   /* soffset back to the vtable at 64 */
+    put64(b + 80, g_handle ? g_handle : 1);
+    put64(b + 88, g_fd_handle);
+    return 96;
+  }
   put32(b + 0, 36);
   put16(b + 24, 0x0c);
   put16(b + 26, 0x18);
@@ -322,6 +352,8 @@ int main(int argc, char **argv) {
   long rounds_env = 0;
   int cmd_type = (int)parse_dec(getenv("TYPE"));
 
+  g_handle = (unsigned long)parse_dec(getenv("HANDLE"));
+  g_fd_handle = (unsigned long)parse_dec(getenv("FDH"));
   if (cmd_type <= 0 || cmd_type > 24) cmd_type = 1;
 
   // TYPES=2,7 sends a different union member in each round, each with its
@@ -492,6 +524,33 @@ int main(int argc, char **argv) {
   show_fd(1, fd1);
   show_fd(2, fd2);
   show_fd(3, fd3);
+  // Assign a memfd to a client handle before the command that imports it. The
+  // core's get_fds callback is for handles it needs back; the fd itself goes
+  // out through this call (the lib's SendFileDescriptors).
+  if (g_fd_handle) {
+    typedef void *(*sendfds_fn)(void *, const int *, const long *, long);
+    sendfds_fn sendfds =
+        (sendfds_fn)dlsym(h, "TachyonComputeSession_sendFileDescriptors");
+
+    if (sendfds) {
+      long mfd = syscall(279, "tpu-mem", 0);
+
+      if (mfd >= 0) {
+        static char page[4096];
+        int ifd = (int)mfd;
+        long h = (long)g_fd_handle;
+        void *r;
+
+        write(ifd, page, sizeof page);
+        r = sendfds(session, &ifd, &h, 1);
+        show_status(0, status_ok, "sendFileDescriptors", r);
+      } else {
+        put("memfd_create failed\n");
+      }
+    } else {
+      put("sendFileDescriptors symbol missing\n");
+    }
+  }
   // The core sends the firmware's setup message lazily, before the first
   // command it copies into the command FMQ. Send one zero-filled message so
   // that setup runs before the delegate's own VII sync (TPU-PLAN U58).
