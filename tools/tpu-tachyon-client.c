@@ -567,9 +567,72 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
   return 512;
 }
 
+/* The A17 HAL's type-1 setup command (TPU-PLAN U162). The setup payload is a
+   table with 13 field slots (0..12); fields 2 and 3 are vectors, and the only
+   fields with a known encoding from the serializer (0x14e0380) are the 16-byte
+   scratch vector (field 2) and the 64-byte resource vector (field 3). The
+   cluster id and bitset travel beside the flatbuffer in the HAL's per-command
+   call, not in this table, so a minimal table with just the two vector fields
+   is the right first probe: the firmware's answer names what is missing.
+   SETUP_ADDR=phys sends the physical mapping addresses instead of the TPU
+   virtual ones, and SETUP_N limits the list to 1..3 ranges. */
+static unsigned build_setup(unsigned char *b, long seq) {
+  static const unsigned long tpu[3][2] = {
+      {0x10000000UL, 0x1000000UL},   /* map[0]: the firmware carveout */
+      {0x11000000UL, 0x10000UL},     /* map[1] */
+      {0x11010000UL, 0x10000UL},     /* map[2] */
+  };
+  static const unsigned long phys[3][2] = {
+      {0x93000000UL, 0x1000000UL},
+      {0x18290000UL, 0x10000UL},
+      {0x1cc00000UL, 0x10000UL},
+  };
+  const unsigned long(*ranges)[2] =
+      getenv("SETUP_ADDR") && same_str(getenv("SETUP_ADDR"), "phys") ? phys
+                                                                      : tpu;
+  int n = (int)env_num("SETUP_N", 3);
+  int i;
+
+  if (n > 3) n = 3;
+  if (n < 1) n = 1;
+  for (i = 0; i < 512; i++) b[i] = 0;
+  /* Root table at 36, its vtable at 24, exactly as every command. */
+  put32(b + 0, 36);
+  put16(b + 24, 0x0c);
+  put16(b + 26, 0x18);
+  put16(b + 28, 4);
+  put16(b + 30, 12);
+  put16(b + 32, 13);
+  put16(b + 34, 16);
+  put32(b + 36, 12);
+  put64(b + 40, (unsigned long)seq);
+  b[48] = 1;              /* privileged, matching the session config */
+  b[49] = 1;              /* union type 1: firmware setup */
+  /* Union (setup) table at 96, its vtable at 56: 13 slots, 30 bytes. */
+  put32(b + 52, 96 - 52);
+  put16(b + 56, (unsigned)(4 + 2 * 13));
+  put16(b + 58, 24);      /* table size: fields up to table+20+4 */
+  put16(b + 60 + 2 * 2, 16);   /* field 2: the 16-byte scratch vector */
+  put16(b + 60 + 3 * 2, 20);   /* field 3: the 64-byte resource vector */
+  put32(b + 96, 96 - 56); /* table soffset back to the vtable */
+  /* Field 2: vector at 160, length n, 16-byte {address, size} entries at 168. */
+  put32(b + 96 + 16, 160 - (96 + 16));
+  put32(b + 160, (unsigned)n);
+  for (i = 0; i < n; i++) {
+    put64(b + 168 + 16 * i, ranges[i][0]);
+    put64(b + 168 + 16 * i + 8, ranges[i][1]);
+  }
+  /* Field 3: an empty vector at 224 (the unified stack has one cluster). */
+  put32(b + 96 + 20, 224 - (96 + 20));
+  put32(b + 224, 0);
+  return 256;
+}
+
 static unsigned build_cmd(unsigned char *b, int type, long seq) {
   /* root table at 36, its vtable at 24; union vtable at 56, union table at 60 */
   int i;
+
+  if (type == 1 && getenv("SETUP")) return build_setup(b, seq);
 
   for (i = 0; i < 512; i++) b[i] = 0;
   if ((type == 7 || type == 8) && g_handle) {

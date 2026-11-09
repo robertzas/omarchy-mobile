@@ -7292,3 +7292,36 @@ as the vectors (the 16-byte scratch ranges first: the U159 mapping table
 empty resource vector), then the scalar fields, and read the firmware's
 answer. If it accepts, send `TYPES=2,5,5,7 UORDER=MDMK` plus the gdb
 patch and continue to RegisterGraph/CreateExecution/Invoke.
+
+## U163 (2026-11-09): the type-1 setup command runs on the ring
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, one boot, slot
+B. `tools/tpu-tachyon-client.c` gained a `SETUP=1` path for a type-1
+command: the payload table's field 2 is a vector of three 16-byte
+`{address, size}` entries (TPU `0x10000000`+16 MiB, `0x11000000`+64 KiB,
+`0x11010000`+64 KiB) and field 3 is an empty resource vector, with every
+other field absent. Built with the pinned clang and run as uid 1000
+against the stock tachyon service (its own `TYPES=1 SETUP=1`):
+
+    create: OK
+    createSession: OK
+    setupCommandQueue: OK fds=12,13
+    setupResponseQueue: OK fds=15,16
+    round 1 sendCommand: OK
+    response size=96
+    18 00 00 00 00 00 00 00 00 0e 00 1c 00 10 00 07 00 08 00 ...
+
+`dmesg` shows the first `KCI tx code 21 seq 3` of the boot, the phone
+stayed up, and there is no `Setup is not done yet` line. The 96-byte
+response is a flatbuffer result, not the 72-byte `Virtual device failure`
+and not an ASCII error; its exact status and the hash at +0x58 are not
+decoded. The client was killed by its own 40 s `timeout` (it sleeps 120 s
+after the round), so the tachyon service logged the client death and
+exited; the TPU did not power down and the firmware setup is global.
+
+**Next:** in the same boot, send the full `TYPES=1,2,5,5,7 SETUP=1
+UORDER=MDMK` sequence with the `core+0x5968c` gdb patch (`set
+{unsigned long}($x21+8)=2; set $x8=$x21+8`), then CreateExecution,
+BindInputBuffers, BindOutputBuffers and Invoke on the SSD model, and the
+benchmark. A RegisterGraph that proceeds is the decoded proof the setup
+was accepted; a 96-byte result without that is not.
