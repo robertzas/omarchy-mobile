@@ -6562,3 +6562,44 @@ directly instead of inferring it:
 
 Phone: up, Tachyon service dead after the `SSIISS` register crash, chain
 down; a reboot before the next attempt.
+
+## U126 (2026-11-09): gdb reads the parsed command, and a patched `+0x38` gets RegisterGraph through
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, two boots
+(`tpu-u126`, `tpu-u126b`), slot B. A gdb attach with
+`handle SIGSEGV stop print nopass` catches the fault before the segv shim
+and leaves the registers live.
+
+**The parsed command object** (`$x21`, 24 u64): `2 1 <ptr> <ptr> 0 0 ...`.
+`+0x10` and `+0x18` are two single `BufferDescriptor *`; the vectors at
+`+0x20`, `+0x40`, `+0x58` are empty; `+0x80` holds `0xfcda000000070107`
+(byte 0 = **7**, the RegisterGraph union tag), `+0x90` a pointer,
+`+0x98` `0x31` and `+0xa0` `0x29`. So the request parse is complete and
+correct; only the descriptor's required single buffer is never filled.
+
+**Patching the fault unblocks the command.** At the stop,
+`set $x8 = *(unsigned long *)($x21 + 0x10)` (the container's own
+`BufferDescriptor`) and `continue`: the VII builder stops faulting, the
+core sends the command, and the client receives a **200-byte response with
+a structured error**, not a crash:
+
+```
+Dependent memory handle was not added: 252.
+Maybe you forgot to call ImportMemoryByFd.
+```
+
+So `+0x38` is a real buffer the command must reference, its handle has to
+be in the command's memory set, and the core's own check — not the VII
+builder — is now the gate. The service still ended after that (gdb printed
+no second stop; `SVC=dead`), so the next null is probably one of the
+vectors, but the register path is no longer a blind wall.
+
+**Next:** the missing buffer is imported but not "added". Test the handle
+the error names: run the client with `SH=252` / `IH=252` (and the second
+import's handle) so the buffer that fills `+0x38` names a handle the core
+does have; if the message changes or the register succeeds, the slot is
+right and only the handle was wrong. Then CreateExecution (9), bind (12/13)
+and Invoke (11).
+
+Phone: up, Tachyon service dead after the patched-register run, chain down;
+a reboot before the next attempt.
