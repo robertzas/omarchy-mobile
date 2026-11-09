@@ -6646,3 +6646,16 @@ read from the caller chain, is the answer.
 
 Phone: up, Tachyon service dead after the `SSESS` crash, chain down; a
 reboot before the next attempt.
+
+## U129 (2026-11-09): the command object's allocation site is 0x4d53c
+
+The core has exactly one `mov w0, #0xb8` (`libtachyon_core.so+0x4d53c`),
+the session/kernel-interface construction U117 flagged (`0x4d5e4` ->
+`0x511ec`); the `0xc0` and `0xe0` allocations are elsewhere. That is the
+breakpoint the watchpoint step needs: `break *<core base>+0x4d53c`, let the
+client send RegisterGraph, then `watch -l *(long *)($x21+0x38)` and
+`continue`. A watched store names the flatbuffer field; no store proves the
+member is not filled from the descriptor at all.
+
+No phone run was made for this entry: it is a static read of
+`/tmp/core-stock.dis`.
