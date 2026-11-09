@@ -5603,3 +5603,35 @@ The Ping path end to end (U94): `sendCommand` OK, ring fd 11,
 `received command seq no: 1 of type : Ping`, `receiveResponse` OK,
 `response size=88`.
 
+## U96: the command union is mapped and the actor answers each type (2026-11-08)
+
+The core's enum-name table at `.data.rel.ro` 0x16c2f8 is the command union,
+in order: NONE, Ping, AllocateTpu, AllocateDspTpu, AllocateDsp,
+ImportMemoryFromFd, ReleaseMemory, RegisterGraph, UnregisterGraph,
+CreateExecution, DeleteExecution, Invoke, BindInputBuffersToTensors,
+BindOutputBuffersToTensors, BindInputSyncFencesToExecution,
+BindOutputFenceToExecution, ReleaseClientAssignedFd, AcquireTpuWakelock,
+ReleaseTpuWakelock. Ping is 1, matching the actor's log.
+
+Each command must be sent once per session: `sendCommand` plus a
+`begin/commit` write of the same message makes the actor log it twice and
+kill the session ("command sequence number ... must be larger"). With one
+send and the eventfd ring, the actor answers every type:
+
+- Ping: 88-byte response, OK (U94); the response ends with an 8-byte value
+  (`b0 1f 30 15 de 3a e6 18`).
+- AllocateTpu, empty table: 72 bytes, "Virtual device failure".
+- AllocateDsp, empty table: 104 bytes, "Unimplemented...".
+- RegisterGraph, empty table: 96 bytes, "Virtual device...".
+- ImportMemoryFromFd, empty table: 184 bytes, "INVALID_ARGUMENT: Invalid
+  client assigned fd handle: 0. Mus..." (truncated at the client's 160-byte
+  dump).
+
+The response flatbuffer carries a status text; the client prints it as
+ASCII. What is left is each request's table layout, not the transport.
+
+The vendor model `/vendor/etc/model.tflite` (4,653,936 bytes, md5
+`f524e0f41d4c13a9c12a62b82af78496`) is Edge TPU-compiled
+(`edgetpu-custom-op`, `TFLite_Detection_PostProcess`): a usable SSD
+detector once a graph can be registered and invoked.
+
