@@ -7,12 +7,13 @@ firmware still logs `Setup is not done yet`, and the core never logs a setup
 attempt, so the trigger is not reached. Work offline first; the phone keeps
 its boot until step 2.
 
-1. Find the function that contains `0x7fb5c` in `/tmp/core.dis` (scan back for
-   its prologue), then every `bl` to its start. Its callers name the gate: the
-   core's own strings are `PENDING_FIRMWARE_SETUP` (`strings -t x` finds
-   it), `Unexpected firmware setup status: ` and
-   `Sending firmware-setup VII command. type: `. Record the caller, the state
-   field it tests and the branch that skips the call in `TPU-PLAN.md`.
+1. U114 corrected the map: the builder is `0x7f9c4` (one caller, `0x73abc`
+   in the `0x73a48` session factory); `0x7f7cc` is only a callback at `+0x258`.
+   Now disassemble the function containing `0x7531c`
+   (`PushFirmwareSetupCmdToVII failed`) and its callers: that is the submit
+   path. Find what reads `[obj+0x1c0]` between build and submit, and which of
+   the builder's two `0xd5630` results selects type 11 versus 15. Record the
+   condition in `TPU-PLAN.md`.
    Also map `libedgetpu_util.so`'s `0x13befc`: its program headers differ from
    the core's, so that address is a file offset; print the headers and
    disassemble the mapped vaddr to see whether util's per-cluster setup payload
