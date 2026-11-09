@@ -39,6 +39,32 @@ extern long lseek(int, long, int);
 extern long read(int, void *, size_t);
 extern int close(int);
 
+/* No string.h here: the client is built -nostdlib against bionic's exports. */
+static int same_str(const char *a, const char *b) {
+  while (*a && *a == *b) {
+    a++;
+    b++;
+  }
+  return *a == *b;
+}
+
+static unsigned env_num(const char *name, unsigned def) {
+  const char *s = getenv(name);
+  unsigned v = 0;
+
+  if (!s || !*s) return def;
+  while (*s >= '0' && *s <= '9') v = v * 10 + (unsigned)(*s++ - '0');
+  return v;
+}
+
+static int has_char(const char *s, char c) {
+  while (*s) {
+    if (*s == c) return 1;
+    s++;
+  }
+  return 0;
+}
+
 #define RTLD_NOW 2
 #define RTLD_GLOBAL 0x100
 #define RTLD_DEFAULT ((void *)0)
@@ -231,16 +257,310 @@ static void put64(unsigned char *p, unsigned long v) {
 static unsigned long g_handle;
 static unsigned long g_fd_handle;
 static unsigned long g_dma_size = 4096;
+static unsigned long g_scratch;       /* firmware scratch memory handle */
+static unsigned long g_scratch_size;  /* its size in bytes */
+static unsigned long g_graph_size;    /* the graph dma-buf's size */
+static unsigned long base_handle;     /* HANDLE: the graph's memory handle */
+static unsigned long base_fd;         /* FDH: the graph's fd handle */
+
+/* RegisterGraph with an arbitrary GraphDescriptor layout. ORDER2 is a list of
+   field selectors, one per descriptor field (up to six):
+     C graph container table   S firmware scratch table
+     X extra buffer table      I intermediate-buffer vector (one element)
+     L location, inline struct (offset, size)
+     T location, two-field table
+   Every table sits at a fixed offset, so a sweep permutes only the descriptor's
+   field slots. TPU-PLAN U123: the core dereferences a null field at +0x38, and
+   the failing field's slot is what this finds. */
+/* SAME=1 points the firmware scratch and the intermediate buffer at the
+   graph's own memory, to tell a failed handle lookup from a bad descriptor.
+   RH=1 sends the graph's memory handle as the register command's handle
+   instead of handle+1. */
+static unsigned long reg_scratch_handle(void) {
+  return getenv("SAME") ? g_handle : g_scratch;
+}
+
+static unsigned long reg_scratch_size(void) {
+  return getenv("SAME") ? g_dma_size : g_scratch_size;
+}
+
+static unsigned build_reg2(unsigned char *b, const char *order, long seq) {
+  unsigned nf = 0;
+  unsigned k;
+
+  while (order[nf] && nf < 6) nf++;
+  put32(b + 0, 36);
+  put16(b + 24, 0x0c);
+  put16(b + 26, 0x18);
+  put16(b + 28, 4);
+  put16(b + 30, 12);
+  put16(b + 32, 13);
+  put16(b + 34, 16);
+  put32(b + 36, 12);
+  put64(b + 40, (unsigned long)seq);
+  b[48] = 1;
+  b[49] = 7;
+  put32(b + 52, 20);              /* union table at 72 */
+  put16(b + 60, 10);              /* union vtable: 3 fields */
+  put16(b + 62, 32);
+  put16(b + 64, 8);
+  put16(b + 66, 16);
+  put16(b + 68, 24);
+  put32(b + 72, 12);              /* soffset back to 60 */
+  put64(b + 80, getenv("RH") ? g_handle : g_handle + 1); /* command handle */
+  put64(b + 88, 1);               /* device id */
+  put32(b + 96, 24);              /* descriptor table at 120 */
+  put16(b + 104, (unsigned)(2 + 2 * nf)); /* vtable: one entry per field */
+  put16(b + 106, (unsigned)(8 * nf + 16)); /* table size, room for a struct */
+  for (k = 0; k < nf; k++) put16(b + 108 + 2 * k, (unsigned)(8 + 8 * k));
+  put32(b + 120, 16);             /* soffset back to 104 */
+  for (k = 0; k < nf; k++) {
+    unsigned long fld = 128 + 8 * k;
+    char f = order[k];
+
+    if (f == 'C') put32(b + fld, (unsigned)(204 - fld));
+    else if (f == 'S') put32(b + fld, (unsigned)(252 - fld));
+    else if (f == 'X') put32(b + fld, (unsigned)(300 - fld));
+    else if (f == 'I') put32(b + fld, (unsigned)(336 - fld));
+    else if (f == 'T') put32(b + fld, (unsigned)(408 - fld));
+    else if (f == 'L') {
+      put64(b + fld, 0);
+      put64(b + fld + 8, g_dma_size);
+    }
+  }
+  /* C: graph container table at 204 */
+  put16(b + 192, 10);
+  put16(b + 194, 32);
+  put16(b + 196, 8);
+  put16(b + 198, 16);
+  put16(b + 200, 24);
+  put32(b + 204, 12);
+  put64(b + 212, g_handle);
+  put64(b + 220, 0);
+  put64(b + 228, g_dma_size);
+  /* S: firmware scratch table at 252 */
+  put16(b + 240, 10);
+  put16(b + 242, 32);
+  put16(b + 244, 8);
+  put16(b + 246, 16);
+  put16(b + 248, 24);
+  put32(b + 252, 12);
+  put64(b + 260, reg_scratch_handle());
+  put64(b + 268, 0);
+  put64(b + 276, reg_scratch_size());
+  /* X: a second full-size buffer table at 300 */
+  put16(b + 288, 10);
+  put16(b + 290, 32);
+  put16(b + 292, 8);
+  put16(b + 294, 16);
+  put16(b + 296, 24);
+  put32(b + 300, 12);
+  put64(b + 308, g_handle);
+  put64(b + 316, 0);
+  put64(b + 324, g_dma_size);
+  /* I: the one-element intermediate vector at 336 */
+  put32(b + 336, 1);
+  put32(b + 340, 16);
+  put16(b + 344, 10);
+  put16(b + 346, 32);
+  put16(b + 348, 8);
+  put16(b + 350, 16);
+  put16(b + 352, 24);
+  put32(b + 356, 12);
+  put64(b + 364, reg_scratch_handle());
+  put64(b + 372, 0);
+  put64(b + 380, reg_scratch_size());
+  /* T: the location as a two-field table at 408 */
+  put16(b + 396, 10);
+  put16(b + 398, 24);
+  put16(b + 400, 8);
+  put16(b + 402, 16);
+  put32(b + 408, 12);
+  put64(b + 416, 0);
+  put64(b + 424, g_dma_size);
+  return 512;
+}
+
+/* RegisterGraph with fields on the command itself as well as in the graph
+   descriptor. ORDER2 selects the GraphDescriptor fields and UORDER the
+   command's own fields, one letter each:
+     H command handle (u64)    D device id (u64)    G the descriptor table
+     C graph container table   S firmware scratch table
+     X extra buffer table      I intermediate-buffer vector (one element)
+     L location, inline struct (offset, size)
+     T location, two-field table
+   TPU-PLAN U123: the core reads a null buffer at command+0x38 whatever the
+   descriptor holds, so the missing field is likely on the command: stock's
+   RegisterGraphByBufferWithExternalParameter passes a parameter buffer
+   beside the graph. */
+static unsigned build_reg3(unsigned char *b, const char *order, long seq,
+                           const char *uo) {
+  unsigned nf = 0, nu = 0, k, cur = 8;
+  unsigned offs[8];
+
+  while (order[nf] && nf < 8) nf++;
+  while (uo[nu] && nu < 5) nu++;
+  for (k = 0; k < nf; k++) {
+    offs[k] = cur;
+    cur += (order[k] == 'c' || order[k] == 's' || order[k] == 'i') ? 24 : 8;
+  }
+  put32(b + 0, 36);
+  put16(b + 24, 0x0c);
+  put16(b + 26, 0x18);
+  put16(b + 28, 4);
+  put16(b + 30, 12);
+  put16(b + 32, 13);
+  put16(b + 34, 16);
+  put32(b + 36, 12);
+  put64(b + 40, (unsigned long)seq);
+  b[48] = 1;
+  b[49] = 7;
+  put32(b + 52, 20);              /* union table at 72 */
+  put16(b + 60, (unsigned)(2 + 2 * nu));
+  put16(b + 62, (unsigned)(8 * nu + 8));
+  for (k = 0; k < nu; k++) put16(b + 64 + 2 * k, (unsigned)(8 + 8 * k));
+  put32(b + 72, 12);
+  for (k = 0; k < nu; k++) {
+    unsigned long fld = 80 + 8 * k;
+    char f = uo[k];
+
+    if (f == 'H') put64(b + fld, getenv("RH") ? g_handle : g_handle + 1);
+    else if (f == 'D') put64(b + fld, 1);
+    else if (f == 'G') put32(b + fld, (unsigned)(144 - fld));
+    else if (f == 'X') put32(b + fld, (unsigned)(348 - fld));
+    else if (f == 'V' || f == 'W') put32(b + fld, (unsigned)(440 - fld));
+    else if (f == 'M') put64(b + fld, g_handle);
+    else if (f == 'K') put64(b + fld, g_handle + 1);
+    else if (f == 'S') {
+      put32(b + fld, env_num("BTYPE", 0));
+      put32(b + fld + 4, env_num("BIDX", 0));
+      put64(b + fld + 8, 0);
+      put64(b + fld + 16, env_num("BSIZE", (unsigned)g_dma_size));
+    }
+  }
+  /* GraphDescriptor table at 144; c/s/i are inline BufferLocations */
+  put16(b + 128, (unsigned)(2 + 2 * nf));
+  put16(b + 130, (unsigned)(cur + 16));
+  for (k = 0; k < nf; k++) put16(b + 132 + 2 * k, (unsigned)offs[k]);
+  put32(b + 144, 16);
+  for (k = 0; k < nf; k++) {
+    unsigned long fld = 144 + offs[k];
+    char f = order[k];
+
+    if (f == 'C') put32(b + fld, (unsigned)(252 - fld));
+    else if (f == 'S') put32(b + fld, (unsigned)(300 - fld));
+    else if (f == 'X') put32(b + fld, (unsigned)(348 - fld));
+    else if (f == 'I') put32(b + fld, (unsigned)(384 - fld));
+    else if (f == 'T') put32(b + fld, (unsigned)(476 - fld));
+    else if (f == 'L') {
+      put64(b + fld, 0);
+      put64(b + fld + 8, g_dma_size);
+    } else if (f == 'c') {
+      put32(b + fld, 0);
+      put32(b + fld + 4, 0);
+      put64(b + fld + 8, 0);
+      put64(b + fld + 16, g_dma_size);
+    } else if (f == 's') {
+      put32(b + fld, 1);
+      put32(b + fld + 4, 1);
+      put64(b + fld + 8, 0);
+      put64(b + fld + 16, reg_scratch_size());
+    } else if (f == 'i') {
+      put32(b + fld, 1);
+      put32(b + fld + 4, 2);
+      put64(b + fld + 8, 0);
+      put64(b + fld + 16, reg_scratch_size());
+    }
+  }
+  /* C: graph container table at 252 */
+  put16(b + 240, 10);
+  put16(b + 242, 32);
+  put16(b + 244, 8);
+  put16(b + 246, 16);
+  put16(b + 248, 24);
+  put32(b + 252, 12);
+  put64(b + 260, g_handle);
+  put64(b + 268, 0);
+  put64(b + 276, g_dma_size);
+  /* S: firmware scratch table at 300 */
+  put16(b + 288, 10);
+  put16(b + 290, 32);
+  put16(b + 292, 8);
+  put16(b + 294, 16);
+  put16(b + 296, 24);
+  put32(b + 300, 12);
+  put64(b + 308, reg_scratch_handle());
+  put64(b + 316, 0);
+  put64(b + 324, reg_scratch_size());
+  /* X: a second buffer table at 348 */
+  put16(b + 336, 10);
+  put16(b + 338, 32);
+  put16(b + 340, 8);
+  put16(b + 342, 16);
+  put16(b + 344, 24);
+  put32(b + 348, 12);
+  put64(b + 356, g_handle);
+  put64(b + 364, 0);
+  put64(b + 372, g_dma_size);
+  /* I: the one-element intermediate vector at 384, table at 404 */
+  put32(b + 384, 1);
+  put32(b + 388, 16);
+  put16(b + 392, 10);
+  put16(b + 394, 32);
+  put16(b + 396, 8);
+  put16(b + 398, 16);
+  put16(b + 400, 24);
+  put32(b + 404, 12);
+  put64(b + 412, reg_scratch_handle());
+  put64(b + 420, 0);
+  put64(b + 428, reg_scratch_size());
+  /* V/W: the memory handles a location index names, at 440 */
+  put32(b + 440, 2);
+  put64(b + 444, uo && has_char(uo, 'W') ? g_handle + 1 : g_handle);
+  put64(b + 452, uo && has_char(uo, 'W') ? reg_scratch_handle() + 1
+                                        : reg_scratch_handle());
+  /* T: the location as a two-field table at 476 */
+  put16(b + 464, 10);
+  put16(b + 466, 24);
+  put16(b + 468, 8);
+  put16(b + 470, 16);
+  put32(b + 476, 12);
+  put64(b + 484, 0);
+  put64(b + 492, g_dma_size);
+  return 512;
+}
 
 static unsigned build_cmd(unsigned char *b, int type, long seq) {
   /* root table at 36, its vtable at 24; union vtable at 56, union table at 60 */
   int i;
 
-  for (i = 0; i < 128; i++) b[i] = 0;
+  for (i = 0; i < 512; i++) b[i] = 0;
   if (type == 7 && g_handle) {
-    /* RegisterGraph takes {handle, device_id, memory_handle}: g_handle is
-       the memory handle from ImportMemoryFromFd, so the graph handle is
-       g_handle+1. The import showed device_id 1; the memory handle follows. */
+    /* REG2/ORDER2: the flexible descriptor builder, for the field sweep. */
+    {
+      const char *o2 = getenv("ORDER2");
+      const char *u2 = getenv("UORDER");
+
+      if (u2 && u2[0])
+        return build_reg3(b, o2 && o2[0] ? o2 : "CSI", seq, u2);
+      if (o2 && o2[0]) return build_reg2(b, o2, seq);
+    }
+    /* RegisterGraph is {command handle, device id, GraphDescriptor}. The
+       descriptor has four fields: three BufferDescriptor tables (the graph
+       container, the firmware scratch, the intermediate buffers, which must
+       be non-empty) and the graph location (offset, size) inside the
+       container. Nothing public names their order, so ORDER permutes the
+       three tables and LOC=struct|table|none picks the fourth field: a
+       16-byte inline struct (the default), a two-field table, or no field at
+       all. */
+    const char *order = getenv("ORDER");
+    const char *loc = getenv("LOC");
+    int nf = 3;
+    int k;
+
+    if (!order || !order[0]) order = "CSI";
+    if (!loc) loc = "struct";
+    if (!same_str(loc, "none")) nf = 4;
     put32(b + 0, 36);
     put16(b + 24, 0x0c);
     put16(b + 26, 0x18);
@@ -252,17 +572,85 @@ static unsigned build_cmd(unsigned char *b, int type, long seq) {
     put64(b + 40, (unsigned long)seq);
     b[48] = 1;
     b[49] = (unsigned char)type;
-    put32(b + 52, 28);
-    put16(b + 64, 10);
-    put16(b + 66, 32);
-    put16(b + 68, 8);
-    put16(b + 70, 16);
-    put16(b + 72, 24);
-    put32(b + 80, 16);
-    put64(b + 88, g_handle + 1);
-    put64(b + 96, 1);
-    put64(b + 104, g_handle);
-    return 112;
+    put32(b + 52, 20);              /* union table at 72 */
+    put16(b + 60, 10);              /* union vtable: 3 fields */
+    put16(b + 62, 32);
+    put16(b + 64, 8);
+    put16(b + 66, 16);
+    put16(b + 68, 24);
+    put32(b + 72, 12);              /* soffset back to 60 */
+    put64(b + 80, getenv("RH") ? g_handle : g_handle + 1); /* command handle */
+    put64(b + 88, 1);               /* device id */
+    put32(b + 96, 20);              /* descriptor table at 116 */
+    put16(b + 104, (unsigned)(2 + 2 * nf)); /* vtable: one entry per field */
+    put16(b + 106, (unsigned)(nf == 4 ? 48 : 32)); /* table size */
+    for (k = 0; k < nf; k++) put16(b + 108 + 2 * k, (unsigned)(8 + 8 * k));
+    put32(b + 116, 12);             /* soffset back to 104 */
+    /* The three tables are at 176 (C), 220 (S) and 252 (I); each slot holds a
+       uoffset forward from the slot itself. The location is an inline 16-byte
+       struct in slot 3, or a two-field table at 320 (LOC=table). */
+    for (k = 0; k < 3 && k < nf; k++) {
+      char f = order[k] ? order[k] : "CSI"[k];
+      unsigned long tgt = f == 'C' ? 176 : f == 'I' ? 252 : 220;
+
+      put32(b + 124 + 8 * k, (unsigned)(tgt - 124 - 8 * k));
+    }
+    if (same_str(loc, "table")) {
+      put16(b + 308, 10);           /* location vtable: 2 fields */
+      put16(b + 310, 24);
+      put16(b + 312, 8);
+      put16(b + 314, 16);
+      put32(b + 320, 12);           /* soffset back to 308 */
+      put64(b + 328, 0);            /* location: offset */
+      put64(b + 336, g_dma_size);   /* location: size */
+      put32(b + 148, (unsigned)(320 - 148));
+    } else if (same_str(loc, "struct")) {
+      put64(b + 148, 0);            /* graph location: offset */
+      put64(b + 156, g_dma_size);   /* graph location: size */
+    } else if (same_str(loc, "buf")) {
+      /* The fourth field as a BufferDescriptor table (memory handle, offset,
+         size): the external parameter buffer some register calls take. */
+      put16(b + 304, 10);
+      put16(b + 306, 32);
+      put16(b + 308, 8);
+      put16(b + 310, 16);
+      put16(b + 312, 24);
+      put32(b + 320, 16);           /* soffset back to 304 */
+      put64(b + 328, g_handle);     /* memory handle */
+      put64(b + 336, 0);            /* offset */
+      put64(b + 344, g_dma_size);   /* size */
+      put32(b + 148, (unsigned)(320 - 148));
+    }
+    put16(b + 164, 10);             /* graph container vtable */
+    put16(b + 166, 32);
+    put16(b + 168, 8);
+    put16(b + 170, 16);
+    put16(b + 172, 24);
+    put32(b + 176, 12);             /* soffset back to 164 */
+    put64(b + 184, g_handle);       /* graph memory handle */
+    put64(b + 192, 0);              /* graph offset in that memory */
+    put64(b + 200, g_dma_size);     /* graph length */
+    put16(b + 208, 10);             /* scratch vtable */
+    put16(b + 210, 32);
+    put16(b + 212, 8);
+    put16(b + 214, 16);
+    put16(b + 216, 24);
+    put32(b + 220, 12);             /* soffset back to 208 */
+    put64(b + 228, reg_scratch_handle());   /* firmware scratch handle */
+    put64(b + 236, 0);                      /* scratch offset */
+    put64(b + 244, reg_scratch_size());     /* scratch length */
+    put32(b + 252, 1);              /* one intermediate buffer */
+    put32(b + 256, 16);             /* its table at 272 */
+    put16(b + 260, 10);
+    put16(b + 262, 32);
+    put16(b + 264, 8);
+    put16(b + 266, 16);
+    put16(b + 268, 24);
+    put32(b + 272, 12);             /* soffset back to 260 */
+    put64(b + 280, reg_scratch_handle());   /* memory handle */
+    put64(b + 288, 0);
+    put64(b + 296, reg_scratch_size());     /* size */
+    return 352;
   }
   if ((g_handle || g_fd_handle) && (type == 5 || type == 6 || type == 7)) {
     /* The tegu core's actor engine validates a separate client-assigned fd
@@ -401,6 +789,8 @@ int main(int argc, char **argv) {
 
   g_handle = (unsigned long)parse_dec(getenv("HANDLE"));
   g_fd_handle = (unsigned long)parse_dec(getenv("FDH"));
+  base_handle = g_handle;
+  base_fd = g_fd_handle;
   if (cmd_type <= 0 || cmd_type > 24) cmd_type = 1;
 
   // TYPES=2,7 sends a different union member in each round, each with its
@@ -669,6 +1059,84 @@ int main(int argc, char **argv) {
 
                 show_status(0, status_ok, "sendFileDescriptors", r);
               }
+              g_graph_size = g_dma_size;
+              /* RegisterGraph's GraphDescriptor field 0 is the firmware
+                 scratch memory: its length must be at least the graph's
+                 GetFwScratchBufferSize(). Allocate and send a second
+                 system-heap dma-buf under the next client handle. */
+              {
+                const char *sf = getenv("SFILE");
+                unsigned long ssize = (unsigned long)parse_dec(getenv("SSIZE"));
+                int heap2 = open("/dev/dma_heap/system", 2);
+
+                if (ssize == 0) ssize = 1 << 20;
+                if (heap2 < 0) {
+                  put("scratch: no dma_heap, errno ");
+                  putdec(*__errno());
+                  put("\n");
+                } else {
+                  struct {
+                    unsigned long len;
+                    unsigned int fd;
+                    unsigned int fd_flags;
+                    unsigned long heap_flags;
+                  } a2;
+                  int sifd = -1;
+
+                  memset(&a2, 0, sizeof a2);
+                  a2.len = ssize;
+                  a2.fd_flags = 0x80002;
+                  if (ioctl(heap2, 0xc0184800UL, &a2) != 0 || a2.fd == 0) {
+                    put("scratch: alloc failed, errno ");
+                    putdec(*__errno());
+                    put("\n");
+                  } else {
+                    void *p2 = mmap(0, ssize, 3, 1, (int)a2.fd, 0);
+
+                    if (p2 == (void *)-1) {
+                      put("scratch: mmap failed, errno ");
+                      putdec(*__errno());
+                      put("\n");
+                    } else {
+                      int f2 = sf ? open(sf, 0) : -1;
+
+                      if (f2 >= 0) {
+                        long done = 0;
+
+                        while (done < (long)ssize) {
+                          long n = read(f2, (char *)p2 + done, ssize - done);
+
+                          if (n <= 0) break;
+                          done += n;
+                        }
+                        close(f2);
+                      } else {
+                        memset(p2, 0, ssize);
+                      }
+                      {
+                        struct {
+                          unsigned long flags;
+                        } sy2;
+
+                        sy2.flags = 2;
+                        ioctl((int)a2.fd, 0x40086200UL, &sy2);
+                        sy2.flags = 6;
+                        ioctl((int)a2.fd, 0x40086200UL, &sy2);
+                      }
+                      sifd = (int)a2.fd;
+                      g_scratch_size = ssize;
+                      {
+                        long h2 = (long)g_fd_handle + 1;
+                        void *r = sendfds(session, &sifd, &h2, 1);
+
+                        show_status(0, status_ok,
+                                    "sendFileDescriptors scratch", r);
+                      }
+                    }
+                  }
+                  close(heap2);
+                }
+              }
             }
           }
           close(heap);
@@ -730,11 +1198,28 @@ int main(int argc, char **argv) {
     } else if (!recv_rsp) {
       put("receiveResponse symbol missing\n");
     } else {
-      static unsigned char msg[128];
+      static unsigned char msg[512];
       long round;
 
       for (round = 1; round <= rounds; round++) {
         int this_type = ntypes > 0 ? types[round - 1] : cmd_type;
+        if (ntypes > 0) {
+          /* TYPES=2,5,5,7: round 2 imports the graph under HANDLE/FDH,
+             round 3 the scratch under the next pair, round 4 registers. */
+          if (round == 2) {
+            g_handle = base_handle;
+            g_fd_handle = base_fd;
+            g_dma_size = g_graph_size;
+          } else if (round == 3) {
+            g_handle = base_handle + 1;
+            g_fd_handle = base_fd + 1;
+            g_dma_size = g_scratch_size;
+          } else if (round == 4) {
+            g_handle = base_handle;
+            g_scratch = base_handle + 1;
+            g_dma_size = g_graph_size;
+          }
+        }
         unsigned n = build_cmd(msg, this_type, round);
         static unsigned char rbuf[256];
         struct tmsg rm;
