@@ -1,20 +1,18 @@
-# Next: send the type-1 setup for real, not a skipped one
+# Next: make the gxp stub answer the interface-version query
 
-Measured (U108): the chroot HAL already carries U56's two patches, and the
-delegate still gets `Sync VII command failed: error_code=9` and `create device
-status: 13`. Skipping `SetupFirmware` does not satisfy the firmware; the
-setup element itself must arrive.
+Measured (U109): `libgxp.so` asks `/dev/gxp` for `0xc0184800` (24 bytes,
+`_IOWR(0x48, 0, 24)`), and `drivers/gxp/gxp.c` answers `-EOPNOTSUPP`, which is
+where the Tachyon service stopped in U89. The TPU itself is held on this boot,
+so this step is laptop + one `push` + one cold boot.
 
-1. From U56's dump, the element's type is the `u16` at byte 8 (0 in every
-   command so far) and the core's setup path prints a type byte it sets to
-   **1**. Confirm the offset by dumping the A14 HAL's setup element again with
-   the driver's 48-byte dump, then patch the one instruction in
-   `libdarwinn_hal.so` that stores that type so the HAL sends type 1 with its
-   existing payload; run the delegate and read the firmware's answer.
-2. If the answer is "No global scratches were provided", build the scratch
-   list: the core's `0xd35c8` mmaps 24-byte entries from a firmware-scratch
-   fd; recover its producer at `0xa4d5c` in
-   `out/factory/tegu-cp21/vendor-libs/libtachyon_core.patched.so` and
-   reproduce it in `tools/tpu-tachyon-client.c`.
-3. On acceptance, run one inference through the delegate and measure it, then
-   the 720p CPU/GPU/TPU comparison.
+1. Disassemble `libgxp.so` at `0x14c0a0`-`0x14c160` and `0x12e240`-`0x12e2c0`:
+   the instructions after each `0xc0184800` call read the returned struct, so
+   they name its fields (interface major/minor, feature flags, queue limits).
+2. Fill that struct in `gxp.c` from the published `gxp.h` ABI where the values
+   are safe (major 1, minor 3) and zero elsewhere, keeping the log of the raw
+   24 bytes so a mismatch is visible.
+3. Build `gxp.ko` with `KERNEL_DIR=~/omamobile-kernel/wt-tpu
+   KERNEL_OUT=~/omamobile-kernel/out-tpu`, `bin/omamobile push` it, cold boot,
+   then `DELEGATE_UID=10000 /root/tpu-tachyon-run` and grep dmesg for the
+   firmware's setup line. Pass: the service gets past the version query; the
+   next refusal names the next ioctl.

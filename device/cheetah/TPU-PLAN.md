@@ -5902,3 +5902,38 @@ carrying global scratches (U66), before any delegate command will be accepted.
 The library was restored to U56's exact bytes (`c04ad3249d3c…`) so the known
 state is intact; `.orig` holds the stock file (`f3064911cc7c…`).
 
+## U109: the live lead is the gxp stub's 24-byte info ioctl (2026-11-08)
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, phone up 14808 s,
+TPU held by `tpu-hold` (3905).
+
+**The firmware code is not statically addressable.** `edgetpu-janeiro.fw`
+(1,038,272 B) is 7.0-7.2 bits/byte entropy through `0xe0000` (the `0xe0000`
+block alone is 5.12 with 25 % NUL: the plaintext string table). No 4-byte word
+in the whole image equals `0x93efbdc`, `0x0efbdc`, `0x8fefbdc` or `0x90efbdc`,
+and no word has `0xefbdc` in its low 20 bits, so the gate's log site is not
+reached by a literal and the format is id-addressed. The gate therefore cannot
+be read out of the image cheaply; the string table is the only plaintext part.
+
+**`libgxp.so`'s ioctls, decoded.** `GxpCapi_CreateDevice` (0xc4800),
+`GxpCapi_ReleaseDevice` (0xc48a4) and the request path call:
+
+    create   0x40086200   (arg: 8 bytes, value 7)
+    release  0x40086201   (arg: handle)
+    info     0xc0184800   (_IOWR, size 0x18 = 24, type 0x48, nr 0)
+
+The info call sites in `.text` are `0x12e288`, `0x14c0ec`/`0x14c114`,
+`0x14c3f8`/`0x14c420` and `0x14d01c`/`0x14d044`; the create site is `0x12c1e8`
+(`mov w1,#0x6200; movk w1,#0x4008`), the release site `0x12e3c0`. The skeleton
+`drivers/gxp/gxp.c` (178 lines, commit `1d8f22a9e`) answers create/release and
+returns `-EOPNOTSUPP` for info, which is exactly the call U89 left open.
+
+**Next:** disassemble around `0x14c0a0`-`0x14c160` (and `0x12e240`-`0x12e2c0`)
+to read the fields the caller consumes after the info ioctl, then fill the
+24-byte struct in `gxp.c`. The phone keeps the boot it has; the next gxp.ko
+needs `bin/omamobile push` and a cold boot, and the TPU is already spent for
+this one.
+
+Phone state: up, TPU held (3905), `/dev/janeiro` present, chroot HAL at its
+known sha `c04ad3249d3c…` (U108).
+
