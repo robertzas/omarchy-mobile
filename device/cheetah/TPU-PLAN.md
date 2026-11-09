@@ -5742,3 +5742,33 @@ reports status 13 and no Tachyon session is created. The chroot's
 `/dev/janeiro` shows as `root:robertzas` (gid 1000), so the mode is right for
 the system-uid services; the problem is now their own startup, not the node.
 
+## U103: the delegate reaches VII, but its command payload has no mapping (2026-11-08)
+
+The dmesg from the delegate run (uid 10000, `edgetpu-run` pid 59458) settles
+what the userspace chain was doing:
+
+```
+vii-elem: ... 000b0000 ... (payload iova 0xffefe000, size 128)
+vii-payload iova 0xffefe000 size 128: no mapping
+ERR vii_handler_layer.cc:247 - Setup is not done yet received a command of type 0.
+```
+
+So the app service does hand the delegate a device, the delegate does reach
+VII, and "Setup is not done yet" is not a missing service at all: the driver
+cannot copy the 128-byte command payload, the VII element goes out without
+it, and the firmware sees command type 0 and refuses it. The setup command
+never arrives intact.
+
+`drivers/edgetpu/edgetpu-mailbox.c` looks the client iova up in
+`group->host_mappings` (ALL_DIES, then 0) and then in
+`group->dmabuf_mappings`; neither tree contains 0xffefe000. The running
+module was built from `~/omamobile-kernel/wt-tpu/drivers/edgetpu` (head
+594acaf97, "iommu: let a driver replace its domain's fault handler"); the
+`edgetpu-janeiro` clone is an older snapshot without this code.
+
+Next is to read where a dma-buf map is inserted (`edgetpu-dmabuf.c` and the
+MAP_BUFFER ioctl) and compare the key it stores with the iova the delegate
+puts in the VII command. Either the map is keyed by the dma-buf's own
+device address instead of the client iova, or that ioctl path never inserts
+into `dmabuf_mappings` on this kernel.
+
