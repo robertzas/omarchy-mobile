@@ -12,6 +12,13 @@ unaffected. T6 (one inference) is next: the stock runtime is now identified
 (`libedgetpu_util.so` in the vendor image, which opens `/dev/edgetpu`), but it
 is a bionic vendor library and no client has run against this kernel yet; the
 open Coral runtime is USB-only and cannot drive this device.**
+
+Status (2026-11-08): **T6 is blocked on the firmware's one-time setup.** The
+direct VII path now delivers any payload to the firmware and reads its reply
+(U117), but every command before the setup is rejected as `type 0`; the
+element-code and 32-slot scalar sweeps are ruled out, and the only setup
+producer is the stripped Tachyon core. The CPU/GPU benchmark is measured
+(U118); there is no TPU inference number to compare yet.
 The DT now carries the TPU and SysMMU v8 nodes (both disabled), and the SysMMU
 v8 driver builds as `samsung_iommu.ko` with its group module. Google's GPL
 gs201 janeiro driver is in the `omamobile-tpu` worktree and builds as
@@ -6117,3 +6124,68 @@ the setup submit itself.
 
 **Next:** read those two, then the cold boot with `HOLD=0` to capture
 `vii-payload`. The type bytes remain builder-only (`0x7fbb8`/`0x7fbdc`).
+
+
+## U117 (2026-11-08): the direct path works; the setup is not the element code or a scalar field
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, TPU held by
+`tpu-hold` from the boot (uptime ~17500 s), so no power cycle was needed.
+
+**`SetupCommandFmq` is not the firmware setup.** In
+`libedgetpu_tachyon.google.so` at `0xb850` it allocates `0x80` bytes, writes
+three 24-byte grantor descriptors and a `native_handle` of fds, stores the
+result at `[session+0x18]`, and returns two ints. That is the command FMQ's
+descriptor, not a VII payload; the 128-byte `CommandMessage` that pointed the
+previous session at it is the same size by accident.
+
+**The direct path is end to end.** `edgetpu-run mapped CODE 0 FILE`, run in
+the vendor chroot with `LD_LIBRARY_PATH`, creates a group, maps a page, copies
+the file, submits one element, and reads the response. The driver dumps the
+exact bytes (`vii-payload ... copied 128`) and the firmware answers
+`0xf000009` (KCI status 9, FAILED_PRECONDITION). This is the oracle the next
+attempts need; no cold boot is required while `tpu-hold` lives.
+
+**The element code is not the type.** With the 128-byte legacy payload,
+element codes 1, 11, 15, 16, 18 and 21 each produced a fresh
+`Setup is not done yet received a command of type 0.` line. The core's
+`+0x1c0/+0x1c1` values (11/15) are not this code.
+
+**A scalar in slots 3..31 is not the type either.** 93 payloads extended the
+legacy 3-field table (`f0=0x30`, `f1=5`, `f2` to the same tail) with slots
+3..31, one at a time as u32 1, 11 and 15, plus all-slots variants. Every
+submission that produced a verdict answered `type 0`; no
+`Could not parse Command flatbuffer` and no `No global scratches` appeared.
+
+**Next: make the core's session constructor run.**
+`TachyonCore_CreateClientSession` creates the NPU manager itself (`0x4fbbc`
+allocates the object when `0x17a000+0xec8` is null), so the missing-manager
+reading was wrong. The failure is after that, in the kernel-interface/session
+construction (`0x4d5e4` -> `0x511ec`), which is also where the core logs
+`Sending firmware-setup VII command`. Call it with the exact `0xb8`-byte
+config and capture the core's stderr and the payload dump; only if that is
+impossible is a gxp driver the next cost.
+
+
+## U118 (2026-11-08): the 720p comparison, measured
+
+`out/bench/mosaic12.mp4` is 1280x720, 60 frames, 12 person tiles; the SSD
+MobileNet 300x300 int8 model (`detect.tflite`, threshold 0.5) finds 10.0 per
+frame (max 10), so the 10+ target is met at exactly 10. Every leg decoded the
+same clip and ran 60 frames. CPU is XNNPACK; GPU is LiteRT `CompiledModel`
+WebGPU on the laptop's RTX 3070, not the phone's Mali.
+
+| backend | mean ms | p50 | p95 | fps | detections |
+| --- | --- | --- | --- | --- | --- |
+| CPU, 1 thread | 13.33 | - | - | 75.0 | 10.0 |
+| CPU, 2 threads | 7.48 | - | - | 133.7 | 10.0 |
+| CPU, 4 threads | 4.28 | 4.18 | 5.04 | 233.9 | 10.0 |
+| CPU, 8 threads | 3.28 | - | - | 304.9 | 10.0 |
+| GPU, WebGPU (RTX 3070) | 3.00 | 2.55 | 3.34 | 333.3 | 10.0 |
+| Edge TPU | blocked (U117) | - | - | - | - |
+
+The 4-thread CPU number moved from 3.97 ms in U83 to 4.28 ms here (same
+laptop, same clip), a run-to-run spread of about 8 %; report both or a range,
+not a single number to 0.01 ms. The phone itself has no leg: its Python is
+3.14 and no aarch64 `ai-edge-litert` wheel exists for that ABI, so there is no
+TFLite runtime on the image. The comparison is therefore laptop CPU/GPU only;
+the TPU row has no number and none is claimed.
