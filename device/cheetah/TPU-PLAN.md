@@ -6603,3 +6603,24 @@ and Invoke (11).
 
 Phone: up, Tachyon service dead after the patched-register run, chain down;
 a reboot before the next attempt.
+
+## U127 (2026-11-09): the missing buffer is not command field 4 either
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, one boot
+(`tpu-u127`), slot B. `UORDER=HDXGX` puts a real `BufferDescriptor` table
+(the `X` table at 348) on the command's field 4, where `HDXGG` previously
+put a second GraphDescriptor. The result is unchanged: same fault,
+`libtachyon_core.so+0x5968c`, descriptor `+0x20`/`+0x38` still zero. So the
+required single buffer is not a command-level field beside the descriptor
+either.
+
+The two parsed singles carry distinct pointers but we have always given
+them handles that cannot be told apart. **Next: give every slot its own
+handle** — `CH=252`, `SH=253`, `IH=254`, `X` at 255 — then stop at the
+fault under gdb (U126's recipe) and dump `$x21+0x10` and `$x21+0x18`
+pointers' first words. Which slot's handle lands where names the slot to
+member mapping for the singles, and the next single slot is the one that
+must fill `+0x38`.
+
+Phone: up, Tachyon service dead after the `HDXGX` crash, chain down; a
+reboot before the next attempt.
