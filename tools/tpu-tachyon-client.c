@@ -299,7 +299,7 @@ static unsigned build_reg2(unsigned char *b, const char *order, long seq) {
   put32(b + 36, 12);
   put64(b + 40, (unsigned long)seq);
   b[48] = 1;
-  b[49] = 7;
+  b[49] = (unsigned char)env_num("TAG", 7);
   put32(b + 52, 20);              /* union table at 72 */
   put16(b + 60, 10);              /* union vtable: 3 fields */
   put16(b + 62, 32);
@@ -402,7 +402,8 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
   while (uo[nu] && nu < 5) nu++;
   for (k = 0; k < nf; k++) {
     offs[k] = cur;
-    cur += (order[k] == 'c' || order[k] == 's' || order[k] == 'i') ? 24 : 8;
+    cur += (order[k] == 'c' || order[k] == 's' || order[k] == 'i' ||
+            order[k] == 'A' || order[k] == 'B') ? 24 : 8;
   }
   put32(b + 0, 36);
   put16(b + 24, 0x0c);
@@ -414,14 +415,20 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
   put32(b + 36, 12);
   put64(b + 40, (unsigned long)seq);
   b[48] = 1;
-  b[49] = 7;
-  put32(b + 52, 20);              /* union table at 72 */
-  put16(b + 60, (unsigned)(2 + 2 * nu));
-  put16(b + 62, (unsigned)(8 * nu + 8));
-  for (k = 0; k < nu; k++) put16(b + 64 + 2 * k, (unsigned)(8 + 8 * k));
-  put32(b + 72, 12);
+  b[49] = (unsigned char)env_num("TAG", 7);
+  {
+    /* A five-field vtable is 14 bytes and would overlap a table at 72;
+       move the table past it. The header size is 4 + 2*nu, not 2 + 2*nu. */
+    unsigned ub = nu >= 5 ? 80 : 72;
+
+    put32(b + 52, (unsigned)(ub - 52));
+    put16(b + 60, (unsigned)(4 + 2 * nu));
+    put16(b + 62, (unsigned)(8 * nu + 8));
+    for (k = 0; k < nu; k++) put16(b + 64 + 2 * k, (unsigned)(8 + 8 * k));
+    put32(b + ub, (unsigned)(ub - 60));
+  }
   for (k = 0; k < nu; k++) {
-    unsigned long fld = 80 + 8 * k;
+    unsigned long fld = (nu >= 5 ? 80 : 72) + 8 + 8 * k;
     char f = uo[k];
 
     if (f == 'H') put64(b + fld, getenv("RH") ? g_handle : g_handle + 1);
@@ -469,6 +476,17 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
     } else if (f == 'i') {
       put32(b + fld, 1);
       put32(b + fld + 4, 2);
+      put64(b + fld + 8, 0);
+      put64(b + fld + 16, reg_scratch_size());
+    } else if (f == 'A') {
+      /* U137: an inline BufferLocation as the core's struct, not a table:
+         one u64 handle first (the table encoding put a buffer position
+         there, which is where the core's "handle 252" came from). */
+      put64(b + fld, g_handle);
+      put64(b + fld + 8, 0);
+      put64(b + fld + 16, g_dma_size);
+    } else if (f == 'B') {
+      put64(b + fld, reg_scratch_handle());
       put64(b + fld + 8, 0);
       put64(b + fld + 16, reg_scratch_size());
     }
@@ -554,7 +572,7 @@ static unsigned build_cmd(unsigned char *b, int type, long seq) {
   int i;
 
   for (i = 0; i < 512; i++) b[i] = 0;
-  if (type == 7 && g_handle) {
+  if ((type == 7 || type == 8) && g_handle) {
     /* REG2/ORDER2: the flexible descriptor builder, for the field sweep. */
     {
       const char *o2 = getenv("ORDER2");
@@ -1211,7 +1229,8 @@ int main(int argc, char **argv) {
       put("s before the first command\n");
       sleep((unsigned)delay);
     }
-    if (rounds <= 0 || rounds > 4) rounds = 2;
+    if (ntypes > 0) rounds = ntypes;
+    else if (rounds <= 0 || rounds > 8) rounds = 2;
     if (!send_cmd) {
       put("sendCommand symbol missing\n");
     } else if (!recv_rsp) {
@@ -1310,7 +1329,7 @@ int main(int argc, char **argv) {
         // ReceiveResponseMessage builds exactly that status). Poll instead of
         // reading once, so a lazily produced answer is not missed.
         /* RegisterGraph and Invoke take longer than a Ping: poll 30 s. */
-        for (tries = 0; tries < 300; tries++) {
+        for (tries = 0; tries < env_num("POLL", 300); tries++) {
           rm.size = sizeof rbuf;
           rm.data = rbuf;
           rr = recv_rsp(session, &rm);

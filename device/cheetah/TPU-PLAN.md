@@ -6901,3 +6901,47 @@ be another number.
 **Next:** enumerate the remaining type numbers in one session (the core logs
 each name before processing), then send the ByBuffer variant with the
 descriptor's C/S tables and check its response.
+
+## U150 (2026-11-09): RegisterGraph passes; the firmware setup is the wall
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, one boot (`u152`),
+slot B.
+
+**The register command passes the dependency check.** With the union's
+four fields as handles (`UORDER=MDMK`: 1, 1, 1, 2) and the `+0x38` load
+patched under gdb (break at `base+0x5968c`,
+`set {unsigned long}($x21+8)=2`, `set $x8=$x21+8`), the first buffer is
+handle 1 (not the 252 table position), the second is 2, and the command
+advances:
+
+    CREATED -> PENDING_VIRTUAL_DEVICE -> PENDING_FIRMWARE_BOOTUP
+    Firmware::WakeUp / Successfully woke firmware up
+    PENDING_FIRMWARE_BOOTUP -> PENDING_FIRMWARE_SETUP
+    Sending firmware-setup VII command. type: 1 seq: 0
+
+**The setup fails, and it is the same legacy message.** The core then shuts
+the firmware down and the client gets a 72-byte `Virtual device failure`.
+The driver's dump of the element:
+
+    vii-elem: seq 0, code 0, dma 0xfff80000 size 0x50
+    vii-payload 0:  00000014 00000000 000a0000 00080012
+    vii-payload 16: 000c0007 0000000a 05000000 00000030
+    vii-payload 32: 0000000c 00060000 00040008 00000006
+    vii-payload 48: 00000004 00000001 ff600000 00000000
+    vii-payload 64: 00100000 ...
+
+and the firmware answers `Setup is not done yet received a command of type
+0.` The payload is the same three-field legacy setup the HAL sends (U75:
+fields 48, 5, 6), so the tegu core's setup is not the type-1 message
+cheetah's A17 firmware wants either.
+
+**The path is now:** a correct command -> the firmware setup gate. Next is
+the setup element itself: patch its code/type to 1 and read the firmware's
+answer; if it names the missing global scratches, build them from the graph
+descriptor's scratch into the message.
+
+**Type map, completed for 1-10:** 3 AllocateDspTpu, 4 AllocateDsp,
+6 ReleaseMemory, 9 CreateExecution, 10 DeleteExecution; 2/5/7/8 as before.
+No ByBuffer variant exists. A five-field union is rejected (`Invalid
+command flatbuffer`); the vtable header is `4 + 2*nu` and a five-field
+table must sit at 80, not 72 (fixed in the client).
