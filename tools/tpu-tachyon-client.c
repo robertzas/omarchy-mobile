@@ -26,7 +26,10 @@ extern char *dlerror(void);
 extern void _exit(int) __attribute__((noreturn));
 extern unsigned int sleep(unsigned int);
 extern int usleep(unsigned int);
+extern long readlink(const char *, char *, size_t);
+extern int *__errno(void);
 extern char *getenv(const char *);
+extern void *memcpy(void *, const void *, size_t);
 
 #define RTLD_NOW 2
 #define RTLD_GLOBAL 0x100
@@ -261,6 +264,55 @@ static void get_fds_cb(void *cookie, int *fds, long *handles, int count,
   }
 }
 
+
+static int g_fd[4];
+static int g_is_ev[4];
+
+static int str_has(const char *h, const char *n) {
+  int i, j;
+
+  for (i = 0; h[i]; i++) {
+    for (j = 0; n[j] && h[i + j] == n[j]; j++) {}
+    if (!n[j]) return 1;
+  }
+  return 0;
+}
+
+// The queue setup hands back four raw fds. Whether one is the eventfd the
+// actor's epoll waits on decides who must ring it (U94).
+static void show_fd(int slot, int fd) {
+  char path[32], buf[96], d[12], t[12];
+  const char *pre = "/proc/self/fd/";
+  int i = 0, j = 0, k, n, v;
+
+  g_fd[slot] = fd;
+  g_is_ev[slot] = 0;
+  while (pre[i]) { path[i] = pre[i]; i++; }
+  if (fd == 0) {
+    d[j++] = '0';
+  } else {
+    v = fd;
+    k = 0;
+    while (v) { t[k++] = (char)('0' + v % 10); v /= 10; }
+    while (k) d[j++] = t[--k];
+  }
+  for (k = 0; k < j; k++) path[i++] = d[k];
+  path[i] = 0;
+  n = (int)readlink(path, buf, sizeof(buf) - 1);
+  put("fd ");
+  putdec(fd);
+  put(" -> ");
+  if (n < 0) {
+    put("? errno ");
+    putdec(*__errno());
+  } else {
+    buf[n] = 0;
+    put(buf);
+    g_is_ev[slot] = str_has(buf, "eventfd");
+  }
+  put("\n");
+}
+
 int main(int argc, char **argv) {
   /* argv[1] "0" asks for an unprivileged session; default is privileged
    * (the config the app service uses). */
@@ -412,6 +464,10 @@ int main(int argc, char **argv) {
     put("\n");
     show_status(0, status_ok, "setupResponseQueue", r);
   }
+  show_fd(0, fd0);
+  show_fd(1, fd1);
+  show_fd(2, fd2);
+  show_fd(3, fd3);
   // The core sends the firmware's setup message lazily, before the first
   // command it copies into the command FMQ. Send one zero-filled message so
   // that setup runs before the delegate's own VII sync (TPU-PLAN U58).
@@ -427,6 +483,20 @@ int main(int argc, char **argv) {
   typedef void *(*recv_fn)(void *, struct tmsg *);
   recv_fn recv_rsp =
       (recv_fn)dlsym(h, "TachyonComputeSession_receiveResponse");
+  // The cheetah lib moves the queue fds out of the session in
+  // setupCommandQueue and leaves the session's own copies at -1, so the
+  // legacy sendCommand may write where the actor never looks (U93). The
+  // explicit write path reserves a slot, fills it and commits it:
+  //   begin(session, bytes, &buf1, &len1, &buf2, &len2).
+  typedef void *(*begin_write_fn)(void *, unsigned long, void **,
+                                  unsigned long *, void **, unsigned long *);
+  typedef void *(*commit_fn)(void *);
+  begin_write_fn begin_write = (begin_write_fn)dlsym(
+      h, "TachyonComputeSession_beginCommandQueueWrite");
+  commit_fn commit_write =
+      (commit_fn)dlsym(h, "TachyonComputeSession_commitCommandQueueWrite");
+  put("queue write path: " );
+  put(begin_write && commit_write ? "present\n" : "missing\n");
 
   // The core moves a new session CREATED to STARTED to AUTHORIZED on its own
   // actor, and an event that arrives before STARTED is held and never
@@ -464,6 +534,61 @@ int main(int argc, char **argv) {
         putdec(round);
         put(" ");
         show_status(0, status_ok, "sendCommand", r);
+        {
+          unsigned long one = 1;
+          int k;
+
+          for (k = 0; k < 4; k++) {
+            if (g_is_ev[k]) {
+              long rc = write(g_fd[k], &one, 8);
+
+              put("ring fd ");
+              putdec(g_fd[k]);
+              put(" rc ");
+              putdec(rc);
+              if (rc < 0) {
+                put(" errno ");
+                putdec(*__errno());
+              }
+              put("\n");
+            }
+          }
+        }
+        if (round == 1 && begin_write && commit_write) {
+          void *b1 = 0, *b2 = 0;
+          unsigned long l1 = 0, l2 = 0;
+          void *w = begin_write(session, 128, &b1, &l1, &b2, &l2);
+
+          show_status(0, status_ok, "beginCommandQueueWrite", w);
+          put("queue buffers: ");
+          puthex((unsigned long)b1);
+          put(" len ");
+          putdec((long)l1);
+          put(" / ");
+          puthex((unsigned long)b2);
+          put(" len ");
+          putdec((long)l2);
+          put("\n");
+          /* begin returns 0 on success here, not an AStatus (U94): the
+             buffers and lengths are the only result, so commit whenever a
+             slot was reserved. */
+          if (b1 && l1) {
+            unsigned char q[128];
+            unsigned qn = build_cmd(q);
+
+            if (b1 && l1 >= qn) {
+              memcpy(b1, q, qn);
+            } else if (b1 && l1 && b2 && l2 >= qn - l1) {
+              memcpy(b1, q, l1);
+              memcpy(b2, q + l1, qn - l1);
+            }
+            {
+              void *c = commit_write(session);
+
+              show_status(0, status_ok, "commitCommandQueueWrite", c);
+            }
+          }
+        }
         // Service-specific error 8 means "the response FMQ holds fewer than
         // 128 bytes": no answer yet, not a failure (the lib's
         // ReceiveResponseMessage builds exactly that status). Poll instead of
