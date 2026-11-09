@@ -6063,3 +6063,26 @@ with `HOLD=0` and the delegate as the first and only TPU user, watching
 `vii-payload` in dmesg for the setup element. The driver's own payload
 hexdump is the capture oracle.
 
+## U114: the setup builder and its one caller (2026-11-08)
+
+**U113's boundary was wrong.** `0x7f7cc` is not the constructor: it is a
+callback the session factory stores at `[obj+0x258]` (`0x739dc: adr x8,
+0x7f7cc; str x8, [x19, #0x258]`), beside `0x7f904` at `+0x250` and `0x7f760`
+at `+0x230`. The setup builder is **`0x7f9c4`**, and it has exactly one
+caller: `0x73abc`, inside the factory at `0x73a48` (which allocates a
+`0x3e0`-byte session object and returns it through the sret register x8).
+
+At `0x7fbbc`-`0x7fbd8` the builder calls the helper `0xd5630` twice, compares
+its result with 6 and 4, and writes two booleans: `[x19+0x1c0]` and
+`[x19+0x1c1]`, the second set to **11 (0xb)** or **15 (0xf)**. The log at
+`0x7fc20` prints that byte. The object fields `+0x1c0..+0x3a0` are the
+session's setup-command state, so the "Sending firmware-setup VII command"
+line is emitted while the session object is built, not at the later VII
+submit (`PushFirmwareSetupCmdToVII failed`, `0x7531c`).
+
+**Next:** disassemble the function containing `0x7531c` and its callers to
+find the submit condition, and find what reads `[obj+0x1c0]` between the
+build and the submit. The type value 15 is the one the virtual-device mode
+selects; whether our session's mode picks 11 (direct) or 15 is the first
+thing to read from the builder's two `0xd5630` results.
+
