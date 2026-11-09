@@ -5486,3 +5486,25 @@ Also: `pkill -f "<service name>"` matches the SSH shell that carries the
 pattern in its own command line and kills the session; use
 `pkill -f "tachyon[.]service"`.
 
+## U92: authorization is not the dispatch gate (2026-11-08)
+
+With the Power HAL up (pid 3300), the real core (`libtachyon_core.so`,
+1,538,440 bytes, sha `d1602625abb0`; the 1,015,720-byte
+`libtachyon_core.so.cheetah-stub`, sha `47fb5f74`, is the A17 stub) and a
+delegate run as uid 10000 first, a client session goes
+CREATED -> STARTED -> AUTHORIZED within a millisecond. That delegate run is
+what turned the earlier STARTED-only sessions into AUTHORIZED ones.
+
+The Ping is still never dispatched: three spaced rounds and a 20 s wait
+before the first command all answer `exception -8 service 8` with a
+256-byte zero buffer, and the service never logs `received command`. So the
+gate is the core's command-FMQ dispatch, not the Power HAL, the session
+state or service startup timing.
+
+The Tachyon service exits when its last client disconnects (the lazy
+registrar shim), so every test must start it first. `pgrep -f` matches the
+test shell's own command line when the pattern appears there; use
+`ps -eo pid,args | grep '[c]om.google...'`.
+
+The one good Ping (U90) remains the only dispatch ever seen.
+
