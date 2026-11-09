@@ -7141,3 +7141,35 @@ mapping entries — the TPU address ranges the firmware is allowed to use —
 so the next step is to read the vendor image's config at `0x400 + 0x160`
 (the `TPUF` header's `ImageConfig`) and turn its mapping list into the
 setup element.
+
+## U159 (2026-11-09): the firmware config's mapping table
+
+All three janeiro firmware images carry `TPUF` at `0x400` (the
+`mobile_image_header`) and the `mobile_image_config` at `0x560`. Parsed:
+
+| | A17 (`52c1cccd…`) | A14 (`145993a4…`) | cp3a (`7ea9100f…`) |
+| --- | --- | --- | --- |
+| carveout | `0x93000000` | `0x93000000` | `0x93000000` |
+| firmware_base | `0x93000000` | `0x93000000` | `0x93000000` |
+| firmware_size | `0xfd000` | `0xf0000` | `0xfd000` |
+| version | `1.0.2.3` | `1.0.2.2` | `1.0.2.3` |
+| config_version | 1 | 1 | 1 |
+| privilege | 1 (TZ) | 1 (TZ) | 1 (TZ) |
+| remapped region | `0x93200000`-`0xe00000` | same | same |
+
+The mapping table is the same in all three:
+
+* `map[0]`: TPU `0x10000000` → physical `0x93000000`, 16 MiB (the
+  firmware carveout).
+* `map[1]`: TPU `0x11000000` → physical `0x18290000`, 64 KiB.
+* `map[2]`: TPU `0x11010000` → physical `0x1cc00000`, 64 KiB (the TPU's
+  SSMT/CSR window).
+* one non-secure mapping: `0x12000012` (TPU `0x12000000`).
+
+These are the firmware's address space and the type-1 setup's global
+scratch ranges. The remaining unknown is the **command format**: how the
+stock util/HAL and the tegu core lay these entries into the type-1 setup
+element. The next iteration reads the stock util's setup builder
+(`libedgetpu_util.so`/`libdarwinn_hal.so`, the plan's U51 addresses) and the
+tegu core's setup at `0x7f9c4`, then builds the element and submits it
+through the ring client.
