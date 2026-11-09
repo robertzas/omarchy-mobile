@@ -1,18 +1,16 @@
-# Next: read the Ping response, then send a real command
+# Next: run a model through the Tachyon session
 
-Measured (TPU-PLAN U94): the Ping dispatches once the client rings the
-queue's eventfd (`received command seq no: 1 of type : Ping`), and
-`receiveResponse` returns OK. All four setup fds are eventfds; the lib
-never rings them itself.
+Measured: the Ping dispatches and returns its 88-byte response (TPU-PLAN
+U94); the delegate's platform value does not select the Tachyon path (U95);
+the session authorizes and the actor logs every command.
 
-1. Dump the Ping response: `receiveResponse`'s `TachyonMessage` size and the
-   88 bytes; decode the header (seq no, status, payload) against the core's
-   `MakeErrorStatus`/`TachyonStatus` strings.
-2. Identify the command union member that executes a model: grep the core
-   for `Execute`/`ReadFile`/`CreateVirtualDevice` and match the flatbuffer
-   verifier's table layout, then extend `build_cmd` for it.
-3. Keep the response queue drained between commands
-   (`beginResponseQueueRead`/`commitResponseQueueRead`, or
-   `receiveResponse`).
-4. Once Execute is accepted, feed it `detect_edgetpu.tflite`'s compiled
-   model and measure; the 720p CPU/GPU/TPU comparison comes after.
+1. Decode the 88-byte Ping response (flatbuffer: 0x18 block, then a table
+   with a status field) and use it as the template for a real command.
+2. Find the Execute union type in the core's verifier: disassemble the
+   `VerifyCommandMessage` call site at `tpu_actor_engine.cc:785` and map the
+   union's type ids (`Ping` is 1, from the log).
+3. Build the Execute message from the vendor's own compiled model
+   (`/vendor/etc/model.tflite`); if it is not Edge TPU-compiled, run the
+   vendor compiler in the chroot first.
+4. Only after a real inference: measure it, then run the 720p CPU/GPU/TPU
+   object-detection comparison.

@@ -5589,3 +5589,17 @@ Next: read the Ping's 88-byte response from the response queue, then find
 the command that runs a model. The firmware's one-time setup is sent by the
 core, not by this client.
 
+## U95: the delegate's platform value is not the Tachyon switch (2026-11-08)
+
+Rebuilding `libpropsshim.so` with `PLATFORM_VALUE="gs201"` (so the delegate
+and the HAL see the Pixel 7 platform instead of `mmio`) changes nothing:
+with `RUN_UID=10000` the delegate still logs three `Sync VII command failed:
+error_code=9`, `create device status: 13` and `delegate rc: 1`, and the
+Tachyon service logs no `CreateClientSession`. The util library's choice
+between the direct VII path and the app-service/Tachyon path is therefore
+not made from `ro.board.platform`.
+
+The Ping path end to end (U94): `sendCommand` OK, ring fd 11,
+`received command seq no: 1 of type : Ping`, `receiveResponse` OK,
+`response size=88`.
+
