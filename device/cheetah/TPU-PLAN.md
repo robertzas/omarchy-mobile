@@ -6442,3 +6442,64 @@ builder already encodes the intermediate field as a one-element vector
 
 Phone: up, `tpu-hold` running, chain down; `/tmp/tpu-w.log` is this
 round's log (the scratch-patch run).
+
+## U124 (2026-11-09): the graph descriptor is the command's field 3; only its container parses
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`. Three reboots
+(`tpu-u124`, `tpu-u124b`, `tpu-u124c`), slot B only; each register crash
+kills the Tachyon service, so each attempt costs one reboot.
+
+**The descriptor is field 3, not field 2.** With `UORDER=HDXGG` (handle,
+device id, X table, descriptor, descriptor) the crash moved from
+`+0x59658` to `+0x5968c`, and the args object now carries a
+`shared_ptr`-like pair at `+0x10`/`+0x18` (pointer plus control block)
+instead of null. Every U123 sweep put the descriptor at field 2 and
+always crashed at `+0x59658`. So the register args are
+`{handle, device_id, <a table>, graph_descriptor, ...}`: field 2 must be a
+table, which is why a scalar there failed the verifier in U121.
+
+**The args object.** The crash dump (24 u64 from the variant payload) is
+`2 1 <ptr,ctrl> 0 0 …`: handle 2, device id 1, then the container. The VII
+builder reads `+0x10` (container), `+0x38` (a second single location),
+24-byte-stride vectors at `+0x20`, `+0x40`, `+0x58` and a bool at `+0x70`.
+The object is larger than 192 bytes and the fields past `+0x80` are not
+initialized by the parse (stack garbage in the `CISSS` run), so only
+`+0x10` is really filled.
+
+**The command table, read in full** (name table at `0x172c20` ->
+`0x16c2f8`, 32 entries): 0 NONE, 1 Ping, 2 AllocateTpu, 3 AllocateDspTpu,
+4 AllocateDsp, 5 ImportMemoryFromFd, 6 ReleaseMemory, 7 RegisterGraph,
+8 UnregisterGraph, 9 CreateExecution, 10 DeleteExecution, 11 Invoke,
+12 BindInputBuffersToTensors, 13 BindOutputBuffersToTensors,
+14 BindInputSyncFencesToExecution, 15 BindOutputFenceToExecution,
+16 ReleaseClientAssignedFd, 17 AcquireTpuWakelock, 18 ReleaseTpuWakelock,
+19-21 Internal…DelegateCompleted, 22 ImportMemoryFromHostAddr, 23-24
+Internal…, 25 InternalDeallocateTpu, 26 Cancel, 27 InternalLogGraphPerf-
+SummaryMetrics, 28-30 Internal…, 31 RemapModelMemory. There is no
+separate graph-container command: the descriptor carries it.
+
+**No crash-free oracle yet.** `CH`/`SH`/`IH` force an invalid memory
+handle into one buffer table; an unknown handle should answer "Memory
+handle not found" rather than crash. `CH=0xdeadbeef` changed nothing (same
+crash, same `{2,1,0}`), so no buffer table is read on this path yet.
+
+**Descriptor field order.** `CSI` (container, scratch, intermediate vector
+of table offsets), `CJS` (container, intermediate vector of inline 24-byte
+descriptors, scratch) and `CISSS` (every candidate scratch position) all
+leave `+0x20` empty and crash at `+0x38`. Only descriptor field 0 — the
+graph container, as a table of `{handle, offset, size}` — parses.
+
+**No vendor caller to capture from.** `0x6f87f4`
+(`RegisterGraphByBufferWithIntermediateBuffers`) copies shared_ptr vectors
+and builds the litebuf in a callee, never inline. `libedgetpu_tachyon.
+google.so` exports only the AIDL transport (`TachyonComputeSession_send-
+Command`), and nothing in the image links `libedgetpu_util.so`, so there is
+no stock binary to run under a payload-dumping preload.
+`tools/android-cmd-dump.c` is that interposer (built, pushed, unused).
+
+**Next:** descriptor field 1 vs 2 as single BufferDescriptor tables, no
+vector, and read which offset moves; then the `+0x20` vector as a vector of
+table offsets. The builder's `+0x38` read is the only remaining null.
+
+Phone: up, Tachyon service dead after the `CISSS` crash, chain down; a
+reboot before the next register.

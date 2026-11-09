@@ -450,7 +450,7 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
     if (f == 'C') put32(b + fld, (unsigned)(252 - fld));
     else if (f == 'S') put32(b + fld, (unsigned)(300 - fld));
     else if (f == 'X') put32(b + fld, (unsigned)(348 - fld));
-    else if (f == 'I') put32(b + fld, (unsigned)(384 - fld));
+    else if (f == 'I' || f == 'J') put32(b + fld, (unsigned)(384 - fld));
     else if (f == 'T') put32(b + fld, (unsigned)(476 - fld));
     else if (f == 'L') {
       put64(b + fld, 0);
@@ -479,7 +479,11 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
   put16(b + 246, 16);
   put16(b + 248, 24);
   put32(b + 252, 12);
-  put64(b + 260, g_handle);
+  /* CH/SH/IH force an impossible memory handle into one buffer table. An
+     unknown handle is a clean error, so it says whether the core read that
+     table at all: the named error means it did, the VII-builder crash means
+     it did not. */
+  put64(b + 260, env_num("CH", (unsigned)g_handle));
   put64(b + 268, 0);
   put64(b + 276, g_dma_size);
   /* S: firmware scratch table at 300 */
@@ -489,7 +493,7 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
   put16(b + 294, 16);
   put16(b + 296, 24);
   put32(b + 300, 12);
-  put64(b + 308, reg_scratch_handle());
+  put64(b + 308, env_num("SH", (unsigned)reg_scratch_handle()));
   put64(b + 316, 0);
   put64(b + 324, reg_scratch_size());
   /* X: a second buffer table at 348 */
@@ -511,9 +515,19 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
   put16(b + 398, 16);
   put16(b + 400, 24);
   put32(b + 404, 12);
-  put64(b + 412, reg_scratch_handle());
+  put64(b + 412, env_num("IH", (unsigned)reg_scratch_handle()));
   put64(b + 420, 0);
   put64(b + 428, reg_scratch_size());
+  /* J: the same one-element vector, but its element is the 24-byte
+     BufferDescriptor inline at 392 (a vector of structs), not a uoffset to a
+     table. Written after the I block so it wins when both could apply. */
+  if (has_char(order, 'J')) {
+    put32(b + 384, 1);
+    put32(b + 388, 0);
+    put64(b + 392, env_num("IH", (unsigned)reg_scratch_handle()));
+    put64(b + 400, 0);
+    put64(b + 408, reg_scratch_size());
+  }
   /* V/W: the memory handles a location index names, at 440 */
   put32(b + 440, 2);
   put64(b + 444, uo && has_char(uo, 'W') ? g_handle + 1 : g_handle);
