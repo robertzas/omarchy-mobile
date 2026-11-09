@@ -5562,3 +5562,30 @@ The kernel the phone runs still shows the `samsung-iommu.c:726 unmap_slpt`
 warning in the delegate's teardown; the source fix is committed
 (`594acaf97`) but this boot predates it.
 
+## U94: the client must ring the command eventfd itself (2026-11-08)
+
+The Ping dispatches. With a session AUTHORIZED and the queue fds from
+`setupCommandQueue`, the client writes its message and then writes 8 bytes
+to the queue's eventfds; the actor logs
+
+    [Main TPU Actor] received epoll event: 1 on fd 11
+    [Client Session ...] received command seq no: 1 of type : Ping
+
+and `receiveResponse` returns OK. Nothing else changed: the same lib, the
+same session, the same 64-byte message.
+
+The four fds `setupCommandQueue`/`setupResponseQueue` return are all
+`anon_inode:[eventfd]`; the ring itself is another fd per queue. The lib's
+`sendCommand` writes the message and publishes the ring's write index but
+never signals the eventfd, so the actor's epoll never wakes and the command
+sits in the queue until the client dies. That is the "received command"
+gate U90-U93 were chasing.
+
+`beginCommandQueueWrite` returns 0 (not an AStatus) and fills one 128-byte
+slot; `commitCommandQueueWrite` returns 0 as well. Ringing the command
+eventfd after either path is what matters.
+
+Next: read the Ping's 88-byte response from the response queue, then find
+the command that runs a model. The firmware's one-time setup is sent by the
+core, not by this client.
+
