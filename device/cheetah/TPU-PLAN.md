@@ -5937,3 +5937,38 @@ this one.
 Phone state: up, TPU held (3905), `/dev/janeiro` present, chroot HAL at its
 known sha `c04ad3249d3c…` (U108).
 
+## U110: the info struct decoded; CONFIG_GXP was never enabled (2026-11-08)
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
+
+**The 24-byte info call.** `libgxp.so` builds the struct at `0x12e26c`:
+`+0` a device object pointer, `+8` a u32 0, `+12` the u32 `0x00080002` (the
+rodata constant at file offset `0x36978`, in the first LOAD segment where
+vaddr == offset), and `+16` a u64 0; it calls `0xc0184800` (`_IOWR('H', 0,
+24)`) and checks only the return value. A second 24-byte query uses
+`0xc018ee04` (`0x14c0ec`). The stub answered `-EOPNOTSUPP`; `gxp.c` now logs
+the six words and echoes them back, so the service's next behaviour names the
+reply layout.
+
+**Why the module never rebuilt.** `drivers/gxp/Makefile` is
+`obj-$(CONFIG_GXP) += gxp.o`, and `out-tpu/.config` holds
+`# CONFIG_GXP is not set`. Every `M=drivers/gxp` build therefore found nothing
+to compile and exited 0 with only a MODPOST line; the 264,880-byte
+`out-tpu/out-modules/gxp.ko` dated 16:26 (vermagic
+`...-g052da70970d6-dirty`, correct) is a hand-made artifact from the earlier
+session, not a kbuild product. `drivers/Kconfig` does not source
+`drivers/gxp/Kconfig` either, so a plain `scripts/config -e GXP` would be
+dropped by `olddefconfig`.
+
+The full `make modules` path is also unusable on the host as-is:
+`/bin/sh: bc: command not found` stops `include/generated/timeconst.h`
+(`prepare0`), so the module has to be built in the project container, or `bc`
+installed.
+
+**Next:** add `source "drivers/gxp/Kconfig"` to `drivers/Kconfig`, set
+`CONFIG_GXP=m`, build `gxp.ko` with the release file pinned to the running
+kernel's string (the working recipe: write
+`out-tpu/include/config/kernel.release`, `make M=$PWD/drivers/gxp`, then
+restore it), `bin/omamobile push`, cold boot, and read the service's answer to
+the echo.
+

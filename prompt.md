@@ -1,18 +1,18 @@
-# Next: make the gxp stub answer the interface-version query
+# Next: build and run the gxp info-echo module
 
-Measured (U109): `libgxp.so` asks `/dev/gxp` for `0xc0184800` (24 bytes,
-`_IOWR(0x48, 0, 24)`), and `drivers/gxp/gxp.c` answers `-EOPNOTSUPP`, which is
-where the Tachyon service stopped in U89. The TPU itself is held on this boot,
-so this step is laptop + one `push` + one cold boot.
+Measured (U110): `out-tpu/.config` has `# CONFIG_GXP is not set`, and
+`drivers/Kconfig` never sources `drivers/gxp/Kconfig`, so every module build
+was a no-op. `bc` is missing on the host, so the full `make modules` path stops
+in `prepare0`.
 
-1. Disassemble `libgxp.so` at `0x14c0a0`-`0x14c160` and `0x12e240`-`0x12e2c0`:
-   the instructions after each `0xc0184800` call read the returned struct, so
-   they name its fields (interface major/minor, feature flags, queue limits).
-2. Fill that struct in `gxp.c` from the published `gxp.h` ABI where the values
-   are safe (major 1, minor 3) and zero elsewhere, keeping the log of the raw
-   24 bytes so a mismatch is visible.
-3. Build `gxp.ko` with `KERNEL_DIR=~/omamobile-kernel/wt-tpu
-   KERNEL_OUT=~/omamobile-kernel/out-tpu`, `bin/omamobile push` it, cold boot,
-   then `DELEGATE_UID=10000 /root/tpu-tachyon-run` and grep dmesg for the
-   firmware's setup line. Pass: the service gets past the version query; the
-   next refusal names the next ioctl.
+1. Add `source "drivers/gxp/Kconfig"` to `drivers/Kconfig`, set `CONFIG_GXP=m`
+   in `out-tpu/.config`, and run `olddefconfig`; check that
+   `include/config/auto.conf` keeps `CONFIG_GXP_MODULE=y`.
+2. Build in the project container (it has `bc`):
+   `KERNEL_DIR=~/omamobile-kernel/wt-tpu KERNEL_OUT=~/omamobile-kernel/out-tpu
+   bin/omamobile kernel`, or run `make M=$PWD/drivers/gxp modules` with the
+   release file pinned to `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
+3. `bin/omamobile push`, cold boot, `DELEGATE_UID=10000 /root/tpu-tachyon-run`,
+   then `dmesg | grep "device info: in"` plus the service's log. Pass: the
+   service gets past the version query, and the next refusal names the next
+   ioctl.
