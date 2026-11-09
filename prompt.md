@@ -1,28 +1,29 @@
-# TPU bring-up: next iteration (2026-11-09, after U155)
+# TPU bring-up: next iteration (2026-11-09, after U156)
 
-Read `device/cheetah/TPU-PLAN.md` U150-U155 and `AGENTS.md` first. Phone:
+Read `device/cheetah/TPU-PLAN.md` U150-U156 and `AGENTS.md` first. Phone:
 up, kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, A17 firmware at
 `/lib/firmware/updates/google/edgetpu-janeiro.fw` (sha `52c1cccd…`).
 
 **Do not run `tpu-a14-hal` or any direct `/dev/edgetpu` create again** (U154:
-the A14 HAL's CreateDevice blocks and reset the phone). Use the Tachyon ring
-harness only.
+it blocks in the driver and reset the phone). Use the Tachyon ring harness.
 
-**State.** Both cheetah firmware generations (A14 `1.0 539775951`, A17 `1.0
-895567958`) refuse every userspace producer's legacy type-0 setup. The A14
-vendor image has no Tachyon core, so the A14/A17 HAL direct path is the
-stock path; the same pair worked on stock A14. The GSA power-up works
-(`cmd 50` loads, `TPU cmd 1` starts, state 2).
+**State.** The port's `drivers/edgetpu` matches Google's stock Android 16
+gs201 driver in the KCI open, mailbox attach, PM wakelock and power-up order
+(U156); only bring-up logs differ. The port's own comment says stock's boot
+leaves the TPU running ("unlike stock where ABL leaves the TPU running"),
+while our first access sees GSA state 0 and starts a fresh image with no
+setup. The type-1 setup is external to the driver.
 
-1. **Diff the mainline driver against the stock gs201 driver.** The same A14
-   HAL + A14 firmware succeeded on stock, so the difference is in
-   `drivers/edgetpu`: the VII mailbox init and attach, the KCI
-   open/attach sequence, the GSA power-up commands (`cmd 150/50/151`, `TPU
-   cmd 1`), and the setup element. Take Google's GPL gs201 kernel source as
-   the reference and find the missing setup step.
-2. **If the driver matches,** recover the type-1 setup from the bootloader's
-   hwmgr/tpu-image code (`out/factory/cheetah-abl/…`, segments `0x7a8000`
-   and `0x7fac00`) and submit it through the ring client.
+1. **Recover the bootloader's setup.** Extract and disassemble the
+   bootloader's `hwmgr` and `tpu-image` code (`out/factory/cheetah-abl/…`,
+   segments `0x7a8000` and `0x7fac00`; also the cp3a bundle at
+   `out/factory/cp3a/`). Find how the ABL/GSA image manager builds the TPU
+   setup command — the global scratch list, the cluster bitset, and the
+   command type — and whether the ABL leaves the TPU running before Linux.
+   Replicate that command as the type-1 setup element from the ring client
+   (`TYPES=2,5,5,7 UORDER=MDMK` plus the gdb patch at `core+0x5968c`).
+2. **If the setup is a data blob** in the bootloader image or the GSA
+   firmware, extract it and feed it as the setup element.
 3. **Then the pipeline.** RegisterGraph (7), CreateExecution (9),
    BindInputBuffers (12), BindOutputBuffers (13), Invoke (11) on the SSD
    300x300 int8 model; 60 frames of `out/bench/mosaic12.mp4` through

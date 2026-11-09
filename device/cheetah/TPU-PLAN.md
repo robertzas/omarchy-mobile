@@ -7054,3 +7054,26 @@ the GSA power-up sequence (`cmd 150/50/151`, `TPU cmd 1`) or the setup
 element, not in userspace. Google's stock gs201 driver (the GPL kernel
 source) is the reference to diff against; the bootloader's hwmgr/tpu-image
 code (segments `0x7a8000`, `0x7fac00`) is the other source.
+
+## U156 (2026-11-09): the driver matches the stock Android 16 driver
+
+Google's gs201 Android 16 GPL tree is on disk at
+`~/omamobile-kernel/edgetpu-janeiro/drivers/edgetpu`; the port is
+`~/omamobile-kernel/wt-tpu/drivers/edgetpu`. The diff is bring-up logging
+only: `edgetpu-kci.c` (+31 lines: the KCI timeout parameter, queue/tx logs,
+`cur_seq` reset), `edgetpu-mailbox.c` (+148: the VII payload dump),
+`edgetpu-device-group.c` (+9: finalize logs), `edgetpu-firmware.c` (+1:
+a 50 ms sleep before the handshake), `mobile-firmware.c` (+1 include), and
+`edgetpu-pm.c` / `mobile-pm.c` are the stock files verbatim. That includes
+`edgetpu_kci_open_device` (KCI code 9), the VII mailbox attach/init, the
+`edgetpu_pm` wakelock and delayed power-down work, and the vendor power-up
+order (ACPM state, `lpm_up`, `edgetpu_chip_init`, firmware restart).
+
+So the missing setup is **not** a dropped driver step. The port's own
+comment in `janeiro-pm.c` names the gap: "on our cold path (image loaded and
+started by the driver, unlike stock where ABL leaves the TPU running)". On
+stock the TPU is already running when the driver first touches it, so the
+image load/start are no-ops and whatever setup the bootloader did survives;
+here the first access sees GSA state 0 and starts a fresh image. The type-1
+setup therefore has to come from outside the driver: the bootloader's
+`hwmgr`/`tpu-image` code or the stock vendor service's device spec.
