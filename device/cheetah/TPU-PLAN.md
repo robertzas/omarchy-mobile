@@ -6844,10 +6844,17 @@ client's C table is intact (vtable at 240, table at 252 with `soffset` 12,
 handle 1 at 260, offset 0, size at 276), so the parser is keeping a table
 reference instead of the table's handle.
 
-**Next:** capture the vendor path's real RegisterGraph bytes. The delegate
-builds and sends commands before the VII fails, and `libcmddump.so`
-interposes `TachyonComputeSession_sendCommand` into
-`/data/local/tmp/tpu-cmds.bin`; if the delegate never reaches RegisterGraph,
-dump the frames of the client the app service itself uses. Decode the
-GraphDescriptor field positions from a real message and encode ours the
-same way.
+## U144 (2026-11-09): the cmd-dump interposer loads but sees no command
+
+`$R/data/local/tmp/tpu-cmds.bin` is **0 bytes** and owned by uid 10000: the
+delegate run loaded `libcmddump.so` (its constructor opened the file) but
+`TachyonComputeSession_sendCommand` was never called. The vendor delegate
+fails before sending anything (`CreateDevice` status 13), so its stock
+message cannot be captured this way. The intercept point has to move into
+the process that actually builds the message: the util library's own
+`CreateVirtualDevice` path, or the core's command entry in the service.
+
+**Next:** find the util library's RegisterGraph builder by symbol and
+string reference (`RegisterGraph`, `Desc]`, the graph descriptor's field
+names), and if the delegate cannot be made to run, decode the core's
+parser statically from the handler's callers.
