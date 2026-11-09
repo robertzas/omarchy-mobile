@@ -7195,3 +7195,53 @@ single-core one. The cheetah's userspace runtime is embedded in the A14/A17
 `libdarwinn_hal.so` (49 MB / the A17 HAL in the phone's chroot), so the
 cheetah's setup command type and scratch layout must be read there, not
 from the tegu core.
+
+## U161 (2026-11-09): the A17 stack is the cheetah's Tachyon stack, and the setup builder is in the HAL
+
+The A14 image has no Tachyon core (U155), but the A17 factory image
+`out/factory/fw/img/vendor.img` (`cp2a.260705.006`, ext2, 841 850 880 B)
+does. The files are extracted to `out/a17-edgetpu/`:
+
+* `libtachyon_core.so` — 1 015 720 B, sha `47fb5f74…`, cheetah's core,
+  identical to the chroot's. It exports only `TachyonCore_CreateClientSession`,
+  `_Start`, `_SendClientAssignedFds`, `_Shutdown` (transport, no setup
+  strings).
+* `libedgetpu_util.so` — 3 813 648 B, sha `90908694…`, identical to the
+  chroot's. New `DarwinnApi2` API (`VirtualDevice_GetViiVersion`,
+  `CreateRequestQueue`, `RegisterGraph*`, `Submit*`,
+  `Request_CreateViiCommand`) plus the old `DarwinnDelegate_*` that
+  `edgetpu-run` calls. Its runtime has `firmware_setup_done_`,
+  `SetRegistrationInfo(options.model_info_scratch, …)`, the DIVE scratch,
+  and `Only an Abrolhos/Janeiro chip of MMIO platform type is supported.`
+* `libdarwinn_hal.so` — 37 089 408 B, sha `edf6abfb…`, the A17 HAL. It is
+  self-contained (NEEDED only libc/libm/libdl/liblog) and carries the
+  `JaneiroDriverProvider`/`AbrolhosDriverProvider` runtime, the
+  `Firmware setup failed for commands[%d], cluster_id_bitset in hex: %x.`
+  string (`0x4b8c71`), the `firmware_setup_done_ = false` wakelock
+  callback, and the embedded `janeiro_a0_config.binarypb` /
+  `janeiro_a0_config_memfile` / `janeiro_csr_layout.pb.txt`.
+* `com.google.edgetpu.tachyon-service` (70 024 B) and
+  `android.hardware.neuralnetworks@service-darwinn-aidl` (814 328 B): the
+  stock AIDL services. The NNAPI service calls `GetDarwinnHalFunctions`
+  and `EdgeTpuServiceAppConnector::Create/GetEdgeTpuFd/CompileTfLiteSubgraph`
+  and checks the Power HAL (`ML_ACC is not supported by the Power HAL`).
+  The vendor service is the compiler service (`libedgetpu_tflite_compiler.so`).
+* `etc/earcheek_classifier.tflite` (15 120 B) is a CPU TFLite model
+  (`CONVERSION_METADATA`, TFLite ops): no device spec to borrow.
+
+The A17 HAL's `GetDarwinnHalFunctions` (`0x16946ec`) returns `0x22b79a8`
+in `.data`, a table of small values, not absolute pointers; the HAL API
+table layout must be read from the NNAPI service's calls. The setup-failure
+string has one exact reference in `.text`: `0x14d9d40` (an earlier pass
+matched a different string at `0x47ec71`). The surrounding function
+(`0x14d9a80`-`0x14d9dcc`) walks `[x19+0x68]`/`[x19+0x70]` in 24-byte
+entries, walks the cluster ids at `[x19+0x230]`, calls the per-command
+send at `0x14d9eac` and the overall result at `0x14e3388`, sets a success
+flag with `stlrb #1, [x19+0x180]`, and logs the failure at `0x14d9d40`
+with the count and bitset. So the setup is built locally from the Janeiro
+config, not from the delegate's default spec.
+
+**Next:** decode `0x14d9a00`-`0x14da260` and `0x14e3300`-`0x14e3500`
+(the 24-byte entry layout, the bitset argument, the Janeiro config
+fields and the setup flatbuffer), then build the type-1 setup element for
+the ring client. Nothing on the phone changed this iteration.
