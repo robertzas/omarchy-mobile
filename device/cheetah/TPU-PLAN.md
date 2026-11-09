@@ -6209,3 +6209,68 @@ delegate or the Tachyon service (the AIDL `ClientSessionConfig` /
 `TachyonCore_CreateClientSession` call), not a synthetic one. The client is
 `tools/tpu-core-session.c`; its only useful result so far is the platform-check
 fix.
+
+## U120 (2026-11-08): the session type map, the ring baseline, and the import handle
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, phone up 5:37, TPU
+held once by `tpu-hold` (3905); no cold boot. The chain is left down.
+
+**The ring client is the baseline.** `/root/tpu-tachyon-client` (13,872 B) and
+`/vendor/bin/tpu-tachyon-client.new` (15,208 B) both write the command but
+never signal the queue eventfds, so the actor logs no `received command` and
+`receiveResponse` is the empty-FMQ status `exception -8 service 8`. Rebuilt
+from `tools/tpu-tachyon-client.c` (the source has the ring) and run as uid
+1000:
+
+```
+ring fd 11 rc 8 ... ring fd 15 rc 8
+receiveResponse: OK ... response size=88
+[Main TPU Actor] received epoll event: 1 on fd 11
+[Client Session ...] received command seq no: 1 of type : Ping
+```
+
+**The session type selects the backend.** The client's `STYPE`:
+
+| STYPE | what happens |
+| --- | --- |
+| 0 | the real core: `ClientSession` UNINITIALIZED -> CREATED -> STARTED -> AUTHORIZED, and the Ping above round-trips |
+| 1 | the GXP path: `Loaded GXP Tachyon Server library ... zpr_dsp_20260302`, `Could not setup the main actor`, `scoped_eventfd ... !fd.IsEmpty()`, service dies; `createSession` exception -129 DEAD_OBJECT |
+| 2 | the StarShip path through `fake_libtachyon_core.so`: `Unable to find original definitions of StarShip core. Using Fake definition to create session config with privilege: 1, size:184`, then `Unable to start core for handle ...`; session created, no core |
+| 3 | `createSession` exception -8 service 13 `Invalid Tachyon core` |
+
+`fake_libtachyon_core.so` (35,824 B) is a test double from
+`vendor/google_devices/zumapro/proprietary/gchips/tpu/tachyon/service/
+fake_libtachyon_core.cpp`; its `TachyonStarShipCore_*` and
+`TachyonDspCore_*` symbols are WEAK, and each looks up an "original
+definition" through `dlsym` and logs when it is absent. The cheetah core stub
+(sha `47fb5f74...`, 1,015,720 B) has only four exports and no StarShip
+symbols. So neither image here ships a real `TachyonStarShipCore_*`; STYPE 0
+is the real path.
+
+**The command union numbering**: 0 NONE, 1 Ping, 2 AllocateTpu, 3
+AllocateDspTpu, 4 AllocateDsp, **5 ImportMemoryFromFd**, **6 ReleaseMemory**,
+7 RegisterGraph, 8 UnregisterGraph, 9 CreateExecution, ... A `TYPES=2,6`
+probe therefore sent ReleaseMemory and the core answered `ReleaseMemory 1 ...
+Release memory handle not found: 1`; the import is type 5.
+
+**The import handle probe.** With the root table at 36, the union vtable at 56
+and the union table at 60, the first u64 at table+8 is the **command handle**:
+the core logs `[Cmd 2][ImportMemoryFromFd Handle 1] Command created`. A
+second u64 at table+16 does not reach the **client-assigned fd handle**:
+`TachyonComputeSession_sendFileDescriptors` returns OK for the memfd with
+handle 1 or 2, yet the core still answers `INVALID_ARGUMENT: Invalid client
+assigned fd handle: 0. Must be positive.` for `HANDLE=1 FDH=1` and
+`HANDLE=1 FDH=2`. The fd handle is a different field, most likely a nested
+memory-descriptor table (union field 1 as a uoffset) or a struct, not the
+second u64.
+
+**Next: the nested-descriptor sweep.** `tools/tpu-tachyon-client.c` now has
+the `HANDLE`/`FDH` probe and the `sendFileDescriptors` call. Make union field
+1 a uoffset to a table carrying a u64 at +8/+16/+24, run
+`TYPES=2,5 HANDLE=1 FDH=N`, and stop when the error's number is N. Then
+import `out/edgetpu-runtime/graph.bin` (4,726,868 B, the model's `DWN1`
+custom_options) instead of the 4 KiB page and send RegisterGraph (type 7).
+
+Phone state: up, TPU held by `tpu-hold` (3905), chain down, the ring client at
+`$R/vendor/bin/tpu-tachyon-client.ring`; `/tmp/tpu-tachyon.log` is this
+round's log and is not committed.
