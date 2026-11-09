@@ -1,22 +1,23 @@
-# Next: make the core dispatch a command (Ping first)
+# Next: make one command reach the actor (Ping first)
 
-State (TPU-PLAN U92): with the Power HAL up, the real `libtachyon_core.so`
-and a prior delegate run, the client's session goes
-CREATED -> STARTED -> AUTHORIZED in 1 ms, but no round is dispatched: the
-service never logs `received command`, and receiveResponse returns
-`exception -8 service 8`. The one good Ping (U90) happened on a service
-restart after a boot where the delegate had run.
+Measured state (TPU-PLAN U93): the session reaches AUTHORIZED, the actor
+registers the queue fds, but a Ping produces no actor epoll event and no
+`received command`; the first event is the client's death. The cheetah
+lib's `setupCommandQueue` hands the caller the raw fds (the session's own
+copies become -1), and `sendCommand` writes to the session's own queue
+object.
 
-1. Reproduce a good Ping and keep its log: boot with the runner (delegate
-   enabled), copy `/tmp/tpu-tachyon.log` aside before restarting anything,
-   then restart only the Tachyon service and run the client. On success,
-   diff the core's lines against today's.
-2. Find which binary logs `received command` (strings of the core, the
-   service and the app service) and what starts that actor
-   (`TachyonCore_Start` caller, its argument, thread creation).
-3. Check the command FMQ's direction and notification: the client's
-   `setGetFdsResponseCallback` may hand back the response queue's fds;
-   compare the fds it maps for the command and response queues.
-4. Once a Ping dispatches, find the Execute opcode and its message layout in
-   `libedgetpu_tachyon.google.so` (`TachyonCommand_*` strings), then run
-   `detect_edgetpu.tflite`.
+1. Instrument the send: in the client, after `sendCommand`, call
+   `TachyonComputeSession_beginCommandQueueWrite(session, 128, &buf, &a,
+   &b, &c)` and `commitCommandQueueWrite(session)` and print the status of
+   each. If begin/commit succeeds where sendCommand did not, use them for
+   the Ping and for the response read.
+2. Read the queue's write index before and after the send on both sides
+   (`/proc/<pid>/fdinfo` and the mapped ring) to prove whether the write is
+   visible to the service.
+3. If the queue is dead after setup, build the FMQ client from the two raw
+   fds: 128-byte slots, 12 KiB command queue, and ring the eventfd after
+   the write.
+4. Keep the delegate's util path in view: as uid 10000 it never creates a
+   Tachyon session, so find what the util library checks before it asks the
+   app service (the app service itself publishes and is reachable).

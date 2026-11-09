@@ -5508,3 +5508,57 @@ test shell's own command line when the pattern appears there; use
 
 The one good Ping (U90) remains the only dispatch ever seen.
 
+## U93: the client's command queue is not the one sendCommand writes to (2026-11-08)
+
+The phone's live core is the 1,538,440-byte `libtachyon_core.so` (sha
+`d1602625abb0`): `] received command seq no: ` and ` of type : ` are in it.
+The 1,015,720-byte copy in the laptop chroot is the stub, so every earlier
+local `strings` check read the stub, not the phone's file.
+
+The cheetah `libedgetpu_tachyon.google.so` (133,232 bytes) is not the
+102,384-byte copy in the chroot either. It adds
+`TachyonComputeSession_{begin,commit}CommandQueueWrite`,
+`{begin,commit}ResponseQueueRead`, `setCallbackForGetFdsResponse`,
+`getCoreVersion`, `getSessionHandle`, and config setters for the session
+type, client version and queue slot counts.
+
+Disassembly of it:
+
+- `TachyonComputeSession_setupCommandQueue` / `setupResponseQueue` **move**
+  two fds out of the session's state (offsets 0x68/0x6c and 0xc0/0xc4) and
+  store -1 back, so the caller owns the raw queue fds after the call.
+- `TachyonComputeSession_sendCommand` forwards to
+  `ComputeSession::SendCommandMessage(TachyonMessage)`, which asks
+  `BeginCommandQueueWrite(size, void** buf, size_t* a, size_t* b,
+  size_t* c)`, memcpys the message and publishes the queue's write index
+  with a `stlr`. It returns service-specific error 8 when the queue cannot
+  take 128 bytes. No eventfd write is visible in that path.
+- `begin/commitCommandQueueWrite` and `begin/commitResponseQueueRead` are
+  the same queue object's explicit API (five out-parameters for begin, none
+  for commit).
+
+On the phone the service registers its queue fds when the session is
+created (`registering fd 15 ... handler type: 0`, `registering fd 11 ...
+handler type: 1`), the session reaches AUTHORIZED, and the actor logs its
+**first epoll event only when the client is killed** 25 s later
+(`received epoll event: 1 on fd 15`, then "Stopping due to client death or
+protocol error"). A Ping sent in between produces no actor event and no
+`received command`.
+
+So the client's 64-byte Ping is written into a queue the actor never sees an
+event for. Next: read the ring's write index on both sides after the send
+(or drive begin/commit explicitly), and if the queue is dead after setup,
+treat the two fds as the raw FMQ (128-byte slots, 12 KiB command queue) and
+signal its eventfd.
+
+The delegate as uid 10000 still does not take the Tachyon path: that run
+logs no `TachyonCore_CreateClientSession` at all, only the VII group ioctl
+and `create device status: 13`. Its app service is reachable
+(`Found com.google.edgetpu.IEdgeTpuAppService/default in device VINTF
+manifest`), but the binder warning `Thread Pool max thread count is 0`
+appears for it.
+
+The kernel the phone runs still shows the `samsung-iommu.c:726 unmap_slpt`
+warning in the delegate's teardown; the source fix is committed
+(`594acaf97`) but this boot predates it.
+
