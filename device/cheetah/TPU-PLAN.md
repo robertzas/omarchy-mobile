@@ -6800,7 +6800,32 @@ begins `252 / 40 / 32` — a flatbuffer table position and sizes — which is
 the value the core then reports as a memory handle. The request parser, not
 the log record, is the missing piece.
 
-**Next:** break at the VII-builder entry (`core+0x59608`) for a
-RegisterGraph run and read `$x30` (the caller's return address); walk up to
-the command handler, then find where it allocates and fills `$x21`. Set the
-watchpoint on that object's `+0x10` and `+0x38` instead.
+## U139-U141 (2026-11-09): the handler, the tag, and the null at `+0x38`
+
+One boot each, slot B. `core+0x59608` is the command handler, called from
+`0x87b90` as `handler(msg, arg, out)`. `x1` is **not** the command type: a
+conditional breakpoint on it never fires (the run reaches the SIGSEGV), so
+the U140 hit was the first command, not a typed dispatch. The handler reads
+`[msg]` -> `[msg+0x50]` (the descriptor), compares the **byte at
+descriptor+0x10 with 7**, and only on equality takes `descriptor+0x18` as
+the payload `x21`. It then resolves two values from that payload:
+
+- `ldr x8,[x21,#0x10]` / `ldr x8,[x8]`: for our RegisterGraph this is
+  **252**, the absolute position of the client's graph-container table, and
+  it is passed to the dependency lookup. The lookup fails and the message
+  `Dependent memory handle was not added: 252` is built at `0x74ff4` with
+  this value as its only argument.
+- `ldr x8,[x21,#0x38]` / `ldr x8,[x8]`: **0**, dereferenced with no null
+  check. That is the SIGSEGV at `0x5968c`.
+
+So the parsed payload carries one live buffer reference (252, read as a
+handle) and one null reference. The union tag `7` is the client's own
+`b[49] = 7`, and the payload layout that tag selects is not the layout the
+client fills. The next run enumerates the tag and the payload fields, with
+ImportMemory's accepted descriptor as the reference, aiming for a non-null
+`[x21+0x38]` and a first value that is a real imported handle rather than a
+table position.
+
+**Next:** vary `b[49]` over 0-12 and the payload layout behind it in one
+client binary, log the handler's two values for each, and keep the tag that
+makes both non-null and resolvable.
