@@ -6086,3 +6086,21 @@ build and the submit. The type value 15 is the one the virtual-device mode
 selects; whether our session's mode picks 11 (direct) or 15 is the first
 thing to read from the builder's two `0xd5630` results.
 
+## U115: the failure log is a result handler, not the submit (2026-11-08)
+
+`[obj+0x1c0]` and `[obj+0x1c1]` have exactly two stores in the whole core,
+both in the builder (`0x7fbb8`, `0x7fbdc`); no instruction loads them by
+immediate offset. The log at `0x7fc20` passes `&obj[0x1c1]` to the logger,
+and the flatbuffer builder reads the type through that pointer.
+
+The `PushFirmwareSetupCmdToVII failed` string at `0x7531c` is **not** the
+submit: the block at `0x752ec`-`0x75344` formats a status into the log and
+then branches on the handler's own result (`cbnz x0, 0x750a0` after
+`ldp x8, x0, [x22, #0xe0]`). So the next target is that handler
+(`0x750a0`) and the `bl` that produces the status it logs, not the string
+site.
+
+**Next:** read `0x750a0` and the call that returns the status; name the
+condition that reaches the handler (the setup send's return path). Then one
+cold boot with `HOLD=0`, delegate first, and capture `vii-payload` as before.
+
