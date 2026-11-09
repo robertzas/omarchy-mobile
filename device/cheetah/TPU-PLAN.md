@@ -6978,3 +6978,36 @@ No `RegisterGraph` reached the core (gdb at `0x59620` never hit), and the
 before it sends any command through the client library. So the stock
 client's session config does not carry the missing scratches either; the
 setup message belongs to the core, not the client.
+
+## U153 (2026-11-09): no userspace produces the type-1 setup; the bootloader does
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, boot `u154` (A14
+firmware) and `u155` (A14 HAL/util, direct path as root).
+
+**Older firmware does not accept the legacy setup.** With
+`out/tpu-firmware/edgetpu-janeiro-a14.fw` (985 344 B, sha
+`145993a4e300…`) loaded through GSA (`loaded prod firmware (1.0
+539775951)`), the ring client's RegisterGraph still ends in
+`Setup is not done yet recieved a command of type 0.` (the A14 firmware's
+spelling) with the same payload. The A14 firmware wants the type-1 setup as
+much as the A17 one.
+
+**The A14 HAL is not the producer either.** The stock A14 direct-path
+libraries (`out/a14-edgetpu/libdarwinn_hal.so`, sha `d29cba6b…`, and
+`libedgetpu_util.so`, sha `013fb75c…`, pushed to the chroot's
+`/vendor/a14/`) create a device on `/dev/edgetpu` as root and send the same
+legacy three-field payload; the delegate reports `create device status: 13`
+and `device: 0x0` after three attempts. The A14 HAL's setup-failure string
+is the same `commands[%d], cluster_id_bitset in hex: %x` one.
+
+So every available userspace producer — the tegu Tachyon core, the A17
+HAL, the A14 HAL, the Tachyon client — emits the legacy type-0 setup, and
+both cheetah firmware generations refuse it. The stock path must therefore
+be the bootloader: `janeiro-pm.c`'s own comment says stock is "image loaded
+and started by the driver, unlike stock where ABL leaves the TPU running".
+ABL sets the firmware up before Linux, and the host HAL's legacy message is
+never the setup that matters on a stock boot.
+
+**Next:** extract the cheetah ABL from `out/factory/cheetah-factory.zip`
+and find its TPU/janeiro setup code — the global scratch descriptors and the
+cluster bitset — then replicate that type-1 command from the host.
