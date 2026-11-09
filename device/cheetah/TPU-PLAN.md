@@ -7325,3 +7325,41 @@ UORDER=MDMK` sequence with the `core+0x5968c` gdb patch (`set
 BindInputBuffers, BindOutputBuffers and Invoke on the SSD model, and the
 benchmark. A RegisterGraph that proceeds is the decoded proof the setup
 was accepted; a 96-byte result without that is not.
+
+## U164 (2026-11-09): RegisterGraph runs, but the core's own setup poisons the VD
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, one boot, slot
+B. The round mapping in `tools/tpu-tachyon-client.c` was keyed by round
+number, so the new setup round shifted it: the first type 5 sent handle
+2 with fd 2 (the scratch) and the second sent handle 1 with fd 2, and
+the core refused the second with `ImportMemoryFromFd 1:
+INVALID_ARGUMENT: Invalid client assigned memory handle`. Keyed by
+type, both imports now succeed: the graph as handle 1/fd 1 and the
+scratch as handle 2/fd 2, each a 64-byte response. The `core+0x5968c`
+gdb patch loads (`break *0xffffa8a6a68c`, `PATCH x21=0xb400fffe7800a6e0`)
+and the RegisterGraph (round 5) gets its own 72-byte response.
+
+That response is `Virtual device failure`. The service log gives the
+cause:
+
+    tpu_actor_virtual_device.cc:604 Sending firmware-setup VII command. type: 1 seq: 0
+    tpu_actor_engine.cc:1202 Process VII response after fd signal: 1.
+    state_variable.h:32 [VD 1].state INITIALIZED to IN_ERROR
+    tpu_actor_engine.cc:583 [Virtual Device 1] Stopping due to failure
+
+The core sends **its own** legacy type-1 setup when it creates the
+virtual device, before the client's first command; the firmware
+rejects that one, VD 1 goes IN_ERROR, and every later command including
+RegisterGraph fails on the dead VD. The client's type-1 table (U163)
+is not the core's setup and never reaches that path. The ring path is
+therefore blocked by the core's setup builder, not by the client's
+payload or the graph/scratch handles.
+
+**Next:** the A17 HAL is the only producer whose setup is the correct
+shape. Its NN service is in the chroot and links the HAL, but the chroot
+has no `libneuralnetworks.so`; call the NN service's
+`IDevice::prepareModel` through `libbinder_ndk` (or the HAL's C++
+`prepareModel` directly) with the SSD model, and the HAL should send the
+A17 type-1 setup. If the core is patched instead, the gdb step is the
+setup send at `tpu_actor_virtual_device.cc:604`: replace its payload
+with the client's `build_setup` table or skip it and mark the VD ready.

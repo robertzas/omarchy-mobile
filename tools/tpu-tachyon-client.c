@@ -1301,21 +1301,29 @@ int main(int argc, char **argv) {
     } else {
       static unsigned char msg[512];
       long round;
+      int import_no = 0;
 
       for (round = 1; round <= rounds; round++) {
         int this_type = ntypes > 0 ? types[round - 1] : cmd_type;
         if (ntypes > 0) {
-          /* TYPES=2,5,5,7: round 2 imports the graph under HANDLE/FDH,
-             round 3 the scratch under the next pair, round 4 registers. */
-          if (round == 2) {
-            g_handle = base_handle;
-            g_fd_handle = base_fd;
-            g_dma_size = g_graph_size;
-          } else if (round == 3) {
-            g_handle = base_handle + 1;
-            g_fd_handle = base_fd + 1;
-            g_dma_size = g_scratch_size;
-          } else if (round == 4) {
+          /* TYPES=1,2,5,5,7: the first type 5 imports the graph under
+             HANDLE/FDH, the second the scratch under the next pair, and
+             the type 7 registers. Keyed by type, not round, so the setup
+             round (type 1) does not shift the mapping. The core requires
+             the client-assigned memory handle to match the fd handle it
+             was sent under (U163's 216-byte refusal used handle 1, fd 2). */
+          if (this_type == 5) {
+            if (import_no == 0) {
+              g_handle = base_handle;
+              g_fd_handle = base_fd;
+              g_dma_size = g_graph_size;
+            } else {
+              g_handle = base_handle + 1;
+              g_fd_handle = base_fd + 1;
+              g_dma_size = g_scratch_size;
+            }
+            import_no++;
+          } else if (this_type == 7) {
             g_handle = base_handle;
             g_scratch = base_handle + 1;
             g_dma_size = g_graph_size;
