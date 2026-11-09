@@ -6746,3 +6746,38 @@ Invoke (11) and the benchmark.
 
 Phone after the last run: up, service alive (the patched command returned a
 response), chain up; the TPU power-up for this boot is spent.
+
+## U137 (2026-11-09): inline Buffer structs change nothing; 252 is above the descriptor
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, one boot
+(`tpu-u137`), slot B.
+
+The client now has `A`/`B` descriptor letters that write a Buffer as an
+inline struct, `{u64 handle, u64 offset, u64 size}`. The older `c`/`s`/`i`
+inline encodings wrote two u32s at +0/+4, so their "handle" was never 1 or 2
+(`s` was `0x0000000100000001`, `i` `0x0000000200000001`). With
+`ORDER2=ABI` (container handle 1, scratch handle 2, intermediates vector)
+the result is unchanged: the gdb breakpoint at `core+0x5968c` fires with
+`+0x38` null, and after `$x8` is patched the client receives the same
+200-byte response, `Dependent memory handle was not added: 252`.
+
+**The response is invariant across every descriptor shape** — three table
+fields, inline 24-byte structs, an empty vector, aligned u64 structs —
+always 252. 252 is the byte position of the client's graph-container table
+in the 512-byte message, but no shape moves it. So the core is not reading
+our `GraphDescriptor` for that check at all: the value comes from the
+command framing or a fixed field outside the descriptor. The descriptor
+sweep is finished; more shapes cannot help.
+
+**The util library's builder lookup missed.**
+`DarwinnDelegate_CreateVirtualDevice3` stores a vtable at object+0
+(`0x99ad20`), but that table's `+0x48` (`0x6f5140`) is a destructor/cleanup
+routine, not RegisterGraph, so this is not the VirtualDevice vtable. The
+exported thunks call `[x8+0x48]` on the device object; the real vtable is
+installed elsewhere.
+
+**Next: the import's own descriptor.** ImportMemory (type 5) is the one
+command whose buffer descriptor the core accepts, so it is a working schema
+sample. Capture its raw bytes and the parsed object (break at the
+constructor `0x6384c`, `finish`, dump `$x0`), then encode RegisterGraph's
+container and scratch the same way.
