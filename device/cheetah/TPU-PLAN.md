@@ -5830,3 +5830,30 @@ who is supposed to send it (the core's `PushFirmwareSetupCmdToVII`).
 Counts of "Setup is not done" in dmesg are not usable as before/after
 evidence: the ring buffer drops lines (8 before one run, 6 after the next).
 
+## U106: KCI 6 and 9 both answer INVALID_ARGUMENT, and KCI open is not the missing step (2026-11-08)
+
+`edgetpu-kci.h:146` gives the response codes: `KCI_ERROR_INVALID_ARGUMENT = 3`.
+The debugfs hook sends a zeroed 16-byte buffer as the command's DMA descriptor,
+so both tests were malformed payloads, not unknown commands:
+
+```
+kci_send code 6 tpu_addr 0xffeff000 -> 3
+kci_send code 9 tpu_addr 0xffd7e000 -> 3
+```
+
+The driver's real open path is present: `edgetpu-mailbox.c:1375` calls
+`edgetpu_kci_open_device()` with an `edgetpu_kci_open_device_detail`
+(`edgetpu-kci.c:1045`), and `KCI_CODE_OPEN_DEVICE = 9` is in the enum. So the
+driver does open the device properly.
+
+After both sends the firmware still logged `Setup is not done yet received a
+command of type 0.` on the delegate's first VII (element type 0 = Sync), and
+the delegate still reports `Sync VII command failed: error_code=9` then
+`create device status: 13`, `device: 0x0`.
+
+So the VII "setup" is neither KCI 6 with an empty payload nor KCI open: it is
+a distinct VII step, the one the core names `PushFirmwareSetupCmdToVII`. The
+next step is to recover that command's element type and payload from the
+vendor core (`libdarwinn_hal.so`) or to get the core/app-service path to send
+it for the client's device.
+
