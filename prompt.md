@@ -1,18 +1,15 @@
-# Next: build and run the gxp info-echo module
+# Next: load the info-echo gxp module on a cold boot
 
-Measured (U110): `out-tpu/.config` has `# CONFIG_GXP is not set`, and
-`drivers/Kconfig` never sources `drivers/gxp/Kconfig`, so every module build
-was a no-op. `bc` is missing on the host, so the full `make modules` path stops
-in `prepare0`.
+U110/U111: the 24-byte info query is decoded (`+12` = `0x00080002`, return
+value only) and the module builds with `CONFIG_GXP=m`. The TPU on the current
+boot is spent, so the test needs one cold boot.
 
-1. Add `source "drivers/gxp/Kconfig"` to `drivers/Kconfig`, set `CONFIG_GXP=m`
-   in `out-tpu/.config`, and run `olddefconfig`; check that
-   `include/config/auto.conf` keeps `CONFIG_GXP_MODULE=y`.
-2. Build in the project container (it has `bc`):
-   `KERNEL_DIR=~/omamobile-kernel/wt-tpu KERNEL_OUT=~/omamobile-kernel/out-tpu
-   bin/omamobile kernel`, or run `make M=$PWD/drivers/gxp modules` with the
-   release file pinned to `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
-3. `bin/omamobile push`, cold boot, `DELEGATE_UID=10000 /root/tpu-tachyon-run`,
-   then `dmesg | grep "device info: in"` plus the service's log. Pass: the
-   service gets past the version query, and the next refusal names the next
-   ioctl.
+1. Copy `gxp.ko` to the phone (`tools/phone-ssh 'cat > /root/gxp-new.ko' < K`,
+   then `sha256sum` on both sides), `systemctl poweroff`, and wait for the
+   owner's Power press.
+2. On the new boot: `rmmod gxp; insmod /root/gxp-new.ko` before the first TPU
+   power-up, then `tpu-hold`, then `DELEGATE_UID=10000 /root/tpu-tachyon-run`.
+3. Read `dmesg | grep "device info: in"`; the six words name what libgxp
+   asks for. Pass: the service gets past the version query, and the next
+   refusal names the next ioctl. Rollback: `rmmod` and insmod the installed
+   copy under `/usr/lib/modules/<release>/`.

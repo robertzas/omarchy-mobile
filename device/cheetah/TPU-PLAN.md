@@ -5956,19 +5956,37 @@ reply layout.
 to compile and exited 0 with only a MODPOST line; the 264,880-byte
 `out-tpu/out-modules/gxp.ko` dated 16:26 (vermagic
 `...-g052da70970d6-dirty`, correct) is a hand-made artifact from the earlier
-session, not a kbuild product. `drivers/Kconfig` does not source
-`drivers/gxp/Kconfig` either, so a plain `scripts/config -e GXP` would be
-dropped by `olddefconfig`.
+session, not a kbuild product. `drivers/Kconfig` already sources `drivers/gxp/Kconfig` (line 2), so
+`scripts/config --module GXP` plus `olddefconfig` enables it; the symbol was
+simply never set in `out-tpu`.
 
 The full `make modules` path is also unusable on the host as-is:
 `/bin/sh: bc: command not found` stops `include/generated/timeconst.h`
 (`prepare0`), so the module has to be built in the project container, or `bc`
 installed.
 
-**Next:** add `source "drivers/gxp/Kconfig"` to `drivers/Kconfig`, set
-`CONFIG_GXP=m`, build `gxp.ko` with the release file pinned to the running
+**Next:** set `CONFIG_GXP=m`, build `gxp.ko` with the release file pinned to the running
 kernel's string (the working recipe: write
 `out-tpu/include/config/kernel.release`, `make M=$PWD/drivers/gxp`, then
 restore it), `bin/omamobile push`, cold boot, and read the service's answer to
 the echo.
+
+## U111: gxp.ko builds with the info echo (2026-11-08)
+
+`CONFIG_GXP=m` in `out-tpu/.config` plus `syncconfig` is the whole fix; the
+`M=` build then compiles and links in the project image with the host toolchain
+mounted:
+
+```sh
+docker run --rm -v $S:/src -v $O:/out -v ~/.cache/omamobile/toolchain:/tc:ro \
+  -w /src omamobile-build:24.04 bash -c \
+  'export PATH=/tc/clang-r596125/bin:$PATH
+   make O=/out ARCH=arm64 LLVM=1 syncconfig
+   make -j$N O=/out ARCH=arm64 LLVM=1 M=/src/drivers/gxp modules'
+```
+
+with `out-tpu/include/config/kernel.release` written to the running kernel's
+string (`7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`) for the build and put
+back afterwards. Log: `CC [M] gxp.o`, `LD [M] gxp.ko`; the earlier silent
+no-ops were `auto.conf` still holding `# CONFIG_GXP is not set`.
 
