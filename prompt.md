@@ -1,19 +1,20 @@
-# Next: make the VII payload lookup find an offset inside a mapping
+# Next: find who sends the VII setup, and why the core's does not arrive
 
-Measured (U104): the group's dma-buf map is at `iova=0xfff00000, 256 pages`,
-while the failed VII payload was at `0xffefe000`; `compare()` only matches an
-exact `device_address`, so an offset into the mapping is never found. A later
-run copied some payloads but the firmware still logged six "Setup is not done
-yet" and the delegate still ended at `device: 0x0`.
+Measured (U105): KCI code 6 is accepted and answered `3`, and the firmware
+still logs "Setup is not done yet"; the delegate's first VII is a Sync that
+fails with `error_code=9`, then `create device status: 13`. The driver has
+`mobile_firmware_setup_buffer` registered as `.setup_buffer` and called at
+firmware load.
 
-1. In one delegate run, collect the driver's `mappings` dump and every
-   `vii-payload` line together, and decide which buffer the setup command
-   uses (map base, base minus a header, or a separate host mapping).
-2. Fix `edgetpu_mapping_find_locked()`/`compare()` to find the mapping that
-   *contains* the iova (range check on map_size), not only an exact match.
-   Build with `KERNEL_DIR=~/omamobile-kernel/wt-tpu
-   KERNEL_OUT=~/omamobile-kernel/out-tpu bin/omamobile kernel`, checkpatch and
-   W=1 clean, then push and reboot-to omamobile.
-3. Expect the setup command to arrive whole, the firmware to leave "Setup is
-   not done", and the delegate to create its device. Then run one inference,
-   measure it, and run the 720p CPU/GPU/TPU object-detection comparison.
+1. Read `mobile_firmware_setup_buffer()` and `edgetpu-firmware.c` around line
+   104: what does the buffer hold, and is its TPU address handed to the VII
+   layer? The core string `PushFirmwareSetupCmdToVII` says the Tachyon core
+   sends the setup as a VII command, so the address must reach it.
+2. Run the tachyon service alone with maximum logging and check whether it
+   sends that setup (and gets error 9), or whether it never gets a device at
+   all. Compare with the vendor HAL's device-open order.
+3. If the address is missing, add the setup command to the core path (or to
+   device open) in the driver and rebuild with
+   `KERNEL_DIR=~/omamobile-kernel/wt-tpu KERNEL_OUT=~/omamobile-kernel/out-tpu
+   bin/omamobile kernel`, checkpatch and W=1 clean, then push and reboot-to
+   omamobile. Expect Sync to succeed and `create device status: 0`.
