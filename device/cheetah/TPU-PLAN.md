@@ -5635,3 +5635,36 @@ The vendor model `/vendor/etc/model.tflite` (4,653,936 bytes, md5
 (`edgetpu-custom-op`, `TFLite_Detection_PostProcess`): a usable SSD
 detector once a graph can be registered and invoked.
 
+## U97: the virtual device initializes once /dev/edgetpu-soc exists (2026-11-08)
+
+The core's virtual device failed with `ioctl_kernel_if.cc:123 INTERNAL:
+device_fd >= 0 (-1 vs. 0) Failed to open device fd: /dev/edgetpu-soc` and
+went `INITIALIZING -> IN_ERROR`, which surfaced as "Virtual device failure"
+to the client. The chroot had `/dev/edgetpu` but not `/dev/edgetpu-soc`.
+With `ln -sfn janeiro /dev/edgetpu-soc` (now in `tools/tpu-tachyon-run`),
+AllocateTpu goes `VD 1: UNINITIALIZED -> INITIALIZING -> INITIALIZED` and
+returns a 96-byte success response; dmesg shows janeiro's ioctls and
+`finalize: detachable 1`.
+
+`/dev/edgetpu-limited` is the next missing node, but only a warning (the
+core continues without the limited device).
+
+So the virtual device now exists; the remaining work is the graph and
+execution commands (RegisterGraph, ImportMemoryFromFd, CreateExecution,
+Invoke), each of which needs its request table.
+
+## U98: AllocateTpu retires and the virtual device lives for the session (2026-11-08)
+
+With `/dev/edgetpu-soc` present, a two-command session (AllocateTpu then
+RegisterGraph, each with its own sequence number) allocates the device:
+`Cmd 1 AllocateTpu` goes CREATED -> PENDING_EXECUTION -> RETIRED,
+`[VD 1]` reaches INITIALIZED, and the client gets a 96-byte success
+response. RegisterGraph is then written and its eventfds rung, but the
+client's six-second poll window returns service-specific 8 (no response
+yet), so whether the actor ran it needs the log lines after the AllocateTpu
+retirement.
+
+The client now takes `TYPES=2,7,...` to send a sequence of union members in
+one session, using the round number as the sequence number, and no longer
+breaks the loop after the first success.
+

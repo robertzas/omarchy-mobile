@@ -217,7 +217,7 @@ static void put64(unsigned char *p, unsigned long v) {
   for (i = 0; i < 8; i++) p[i] = (v >> (8 * i)) & 0xff;
 }
 
-static unsigned build_cmd(unsigned char *b, int type) {
+static unsigned build_cmd(unsigned char *b, int type, long seq) {
   /* root table at 36, its vtable at 24; union vtable at 56, union table at 60 */
   int i;
 
@@ -230,7 +230,7 @@ static unsigned build_cmd(unsigned char *b, int type) {
   put16(b + 32, 13);
   put16(b + 34, 16);
   put32(b + 36, 12);
-  put64(b + 40, 1);
+  put64(b + 40, (unsigned long)seq);
   b[48] = 1;  /* privileged, matching the session config */
   b[49] = (unsigned char)type;  /* union type from the core's name table (U96) */
   put32(b + 52, 8);
@@ -317,9 +317,30 @@ int main(int argc, char **argv) {
   /* argv[1] "0" asks for an unprivileged session; default is privileged
    * (the config the app service uses). */
   int privileged = 1;
+  int ntypes = 0;
+  static int types[8];
+  long rounds_env = 0;
   int cmd_type = (int)parse_dec(getenv("TYPE"));
 
   if (cmd_type <= 0 || cmd_type > 24) cmd_type = 1;
+
+  // TYPES=2,7 sends a different union member in each round, each with its
+  // own sequence number; one session can allocate a device and then use it.
+  {
+    const char *tl = getenv("TYPES");
+
+    ntypes = 0;
+    if (tl) {
+      while (*tl && ntypes < 8) {
+        int v = 0;
+
+        while (*tl >= '0' && *tl <= '9') v = v * 10 + (*tl++ - '0');
+        if (v > 0 && v <= 24) types[ntypes++] = v;
+        if (*tl == ',') tl++;
+        else break;
+      }
+    }
+  }
   if (argc > 1 && argv[1] && argv[1][0] == '0') privileged = 0;
   void *h = dlopen("/vendor/lib64/libedgetpu_tachyon.google.so",
                    RTLD_NOW | RTLD_GLOBAL);
@@ -506,9 +527,10 @@ int main(int argc, char **argv) {
   // re-examined. The stock caller therefore does not send its first command
   // in the same breath as createSession. DELAY gives the actor that time;
   // ROUNDS sends the command again if the first one was dropped (U65).
+  rounds_env = ntypes > 0 ? ntypes : 0;
   {
     long delay = parse_dec(getenv("DELAY"));
-    long rounds = parse_dec(getenv("ROUNDS"));
+    long rounds = rounds_env ? rounds_env : parse_dec(getenv("ROUNDS"));
 
     if (delay > 0 && delay <= 60) {
       put("waiting ");
@@ -523,10 +545,11 @@ int main(int argc, char **argv) {
       put("receiveResponse symbol missing\n");
     } else {
       static unsigned char msg[128];
-      unsigned n = build_cmd(msg, cmd_type);
       long round;
 
       for (round = 1; round <= rounds; round++) {
+        int this_type = ntypes > 0 ? types[round - 1] : cmd_type;
+        unsigned n = build_cmd(msg, this_type, round);
         static unsigned char rbuf[256];
         struct tmsg rm;
         unsigned i, tries;
@@ -577,7 +600,7 @@ int main(int argc, char **argv) {
              slot was reserved. */
           if (b1 && l1) {
             unsigned char q[128];
-            unsigned qn = build_cmd(q, cmd_type);
+            unsigned qn = build_cmd(q, this_type, round);
 
             if (b1 && l1 >= qn) {
               memcpy(b1, q, qn);
@@ -626,7 +649,7 @@ int main(int argc, char **argv) {
           put(ch);
         }
         put("\n");
-        if (rr && status_ok && status_ok(rr) == 1) break;
+        if (rr && status_ok && status_ok(rr) == 1 && ntypes == 0) break;
       }
     }
   }
