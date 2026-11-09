@@ -7035,3 +7035,22 @@ be run again on the shared phone.
 candidate is the A14 cheetah `libtachyon_core.so`: the A17 chroot's core is
 a 1 015 720 B stub, and a real A14 core would send the type-1 setup through
 the Tachyon ring (the harness that has never hung the phone).
+
+## U155 (2026-11-09): the A14 vendor image has no Tachyon core; the kernel is the suspect
+
+`out/android14-ota/extracted/vendor.img` is the Android 14 factory image
+(`UP1A.231005.007`, ext4, 740 487 168 B). `debugfs -R 'ls -l /lib64'` lists
+the A14 HAL (49 768 952 B), the util (3 400 592 B), the app and vendor
+services and the DBA — and **no `libtachyon_core.so`**. Cheetah's A14 stack
+used the direct HAL, not the Tachyon service, so there is no cheetah core to
+recover: the A17 chroot's 1 015 720 B core is the stub, and the 1 538 440 B
+tegu core is the only real one.
+
+That leaves the **kernel driver** as the difference. The same A14 HAL plus
+A14 firmware pair that ran the TPU on stock A14 sends its legacy setup
+through our mainline `drivers/edgetpu` and is refused, so the missing step
+is likely in the driver's VII mailbox init, the KCI open/attach sequence,
+the GSA power-up sequence (`cmd 150/50/151`, `TPU cmd 1`) or the setup
+element, not in userspace. Google's stock gs201 driver (the GPL kernel
+source) is the reference to diff against; the bootloader's hwmgr/tpu-image
+code (segments `0x7a8000`, `0x7fac00`) is the other source.
