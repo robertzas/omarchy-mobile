@@ -450,7 +450,7 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
     if (f == 'C') put32(b + fld, (unsigned)(252 - fld));
     else if (f == 'S') put32(b + fld, (unsigned)(300 - fld));
     else if (f == 'X') put32(b + fld, (unsigned)(348 - fld));
-    else if (f == 'I') put32(b + fld, (unsigned)(384 - fld));
+    else if (f == 'I' || f == 'E') put32(b + fld, (unsigned)(384 - fld));
     else if (f == 'J') put32(b + fld, (unsigned)(388 - fld));
     else if (f == 'T') put32(b + fld, (unsigned)(476 - fld));
     else if (f == 'L') {
@@ -522,6 +522,11 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
   /* J: the same one-element vector, but its element is the 24-byte
      BufferDescriptor inline at 392 (a vector of structs), not a uoffset to a
      table. Written after the I block so it wins when both could apply. */
+  /* E: an empty vector at 384 (length 0). A valid vector of any element
+     type, to tell "the field is a vector" from "the element encoding is
+     wrong": if the parse advances past it, the next field parses. */
+  if (has_char(order, 'E'))
+    put32(b + 384, 0);
   if (has_char(order, 'J')) {
     put32(b + 388, 1);            /* length at 388: data at 392 is 8-aligned */
     put64(b + 392, env_num("IH", (unsigned)reg_scratch_handle()));
