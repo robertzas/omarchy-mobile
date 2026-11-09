@@ -450,7 +450,8 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
     if (f == 'C') put32(b + fld, (unsigned)(252 - fld));
     else if (f == 'S') put32(b + fld, (unsigned)(300 - fld));
     else if (f == 'X') put32(b + fld, (unsigned)(348 - fld));
-    else if (f == 'I' || f == 'J') put32(b + fld, (unsigned)(384 - fld));
+    else if (f == 'I') put32(b + fld, (unsigned)(384 - fld));
+    else if (f == 'J') put32(b + fld, (unsigned)(388 - fld));
     else if (f == 'T') put32(b + fld, (unsigned)(476 - fld));
     else if (f == 'L') {
       put64(b + fld, 0);
@@ -522,8 +523,7 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
      BufferDescriptor inline at 392 (a vector of structs), not a uoffset to a
      table. Written after the I block so it wins when both could apply. */
   if (has_char(order, 'J')) {
-    put32(b + 384, 1);
-    put32(b + 388, 0);
+    put32(b + 388, 1);            /* length at 388: data at 392 is 8-aligned */
     put64(b + 392, env_num("IH", (unsigned)reg_scratch_handle()));
     put64(b + 400, 0);
     put64(b + 408, reg_scratch_size());

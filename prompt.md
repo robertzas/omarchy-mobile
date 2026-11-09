@@ -1,38 +1,46 @@
-# TPU bring-up: next iteration (2026-11-09, after U124)
+# TPU bring-up: next iteration (2026-11-09, after U125)
 
-Read `device/cheetah/TPU-PLAN.md` U124 and `AGENTS.md` first. The phone is
-up with the Tachyon service dead; `reboot-to` first (slot B, the grant
-covers it), then `TPU_VLOG=5 NO_DELEGATE=1 /root/tpu-tachyon-run`.
+Read `device/cheetah/TPU-PLAN.md` U124 and U125, and `AGENTS.md` first. The
+phone is up with the Tachyon service dead; `reboot-to` first (slot B, the
+grant covers it), then `TPU_VLOG=5 NO_DELEGATE=1 /root/tpu-tachyon-run`.
 
-**State.** RegisterGraph's args are `{handle, device_id, <table>,
-graph_descriptor, ...}`; the descriptor at field 3 fills the builder's
-`+0x10` (graph container) and the crash moves to `+0x38` (the second
-single location, read with `ldr x8,[x8]` at `libtachyon_core.so+0x5968c`).
-Only descriptor field 0 parses. `tools/tpu-tachyon-client.c` already has
-`ORDER2` letters: `C`/`S`/`I`/`X`/`T` tables, `c`/`s`/`i` inline
-24-byte locations, `J` a vector of inline descriptors, `L` an inline
-location struct; `UORDER=HDXGG` is the working command shape, and `CH`,
-`SH`, `IH` override one buffer table's memory handle.
+**State.** RegisterGraph's graph descriptor is the command's union field 3
+(`UORDER=HDXGG`, `ORDER2=...`). Its container (field 0) parses into the
+faulting object at `+0x10`/`+0x18`, but the first vector (`+0x20`) never
+fills for any of `S`, `I` or `J` at fields 1-4, and `+0x38` — a required
+single BufferDescriptor, read as `(*(desc+0x38))[0]` — stays null, so
+`libtachyon_core.so+0x5968c` dies. The core logs `Command created` and no
+parse error: the request parses, the VII build fails.
 
-One register per boot: a failure kills the service.
+One register crash kills the service, so a boot carries one blind probe.
+Stop probing blind.
 
-1. **Field 1 alone.** `ORDER2=CS` (container, scratch) with
-   `UORDER=HDXGG`. If the crash stays at `+0x38`, the scratch is not
-   descriptor field 1; if it moves, it is. Then `ORDER2=CX` with `X` a
-   second BufferDescriptor table (the `X` table at 348) to see whether any
-   table in field 1 parses.
-2. **Field 2 alone.** `ORDER2=CIS` (container, the `I` vector, scratch)
-   and `ORDER2=CXS`, reading whether `+0x20` becomes non-empty; a vector of
-   table offsets and a vector of inline structs are the two encodings, and
-   `J` gives the second.
-3. **The container's own shape.** The parsed container's pointee starts
-   `0x002028fc …` (a vtable-like word), so a BufferDescriptor may carry a
-   tagged union, not three u64s. If fields 1 and 2 never parse, dump the
-   container table the core builds at `+0x10` and match its layout.
-4. **Then** CreateExecution (9), bind input/output (12/13), Invoke (11),
-   feed SSD 300x300 int8, run 60 frames of `out/bench/mosaic12.mp4` with
-   `tools/bench-object-detection.py`, and replace the blocked TPU row in
-   U118 (CPU 4t 4.28 ms, GPU 3.00 ms, 10.0 detections/frame).
+1. **Catch the fault with gdb.** Start the chain, `pgrep -x com.google.edge`,
+   attach `gdb -p PID` with `set pagination off` and
+   `handle SIGSEGV stop print nopass` (the segv preload would otherwise
+   `_exit`). Run the client (`ORDER2=SSIISS UORDER=HDXGG`, `timeout 120`).
+   gdb stops at `+0x5968c` with the registers live:
+   `x/24gx $x21`, `x/8gx *(void **)$x2`, `bt`, `info registers x19 x20 x21
+   x22`.
+2. **Read the parse.** Walk one frame up and disassemble the caller
+   (`x/40i $pc-0x100`); find where `$x21+0x38` is meant to be written, and
+   the field-order table for the descriptor. That is the fact the sweep
+   could not give: which flatbuffer slot maps to `+0x20`, `+0x38`, `+0x40`,
+   `+0x58`.
+3. **Patch in memory and continue.** With the process stopped at the fault:
+   `set $x8 = *(unsigned long *)($x21+0x10)` (the container's
+   BufferDescriptor), then `continue`. If RegisterGraph completes, `+0x38`
+   is the firmware scratch and only its slot is missing from our payload;
+   record the core's next log line either way (U125's oracle).
+4. **Restart instead of rebooting.** `kill -9` the service and start it again
+   from the chain script; the firmware never saw a VII command, so this
+   should cost no reboot and let one boot carry several probes. Verify with a
+   second attach before relying on it.
+5. **Then the run path.** CreateExecution (9), bind input/output (12/13),
+   Invoke (11), feed the SSD 300x300 int8 model, run 60 frames of
+   `out/bench/mosaic12.mp4` with `tools/bench-object-detection.py`, and fill
+   the TPU row in U118 (CPU 4t 4.28 ms, GPU 3.00 ms, 10.0 detections/frame).
 
-Record the result as U125 with date, `uname -r`, commands and the crash
-dump line (`obj…`), then replace this prompt and continue.
+Record the result as U126 with the date, `uname -r`, the commands and the
+gdb output (registers, the disassembled store site), then replace this
+prompt and continue.
