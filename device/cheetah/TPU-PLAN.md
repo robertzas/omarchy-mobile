@@ -7011,3 +7011,27 @@ never the setup that matters on a stock boot.
 **Next:** extract the cheetah ABL from `out/factory/cheetah-factory.zip`
 and find its TPU/janeiro setup code — the global scratch descriptors and the
 cluster bitset — then replicate that type-1 command from the host.
+
+## U154 (2026-11-09): the A14 HAL's direct create resets the phone
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, boot `u157`, A17
+firmware restored after the run.
+
+**The chroot needed basic nodes.** The A14 HAL crashed in its constructors
+on `/dev/urandom`; after `mknod` for `null`, `zero`, `random`, `urandom` in
+the chroot, the A14 table loaded and printed its 24 entries.
+
+**The direct create is unsafe.** With `janeiro` loaded and `/dev/edgetpu`
+pointing at the real `/dev/janeiro` (char 501,0), `tpu-a14-hal vd B` opens
+`/dev/edgetpu` and enters `CreateDevice`; the call blocks in the driver's
+group finalize (the tool's own comment says the A14 stack is the first
+client seen to send VII from create). After the first B=1 run the SSH link
+dropped and the phone came back with a fresh uptime, i.e. a watchdog reset.
+The tool's 8-second queue watcher and `_exit` did not prevent it. The
+cluster-bitset result is therefore **inconclusive**, and this path must not
+be run again on the shared phone.
+
+**Next:** do not use the A14 HAL direct path. The remaining safe producer
+candidate is the A14 cheetah `libtachyon_core.so`: the A17 chroot's core is
+a 1 015 720 B stub, and a real A14 core would send the type-1 setup through
+the Tachyon ring (the harness that has never hung the phone).
