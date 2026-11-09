@@ -217,7 +217,7 @@ static void put64(unsigned char *p, unsigned long v) {
   for (i = 0; i < 8; i++) p[i] = (v >> (8 * i)) & 0xff;
 }
 
-static unsigned build_cmd(unsigned char *b) {
+static unsigned build_cmd(unsigned char *b, int type) {
   /* root table at 36, its vtable at 24; union vtable at 56, union table at 60 */
   int i;
 
@@ -232,7 +232,7 @@ static unsigned build_cmd(unsigned char *b) {
   put32(b + 36, 12);
   put64(b + 40, 1);
   b[48] = 1;  /* privileged, matching the session config */
-  b[49] = 1;  /* union type 1 (the core's first known command type) */
+  b[49] = (unsigned char)type;  /* union type from the core's name table (U96) */
   put32(b + 52, 8);
   put16(b + 56, 4);
   put16(b + 58, 4);
@@ -317,6 +317,9 @@ int main(int argc, char **argv) {
   /* argv[1] "0" asks for an unprivileged session; default is privileged
    * (the config the app service uses). */
   int privileged = 1;
+  int cmd_type = (int)parse_dec(getenv("TYPE"));
+
+  if (cmd_type <= 0 || cmd_type > 24) cmd_type = 1;
   if (argc > 1 && argv[1] && argv[1][0] == '0') privileged = 0;
   void *h = dlopen("/vendor/lib64/libedgetpu_tachyon.google.so",
                    RTLD_NOW | RTLD_GLOBAL);
@@ -520,7 +523,7 @@ int main(int argc, char **argv) {
       put("receiveResponse symbol missing\n");
     } else {
       static unsigned char msg[128];
-      unsigned n = build_cmd(msg);
+      unsigned n = build_cmd(msg, cmd_type);
       long round;
 
       for (round = 1; round <= rounds; round++) {
@@ -554,7 +557,7 @@ int main(int argc, char **argv) {
             }
           }
         }
-        if (round == 1 && begin_write && commit_write) {
+        if (getenv("QW") && round == 1 && begin_write && commit_write) {
           void *b1 = 0, *b2 = 0;
           unsigned long l1 = 0, l2 = 0;
           void *w = begin_write(session, 128, &b1, &l1, &b2, &l2);
@@ -574,7 +577,7 @@ int main(int argc, char **argv) {
              slot was reserved. */
           if (b1 && l1) {
             unsigned char q[128];
-            unsigned qn = build_cmd(q);
+            unsigned qn = build_cmd(q, cmd_type);
 
             if (b1 && l1 >= qn) {
               memcpy(b1, q, qn);
@@ -608,9 +611,19 @@ int main(int argc, char **argv) {
         put("response size=");
         putdec((long)rm.size);
         put(" data=");
-        for (i = 0; i < rm.size && i < 64; i++) {
+        for (i = 0; i < rm.size && i < 160; i++) {
           puthex(rbuf[i]);
           put(" ");
+        }
+        put("\n");
+        put("ascii: ");
+        for (i = 0; i < rm.size && i < 160; i++) {
+          char ch[2];
+          unsigned char b = rbuf[i];
+
+          ch[0] = (b >= 32 && b < 127) ? (char)b : '.';
+          ch[1] = 0;
+          put(ch);
         }
         put("\n");
         if (rr && status_ok && status_ok(rr) == 1) break;

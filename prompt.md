@@ -1,16 +1,17 @@
-# Next: run a model through the Tachyon session
+# Next: build the command tables and reach Invoke
 
-Measured: the Ping dispatches and returns its 88-byte response (TPU-PLAN
-U94); the delegate's platform value does not select the Tachyon path (U95);
-the session authorizes and the actor logs every command.
+Measured (TPU-PLAN U96): the union map is known, the actor answers every
+command type, and each command must be sent once per session. Ping returns
+OK; the empty tables return structured errors ("Virtual device failure",
+"Invalid client assigned fd handle: 0").
 
-1. Decode the 88-byte Ping response (flatbuffer: 0x18 block, then a table
-   with a status field) and use it as the template for a real command.
-2. Find the Execute union type in the core's verifier: disassemble the
-   `VerifyCommandMessage` call site at `tpu_actor_engine.cc:785` and map the
-   union's type ids (`Ping` is 1, from the log).
-3. Build the Execute message from the vendor's own compiled model
-   (`/vendor/etc/model.tflite`); if it is not Edge TPU-compiled, run the
-   vendor compiler in the chroot first.
-4. Only after a real inference: measure it, then run the 720p CPU/GPU/TPU
+1. Recover the request table layout for AllocateTpu: disassemble the
+   verifier switch at `tpu_actor_engine.cc:785` in the core and the vendor
+   builder in `libedgetpu_client.google.so` / `libedgetpu_util.so`.
+2. Send AllocateTpu with the fields the verifier requires, then
+   ImportMemoryFromFd with a real dma-buf fd handle, RegisterGraph with the
+   compiled model's graph, CreateExecution, the Bind* commands and Invoke.
+3. Keep one session for the whole sequence; the actor kills it on an
+   invalid command.
+4. Then measure the inference and run the 720p CPU/GPU/TPU
    object-detection comparison.
