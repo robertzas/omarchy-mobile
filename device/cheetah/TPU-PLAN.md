@@ -6274,3 +6274,48 @@ custom_options) instead of the 4 KiB page and send RegisterGraph (type 7).
 Phone state: up, TPU held by `tpu-hold` (3905), chain down, the ring client at
 `$R/vendor/bin/tpu-tachyon-client.ring`; `/tmp/tpu-tachyon.log` is this
 round's log and is not committed.
+
+## U121 (2026-11-08): the Tachyon import works; RegisterGraph needs its graph descriptor
+
+The running core in the phone's chroot is the **tegu** build (sha
+`d1602625...`, 1,538,440 B, `/vendor/lib64/libtachyon_core.so`), not the
+local chroot's 1,015,720-byte cheetah stub. It carries the actor engine
+(`tpu_actor_engine.cc`, `tpu_actor_memory_import.cc`) and the import error
+strings.
+
+**ImportMemoryFromFd works.** Its request table is
+`{handle, device_id, fd_handle, offset, size}`:
+
+- 4 KiB system-heap dma-buf: 64-byte success response, `Memory handle 1`
+  created and unmapped on release.
+- 4,726,868-byte `graph.bin` (DWN1): read into the dma-buf, `sendFileDescriptors`
+  OK, `memory handle: 1 resolved to fd: 20`, import RETIRED.
+
+The dma-heap ABI in this kernel is `{len, fd, fd_flags, heap_flags}` (the
+output fd first); the older order returned EINVAL. `/dev/dma_heap/system`
+exists in the chroot and `CONFIG_DMABUF_HEAPS_SYSTEM=y`; the client syncs the
+cached system heap with `DMA_BUF_IOCTL_SYNC` START|WRITE then END|WRITE.
+
+**RegisterGraph is blocked on the descriptor.**
+
+- 2-field `{handle=2, memory=1}`: `[Cmd 3][RegisterGraph Handle 2] Command
+  created`, then the service's `MainTpuActor` gets SIGSEGV (audit `sig=11`),
+  no response.
+- 3-field `{handle=2, device=1, memory=1}`: the core answers 76 bytes
+  `INVALID_ARGUMENT: Invalid command flatbuffer`. A scalar in field 2 is not a
+  valid uoffset, so field 2 is a nested table: the graph descriptor.
+
+**Kernel warnings on the register path.** `edgetpu_device_group_alloc` ->
+`edgetpu_mmu_alloc_domain` calls `iommu_set_fault_handler`, but the mainline
+`samsung_iommu` domain has no `set_fault_handler` op, so
+`drivers/iommu/iommu.c:2061` warns. `unmap_slpt` (`samsung-iommu.c:726`) also
+warns on release. These are driver gaps, not the immediate blocker.
+
+**Next: build the graph descriptor table at field 2.** Find the stock builder
+(the app service or `libedgetpu`'s `RegisterGraph`) or disassemble the tegu
+core's `RegisterGraph_Init` (name string at 0xcd54). The descriptor carries
+the graph's input/output tensor metadata. Then CreateExecution (9), bind
+buffers (12/13) and Invoke (11), and only then the 720p comparison.
+
+Phone: up, TPU held by `tpu-hold` (3905), chain down; `/tmp/tpu-tachyon.log`
+has the graph-import/register log.

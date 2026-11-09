@@ -30,7 +30,14 @@ extern long readlink(const char *, char *, size_t);
 extern int *__errno(void);
 extern char *getenv(const char *);
 extern void *memcpy(void *, const void *, size_t);
+extern void *memset(void *, int, size_t);
 extern long syscall(long, ...);
+extern int open(const char *, int);
+extern int ioctl(int, unsigned long, ...);
+extern void *mmap(void *, size_t, int, int, int, long);
+extern long lseek(int, long, int);
+extern long read(int, void *, size_t);
+extern int close(int);
 
 #define RTLD_NOW 2
 #define RTLD_GLOBAL 0x100
@@ -223,14 +230,48 @@ static void put64(unsigned char *p, unsigned long v) {
 // with only HANDLE set it names Handle 1 but still reports fd handle 0.
 static unsigned long g_handle;
 static unsigned long g_fd_handle;
+static unsigned long g_dma_size = 4096;
 
 static unsigned build_cmd(unsigned char *b, int type, long seq) {
   /* root table at 36, its vtable at 24; union vtable at 56, union table at 60 */
   int i;
 
   for (i = 0; i < 128; i++) b[i] = 0;
+  if (type == 7 && g_handle) {
+    /* RegisterGraph takes {handle, device_id, memory_handle}: g_handle is
+       the memory handle from ImportMemoryFromFd, so the graph handle is
+       g_handle+1. The import showed device_id 1; the memory handle follows. */
+    put32(b + 0, 36);
+    put16(b + 24, 0x0c);
+    put16(b + 26, 0x18);
+    put16(b + 28, 4);
+    put16(b + 30, 12);
+    put16(b + 32, 13);
+    put16(b + 34, 16);
+    put32(b + 36, 12);
+    put64(b + 40, (unsigned long)seq);
+    b[48] = 1;
+    b[49] = (unsigned char)type;
+    put32(b + 52, 28);
+    put16(b + 64, 10);
+    put16(b + 66, 32);
+    put16(b + 68, 8);
+    put16(b + 70, 16);
+    put16(b + 72, 24);
+    put32(b + 80, 16);
+    put64(b + 88, g_handle + 1);
+    put64(b + 96, 1);
+    put64(b + 104, g_handle);
+    return 112;
+  }
   if ((g_handle || g_fd_handle) && (type == 5 || type == 6 || type == 7)) {
-    /* union vtable at 64, union table at 72, handle at 80, fd handle at 88 */
+    /* The tegu core's actor engine validates a separate client-assigned fd
+       handle. Its schema is {handle, device_id, fd_handle, offset, size}:
+       field 0 is the command handle (the core logs "Handle 1"), field 1 the
+       device id, field 2 the fd handle, field 3 the offset and field 4 the
+       size. Union vtable at 64 (14 bytes), union table at 80; fields at 88,
+       96, 104, 112 and 120. The core read 4096 as the offset when it was in
+       field 3, so the offset comes before the size. */
     put32(b + 0, 36);
     put16(b + 24, 0x0c);
     put16(b + 26, 0x18);
@@ -242,15 +283,21 @@ static unsigned build_cmd(unsigned char *b, int type, long seq) {
     put64(b + 40, (unsigned long)seq);
     b[48] = 1;  /* privileged, matching the session config */
     b[49] = (unsigned char)type;
-    put32(b + 52, 20);  /* union table at 72 */
-    put16(b + 64, 8);   /* vtable size */
-    put16(b + 66, 24);  /* table size */
+    put32(b + 52, 28);  /* union table at 80 */
+    put16(b + 64, 14);  /* vtable size: 7 u16 entries */
+    put16(b + 66, 48);  /* table size */
     put16(b + 68, 8);   /* field 0 at table+8 */
     put16(b + 70, 16);  /* field 1 at table+16 */
-    put32(b + 72, 8);   /* soffset back to the vtable at 64 */
-    put64(b + 80, g_handle ? g_handle : 1);
-    put64(b + 88, g_fd_handle);
-    return 96;
+    put16(b + 72, 24);  /* field 2 at table+24 */
+    put16(b + 74, 32);  /* field 3 at table+32 */
+    put16(b + 76, 40);  /* field 4 at table+40 */
+    put32(b + 80, 16);  /* soffset back to the vtable at 64 */
+    put64(b + 88, g_handle ? g_handle : 1);
+    put64(b + 96, 1);   /* device id, the virtual device from AllocateTpu */
+    put64(b + 104, g_fd_handle);
+    put64(b + 112, 0);  /* offset into the dma-buf */
+    put64(b + 120, g_dma_size);  /* bytes to map */
+    return 128;
   }
   put32(b + 0, 36);
   put16(b + 24, 0x0c);
@@ -533,19 +580,99 @@ int main(int argc, char **argv) {
         (sendfds_fn)dlsym(h, "TachyonComputeSession_sendFileDescriptors");
 
     if (sendfds) {
-      long mfd = syscall(279, "tpu-mem", 0);
+      const char *gf = getenv("GFILE");
+      unsigned long size = g_dma_size;
+      int graph_fd = -1;
 
-      if (mfd >= 0) {
-        static char page[4096];
-        int ifd = (int)mfd;
-        long h = (long)g_fd_handle;
-        void *r;
+      if (gf) {
+        graph_fd = open(gf, 0);
+        if (graph_fd < 0) {
+          put("graph open failed: ");
+          put(gf);
+          put("\n");
+        } else {
+          long end = lseek(graph_fd, 0, 2);
 
-        write(ifd, page, sizeof page);
-        r = sendfds(session, &ifd, &h, 1);
-        show_status(0, status_ok, "sendFileDescriptors", r);
-      } else {
-        put("memfd_create failed\n");
+          if (end > 0) size = (unsigned long)end;
+          lseek(graph_fd, 0, 0);
+        }
+      }
+      /* The import maps a dma-buf, not a memfd: a memfd gave "Could not map
+         dma-buf 20 ... errno=Invalid argument". The system heap is the
+         Android dma-buf allocator, and the TPU driver can map it. */
+      {
+        int heap = open("/dev/dma_heap/system", 2);
+
+        if (heap < 0) {
+          put("no /dev/dma_heap/system, errno ");
+          putdec(*__errno());
+          put("\n");
+        } else {
+          /* The kernel's ABI puts the output fd first: {len, fd, fd_flags,
+             heap_flags}. The older {len, fd_flags, heap_flags, fd} order made
+             the kernel read fd_flags as a nonzero fd and return EINVAL. */
+          struct {
+            unsigned long len;
+            unsigned int fd;
+            unsigned int fd_flags;
+            unsigned long heap_flags;
+          } a;
+
+          memset(&a, 0, sizeof a);
+          a.len = size;
+          a.fd_flags = 0x80002;  /* O_RDWR | O_CLOEXEC */
+          if (ioctl(heap, 0xc0184800UL, &a) != 0 || a.fd == 0) {
+            put("dma_heap alloc failed, errno ");
+            putdec(*__errno());
+            put("\n");
+          } else {
+            void *p = mmap(0, size, 3, 1, (int)a.fd, 0);
+
+            if (p == (void *)-1) {
+              put("dma-buf mmap failed, errno ");
+              putdec(*__errno());
+              put("\n");
+            } else {
+              if (graph_fd >= 0) {
+                long done = 0;
+
+                while (done < (long)size) {
+                  long n = read(graph_fd, (char *)p + done, size - done);
+
+                  if (n <= 0) break;
+                  done += n;
+                }
+                put("graph bytes ");
+                putdec(done);
+                put("\n");
+                close(graph_fd);
+              } else {
+                memset(p, 0, size);
+              }
+              /* The system heap is CPU-cached; sync the writes before the
+                 TPU maps it (DMA_BUF_IOCTL_SYNC, START|WRITE then END|WRITE). */
+              {
+                struct {
+                  unsigned long flags;
+                } sy;
+
+                sy.flags = 2;  /* DMA_BUF_SYNC_START | WRITE */
+                ioctl((int)a.fd, 0x40086200UL, &sy);
+                sy.flags = 6;  /* DMA_BUF_SYNC_END | WRITE */
+                ioctl((int)a.fd, 0x40086200UL, &sy);
+              }
+              g_dma_size = size;
+              {
+                int ifd = (int)a.fd;
+                long h = (long)g_fd_handle;
+                void *r = sendfds(session, &ifd, &h, 1);
+
+                show_status(0, status_ok, "sendFileDescriptors", r);
+              }
+            }
+          }
+          close(heap);
+        }
       }
     } else {
       put("sendFileDescriptors symbol missing\n");
