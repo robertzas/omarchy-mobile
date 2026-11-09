@@ -6659,3 +6659,18 @@ member is not filled from the descriptor at all.
 
 No phone run was made for this entry: it is a static read of
 `/tmp/core-stock.dis`.
+
+## U130 (2026-11-09): `0x4d53c` is a size, not the object's allocation
+
+One boot (`tpu-w1`), slot B. gdb resolved the core base from
+`/proc/PID/maps` (`0xffff88a2e000`) and broke at `base+0x4d544`, but `$x0`
+there read **`0xb8`**: the size argument, not a heap pointer. The watchpoint
+was therefore armed on `0xb8+0x38`, never fired, and the run went on to the
+usual `+0x5968c` fault with `+0x38` still null. So `0x4d53c` is a length
+passed to a copy, not `new(0xb8)`.
+
+**Corrected next step:** at `0x4d53c` decode the following `bl` and break
+at *its return address* (or `si` past it) so `$x0` is the returned value;
+then `watch -l *(long *)($x0+0x38)`. If `$x0` is still not a pointer, find
+the constructor that stores the RegisterGraph tag (7) at `+0x80` and break
+there instead — that object is the parsed command.
