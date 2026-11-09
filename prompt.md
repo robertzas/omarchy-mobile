@@ -1,18 +1,20 @@
-# Next: capture a real RegisterGraph, then replay it
+# Next: make the device owner come up, then re-test the delegate
 
-Measured (U101): the DIVE blob is a DWN1 container whose field order is older
-than the published `executable.fbs` (version 12, 8-slot vtable), so the core
-must parse it itself. The private piece is the Tachyon RegisterGraph request.
+Measured (U102): the chroot now has `/dev/janeiro`, `/dev/edgetpu`,
+`/dev/edgetpu-soc` and `/dev/dma_heap/system`, so the status 13 was a missing
+node, not permissions. With nodes present the vendor HAL dies with a SIGSEGV
+in its setup path, the app service still never opens the device, and no
+Tachyon session exists.
 
-1. Write an LD_PRELOAD hook over `TachyonComputeSession_sendCommand` and
-   `TachyonComputeSession_sendFileDescriptors` that hexdumps every buffer and
-   fd set. Run it in the vendor HAL (app uid) and drive the HAL's NNAPI
-   device with the smallest possible client, so it prepares the model and
-   builds RegisterGraph for it.
-2. If the HAL sends nothing, sweep the union table layout with the core's log
-   as the oracle: "Register graph Litebuf command buffer info: vii_cmd
-   size=..., dive_cmd size=..." appears only for a request the core accepts.
-3. With the graph registered, send ImportMemoryFromFd (a `/dev/dma_heap/system`
-   dma-buf holding the executable), CreateExecution (9), BindInput- and
-   OutputBuffersToTensors (12/13) and Invoke (11). Measure it, then run the
-   720p CPU/GPU/TPU object-detection comparison.
+1. Run the app service alone under the runner's preloads as uid 1000 and read
+   its own output: does it publish `com.google.edgetpu.IEdgeTpuAppService`,
+   open `/dev/janeiro`, and stay up? Confirm with `ls -l /proc/<pid>/fd` and
+   `dumpsys`/`svclookup-check`.
+2. Get the HAL's SIGSEGV stack (CORES=1 leaves a core, or run it under gdb
+   with the chroot sysroot) and fix the failing mapping; the fault address
+   `0x72656b6e694c00` is ASCII-ish and looks like a string pointer, not a
+   device address.
+3. With a device owner and a live HAL, the delegate as uid 10000 should get a
+   device fd instead of status 13; if it then reports "Setup is not done",
+   the setup is the HAL's own path, and the Tachyon RegisterGraph capture from
+   the previous prompt stays the fallback.

@@ -5720,3 +5720,25 @@ hexdump the RegisterGraph it builds. If the HAL sends nothing, the core's
 own log line "Register graph Litebuf command buffer info: vii_cmd size=%d,
 dive_cmd size=%d, total=%d" is the oracle for a field-layout sweep.
 
+## U102: the chroot had no device node, and the HAL segfaults once it does (2026-11-08)
+
+The runner's `mount --rbind /dev "$R/dev"` was failing with `move_mount()...
+No space left on device`, so the chroot had no `/dev/edgetpu` at all. The app
+service therefore never opened the device it is supposed to own, and the
+delegate's `create device status: 13` (EACCES) came from calling a service
+that had no device to hand out, not from a driver or binder problem.
+
+Two runner fixes: it now mounts the one node the chain needs
+(`/dev/janeiro`) and the binder and dma_heap nodes explicitly, recreates
+`/dev/edgetpu` and `/dev/edgetpu-soc`, and logs what the chroot sees; and it
+splits `DELEGATE_UID` (default 10000) from `RUN_UID`. `RUN_UID=10000` used to
+push the services to an app uid too, so the device owner could not open
+`root:1000` mode-660 `/dev/janeiro` and nothing could ever serve a device.
+
+With the nodes in place the vendor HAL (as root) opens `janeiro` and dies
+with `Fatal signal 11 (SIGSEGV), SEGV_MAPERR, fault addr 0x72656b6e694c00`,
+and the app service still does not open the device; the delegate still
+reports status 13 and no Tachyon session is created. The chroot's
+`/dev/janeiro` shows as `root:robertzas` (gid 1000), so the mode is right for
+the system-uid services; the problem is now their own startup, not the node.
+
