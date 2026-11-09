@@ -6945,3 +6945,20 @@ descriptor's scratch into the message.
 No ByBuffer variant exists. A five-field union is rejected (`Invalid
 command flatbuffer`); the vtable header is `4 + 2*nu` and a five-field
 table must sit at 80, not 72 (fixed in the client).
+
+## U151 (2026-11-09): the setup element is the legacy message; no VII setup code
+
+Static checks after U150. The driver has no VII setup type or element code
+(`drivers/edgetpu` defines only the KCI codes), so the element's `code 0`
+is an ordinary command and the firmware's "type 0" is that code. The
+firmware strings (`out/tpu-firmware/edgetpu-janeiro.fw` at 0xefbdc,
+0xefd8c, 0xefddc, 0xefe18) name the missing piece: a setup command that
+carries the global scratches. The gxp stub is loaded (`gxp 12288 0`,
+`/dev/gxp` 10:258) and the core never queries it (U113). The tegu core's
+setup builder (`0x7f9c4`) emits the same 80-byte legacy payload the HAL
+sends, so it has no type-1 setup message for cheetah's A17 firmware.
+
+Next: build the type-1 setup message itself (the firmware's handler wants
+the cluster bitset and the global scratch list) and submit it as the setup
+element, or recover the message from a userspace that has the real setup
+producer. The RegisterGraph command path is otherwise correct.
