@@ -7113,3 +7113,31 @@ around the `.rodata` offsets with `llvm-objdump --triple=armv7` and the
 check and field accesses. The A14 vendor image has no `/vendor/etc/edgetpu`
 and only the TPU libraries in `/lib64`, so there is no model or device spec
 to borrow either.
+
+## U158 (2026-11-09): `tpu_img_config` is the 0x100-byte mobile mapping table
+
+The GSA firmware (ARM32, ELF at bundle offset `0x7fbe00`) loads its
+`.rodata` addresses with Thumb-2 `movw`/`movt` pairs, which locates the
+image manager:
+
+* **`tpu_get_img_config`** starts at **`0x18e52`**: `cmp r1, #0xff;
+  bls` the error path, so the caller's size must exceed 255; the success
+  path copies **`0x100`** bytes (`mov.w r2, #0x100; bl 0x144a6`, a memcpy)
+  from the image manager's buffer to the config. The error path prints
+  `sz >= sizeof(tpu_img_config)` (`.rodata` `0x102fb`) with `__func__`
+  (`0x1214f`) and `tpu-image.c` (`0x182f`). So
+  **`sizeof(tpu_img_config)` = `0x100`**, which is exactly the kernel's
+  `mobile_image_config`: 4+4+4+16+4+4+4+4+4+23×8+4+5×4 = 256 bytes.
+* The image manager's mmap path at **`0x18b28`** records the TPU ranges
+  base+`0x10000` and base+`0x30000`, i.e. the mapping table's virtual
+  ranges. `tpu_start`/`TPU is already running` is at **`0x18eea`**; the
+  AUTH_IMG check is at **`0x1a7e2`**; the image-magic helper at
+  **`0x19d14`** compares `TPUF`/`AOC`/`CHRE`.
+
+The config therefore carries the firmware's **mapping table** (the 23
+`iommu_mapping` entries: TPU virtual address + physical page), not a
+separate scratch array. The type-1 setup's "global scratches" are those
+mapping entries — the TPU address ranges the firmware is allowed to use —
+so the next step is to read the vendor image's config at `0x400 + 0x160`
+(the `TPUF` header's `ImageConfig`) and turn its mapping list into the
+setup element.
