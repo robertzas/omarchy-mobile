@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: MIT
+/*
+ * T2.3/T4: enable the TPU's SysMMU and the TPU node itself. janeiro stays
+ * blacklisted, so this only creates the platform devices; no TPU register is
+ * touched. Boot with this only under TPU-PLAN.md's runbook, one step at a
+ * time (tpu-test.dtso first, this one after it passes).
+ */
+
+/dts-v1/;
+/plugin/;
+
+&sysmmu_tpu {
+	status = "okay";
+};
+
+&edgetpu {
+	status = "okay";
+};

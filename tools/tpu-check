@@ -1,0 +1,344 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""tpu-check: read-only report on the phone's Edge TPU (janeiro) bring-up.
+
+Run it on the phone as root (the device and dmesg need it)::
+
+    tools/phone-ssh 'python3 - --expect none' < tools/tpu-check
+
+    --expect none     no TPU/SysMMU platform device is enabled and janeiro is
+                      not loaded (the base kernel, before T2.2)
+    --expect sysmmu   the SysMMU platform device exists; the TPU node is still
+                      disabled; janeiro is blacklisted and not loaded
+    --expect nodes    both the SysMMU and TPU platform devices exist, with
+                      janeiro still blacklisted and not loaded
+    --expect group    nodes, plus the samsung,sysmmu-group group node bound;
+                      janeiro still blacklisted and not loaded (T2.4)
+    --expect device   /dev/janeiro (or /dev/edgetpu) exists and janeiro is
+                      loaded and bound
+
+The check never loads a module, writes a file or reads a TPU register. It
+only reads /proc, /sys, /dev/janeiro's existence, the firmware file's hash and
+dmesg. Use the laptop wrapper ``tools/tpu-test`` to bring up USB, save a
+timestamped log and optionally run tools/tpu-info.
+"""
+
+import argparse
+import glob
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+
+
+def read(path, default=""):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read().strip()
+    except OSError:
+        return default
+
+
+def run(*args, timeout=5):
+    try:
+        p = subprocess.run(args, text=True, capture_output=True, timeout=timeout)
+        return p.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def sha256(path):
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return ""
+
+
+def platform_devices():
+    try:
+        names = sorted(os.listdir("/sys/bus/platform/devices"))
+    except OSError:
+        return []
+    out = []
+    for name in names:
+        lower = name.lower()
+        if ("1cc40000" in lower or "1ce00000" in lower or
+                "sysmmu" in lower or "janeiro" in lower or "edgetpu" in lower):
+            out.append(name)
+    return out
+
+
+def bound_devices(driver):
+    path = f"/sys/bus/platform/drivers/{driver}"
+    try:
+        return sorted(n for n in os.listdir(path)
+                      if os.path.islink(os.path.join(path, n)))
+    except OSError:
+        return []
+
+
+def loaded_modules():
+    modules = []
+    for line in read("/proc/modules").splitlines():
+        fields = line.split()
+        if fields:
+            modules.append(fields[0])
+    return sorted(modules)
+
+
+def firmware_files():
+    candidates = [
+        "/usr/lib/firmware/google/edgetpu-janeiro.fw",
+        "/usr/lib/firmware/updates/google/edgetpu-janeiro.fw",
+        "/lib/firmware/google/edgetpu-janeiro.fw",
+        "/lib/firmware/updates/google/edgetpu-janeiro.fw",
+        "/usr/lib/firmware/edgetpu-janeiro.fw",
+    ]
+    return [p for p in candidates if os.path.isfile(p)]
+
+
+def blacklist_lines():
+    found = []
+    for path in ("/etc/modprobe.d/omamobile-tpu.conf",
+                 "/usr/lib/modprobe.d/omamobile-tpu.conf",
+                 "/etc/modprobe.d/blacklist.conf"):
+        if not os.path.isfile(path):
+            continue
+        for line in read(path).splitlines():
+            if re.search(r"^\s*(blacklist\s+janeiro|install\s+janeiro\s+)", line):
+                found.append(f"{path}: {line.strip()}")
+    return found
+
+
+def tpu_thermal():
+    zones = []
+    for type_path in glob.glob("/sys/class/thermal/thermal_zone*/type"):
+        kind = read(type_path)
+        if "tpu" not in kind.lower():
+            continue
+        zone = os.path.dirname(type_path)
+        temp = read(os.path.join(zone, "temp"))
+        try:
+            temp_mc = int(temp)
+        except ValueError:
+            temp_mc = None
+        zones.append({
+            "zone": os.path.basename(zone),
+            "type": kind,
+            "temp_mc": temp_mc,
+            "temp_c": None if temp_mc is None else round(temp_mc / 1000.0, 1),
+        })
+    return zones
+
+
+def reserved_lines():
+    lines = []
+    for line in read("/proc/iomem").splitlines():
+        if re.search(r"tpu|janeiro|91e00000|93000000", line, re.I):
+            lines.append(line.strip())
+    return lines
+
+
+def dmesg_lines():
+    text = run("dmesg", timeout=10)
+    if not text:
+        return []
+    pattern = re.compile(
+        r"janeiro|edgetpu|samsung[-_]iommu|sysmmu|tpu|SError|"
+        r"synchronous external abort|Unable to handle kernel paging request",
+        re.I,
+    )
+    return [line for line in text.splitlines() if pattern.search(line)][-80:]
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Read-only Edge TPU bring-up check.",
+    )
+    ap.add_argument("--expect", choices=("none", "sysmmu", "nodes", "group", "device"),
+                    default="none", help="state this boot should be in")
+    ap.add_argument("--json", action="store_true", help="print one JSON object")
+    args = ap.parse_args()
+
+    platform = platform_devices()
+    modules = loaded_modules()
+    janeiro_modules = [m for m in modules if "janeiro" in m]
+    sysmmu_modules = [m for m in modules if "samsung" in m and "iommu" in m]
+    # 1a090000.sysmmu is an existing, unrelated SysMMU; only the TPU's
+    # 1cc40000 instance is part of this bring-up. Do not match every sysmmu.
+    sysmmu = [n for n in platform if "1cc40000" in n.lower()]
+    tpu = [n for n in platform if ("1ce00000" in n.lower() or
+                                   "janeiro" in n.lower() or "edgetpu" in n.lower())]
+    # The platform driver's name is edgetpu_platform; janeiro is the driver
+    # name used for the module, firmware and interface.
+    janeiro_bound = (bound_devices("janeiro") +
+                     bound_devices("edgetpu_platform"))
+    # The driver's .name is samsung-sysmmu; its module is samsung_iommu.
+    sysmmu_bound = (bound_devices("samsung-sysmmu") +
+                    bound_devices("samsung-iommu") +
+                    bound_devices("samsung_iommu"))
+    tpu_sysmmu_bound = [n for n in sysmmu_bound if "1cc40000" in n.lower()]
+    group_bound = bound_devices("sysmmu-group")
+    # The default interface is DRIVER_NAME "janeiro"; older text said
+    # /dev/edgetpu. Accept either so the check does not depend on the name.
+    dev = os.path.exists("/dev/janeiro") or os.path.exists("/dev/edgetpu")
+    classes = os.path.isdir("/sys/class/edgetpu")
+    firmware = firmware_files()
+    firmware_hashes = {path: sha256(path) for path in firmware}
+    blacklist = blacklist_lines()
+    thermal = tpu_thermal()
+    reserved = reserved_lines()
+    dmesg = dmesg_lines()
+    bootconfig = read("/proc/bootconfig")
+    slot_match = re.search(r'androidboot\.slot_suffix\s*=\s*"(_[ab])"', bootconfig)
+    slot = slot_match.group(1) if slot_match else "unknown"
+    kernel = os.uname().release
+    cmdline = read("/proc/cmdline")
+    iommu_debug = os.path.isdir("/sys/kernel/debug/iommu")
+
+    facts = {
+        "kernel": kernel,
+        "slot": slot,
+        "cmdline": cmdline,
+        "platform_devices": platform,
+        "sysmmu_platform": sysmmu,
+        "tpu_platform": tpu,
+        "modules": modules,
+        "janeiro_modules": janeiro_modules,
+        "sysmmu_modules": sysmmu_modules,
+        "janeiro_bound": janeiro_bound,
+        "sysmmu_bound": sysmmu_bound,
+        "tpu_sysmmu_bound": tpu_sysmmu_bound,
+        "group_bound": group_bound,
+        "dev_edgetpu": dev,
+        "class_edgetpu": classes,
+        "firmware": firmware,
+        "firmware_sha256": firmware_hashes,
+        "blacklist": blacklist,
+        "thermal": thermal,
+        "reserved_memory": reserved,
+        "iommu_debugfs": iommu_debug,
+        "dmesg": dmesg,
+    }
+
+    failures = []
+    warnings = []
+
+    def require(condition, message):
+        if not condition:
+            failures.append(message)
+
+    if args.expect == "none":
+        require(not sysmmu and not tpu,
+                f"TPU/SysMMU platform device is enabled: {sysmmu + tpu}")
+        require(not janeiro_modules, f"janeiro is loaded: {janeiro_modules}")
+        require(not dev, "/dev/janeiro or /dev/edgetpu exists")
+    elif args.expect == "sysmmu":
+        require(sysmmu, "the SysMMU platform device is missing")
+        require(tpu_sysmmu_bound, "the TPU SysMMU device is not bound to samsung-sysmmu")
+        require(not tpu, f"the TPU platform device is unexpectedly enabled: {tpu}")
+        require(not janeiro_modules, f"janeiro is loaded before T4: {janeiro_modules}")
+        require(not dev, "/dev/janeiro or /dev/edgetpu exists before T4")
+        require(blacklist, "janeiro is not blacklisted")
+    elif args.expect == "nodes":
+        require(sysmmu, "the SysMMU platform device is missing")
+        require(tpu_sysmmu_bound, "the TPU SysMMU device is not bound to samsung-sysmmu")
+        require(tpu, "the TPU platform device is missing")
+        require(not janeiro_modules, f"janeiro is loaded before T4: {janeiro_modules}")
+        require(not dev, "/dev/janeiro or /dev/edgetpu exists before T4")
+        require(blacklist, "janeiro is not blacklisted")
+    elif args.expect == "group":
+        require(sysmmu, "the SysMMU platform device is missing")
+        require(tpu_sysmmu_bound, "the TPU SysMMU device is not bound to samsung-sysmmu")
+        require(tpu, "the TPU platform device is missing")
+        require(group_bound, "the TPU IOMMU group is not bound to sysmmu-group")
+        require(not any("group is not registered" in line.lower() for line in dmesg),
+                "dmesg says the TPU IOMMU group is not registered")
+        require(not janeiro_modules, f"janeiro is loaded before T4: {janeiro_modules}")
+        require(not dev, "/dev/janeiro or /dev/edgetpu exists before T4")
+        require(blacklist, "janeiro is not blacklisted")
+    else:  # device
+        require(dev, "/dev/janeiro (or /dev/edgetpu) is missing")
+        require(tpu_sysmmu_bound, "the TPU SysMMU device is not bound to samsung-sysmmu")
+        require(janeiro_modules, "janeiro is not loaded")
+        require(janeiro_bound, "janeiro is loaded but not bound to a platform device")
+        require(firmware, "the google/edgetpu-janeiro.fw firmware is missing")
+
+    if sysmmu and not tpu_sysmmu_bound:
+        warnings.append("the TPU SysMMU platform device exists but no samsung-sysmmu driver is bound")
+    if tpu and not group_bound:
+        warnings.append("the TPU platform device exists but no sysmmu-group is bound")
+    if not thermal:
+        warnings.append("no tpu-thermal zone found")
+    if not firmware:
+        warnings.append("no edgetpu-janeiro.fw firmware file found")
+    if not blacklist:
+        warnings.append("no blacklist entry for janeiro found")
+    if not reserved:
+        warnings.append("no TPU carveout lines in /proc/iomem")
+    if not iommu_debug:
+        warnings.append("/sys/kernel/debug/iommu is not mounted")
+    if not os.geteuid() == 0:
+        warnings.append("not running as root; dmesg and the device check may be incomplete")
+    serious = [line for line in dmesg
+               if re.search(r"SError|synchronous external abort|Unable to handle",
+                            line, re.I)]
+    if serious:
+        if args.expect == "none":
+            warnings.extend(f"dmesg: {line}" for line in serious[-5:])
+        else:
+            failures.extend(f"dmesg: {line}" for line in serious[-5:])
+    elif not dmesg:
+        warnings.append("dmesg has no TPU/IOMMU lines (or is unreadable)")
+
+    result = {
+        "ok": not failures,
+        "expect": args.expect,
+        "failures": failures,
+        "warnings": warnings,
+        "facts": facts,
+    }
+
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0 if result["ok"] else 1
+
+    print(f"tpu-check: {'ok' if result['ok'] else 'FAIL'} (expect {args.expect})")
+    print(f"kernel: {kernel}  slot: {slot}")
+    print("platform: " + (" ".join(platform) if platform else "(none)"))
+    print("modules:  " + (" ".join(modules) if modules else "(none)"))
+    print("group:    " + (" ".join(group_bound) if group_bound else "(none)"))
+    print("dev:      " + ("/dev/janeiro or /dev/edgetpu, class " if dev
+                          else "no /dev/janeiro or /dev/edgetpu, class ") +
+          ("yes" if classes else "no"))
+    print("firmware: " + (", ".join(f"{p} ({firmware_hashes[p][:16]})" for p in firmware)
+                          if firmware else "(none)"))
+    print("blacklist: " + ("; ".join(blacklist) if blacklist else "(none)"))
+    if thermal:
+        for zone in thermal:
+            print(f"thermal:  {zone['zone']} {zone['type']} "
+                  f"{zone['temp_c']} C" if zone["temp_c"] is not None
+                  else f"thermal:  {zone['zone']} {zone['type']} (no temperature)")
+    else:
+        print("thermal:  no tpu-thermal zone")
+    if reserved:
+        print("reserved:")
+        for line in reserved:
+            print(f"  {line}")
+    else:
+        print("reserved: no TPU lines in /proc/iomem")
+    for warning in warnings:
+        print(f"WARN: {warning}")
+    for failure in failures:
+        print(f"FAIL: {failure}")
+    return 0 if result["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

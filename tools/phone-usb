@@ -1,0 +1,102 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# phone-usb: find the configured phone's USB network interface, bring up the
+# host-side profile, and verify the route and root SSH.
+#
+#   tools/phone-usb
+#   DEVICE=cheetah tools/phone-usb
+#   OMAMOBILE_NM_PROFILE=omamobile-pixel tools/phone-usb
+#
+# The interface is selected by the descriptor's USB_PRODUCT, not by its name:
+# another phone on the same laptop must never receive the route or a command.
+# The profile is pinned to that interface and gets 172.16.42.3/32 plus a /32
+# route to the phone, so traffic cannot fall through to a second USB phone.
+# It never uses sudo; NetworkManager lets the logged-in user manage its own
+# profiles.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+DEVICE=${DEVICE:-cheetah}
+profile=${OMAMOBILE_NM_PROFILE:-omamobile-pixel}
+[[ $DEVICE =~ ^[a-z0-9]+$ ]] || { echo "phone-usb: bad DEVICE '$DEVICE'" >&2; exit 1; }
+[[ $profile =~ ^[A-Za-z0-9._-]+$ ]] || { echo "phone-usb: bad OMAMOBILE_NM_PROFILE '$profile'" >&2; exit 1; }
+
+descriptor="device/$DEVICE/device.conf"
+[[ -f $descriptor ]] || { echo "phone-usb: no $descriptor" >&2; exit 1; }
+product=$(sed -n 's/^USB_PRODUCT="\([^"]*\)"$/\1/p' "$descriptor")
+[[ -n $product ]] || product=$(sed -n 's/^NAME="\([^"]*\)"$/\1/p' "$descriptor")
+[[ -n $product ]] || { echo "phone-usb: $descriptor has no USB_PRODUCT or NAME" >&2; exit 1; }
+
+norm() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' |
+    sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//'
+}
+want=$(norm "$product")
+
+matches=()
+for path in /sys/class/net/*; do
+  iface=${path##*/}
+  [[ $iface == lo ]] && continue
+  props=$(udevadm info --query=property --path="$path" 2>/dev/null || true)
+  model=$(sed -n 's/^ID_MODEL=//p' <<<"$props" | head -1)
+  [[ -n $model ]] || continue
+  [[ $(norm "$model") == "$want" ]] || continue
+  matches+=("$iface")
+done
+
+case ${#matches[@]} in
+  0)
+    echo "phone-usb: no USB network interface for '$product' (is the phone connected and booted?)" >&2
+    exit 1
+    ;;
+  1)
+    iface=${matches[0]}
+    ;;
+  *)
+    printf 'phone-usb: more than one interface matches %s: %s\n' "$product" "${matches[*]}" >&2
+    exit 1
+    ;;
+esac
+
+# NetworkManager owns the host side. Keep the profile manual and never-default:
+# the phone is a directly connected peer, not this laptop's Internet gateway.
+if nmcli -t -f NAME connection show | grep -Fxq -- "$profile"; then
+  nmcli connection modify "$profile" \
+    connection.interface-name "$iface" \
+    ipv4.method manual \
+    ipv4.addresses 172.16.42.3/32 \
+    ipv4.routes 172.16.42.1/32 \
+    ipv4.never-default yes \
+    ipv6.method disabled \
+    connection.autoconnect no
+else
+  nmcli connection add type ethernet ifname "$iface" con-name "$profile" \
+    ipv4.method manual \
+    ipv4.addresses 172.16.42.3/32 \
+    ipv4.routes 172.16.42.1/32 \
+    ipv4.never-default yes \
+    ipv6.method disabled \
+    connection.autoconnect no >/dev/null
+fi
+nmcli connection up "$profile" >/dev/null
+
+addr=$(ip -4 -o addr show dev "$iface" | awk '{print $4}' | head -1)
+[[ $addr == 172.16.42.3/32 ]] || {
+  echo "phone-usb: $iface has address ${addr:-none}, expected 172.16.42.3/32" >&2
+  exit 1
+}
+route=$(ip -4 route get 172.16.42.1)
+[[ $route == *"dev $iface"* && $route == *"src 172.16.42.3"* ]] || {
+  echo "phone-usb: route to 172.16.42.1 is not via $iface/172.16.42.3:" >&2
+  echo "  $route" >&2
+  exit 1
+}
+
+if ! timeout 15 tools/phone-ssh --fresh 'printf "PHONE_OK\n"' | grep -qx PHONE_OK; then
+  echo "phone-usb: route is up but root SSH to 172.16.42.1 failed" >&2
+  exit 1
+fi
+
+printf 'phone-usb: %s (%s)\n' "$iface" "$product"
+printf 'route:    %s\n' "$route"
+printf 'root SSH: ok\n'

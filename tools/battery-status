@@ -1,0 +1,100 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# battery-status: print the phone's battery and charger state, read-only.
+#
+# Run it on the phone:
+#   tools/phone-ssh 'bash -s' < tools/battery-status
+#
+# The battery is found by its type=Battery, not by name: cheetah's is
+# max170xx_battery and other phones name theirs differently. Units are the
+# kernel's: uV, uA, 0.1 C and uAh; current is positive while charging, as
+# power_supply reports it. OMAMOBILE_SYSFS overrides the sysfs root, as
+# omamobile-charge-limit's does (tests use a fixture tree).
+#
+# Exit status: 0 reported, 1 no battery, 2 battery without a readable
+# capacity.
+set -euo pipefail
+
+if (($#)); then
+  echo "Usage: battery-status   (no arguments)" >&2
+  exit 1
+fi
+
+sys=${OMAMOBILE_SYSFS:-/sys}
+rd() { [[ -r $1 ]] && cat "$1" 2>/dev/null || true; }
+
+bat=
+fallback=
+for d in "$sys"/class/power_supply/*; do
+  [[ -d $d ]] || continue
+  [[ $(rd "$d/type") == Battery ]] || continue
+  [[ -n $fallback ]] || fallback=$d
+  if [[ -r $d/current_now ]]; then bat=$d; break; fi
+done
+bat=${bat:-$fallback}
+[[ -n $bat ]] || {
+  echo "battery-status: no power supply of type Battery under $sys/class/power_supply" >&2
+  exit 1
+}
+
+cap=$(rd "$bat/capacity")
+[[ $cap =~ ^[0-9]+$ ]] || {
+  echo "battery-status: ${bat##*/} has no readable capacity" >&2
+  exit 2
+}
+
+printf 'battery:  %s\n' "${bat##*/}"
+printf 'capacity: %s%%\n' "$cap"
+for field in status health; do
+  value=$(rd "$bat/$field")
+  [[ -n $value ]] && printf '%-9s %s\n' "$field:" "$value"
+done
+
+t=$(rd "$bat/temp")
+if [[ $t =~ ^-?[0-9]+$ ]]; then
+  if ((t < 0)); then sign=-; at=$((-t)); else sign=; at=$t; fi
+  printf 'temp:     %s%d.%d °C\n' "$sign" $((at / 10)) $((at % 10))
+fi
+
+v=$(rd "$bat/voltage_now")
+if [[ $v =~ ^[0-9]+$ ]]; then
+  printf 'voltage:  %d.%03d V\n' $((v / 1000000)) $((v % 1000000 / 1000))
+fi
+
+i=$(rd "$bat/current_now")
+if [[ $i =~ ^-?[0-9]+$ ]]; then
+  if ((i < 0)); then sign=-; at=$((-i)); what=discharging
+  elif ((i > 0)); then sign=+; at=$i; what=charging
+  else sign=; at=0; what=idle
+  fi
+  printf 'current:  %s%d.%03d A (%s)\n' "$sign" $((at / 1000000)) $((at % 1000000 / 1000)) "$what"
+fi
+
+p=$(rd "$bat/power_now")
+if [[ $p =~ ^-?[0-9]+$ ]]; then
+  if ((p < 0)); then sign=-; at=$((-p)); else sign=; at=$p; fi
+  printf 'power:    %s%d.%03d W\n' "$sign" $((at / 1000000)) $((at % 1000000 / 1000))
+fi
+
+full=$(rd "$bat/charge_full")
+design=$(rd "$bat/charge_full_design")
+if [[ $full =~ ^[0-9]+$ && $design =~ ^[1-9][0-9]*$ ]]; then
+  printf 'charge:   %d/%d mAh (%d%% of design)\n' \
+    $((full / 1000)) $((design / 1000)) $((full * 100 / design))
+elif [[ $full =~ ^[0-9]+$ ]]; then
+  printf 'charge:   %d mAh\n' $((full / 1000))
+fi
+
+cycles=$(rd "$bat/cycle_count")
+[[ $cycles =~ ^[0-9]+$ ]] && printf 'cycles:   %s\n' "$cycles"
+
+for c in "$sys"/class/power_supply/*; do
+  [[ -d $c ]] || continue
+  type=$(rd "$c/type")
+  case $type in
+    Mains|USB|USB_C|USB_CDP|USB_DCP|USB_ACA) ;;
+    *) continue ;;
+  esac
+  online=$(rd "$c/online")
+  printf 'charger:  %s (%s) online=%s\n' "${c##*/}" "$type" "${online:-?}"
+done

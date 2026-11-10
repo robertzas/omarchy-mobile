@@ -1,0 +1,13 @@
+[Unit]
+Description=Omarchy Mobile charge limit (battery health for an always-plugged phone)
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/omamobile-charge-limit daemon
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

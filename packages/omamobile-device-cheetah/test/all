@@ -30,21 +30,23 @@ pass "reboot-to.c calls nothing from the printf family"
 
 # omamobile-bootctl against a synthetic devinfo: dump works, and a dry run
 # of mark-successful plans exactly one flag byte and writes nothing
-python3 - "$tmp/devinfo" <<'PY'
+python3 - "$tmp/devinfo" "$tmp/devinfo-319" <<'PY'
 import struct, sys
-buf = bytearray(8192)
-buf[0:4] = b"DEVI"
-struct.pack_into("<HH", buf, 4, 3, 15)
-buf[0x30:0x34] = bytes([2, 0x0a, 0, 0])   # slot a: successful, active-bit off
-buf[0x34:0x38] = bytes([1, 0x04, 0, 0])   # slot b: active, not successful
-open(sys.argv[1], "wb").write(buf)
+for path, minor in ((sys.argv[1], 15), (sys.argv[2], 19)):
+    buf = bytearray(8192)
+    buf[0:4] = b"DEVI"
+    struct.pack_into("<HH", buf, 4, 3, minor)
+    buf[0x30:0x34] = bytes([2, 0x0a, 0, 0])   # slot a: successful, active-bit off
+    buf[0x34:0x38] = bytes([1, 0x04, 0, 0])   # slot b: active, not successful
+    open(path, "wb").write(buf)
 PY
-cp "$tmp/devinfo" "$tmp/devinfo.orig"
-"$tmp/build/omamobile-bootctl" dump "$tmp/devinfo" | grep -c 'version: 3.15' >/dev/null || fail "bootctl decodes devinfo"
-plan=$("$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo" b 2>&1 || true)
+cp "$tmp/devinfo-319" "$tmp/devinfo.orig"
+"$tmp/build/omamobile-bootctl" dump "$tmp/devinfo" | grep -c 'version: 3.15' >/dev/null || fail "bootctl decodes devinfo 3.15"
+"$tmp/build/omamobile-bootctl" dump "$tmp/devinfo-319" | grep -c 'version: 3.19' >/dev/null || fail "bootctl decodes devinfo 3.19"
+plan=$("$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo-319" b 2>&1 || true)
 grep -q '0x35: 04 -> 06' <<<"$plan" || fail "mark-successful plans one byte (0x35: 04 -> 06)" 
-cmp -s "$tmp/devinfo" "$tmp/devinfo.orig" || fail "a dry run writes nothing"
-pass "bootctl dry run plans one byte and writes nothing"
+cmp -s "$tmp/devinfo-319" "$tmp/devinfo.orig" || fail "a dry run writes nothing"
+pass "bootctl decodes 3.15 and 3.19; a 3.19 dry run plans one byte and writes nothing"
 
 # The [omamobile] channel: installed phones follow stable, the file is kept
 # across upgrades (backup=), and a phone that read its own repository keeps
@@ -94,6 +96,7 @@ for f in usr/bin/omamobile-bootctl usr/bin/reboot-to usr/bin/omamobile-boot-succ
          usr/lib/udev/rules.d/10-omamobile-storage.rules usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf usr/lib/udev/rules.d/20-omamobile-gpu-always-on.rules \
          usr/bin/omamobile-wlan-mac usr/lib/udev/rules.d/80-omamobile-wlan-mac.rules \
          usr/bin/omamobile-charge-guard usr/lib/modprobe.d/omamobile-charger.conf \
+         usr/bin/omamobile-charge-limit usr/lib/systemd/system/omamobile-charge-limit.service \
          usr/lib/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf \
          usr/lib/udev/rules.d/72-omamobile-feedbackd.rules \
          usr/bin/omamobile-bt-addr usr/lib/systemd/system/omamobile-bt-addr@.service usr/lib/udev/rules.d/80-omamobile-bt-addr.rules \
@@ -105,6 +108,8 @@ done
   || fail "the boot-success unit is enabled by a vendor wants link"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-wifi.service") == ../omamobile-wifi.service ]] \
   || fail "the Wi-Fi unit is enabled by a vendor wants link"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-charge-limit.service") == ../omamobile-charge-limit.service ]] \
+  || fail "the charge-limit unit is enabled by a vendor wants link"
 grep -q 'mode=' bin/omamobile-wifi-start && fail "omamobile-wifi-start never loads the SysMMU firewall"
 grep -qx 'blacklist pcie_gs201' vendor/modprobe.d/omamobile-wifi.conf || fail "pcie_gs201 only loads through the guarded service"
 # The charger loads at boot (USB-C-PLAN D1) only with both options: without
@@ -139,6 +144,30 @@ grep -c 'OMAMOBILE_BOOT_FILES' PKGBUILD >/dev/null && fail "the PKGBUILD never o
 bf=$tmp/boot-files && mkdir -p "$bf/overlays"
 cp ../../device/cheetah/device.conf "$bf/device.conf" 2>/dev/null || printf 'CODENAME=cheetah\n' > "$bf/device.conf"
 echo dtbo > "$bf/dtbo.img"; echo initramfs > "$bf/initramfs.cpio.lz4"; echo ov > "$bf/overlays/aoc-core-test.dtbo"
+# The charge limit is policy over the charger's writable charge_limit
+# attribute (charge_behaviour is the read-only report): force above the
+# limit, inhibit at it, auto below the hysteresis band. Exercise the decision
+# against a fake sysfs.
+sysf=$tmp/sysfs
+mkdir -p "$sysf/class/power_supply/max170xx_battery" "$sysf/class/power_supply/max77759-charger"
+: > "$sysf/class/power_supply/max77759-charger/charge_limit"
+printf 'CHARGE_LIMIT=50\n' > "$tmp/charge-limit.conf"
+limit_cmd() { OMAMOBILE_SYSFS=$sysf OMAMOBILE_CHARGE_LIMIT_CONF=$tmp/charge-limit.conf bin/omamobile-charge-limit once; }
+printf '100\n' > "$sysf/class/power_supply/max170xx_battery/capacity"
+limit_cmd; grep -qx 'force' "$sysf/class/power_supply/max77759-charger/charge_limit" \
+  || fail "the charge limit forces discharge above the limit"
+printf '44\n' > "$sysf/class/power_supply/max170xx_battery/capacity"
+limit_cmd; grep -qx 'auto' "$sysf/class/power_supply/max77759-charger/charge_limit" \
+  || fail "the charge limit resumes below the hysteresis band"
+printf '48\n' > "$sysf/class/power_supply/max170xx_battery/capacity"
+printf 'auto\n' > "$sysf/class/power_supply/max77759-charger/charge_limit"
+limit_cmd; grep -qx 'auto' "$sysf/class/power_supply/max77759-charger/charge_limit" \
+  || fail "the charge limit leaves the hysteresis band alone"
+printf '50\n' > "$sysf/class/power_supply/max170xx_battery/capacity"
+limit_cmd; grep -qx 'inhibit' "$sysf/class/power_supply/max77759-charger/charge_limit" \
+  || fail "the charge limit inhibits charging at the limit"
+pass "the charge limit forces down to 50%, holds, and resumes at 45%"
+
 echo "0000  device/cheetah/device.conf" > "$bf/SOURCES"
 (cd "$bf" && find . -type f | sed 's|^\./||' | sort | xargs sha256sum) > "$tmp/sums" && mv "$tmp/sums" "$bf/SHA256SUMS"
 OMAMOBILE_BOOT_FILES=$bf ./install "$tmp/root-bf" "$tmp/build" || fail "install takes staged boot files"

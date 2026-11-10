@@ -7363,3 +7363,42 @@ has no `libneuralnetworks.so`; call the NN service's
 A17 type-1 setup. If the core is patched instead, the gdb step is the
 setup send at `tpu_actor_virtual_device.cc:604`: replace its payload
 with the client's `build_setup` table or skip it and mark the VD ready.
+
+## U165 (2026-11-09): the core's own setup answer is what kills the VD; forcing it to success lets both imports retire
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, slot B.
+
+The core sends its own legacy `Sending firmware-setup VII command. type: 1
+seq: 0` before any client command. The firmware's answer code is read at
+`0xab754` (`ldrh w8, [x1, #8]`); on a non-zero code the core logs
+`Firmware setup VII command failed with response code: %u` (`0xab760`)
+and takes VD 1 to `IN_ERROR`, after which every command answers
+`Virtual device failure`. In a copy of the chroot's
+`/vendor/lib64/libtachyon_core.so`:
+
+    cp -n $R/vendor/lib64/libtachyon_core.so \
+          $R/vendor/lib64/libtachyon_core.so.setupok-orig
+    printf '\x08\x00\x80\x52' | \
+      dd of=$R/vendor/lib64/libtachyon_core.so bs=1 seek=$((0xab754)) conv=notrunc
+
+(`mov w8, #0` in place of the load) makes the core treat the answer as
+success. The VD then goes `UNINITIALIZED -> INITIALIZING -> INITIALIZED`
+and no command answers `Virtual device failure`.
+
+With `HANDLE=1 FDH=1 TYPES=1,2,5,5 SETUP=1 UORDER=MDMK` the four rounds
+answer 96, 96, 64 and 64 bytes, and the core logs
+
+    memory handle: 1 resolved to fd: 20
+    ... PENDING_EXECUTION to RETIRED
+    memory handle: 2 resolved to fd: 21
+    ... PENDING_EXECUTION to RETIRED
+
+so the client's type-1 setup, `AllocateTpu` and both
+`ImportMemoryFromFd` commands run. Without `FDH=1` the import reports
+`Invalid client assigned fd handle: 0` and never retires; without
+`HANDLE` the second import overwrites handle 1.
+
+Next: `TYPES=1,2,5,5,7` with the `core+0x5968c` patch
+(`set {unsigned long}($x21+8)=2; set $x8=$x21+8`), then the execution
+commands. The setup patch stays on the phone (backup `.setupok-orig`);
+restore it before a normal delegate run.

@@ -1,0 +1,82 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tpu-test: run the read-only TPU bring-up check against the phone and keep
+# the evidence in logs/tpu/<UTC>/.
+#
+#   tools/tpu-test                       # expect the base state (no nodes)
+#   tools/tpu-test --expect sysmmu       # T2.2
+#   tools/tpu-test --expect nodes        # T2.3
+#   tools/tpu-test --expect group        # T2.4
+#   tools/tpu-test --expect device --info
+#   tools/tpu-test --no-usb              # the link is already configured
+#
+# It never pushes an image, loads a module or reboots the phone. Those remain
+# explicit, human-approved steps in device/cheetah/TPU-PLAN.md.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+expect=none
+info=0
+usb=1
+while (($#)); do
+  case $1 in
+    --expect)
+      expect=${2:-}
+      shift 2
+      ;;
+    --info)
+      info=1
+      shift
+      ;;
+    --no-usb)
+      usb=0
+      shift
+      ;;
+    --help|-h)
+      sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      echo "tpu-test: unknown argument '$1' (see --help)" >&2
+      exit 2
+      ;;
+  esac
+done
+case $expect in
+  none|sysmmu|nodes|group|device) ;;
+  *) echo "tpu-test: --expect must be none, sysmmu, nodes, group or device" >&2; exit 2 ;;
+esac
+[[ -f tools/tpu-check ]] || { echo "tpu-test: missing tools/tpu-check" >&2; exit 1; }
+
+if ((usb)); then
+  tools/phone-usb
+fi
+
+run=$(date -u +%Y%m%dT%H%M%SZ)
+dir="logs/tpu/$run"
+mkdir -p "$dir"
+printf 'expect=%s\nstarted=%s\n' "$expect" "$run" > "$dir/summary.txt"
+
+set +e
+tools/phone-ssh --fresh "python3 - --expect $expect" < tools/tpu-check |
+  tee "$dir/check.txt"
+rc=${PIPESTATUS[0]}
+set -e
+printf 'check_rc=%s\n' "$rc" >> "$dir/summary.txt"
+
+if ((info)); then
+  if tools/phone-ssh --fresh 'python3 -' < tools/tpu-info > "$dir/info.txt" 2>&1; then
+    printf 'info_rc=0\n' >> "$dir/summary.txt"
+  else
+    info_rc=$?
+    printf 'info_rc=%s\n' "$info_rc" >> "$dir/summary.txt"
+  fi
+  sed -n '1,20p' "$dir/info.txt"
+fi
+
+if ((rc == 0)); then
+  printf 'tpu-test: ok (expect %s); %s\n' "$expect" "$dir/check.txt"
+else
+  printf 'tpu-test: FAIL (expect %s); see %s\n' "$expect" "$dir/check.txt" >&2
+fi
+exit "$rc"
