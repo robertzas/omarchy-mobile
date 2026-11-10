@@ -12,40 +12,31 @@ load replaced by `mov w8, #2` at `0x5968c`; backups `.setupok-orig`,
 `.regnull-orig`). Header-less graph is at `$R/vendor/etc/graph-fb.bin`
 (4,726,860 B, `c8 0f 00 00 44 57 4e 31`). Chain runs with
 `NO_DELEGATE=1 sh -s < tools/tpu-tachyon-run`; test with
-`tools/phone-ssh --fresh 'GFILE=<path> sh /tmp/run_graph_test.sh <path>'`
-or `logs/exp166.sh` style (see below). Service dies after client timeout;
-restart chain between tests.
+`tools/phone-ssh --fresh 'GFILE=<path> sh /tmp/run_graph_test.sh <path>'`.
 
 **U167b findings (RegisterGraph, type 7, round 5):** Core reads bytes 4-7 of
 the graph buffer as flatbuffer file identifier. Identifier byte 4 == 0x00 →
 immediate reject with empty `%s`. Non-zero identifiers: `DWN1` (correct per
-upstream `executable.fbs`) was rejected as `Invalid flatbuffer file
-identifier DWN1` in early runs (parser/structure mismatch after identifier
-read), but later runs printed empty `%s` for the same and other buffers
-(variance across chain restarts, cause unclear). Patched identifiers
-(TCHN/DIVE/EXEC/DGC0/etc.), zeroed identifier, 0x482000-length slice, and
-`out/bench/graph-dgc0-fb.bin` all failed. RegisterGraph never passes.
+upstream `executable.fbs`) was rejected as `Invalid flatbuffer file identifier
+DWN1` in early runs (parser/structure mismatch after identifier read), but
+later runs printed empty `%s` for the same and other buffers (variance across
+chain restarts, cause unclear). Patched identifiers (TCHN/DIVE/EXEC/DGC0/etc.),
+zeroed identifier, 0x482000-length slice, and `out/bench/graph-dgc0-fb.bin`
+all failed. RegisterGraph never passes.
 
 **Next (highest value):**
-1. **Find what the core expects.** Disassemble/trace the verifier in
-   `out/edgetpu-runtime/libtachyon_core.so` (error string "Invalid
-   flatbuffer file identifier %s" at rodata 0x142ee): locate the call site,
-   determine the expected identifier and the schema/verification it applies
-   (is it verifying a DWN1 executable, a DGC0/DGD0 graph, a wrapper
-   flatbuffer, or something else?). Compare with A17/tegu cores in
-   `out/a17-edgetpu/`, `out/tegu-hal/` if helpful.
-2. **Check bench graph formats.** `out/bench/` has `graph-cache.bin`
-   (4,460,579 B, starts with structured header "pro_tpu_20..."),
-   `graph-dgc0.bin`/`graph-dgc0-fb.bin` (DGC0), `graph-dgd0.bin` (DGD0),
-   `graph-dwn1.bin`/`graph-dwn1-container.bin`. Understand their provenance
-   and try the format(s) the core's verifier expects (push to phone, run
-   with `GFILE`). Also check if `detect.tflite` in out/bench has a compiled
-   EdgeTPU custom op whose payload is the right format.
-3. **If RegisterGraph passes:** send CreateExecution (9), BindInputBuffers,
+1. **Patch the core's identifier check.** The error string "Invalid
+   flatbuffer file identifier %s" is at `out/edgetpu-runtime/libtachyon_core.so`
+   rodata offset 0x142ee. Find the comparison that checks bytes 4-7 against
+   an expected value, and modify it to accept the graph buffer's identifier.
+   Or: NOP out the check entirely. This is the highest-probability path to
+   getting RegisterGraph to pass.
+2. **If patching the core:** re-run the chain with the modified core, verify
+   RegisterGraph passes, then proceed to CreateExecution (9), BindInputBuffers,
    BindOutputBuffers and Invoke for `detect.tflite`, then 60 frames of
    `out/bench/mosaic12.mp4` for the TPU row of U118 (CPU 4t 4.28 ms, GPU
-   3.00 ms, 10.0 detections/frame). Record date and `uname -r`.
-4. **If blocked:** document findings in `device/cheetah/TPU-PLAN.md` (new
+   3.00 ms, 10.0 detections/frame). Record the date and `uname -r`.
+3. **If blocked:** document findings in `device/cheetah/TPU-PLAN.md` (new
    U168+), update this prompt with concrete next steps, and commit plan +
    prompt + any client/script changes. No `Signed-off-by`; grep diff for
    identifiers.
