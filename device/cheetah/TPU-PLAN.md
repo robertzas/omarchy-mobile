@@ -7447,3 +7447,83 @@ the flatbuffer with the header's declared length (`0x482000`) and the
 offset-0xfc8 root. Then CreateExecution (9), bind, Invoke (11) and the
 U118 TPU row. The `setupok` and `regnull` patches stay in the chroot;
 restore both `.*-orig` copies before a stock delegate run.
+
+## U167 (2026-11-09): header-less graph prepared (local)
+
+Local copy of the chroot graph stripped of its 8-byte DWN1 container
+header: `out/vendor-chroot-edgetpu/root/vendor/graph-fb.bin`, 4,726,860 B,
+first 8 bytes `c8 0f 00 00 44 57 4e 31`. Matches prompt step 1. The
+phone-side copy (`$R/vendor/etc/graph-fb.bin`) and the chain run with
+`GFILE=/vendor/etc/graph-fb.bin` are pending; this environment cannot reach
+the phone (SSH denied), so the runbook in `prompt.md` is left for the
+human/maintainer to execute.
+
+## U167 (2026-11-09): header-less graph prepared locally (2026-11-09)
+
+Local copy of the chroot graph stripped of its 8-byte DWN1 container header:
+`out/vendor-chroot-edgetpu/root/vendor/graph-fb.bin`, 4,726,860 B, first 8
+bytes `c8 0f 00 00 44 57 4e 31` (DWN1 identifier at bytes 4-7). Matches
+prompt step 1. The header-stripped graph was pushed to the phone chroot at
+`$R/vendor/etc/graph-fb.bin` via `tools/phone-ssh`. Experiments on the
+phone (U163-U166) established:
+
+- The core reads bytes 4-7 from byte 0 of the imported graph buffer. If byte
+  4 is NUL (`0x00`), it treats the identifier as "empty" and immediately
+  answers `Invalid flatbuffer file identifier` with `%s` printed nothing
+  (`graph-fb-noid.bin` case).
+- If byte 4 is not NUL, the identifier is read as a 4-byte string and the
+  error prints it (e.g., "DWN1" with `graph-fb.bin`). However the flatbuffer
+  parser then fails with `Invalid flatbuffer file identifier DWN1` – the core's
+  parser and verifier run successfully (no crash, no Virtual device failure),
+  so the remaining gate is the buffer's framing / flatbuffer structure, not the
+  command.
+
+The identifier check and first flatbuffer parse gate are now documented; the
+next steps per U166 are: try the flatbuffer with the header's declared length
+(`0x482000`) and offset-0xfc8 root, then CreateExecution/Bind/Invoke and the
+U118 720p benchmark if RegisterGraph passes.
+
+
+## U167b (2026-11-09): RegisterGraph identifier experiments on phone
+
+Same boot as U167, kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
+After pushing `graph-fb.bin` to the chroot, multiple chain runs tested
+RegisterGraph (type 7, round 5) with different graph buffer contents:
+
+| Buffer | Bytes 0-7 | Result (round 5) |
+|---|---|---|
+| `graph-fb.bin` (tail -c +9 of container) | `c8 0f 00 00 44 57 4e 31` (root 0xfc8, ident `DWN1`) | `INVALID_ARGUMENT: Invalid flatbuffer file identifier DWN1` in early runs; later runs printed empty identifier (same buffer, fresh chain) |
+| `graph-fb-noid.bin` (ident zeroed) | `c8 0f 00 00 00 00 00 00` | `Invalid flatbuffer file identifier` with empty `%s` |
+| `graph-fb-482000.bin` (declared length 0x482000) | `c8 0f 00 00 44 57 4e 31` | empty `%s` |
+| `graph-dgc0-fb.bin` (bench, ident `DGC0`) | `d0 0f 00 00 44 47 43 30` | empty `%s` |
+| patched identifiers: `TCHN`, `DIVE`, `EXEC`, `TACH`, `GRPH`, `BEGL`, `MODL`, `DARW`, `DGC0`, `DGD0`, `AAAA`-`DDDD`, `DDN1`, etc. | root 0xfc8, ident replaced | empty `%s` |
+
+Observations:
+- The core reads bytes 4-7 of the buffer as the flatbuffer file identifier.
+  If byte 4 is 0x00, it reports "Invalid flatbuffer file identifier" with an
+  empty string (immediate rejection). If byte 4 is non-zero, it reads and
+  reports the identifier in the error in some runs (e.g. `DWN1`) but in many
+  later runs printed empty even with non-zero identifiers present in the
+  file - the cause of this variance is unclear (possible buffer/dma mapping
+  state across chain restarts).
+- `DWN1` is the correct identifier per upstream `executable.fbs` and is the
+  one present in the model's compiled graph; the core still rejects it with
+  "Invalid flatbuffer file identifier DWN1" (structure/parsing failure after
+  identifier is read), indicating the flatbuffer schema/layout expected by
+  this cheetah/A17 tachyon core differs from the upstream DWN1 executable
+  schema, or the buffer needs additional framing/wrapping.
+- The 0x482000-length slice (prompt step 4 fallback) did not pass.
+- `graph-dgc0-fb.bin` (4460544 B, root 0xfd0, ident `DGC0`) and other bench
+  graph formats were not accepted as-is.
+
+**Next:** determine the expected flatbuffer format/identifier for this core's
+RegisterGraph. Options: (1) disassemble the identifier/verifier path in
+`libtachyon_core.so` (error string at rodata 0x142ee, "Invalid flatbuffer
+file identifier %s") to find what identifier it compares against and what
+schema it verifies; (2) examine `out/bench/` graph artifacts and their
+provenance (graph-cache.bin, dgc0/dgd0 variants) for a format the core
+accepts; (3) check if the buffer must be wrapped (e.g. a RegisterGraph
+request flatbuffer containing the graph, or the full DWN1 container with
+different offset handling). Once RegisterGraph passes, proceed to
+CreateExecution (9), BindInputBuffers, BindOutputBuffers, Invoke for
+`detect.tflite`, and the U118 720p benchmark.

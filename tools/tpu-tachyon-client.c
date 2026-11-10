@@ -438,6 +438,7 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
     else if (f == 'V' || f == 'W') put32(b + fld, (unsigned)(440 - fld));
     else if (f == 'M') put64(b + fld, g_handle);
     else if (f == 'K') put64(b + fld, g_handle + 1);
+    else if (f == 'Z') put64(b + fld, 0);
     else if (f == 'S') {
       put32(b + fld, env_num("BTYPE", 0));
       put32(b + fld + 4, env_num("BIDX", 0));
