@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: MIT
+/*
+ * T2: enable the TPU SysMMU only. The TPU node stays disabled, so no TPU
+ * register is touched. Boot with this only under the T2 runbook, with the
+ * TPU module blacklisted.
+ */
+
+/dts-v1/;
+/plugin/;
+
+&sysmmu_tpu {
+	status = "okay";
+};

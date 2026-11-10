@@ -50,10 +50,14 @@ static void puthex(unsigned long v)
 	write(2, b, 19);
 }
 
-static void mark(const char *what, const AStatus *status, int code)
+static void mark(const char *what, const AStatus *status, int code, int ok)
 {
 	put("ADDSVC-REAL ");
 	put(what);
+	put(" p=");
+	puthex((unsigned long)status);
+	put(" ok=");
+	put(ok == 1 ? "1" : "0");
 	put(" ex=");
 	puthex((unsigned long)code);
 }
@@ -62,8 +66,10 @@ AStatus *AServiceManager_addService(AIBinder *binder, const char *instance)
 {
 	typedef AStatus *(*add_fn)(AIBinder *, const char *);
 	typedef int (*code_fn)(const AStatus *);
+	typedef int (*ok_fn)(const AStatus *);
 	add_fn real = (add_fn)dlsym(libbinder(), "AServiceManager_addService");
 	code_fn code = (code_fn)dlsym(libbinder(), "AStatus_getExceptionCode");
+	ok_fn ok = (ok_fn)dlsym(libbinder(), "AStatus_isOk");
 	AStatus *status;
 	int exc;
 
@@ -73,6 +79,6 @@ AStatus *AServiceManager_addService(AIBinder *binder, const char *instance)
 	}
 	status = real(binder, instance);
 	exc = status && code ? code(status) : -999;
-	mark(instance ? instance : "(null)", status, exc);
+	mark(instance ? instance : "(null)", status, exc, status && ok ? ok(status) : -1);
 	return status;
 }

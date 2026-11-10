@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""tpu-info: query the phone's Edge TPU (janeiro) driver.
+
+Runs the driver's two read-only ioctls, EDGETPU_FIRMWARE_VERSION and
+EDGETPU_GET_DRAM_USAGE, and prints what the firmware reports. With --load it
+first acquires the driver's wakelock: that powers the TPU through ACPM and
+loads the firmware through the GSA, the first real TPU boot; the wakelock is
+released afterwards, which powers the TPU down again. Use --load once per
+boot, attended.
+
+The device is opened O_RDWR because the driver's ioctl permission check
+requires FMODE_WRITE for every command (edgetpu_ioctl_check_permissions). The
+client still issues only read queries and the wakelock ioctls: it never maps
+buffers, creates groups or submits work. The ABI values are Google's GPL-2.0
+drivers/edgetpu/edgetpu.h (as ported into our kernel tree); this client is
+written from that header and contains no vendor code.
+
+Run it on the phone, as root, once janeiro is loaded and bound:
+
+    tools/phone-ssh 'python3 -' < tools/tpu-info
+    tools/phone-ssh 'python3 - --load' < tools/tpu-info
+
+or copy it over and run it there. --json gives one object for scripts.
+"""
+
+import argparse
+import fcntl
+import json
+import os
+import struct
+import sys
+import time
+
+# _IOC() from <linux/ioctl.h>: _IOR() is direction 2 (read from the device).
+EDGETPU_IOCTL_BASE = 0xED
+
+
+def _ioc(direction, nr, size):
+    return ((direction << 30) | (size << 16) |
+            (EDGETPU_IOCTL_BASE << 8) | nr)
+
+
+# struct edgetpu_fw_version: 4 x __u32
+EDGETPU_FIRMWARE_VERSION = _ioc(2, 27, 16)
+# struct edgetpu_device_dram_usage: 2 x __u64
+EDGETPU_GET_DRAM_USAGE = _ioc(2, 29, 16)
+# _IO() commands: no argument, so direction 0 and size 0.
+EDGETPU_RELEASE_WAKE_LOCK = _ioc(0, 25, 0)
+EDGETPU_ACQUIRE_WAKE_LOCK = _ioc(0, 26, 0)
+
+# The firmware handshake runs inside the wakelock's power-up, but allow a
+# little time for the driver to publish the version after it returns.
+FIRMWARE_TIMEOUT_S = 10.0
+
+
+def read_ioctl(fd, request, fmt, deadline=None):
+    buf = bytearray(struct.calcsize(fmt))
+    while True:
+        try:
+            fcntl.ioctl(fd, request, buf, True)
+            return struct.unpack(fmt, buf)
+        except OSError:
+            if deadline is None or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.2)
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Read the Edge TPU firmware version and DRAM usage.")
+    ap.add_argument("--device", default="/dev/edgetpu",
+                    help="janeiro's device node (default: /dev/edgetpu)")
+    ap.add_argument("--load", action="store_true",
+                    help="power the TPU up and load its firmware first "
+                         "(acquires the wakelock; one run per boot)")
+    ap.add_argument("--json", action="store_true",
+                    help="print one JSON object instead of lines")
+    args = ap.parse_args()
+
+    try:
+        fd = os.open(args.device, os.O_RDWR)
+    except FileNotFoundError:
+        sys.exit(f"{args.device}: no such device; is janeiro loaded and bound?")
+    except PermissionError:
+        sys.exit(f"{args.device}: permission denied; run it as root")
+
+    loaded = False
+    try:
+        if args.load:
+            fcntl.ioctl(fd, EDGETPU_ACQUIRE_WAKE_LOCK)
+            loaded = True
+
+        deadline = time.monotonic() + FIRMWARE_TIMEOUT_S
+        major, minor, vii, kci = read_ioctl(
+            fd, EDGETPU_FIRMWARE_VERSION, "=4I", deadline)
+        allocated, available = read_ioctl(
+            fd, EDGETPU_GET_DRAM_USAGE, "=2Q", deadline)
+    except OSError as err:
+        sys.exit(f"{args.device}: ioctl failed: {err.strerror} "
+                 f"(ENODEV means no firmware has been loaded yet; "
+                 f"try --load)")
+    finally:
+        if loaded:
+            try:
+                fcntl.ioctl(fd, EDGETPU_RELEASE_WAKE_LOCK)
+            except OSError:
+                pass
+        os.close(fd)
+
+    if args.json:
+        print(json.dumps({
+            "firmware": {
+                "major": major,
+                "minor": minor,
+                "vii": vii,
+                "kci": kci,
+            },
+            "dram": {
+                "allocated": allocated,
+                "available": available,
+            },
+        }))
+        return
+
+    print(f"firmware: {major}.{minor} (KCI {kci}, VII {vii})")
+    print(f"dram: {allocated} bytes allocated, {available} bytes available")
+
+
+if __name__ == "__main__":
+    main()

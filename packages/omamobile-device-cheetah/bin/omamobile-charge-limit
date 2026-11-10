@@ -1,0 +1,87 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Hold the battery at a fixed level on an always-plugged phone. The charger
+# exposes the standard charge_behaviour; this is policy, not a hardware
+# threshold: inhibit charging at the limit and let it resume hysteresis
+# percent below it. The default is 50%.
+#
+# Config (optional): /etc/omamobile/charge-limit.conf
+#   CHARGE_LIMIT=50         0 disables the limit
+#   CHARGE_LIMIT_HYSTERESIS=5
+#
+#   omamobile-charge-limit status
+#   omamobile-charge-limit once       apply one decision
+#   omamobile-charge-limit daemon     run the policy (the systemd unit)
+set -euo pipefail
+
+sys=${OMAMOBILE_SYSFS:-/sys}
+bat=$sys/class/power_supply/max170xx_battery
+chg=$sys/class/power_supply/max77759-charger
+conf=${OMAMOBILE_CHARGE_LIMIT_CONF:-/etc/omamobile/charge-limit.conf}
+
+limit=50
+hysteresis=5
+if [[ -r $conf ]]; then
+  # shellcheck source=/dev/null
+  . "$conf"
+fi
+
+[[ $limit =~ ^[0-9]+$ ]] || { echo "charge-limit: CHARGE_LIMIT must be 0-100" >&2; exit 2; }
+((limit >= 0 && limit <= 100)) || { echo "charge-limit: CHARGE_LIMIT must be 0-100" >&2; exit 2; }
+[[ $hysteresis =~ ^[0-9]+$ ]] || { echo "charge-limit: CHARGE_LIMIT_HYSTERESIS must be 0-20" >&2; exit 2; }
+((hysteresis >= 0 && hysteresis <= 20)) || { echo "charge-limit: CHARGE_LIMIT_HYSTERESIS must be 0-20" >&2; exit 2; }
+
+apply() {
+  local cap mode
+  [[ -r $bat/capacity ]] || return 1
+  cap=$(cat "$bat/capacity")
+  if ((limit == 0)); then
+    mode=auto
+  elif ((cap > limit)); then
+    mode=force
+  elif ((cap >= limit)); then
+    mode=inhibit
+  elif ((cap <= limit - hysteresis)); then
+    mode=auto
+  else
+    return 0
+  fi
+  [[ -w $chg/charge_limit ]] || return 1
+  printf '%s\n' "$mode" > "$chg/charge_limit"
+}
+
+release() {
+  [[ -w $chg/charge_limit ]] && printf 'auto\n' > "$chg/charge_limit" || true
+}
+
+status() {
+  if ((limit == 0)); then
+    echo 'limit:            off'
+  else
+    printf 'limit:            %s%% (resume at %s%%)\n' "$limit" "$((limit - hysteresis))"
+  fi
+  printf 'battery:          %s%%\n' "$(cat "$bat/capacity" 2>/dev/null || echo '?')"
+  printf 'charger:          %s\n' "$(cat "$chg/status" 2>/dev/null || echo 'absent')"
+  printf 'charge limit:     %s\n' "$(cat "$chg/charge_limit" 2>/dev/null || echo 'not supported')"
+  printf 'charge behaviour: %s\n' "$(cat "$chg/charge_behaviour" 2>/dev/null || echo 'not supported')"
+}
+
+case "${1:-status}" in
+  status) status ;;
+  once) apply ;;
+  daemon)
+    trap 'release; exit 0' INT TERM
+    trap release EXIT
+    while :; do
+      if apply; then
+        sleep 60
+      else
+        # The charger module can load after this service starts. Retry soon so
+        # the battery is not left in the charger's default auto mode until the
+        # next minute-long pass.
+        sleep 5
+      fi
+    done
+    ;;
+  *) echo "Usage: omamobile-charge-limit [status|once|daemon]" >&2; exit 1 ;;
+esac
