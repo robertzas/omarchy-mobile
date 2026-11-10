@@ -7402,3 +7402,48 @@ Next: `TYPES=1,2,5,5,7` with the `core+0x5968c` patch
 (`set {unsigned long}($x21+8)=2; set $x8=$x21+8`), then the execution
 commands. The setup patch stays on the phone (backup `.setupok-orig`);
 restore it before a normal delegate run.
+
+## U166 (2026-11-09): RegisterGraph is answered; the core reads the graph's file identifier from offset 0
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, slot B, the same
+boot as U163-U165 (`tpu-hold` since boot). The `core+0x5968c` null load is
+now a binary patch like the setup one (`48 00 80 52`, `mov w8, #2`; backup
+`libtachyon_core.so.regnull-orig` in the chroot), so no gdb attach was
+needed. The ring client on the phone (`tpu-tachyon-client.setup`) is
+byte-identical to a fresh build of `tools/tpu-tachyon-client.c`. Chain
+restarted with `NO_DELEGATE=1 sh -s < tools/tpu-tachyon-run`, then
+(`logs/exp166.sh`):
+
+    HANDLE=1 FDH=1 TYPES=1,2,5,5,7 SETUP=1 UORDER=MDMK GFILE=/vendor/etc/graph.bin DELAY=1
+
+Rounds 1-4 answer as in U165 (96, 96, 64, 64 bytes). Round 5, the
+RegisterGraph, answers a 160-byte structured result whose text is
+
+    [S-… RegisterGraph 1] INVALID_ARGUMENT: Invalid flatbuffer file identifier 
+
+with an **empty** identifier (`%s` printed nothing; the message is
+`Invalid flatbuffer file identifier %s` at core `0x142ee`). The core
+therefore verifies the imported graph buffer as a flatbuffer from its byte
+0: `graph.bin` is the DWN1 container (U100/U101), an 8-byte header
+(`31 00 34 00 00 20 48 00`) ahead of the flatbuffer whose `DWN1`
+identifier sits at offset 12. Read from offset 0, bytes 4-7 are
+`00 20 48 00`, an identifier that starts with NUL: exactly the empty string
+the error prints. The core's parser and verifier run (no crash, no
+`Virtual device failure`), so the remaining gate is the buffer's framing,
+not the command.
+
+The driver logged one `WARNING ... iommu_set_fault_handler` from
+`edgetpu_mmu_alloc_domain` (`edgetpu_ioctl_create_group`) during the run:
+the running kernel predates `594acaf97` ("iommu: let a driver replace its
+domain's fault handler") on `omamobile-tpu`; a warning, not an oops, and
+the group finalized. The tachyon service survived the round and exited on
+the client's `timeout` as before.
+
+**Next:** import the graph **without** its 8-byte header (`tail -c +9
+graph.bin`, 4,726,860 bytes) as handle 1 and rerun the same sequence; if
+the identifier error goes away, the core parses the DIVE image and the
+response says what the firmware did with it. If it still complains, try
+the flatbuffer with the header's declared length (`0x482000`) and the
+offset-0xfc8 root. Then CreateExecution (9), bind, Invoke (11) and the
+U118 TPU row. The `setupok` and `regnull` patches stay in the chroot;
+restore both `.*-orig` copies before a stock delegate run.
