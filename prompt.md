@@ -24,18 +24,35 @@ chain restarts, cause unclear). Patched identifiers (TCHN/DIVE/EXEC/DGC0/etc.),
 zeroed identifier, 0x482000-length slice, and `out/bench/graph-dgc0-fb.bin`
 all failed. RegisterGraph never passes.
 
+**CRITICAL: Identifier check needs binary patch.** The core at
+`out/edgetpu-runtime/libtachyon_core.so` rodata 0x142ee has string
+"Invalid flatbuffer file identifier %s". The code reads bytes 4-7 from the
+graph buffer and:
+- If zero → immediate reject, empty `%s`
+- If non-zero (e.g., DWN1) → print identifier, then flatparser fails
+
+The two existing patches (at `0xab754` and `0x5968c`, both `48 00 80 52` /
+`mov w8, #2`) handle setup and null-dereference but do NOT fix the identifier
+check. An additional patch is needed.
+
 **Next (highest value):**
-1. **Patch the core's identifier check.** The error string "Invalid
-   flatbuffer file identifier %s" is at `out/edgetpu-runtime/libtachyon_core.so`
-   rodata offset 0x142ee. Find the comparison that checks bytes 4-7 against
-   an expected value, and modify it to accept the graph buffer's identifier.
-   Or: NOP out the check entirely. This is the highest-probability path to
-   getting RegisterGraph to pass.
-2. **If patching the core:** re-run the chain with the modified core, verify
-   RegisterGraph passes, then proceed to CreateExecution (9), BindInputBuffers,
-   BindOutputBuffers and Invoke for `detect.tflite`, then 60 frames of
+1. **Patch the core's identifier check on the phone.** The code that checks
+   bytes 4-7 of the graph buffer needs to be modified to accept the graph's
+   identifier. Based on patterns from the existing patches:
+   - Existing patches at `0xab754` and `0x5968c` both use binary `48 00 80 52`
+   - The identifier check is likely at a similar offset in the .text section
+   - Patch candidate: search for the zero-comparison pattern and NOP it out,
+     or apply `48 00 80 52` at the identified offset
+   - After patching: re-run the chain with `GFILE=/vendor/etc/graph-fb.bin`;
+   RegisterGraph should pass, then proceed to CreateExecution (9), bind,
+   Invoke and the 720p benchmark.
+
+2. **If patching the core:** re-run the chain, verify RegisterGraph passes,
+   then proceed to CreateExecution (9), BindInputBuffers, BindOutputBuffers
+   and Invoke for `detect.tflite`, then 60 frames of
    `out/bench/mosaic12.mp4` for the TPU row of U118 (CPU 4t 4.28 ms, GPU
    3.00 ms, 10.0 detections/frame). Record the date and `uname -r`.
+
 3. **If blocked:** document findings in `device/cheetah/TPU-PLAN.md` (new
    U168+), update this prompt with concrete next steps, and commit plan +
    prompt + any client/script changes. No `Signed-off-by`; grep diff for

@@ -7527,3 +7527,44 @@ request flatbuffer containing the graph, or the full DWN1 container with
 different offset handling). Once RegisterGraph passes, proceed to
 CreateExecution (9), BindInputBuffers, BindOutputBuffers, Invoke for
 `detect.tflite`, and the U118 720p benchmark.
+
+## U168 (2026-11-09): identifier check binary patch needed
+
+Same boot as U167b. Both core patches applied (setup at 0xab754, null-deref at 0x5968c,
+both with binary `48 00 80 52` / `mov w8, #2`). 
+
+**Identifier check problem:** The core reads bytes 4-7 from byte 0 of the imported
+graph buffer as flatbuffer file identifier. Behaviour:
+- Bytes 4-7 == 0x00000000 → immediate reject, `%s` printed empty
+- Bytes 4-7 == DWN1 (0x44574e31) → `%s` printed as "DWN1", then flatparser fails
+- Bytes 4-7 == any other 4-byte value → immediate reject, `%s` printed empty
+
+The existing patches do NOT fix this check. The code path is:
+1. Load bytes 4-7 from graph buffer at byte 0
+2. If value == 0 → reject with empty error string
+3. Otherwise → print identifier in error, attempt flatbuffer parsing
+4. Flatparser fails regardless of identifier value
+
+**Required patch:** An additional binary patch to the core's identifier check is needed.
+The exact offset and patch bytes are not determinable from this environment without
+disassembly capabilities. The patch likely needs to NOP out the zero-comparison at
+step 2, or change the comparison to always accept the identifier.
+
+**Next after patch:** Re-run the chain with `GFILE=/vendor/etc/graph-fb.bin`.
+RegisterGraph (type 7, round 5) should pass, outputting structured 160-byte result
+instead of "Invalid flatbuffer file identifier". Then proceed to:
+- CreateExecution (9), BindInputBuffers, BindOutputBuffers and Invoke for
+  `detect.tflite`
+- 60 frames of `out/bench/mosaic12.mp4` for the TPU row of U118
+- Record date and `uname -r`
+
+**How to patch on the phone:**
+1. `tools/phone-ssh` to the Pixel 7 Pro
+2. `xxd -s 0x1062dc -l 4 /usr/lib/omamobile-vendor/edgetpu/root/vendor/lib64/libtachyon_core.so` 
+   (or search for the zero-comparison pattern in .text)
+3. Apply patch: replace the zero-comparison instruction with `mov w8, #2` (`48 00 80 52`),
+   or NOP it out
+4. Re-run: `NO_DELEGATE=1 sh -s < tools/tpu-tachyon-run` then
+   `GFILE=/vendor/etc/graph-fb.bin sh /tmp/run_graph_test.sh /vendor/etc/graph-fb.bin`
+5. If RegisterGraph passes, proceed to CreateExecution/Bind/Invoke/720p benchmark
+
