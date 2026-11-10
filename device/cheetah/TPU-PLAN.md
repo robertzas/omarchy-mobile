@@ -7616,3 +7616,15 @@ to core identifier check at various .text offsets (0x1062dc, 0x160c44, 0x4d150,
 check remains the blocking issue. Next: attempt NOP substitution at same offsets,
 or search for the exact comparison instruction pattern in .text disassembly.
 
+
+## U169 — 2026-11-10: TPU wedged, continued patch/format search, CPU baseline re-confirmed
+
+**Phone state (2026-11-10):** reachable via `tools/phone-ssh`, kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, uptime ~23h. `janeiro` loaded but **TPU hardware wedged**: `PSM0_STATUS=0x5644c13`, `PSM1_STATUS=0xe893`, `LPM_CONTROL=0x1240`, AON regs `0xdeadfeed`, `GSA state=1/2`, KCI timeout (code 11), firmware handshake failed (-110), `edgetpu_ioctl_acquire_wakelock: pm_get failed (-110)`. `tpu-hold` runs but cannot recover power state. Consistent with U54 "second power-up of the boot wedges the PSM"; **cold reboot required** before further RegisterGraph/inference tests.
+
+**Continued attempts:** analyzed `libtachyon_core.so` on phone (error string `Invalid flatbuffer file identifier %s` at VA `0x142ee` in .rodata; no direct adrp+add/pointer xref found by scan). Re-tested known candidate offsets (`0x1062dc, 0x160c44, 0x4d150, 0x5adb8, 0x5adc4, 0xab754, 0x5968c`) with `48 00 80 52`/NOP and sampled instruction-boundary offsets across .text — no RegisterGraph pass. Restored probed offsets; setup (`0xab754`) and null-deref (`0x5968c`) patches retained.
+
+**Graphs available on phone:** original `/vendor/graph.bin` (container header `31 00 34 00 00 20 48 00` + DWN1 payload) and `/vendor/etc/{graph-fb.bin,graph-dwn1.bin,graph-dgc0.bin,graph-dgd0.bin,graph-scratch.bin}`. All tested variants still rejected when service was previously responsive; re-test needed after reboot with stable chain.
+
+**CPU baseline (laptop, re-run 2026-11-10):** `out/bench/mosaic12.mp4` 60 frames, `out/bench/detect.tflite`, LiteRT+XNNPACK → **11.36 ms/frame avg**, ~10 detections/frame (>0.5, class 0, scores ~0.70-0.73). U118 refs: CPU 4t 4.28 ms, GPU 3.00 ms (prior environment).
+
+**Next:** cold reboot to un-wedge TPU, start `tpu-hold` and `NO_DELEGATE=1` chain, then (1) locate/patch flatbuffer identifier-validation path (xref to `0x142ee` / bytes 4-7 check) or (2) try compatible compiled graph format for cheetah/A17 core. If RegisterGraph passes: CreateExecution(9)/Bind/Invoke on `detect.tflite`, 60-frame TPU benchmark for U118 row with date+`uname -r`.
