@@ -46,12 +46,36 @@ hits the gate. So the missing piece is the element envelope the A17 HAL's
 `ViiCommandQueue` writes (litebuf vs legacy, and the type it carries), not the
 Command flatbuffer's root layout.
 
-U176 moves the target: the firmware's setup is not a VII element. With the
-device open, KCI code 6 (the value the in-tree enum skips between 5 and 7)
-answers 3 (INVALID_ARGUMENT) for the hook's zeroed 16-byte descriptor, while
-codes 0/2/5/20 answer 0 and 40/255 answer 12. Code 6 is the setup command, it
-carries the global scratches in its DMA payload, and the driver must send it;
-no VII element can set the firmware up.
+U176 moved the target to KCI code 6; U177 closes that route. With the device
+open, code 6 answers 3 (INVALID_ARGUMENT) for every payload tested: 8-1024
+byte structs with the carveout or context scratch, the
+`Vector<Offset<RequestAllocation>>` tree in three field layouts, the inline
+vector from `tools/tpu-setup-payload.py`, and the firmware's own 256-byte
+`mobile_image_config`. No firmware log line follows any of them. The stock
+A17 `janeiro.ko` is unstripped and has no setup function or KCI-6 caller, so
+the setup is not driver-side either: it is created before Linux, and the
+only oracle left is a stock Android boot (attended; it rewrites
+`efs`/`persist`/`modem_userdata`) or a full GSA/Trusty `tpu-mgr` reverse
+pass.
+
+U178 corrects the reverse pass: the TPU firmware body is **Thumb-2 linked at
+`0x10000000`** (the ARM32 vector table at file `0x1000` is only the exception
+stub), not AArch64 at `0x93000000`. The GSA's ARM32 `tpu-mgr` is a load/start
+and mapping manager (`tpu_get_img_config`, `tpu_set_dvfs_opp`, state machine
+at `0x19200`/`0x192c0`) with no setup or KCI-6 sender in the functions
+inspected. With the right mode and link base, the setup strings still have **no code
+reference** (no `movw`/`movt`, no literal, no `adr`; the nearby pointer words
+address other strings), which matches U19/U57's index-table logging.
+
+U179 moves the blocker to the real producer: the A17 `vendor_dlkm.img` has
+an unstripped `gxp.ko` (687,680 B, GPL v2) whose loader requests
+`gxp_fw_core0`, authenticates it with `gsa_authenticate_image`, and runs the
+GXP core. The TPU setup comes from the Tachyon firmware on that core, not
+from the AP. Our `drivers/gxp/gxp.c` maps the AUR but loads no firmware, so
+the DSP never starts. Google publishes the driver's GPL-2.0 source
+(`kernel/google-modules/gxp/gs201`, `gxp-firmware.c`), and our GSA already
+has the TPU image-load path, so the next step is a source port, not more
+disassembly; the stock-capture runbook is the fallback.
 
 ## Benchmark: 720p object detection
 
@@ -76,19 +100,13 @@ setup succeeds, and no TPU number is claimed.
 
 ## Next steps
 
-1. Give the debugfs `kci_send` hook a payload (`kci_payload`, up to
-   `PAGE_SIZE`, `cmd.dma.size` = the write length), build the module and send
-   code 6 with the captured HAL setup blob and with our flatbuffer; a response
-   of 0 (or the firmware's scratch messages) is the setup landing.
-2. Read the A17 HAL's `ViiCommandQueue`/`ViiCommandBuffer` enqueue path: the
-   element envelope (litebuf flag and the type it carries) is the remaining
-   unknown, and `+11`/`+12` are the bytes that change the class.
-2. Capture the core's own setup element through a working chain (create
-   `/dev/binderfs` first) and compare its 48 bytes with ours byte for byte.
-3. Feed the accepted payload through `tools/tpu-setup-payload.py`'s harness
-   (`tools/tpu-fwsetup.sh` + `edgetpu-run mapped <code> <p0> <file> <type12>`);
-   the firmware's own log line is the oracle, and the `+12` element byte is
-   now settable.
-4. Once set up, run `CreateExecution` (9), `BindInputBuffersToTensors` (12),
-   `BindOutputBuffersToTensors` (13) and `Invoke` (11), then the 60-frame
-   benchmark above.
+1. Port the GXP driver from the GPL source in the order in
+   [TPU-PLAN.md](TPU-PLAN.md) U179: `gxp_fw_init`, the DSPF loader with
+   `gsa_authenticate_image`, then `gxp_firmware_run` and the mailbox; build
+   `CONFIG_GXP=m` and boot `gxp-probe`.
+2. If the port stalls, run the attended stock-capture runbook (slot A,
+   `tools/nv-backup --check` before and after, AGENTS §1) as the fallback
+   oracle.
+3. With an accepted setup, run `CreateExecution` (9),
+   `BindInputBuffersToTensors` (12), `BindOutputBuffersToTensors` (13) and
+   `Invoke` (11), then the 60-frame benchmark above.

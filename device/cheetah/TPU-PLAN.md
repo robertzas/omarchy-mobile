@@ -8160,3 +8160,215 @@ cost:
 
 None of this was flashed, pushed or boot-overlaid; the only write was the
 in-chroot core patch.
+
+## U177 (2026-11-11): KCI code 6 rejects every payload shape; the oracle is a stock boot
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, slot B, the same
+boot (TPU powered once, `tpu-hold` active). The `kci_payload` hook built for
+U176 sent, in this order, with the response read from `dmesg`:
+
+* a 1024-byte page and then 8/16/24/32/40/48/64/256/1024-byte prefixes of
+  `{u64 addr = 0x10200000, u64 size = 0xe00000}` (four-field variants with a
+  leading count, and the pair at +4/+8);
+* a `flatbuffers::Vector<Offset<RequestAllocation>>` tree (Command table ->
+  setup table -> vector of uoffsets -> `RequestAllocation` tables) with the
+  allocation table read as `{addr, size}`, `{size, addr}` and
+  `{size, alignment}`, for the carveout (`0x10200000`), the context region
+  (`0x91e00000`) and the three ImageConfig mappings;
+* the inline 16-byte-vector payload from `tools/tpu-setup-payload.py` with
+  the carveout scratch;
+* the exact 256-byte `mobile_image_config` from the A17 .fw (`0x560..0x65f`).
+
+Every send answered **3** (INVALID_ARGUMENT), at every length, with no
+firmware log line before or after. So code 6 is not the AP-side setup with
+any of these ABIs; it is either a different command or one only the
+GSA/Trusty path may send. Step 0 of "What would unblock it" is closed.
+
+**What this session also ruled out:**
+
+* the A17 stock `janeiro.ko` is unstripped and its `mobile-firmware.c` is the
+  Android 16 pantah/akita source plus one include; it has **no** setup
+  function and **no** KCI-6 caller, so the setup is not driver-side;
+* the stock vendor ramdisk carries no TPU firmware (the `edgetpu` strings are
+  `plat_property_contexts`/`prop.default`), so ABL does not load it from
+  `vendor_boot`;
+* the running DT has both regions (`tpu-ctx@91e00000`, 18 MiB;
+  `tpu-fw@93000000`, 16 MiB), so the phandle is not the gap;
+* the 14 MiB after the 1 MiB firmware and 1 MiB remapped pool
+  (`0x10200000`) and the 18 MiB context region are the two plausible global
+  scratch homes; neither is accepted.
+
+**The remaining oracle is a stock Android boot.** The setup state is created
+before Linux, and no AP path we can reach sets it. A slot-A boot rewrites
+`efs`/`persist`/`modem_userdata`, so it is the owner's per-step go under
+AGENTS §1, with a fresh read-only `tools/nv-backup --check` afterwards. The
+other route is a full reverse pass of the GSA/Trusty `tpu-mgr` (the ARM32
+image at bundle offset `0x7fae00` in this ABL, not `0x7fbe00`: `tpu-mgr`,
+`tpu_get_img_config`, `TPUF`), which U158/U159 only started.
+
+Nothing was flashed, pushed, rebooted or overlaid for this; the only writes
+were the KCI payload pages and the debugfs sends.
+
+## U178 (2026-11-11): the TPU firmware is Thumb-2 at link base 0x10000000; no setup-string xref
+
+* File offset `0x1000` is an **ARM32 exception vector table** (`EA000019`
+  branches, with an ARM reset stub at `0x106c`), but the application body is
+  **Thumb-2**: the bytes at `0x93010000` decode cleanly as Thumb and as
+  garbage in ARM. The earlier AArch64 pass (and the `udf` it produced) was
+  meaningless.
+* The image is **linked at `0x10000000`**, not at the load address. The
+  function-pointer table at file `0xe3790` holds `0x1000b945`, `0x1000cac9`,
+  …; masking the Thumb bit gives file offsets `0xb944`, `0xcac8`, … and both
+  are real Thumb function prologues. String pointers in the data are
+  `0x100exxxx`; the ImageConfig's `firmware_base` `0x93000000` is the
+  physical load address, not the link address. The three VII strings are at
+  link addresses `0x100efbdc`, `0x100efddc`, `0x100efe18`.
+* With the right mode and base, the gate is still not string-addressable.
+  A scan of the body for `movw #0xfbdc`/`movt #0x100e`, for the literal
+  `0x100efbdc`, and for `adr`/PC-relative targets in `0x100efb00`–
+  `0x100f0000` found **zero**. The 136 words that point into that page
+  address neighboring strings (`0x100ef9ba`, `0x100efaac`, …), never the
+  setup strings. This confirms U19/U57: the log ring resolves its messages
+  through an index table, so the `vii_handler_layer.cc:247` gate has to be
+  found by pattern (the `0x0f000009` response / the setup-done flag), not by
+  a string reference.
+* The GSA firmware's ARM32 `tpu-mgr` (`tpu-image.c`) is a load/start
+  manager, not an obvious setup sender: it validates
+  `sizeof(tpu_img_config)` (string at `0x2fb`), maps the config's ranges
+  (`0x18914`/`0x194cc`), and drives a state machine (`0x19200`, `0x192c0`)
+  with `tpu_set_dvfs_opp`; its strings contain no setup/global-scratch text
+  and no KCI-6 producer. Its `mbox_send_raw_cmd` is the AP-facing mailbox
+  client.
+* Conclusion so far: the setup is neither in the stock module nor visibly in
+  the GSA image-manager functions inspected. It may be a TPU-side effect of
+  the load command's config, or a command in the GSA start path that this
+  pass has not identified. The stock boot capture below is still the only
+  oracle that can settle it without more reverse work.
+
+## U179 (2026-11-11): the stock gxp.ko is recovered; the setup producer is the GXP's Tachyon firmware
+
+The A17 `vendor_dlkm.img` (already extracted at
+`out/stock-a17/vendor_dlkm.img`) carries `/lib/modules/gxp.ko`, 687,680 bytes,
+**not stripped**. `modinfo` gives `license: GPL v2`, vermagic
+`6.1.157-android14-11-ge4470993d947-ab15260412`, `depends:
+gsa,cmupmucal,exynos_pm_qos,janeiro`, and the parameters `dsp_fw_auth_disable`,
+`mbx_timeout`, `slow_clk`, `log_iova` and `gcip_iommu_domain_type`.
+
+Its symbol table is the missing stack: `gxp_firmware_load_core_firmware`,
+`gxp_firmware_run`, `gxp_firmware_stop`, `gxp_fw_init`, `gxp_lpm_up/down`,
+`gxp_pm_blk_on/off`, `gxp_mailbox_*`, `gxp_dci_*` and `gxp_gsx01_ssmt_*`, and
+it imports `gsa_authenticate_image`. U65/U81's "no GXP driver" is now a
+concrete binary plus a public source, not a blank.
+
+**The loader.** Read from the module with `llvm-objdump -dr` and confirmed
+against Google's GPL-2.0 source at
+`android.googlesource.com/kernel/google-modules/gxp/gs201`
+(`gxp-firmware.c`, commit `f74aa638e06c1edcb7c8c295c03d2f7b9b6f604d`):
+
+- `gxp_fw_init` calls `gxp_pm_blk_on`, reads `GXP_REG_AURORA_REVISION` and
+each core's `GXP_REG_PROCESSOR_ID`, then calls `gxp_pm_blk_off`. It takes
+`gxp-fw-region` (0x400000 at 0x98000000) and `gxp-scratchpad-region`
+(0x100000 at 0x98400000), and `memremap`s four 1 MiB firmware buffers, one
+per core.
+- `request_dsp_firmware("gxp_fw_core%d")` requests `gxp_fw_core0` to
+`gxp_fw_core3`; the cheetah file is 589,056 bytes, with the signed-image
+marker `DSPF` at 0x400 and a 0x1000-byte header. With a GSA device,
+`gxp_firmware_load_authenticated` copies the header to coherent DMA memory,
+copies the body into the core's carveout, calls
+`gsa_authenticate_image(gsa_dev, header_dma, body_paddr)`, and then runs
+`elf_load_segments` on the body after the header. Without a GSA it loads the
+ELF directly.
+- `gxp_firmware_run` programs `GXP_REG_ALT_RESET_VECTOR` with the carveout
+address, powers the core, sets `CORE_WAKEUP_DOORBELL`, waits for
+`Q7_ALIVE_MAGIC` (`0x55555555`) at `MSG_CORE_ALIVE`, checks
+`MSG_TOP_ACCESS_OK`, and allocates the mailbox. That is the producer path for
+the TPU setup: the Tachyon firmware on this core sends it.
+- The DT node already carries what the source expects (`aur`, `mailbox0-3`,
+`cmu`, `ssmt_idma`, `ssmt_inst_data`, `gcip-dma-window`, `pasid-num-bits`,
+`gxp-tpu-mbx-offset`, `tpu-device`, `gsa-device`); only the driver is missing.
+
+**This moves the blocker.** The setup is not an AP ioctl and not a KCI-6
+payload: it is produced by the GXP's Tachyon firmware after the GXP core is
+loaded and running. Stock Android's `gxp.ko` does that at boot; our
+`drivers/gxp/gxp.c` maps the AUR but deliberately loads nothing, so the
+userspace Tachyon service cannot start the DSP (U87/U88 saw only
+create/free/info). KCI-6's `INVALID_ARGUMENT` was the wrong layer.
+
+**Our GSA side.** `drivers/soc/google/gsa.c` already has the
+authenticate-and-load command path for the TPU (`gsa_load_tpu_fw_image()`,
+command 50) and for the AoC, but not the generic `gsa_authenticate_image()`
+the GXP module imports. The stock `gsa.ko` exports it (116 bytes), so the GXP
+port either factors command 50 into that wrapper or adds the command beside
+the existing two loaders. Without `CONFIG_GOOGLE_GSA` the calls already
+return `-EOPNOTSUPP`, so the skeleton still builds.
+
+**Port order.** The source is the reference; the reverse pass is done for the
+loader. One boot per step, read-only first:
+
+1. `gxp_fw_init`: power BLK_AUR, read the revision and processor IDs, power
+off; take the two reserved-memory regions and map the four firmware
+buffers. This is the T-runbook's first read, now with the vendor's exact
+register and sequence.
+2. The firmware loader plus the GSA wrapper: request `gxp_fw_core0`, check
+`DSPF`, authenticate, `elf_load_segments`.
+3. `gxp_firmware_run`: reset vector, `gxp_pm_core_on`, doorbell, alive
+magic, mailbox. The source files to port are `gxp-firmware.c`, `gxp-lpm.c`,
+`gxp-pm.c`, `gxp-cmu.c`, `gxp-gsx01-mailbox.c`, `gxp-gsx01-ssmt.c`,
+`gxp-mailbox*.c`, `gxp-dci.c` and the `gcip-kernel-driver/` helpers; its
+other module dependencies (`cmupmucal`, `exynos_pm_qos`) are separate
+pieces to check against our tree.
+4. Boot `gxp-probe` with the ported module, start the Tachyon service, and
+check the TPU firmware log for the setup-done line before any inference.
+
+The stock module cannot be dropped in: it is built for 6.1.157, GPL-symbol
+and API bound, and our kernel is 7.3-rc6. This is a source port. Use the 6.1
+line matching `android14-11`, not the 5.10 `gxp-firmware.c` layout.
+
+The stock-capture runbook below is now the fallback: the port is
+source-backed, and the capture only confirms the setup arrives from the GXP.
+
+## Stock-capture runbook (attended, 2026-11-11)
+
+Purpose: observe what a stock Android boot does to the TPU, as a fallback
+oracle. U179 found the missing producer and its GPL source (the GXP's
+Tachyon firmware), so the port above is the first route; this capture
+confirms the GXP sends the setup and records the stock sequence.
+
+**Preconditions:** the owner is at the phone; slot A holds the stock Android
+install; a verified read-only NV backup exists (`tools/nv-backup --check
+DIR` passes); the current slot-B image set is saved as a rollback set built
+with the current `bin/omamobile` (AVB footers, [NOTES](NOTES.md#2026-10-30-the-charger-reads-offline-at-full-and-slot-b-now-needs-its-avb-footers));
+the charger is connected.
+
+Each step is the owner's explicit go. This is not covered by §1.1.
+
+1. **Read-only.** `tools/nv-backup --check DIR`; record the output. Save the
+   slot-B image set and record `fastboot getvar current-slot`,
+   `slot-successful:a`, `slot-successful:b`. Expect the backup check to
+   pass; stop if it does not.
+2. **Slot A boot (gated).** Reboot to bootloader, `fastboot --set-active=a`,
+   boot stock. This changes the active slot, can clear B's successful flag,
+   and stock rewrites `efs`/`persist`/`modem_userdata`. Expect the stock
+   launcher; stop on a recovery screen or any fastboot error.
+3. **On stock, with the owner.** Run one stock Edge TPU inference (the stock
+   demo or a `tflite` benchmark) so the TPU is set up. Capture, in this
+   order: `adb shell dmesg` (GSA/TPU lines), `/sys/kernel/debug/edgetpu/*`
+   and `/sys/kernel/debug/gsa/*` if present, the TPU firmware log if it is
+   exposed, and the build fingerprint only. If `adb root` is unavailable,
+   record that and stop: do not flash a stock boot image to get root (a
+   bootloader/AVB write).
+4. **Back to Linux.** Reboot to bootloader, `fastboot --set-active=b`, boot
+   slot B. Do not run stock again.
+5. **Fresh backup.** Immediately take a new read-only NV backup and compare
+   it with the pre-capture one; stock's modem stack writes
+   `efs`/`persist`/`modem_userdata`, so the old checksums stop matching.
+   Record names and sizes only, never contents.
+6. Record the captured lines above with the date and the stock build
+   fingerprint, after grepping for identifiers.
+
+**Stop conditions:** a recovery screen, a fastboot/AVB error, no adb, or a
+TPU line naming an address outside the carveout: stop and ask. Do not flash
+anything else. **Rollback:** `fastboot --set-active=b` and boot the saved
+slot-B set; slot A's stock install is unchanged. **Risk:** high (slot write,
+stock rewrites modem NV, B may lose its successful mark). **Time:** about
+30 minutes.
