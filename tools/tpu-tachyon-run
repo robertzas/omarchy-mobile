@@ -63,6 +63,15 @@ env = {"LD_LIBRARY_PATH": "/apex/com.android.tethering/lib64:/system_ext/lib64"
        "ANDROID_DATA": "/data"}
 if pre:
     env["LD_PRELOAD"] = pre
+# Test knobs reach the chroot target. A fixed whitelist silently ate SSIZE,
+# IVH and the extra import handles once (TPU-PLAN U171), so keep it complete.
+for k, v in os.environ.items():
+    if k in ("HANDLE", "FDH", "TYPE", "TYPES", "GFILE", "SFILE", "SSIZE",
+             "ORDER", "ORDER2", "UORDER", "LOC", "TAG", "BTYPE", "BIDX",
+             "BSIZE", "CH", "SH", "IH", "RH", "SAME", "IVH", "J2",
+             "SETUP", "SETUP_N", "SETUP_ADDR", "STYPE", "CVER_MAJOR",
+             "CVER_MINOR", "H2", "FDH2", "H3", "FDH3"):
+        env[k] = v
 os.chroot("/usr/lib/omamobile-vendor/edgetpu/root")
 os.chdir("/")
 os.setgroups([])
