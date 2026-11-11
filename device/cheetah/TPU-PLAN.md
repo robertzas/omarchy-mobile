@@ -8392,9 +8392,134 @@ go.
    command-1 wrapper and the AUR IOMMU mapping; the read result decides
    whether ACPM alone is enough to power the block.
 
-**Rollback:** `rmmod gxp` if the phone answers; the module is only in
-`/tmp`, so a reboot restores the packaged skeleton. **Risk:** high (unknown
-power state, possible SoC abort). **Time:** under a minute if it passes.
+**Rollback:** reboot. The fixed module leaves BLK_AUR powered; `rmmod gxp`
+is safe but no longer powers the block off. T6.1's ACPM power-off reset the
+phone (U182), so there is no in-driver way back to an unpowered AUR.
+**Risk:** high (unknown power state, possible SoC abort). **Time:** under a
+minute if it passes.
+
+## U181 (2026-11-11): the GXP DSPF loader, core-0 start and the AUR IOMMU overlay are built; no hardware step ran
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, worktree `wt-tpu`,
+output `out-tpu`. Nothing was flashed, rebooted or powered; the module below
+was loaded only because its probe still touches no register.
+
+The stock A17 `gxp.ko`'s `gxp_firmware_get_cfg_resource` (0x7bb4) resolves the
+image-config v2 layout that the newer 6.1 source no longer uses. The size
+field is `0x1000 << value` when bit 11 is clear, not a 1 MiB count:
+
+| region | IOVA | size | physical |
+| --- | --- | --- | --- |
+| core config (4 cores) | `0xfac10000` | `0x8000` | scratchpad `0x98400000` |
+| VD config | `0xfac18000` | `0x1000` | `0x98408000` |
+| system config | `0xfac20000` | `0x2000` | end of scratchpad, `0x984fe000` |
+| NS shared | `0xfac00000` | `0x10000` | allocated, zeroed |
+| NS per-core | `0xfa400000`, `0xfa600000`, `0xfa800000`, `0xfaa00000` | `0x110000` each | allocated, zeroed |
+
+The firmware is `DSPF` generation 1, image config v2, privilege **2 (NS)**:
+the host programs every mapping, and the 6.1 loader does not authenticate an
+NS image with the GSA. The ELF entry is `0xfa000000`; its four `PT_LOAD`
+segments are at `0xfa040e24` (`0x3bbc`), `0xfa000000` (`0x234`),
+`0xfa001000` (`0x2e4`) and `0xfa002000` (`0x3ee24`). The core-0 alive magic
+is at the start of its 8 KiB core-config slice (`0x2000` per core).
+
+Built and checked:
+
+- `drivers/gxp/gxp.c` now has a `firmware_start` sysfs gate. It maps the
+  firmware carveout `0x98000000` to `0xfa000000`, AUR to `0x25c00000`,
+  the sync barrier to `0x100000`, and the config/NS regions above; copies
+  the body after the 4 KiB header; loads the ELF; programs the core-0
+  reset vector, PSM and wake doorbell; and waits for `0x55555555` and the
+  `BIT(0)` TOP-access echo. It refuses if there is no default IOMMU
+  domain, before touching AUR.
+- The GSA command-1 wrapper (`gsa_authenticate_image`, four-word
+  header/body request) is in `drivers/soc/google/gsa.c` and exported, for a
+  future secure image. It is deliberately not linked into this loader: the
+  image is NS, so `gxp.ko` has no `gsa_authenticate_image` dependency.
+- `device/cheetah/overlays/gxp-iommu.dtso` adds the two AUR SysMMUs
+  (`0x25a50000`, `0x25a80000`), the AUR IOMMU group and the GXP `iommus`.
+  It is **not** in `DTB_OVERLAYS`; it is a test-only overlay. It compiles
+  and `fdtoverlay` merges it into `gs201-cheetah.dtb` (GXP phandles
+  `0x115`/`0x116`, group `0x117`).
+
+Checks: `make ... M=drivers/gxp modules` is clean with no undefined GSA
+symbol; checkpatch has 0 errors and one pre-existing `kzalloc` warning;
+`gsa.c` checkpatch is clean. The four firmware files were copied to the
+phone's `/lib/firmware/gxp_fw_core0..3` (hashes match the extracted files),
+and the loader is at `/root/gxp-loader.ko` (`6577e796...`).
+
+On the phone, the old register-free `gxp` module was replaced with
+`/root/gxp-loader.ko` (the old `/tmp/gxp-new.ko` is the rollback). Probe
+logged the missing old-DT regions and `/dev/gxp`; `firmware_start` read `0`,
+and writing `1` returned `ENODEV` **before** `gxp_power_on` because this DT
+has no `gxp-fw-region`/scratchpad. No AUR read, firmware start or TPU work
+happened. The running GSA is still the packaged one; `/root/gsa-auth.ko` is
+staged but not loaded (it is in use by `aoc_core` and `janeiro`).
+
+### T6.2: boot the AUR IOMMU overlay and start core 0 (owner go; risk high)
+
+This is the first step that can abort the SoC before USB returns: the AUR
+SysMMUs probe at boot, and the block may not be powered until ACPM acts. Do
+not run it without the owner at the phone. The §1.1 grant does not cover a
+boot whose failure costs the USB link; this runbook is stricter.
+
+1. **Build a test image with the overlay.** Make a local, uncommitted edit to
+   `device/cheetah/device.conf` adding `gxp-iommu` at the end of
+   `DTB_OVERLAYS` (after `gxp-probe`), then build the kernel, initramfs and
+   images in `wt-tpu`/`out-tpu`. Revert the descriptor edit after packing.
+   Keep the current slot-B image set as the rollback. Expect `gxp-iommu.dtbo`
+   to compile and the overlay to apply; stop on a `dtc`/`fdtoverlay` error.
+2. **Push and boot the test image.** `bin/omamobile push` (slot B only). The
+   owner has the phone and charger; if it does not return, this is the
+   AUR-power failure, not a kernel log to debug. Stop immediately.
+3. **Read-only after boot.** `uname -r`; `dmesg | grep -E 'gxp|25a[58]0000|sysmmu'`;
+   `ls /sys/kernel/iommu_groups`; `cat /sys/devices/platform/soc@0/25c00000.gxp/firmware_start`.
+   Expect the two AUR SysMMUs to probe and the GXP device to have a default
+   domain; `firmware_start` still reads `0`. If a SysMMU probe fails or the
+   GXP domain is absent, stop: do not write `firmware_start`.
+4. **Load the staged loader.** `rmmod gxp` (refcount 0), then
+   `insmod /root/gxp-loader.ko`; check the probe logs for the firmware and
+   scratchpad regions. Then write `1` to `firmware_start`. **Expect** the
+   image-config line, the six mappings, the four loaded segments, `core 0
+   alive` and `core 0 TOP access handshake ok`. **Stop** on no SSH reply, a
+   reset, an IOMMU fault, or a timeout: do not retry in this boot.
+5. **If it passes,** record `uname -r`, the config line and the alive line;
+   the next piece is the mailbox/KCI path, not another core start.
+
+**Rollback:** boot the saved slot-B image set without `gxp-iommu`; if the
+phone does not boot, use the owner's buttons/fastboot, never a slot-A stock
+boot. **Risk:** high (possible SoC abort at boot; no USB dead-man). **Time:**
+about 10 minutes after the image is built.
+
+## U182 (2026-11-11): T6.1 passes; the ACPM power-off resets the phone
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, worktree `wt-tpu`.
+The T6.1 read ran with the owner at the phone and the charger connected. It
+returned:
+
+```
+gxp 25c00000.gxp: Aurora revision: 0x00010104
+gxp 25c00000.gxp: Aurora core 0 processor ID: 0x00000000
+gxp 25c00000.gxp: Aurora core 1 processor ID: 0x00000001
+gxp 25c00000.gxp: Aurora core 2 processor ID: 0x00000002
+gxp 25c00000.gxp: Aurora core 3 processor ID: 0x00000003
+```
+
+`bringup` then read `1`, so ACPM powered the block and the TOP PSM ran. The
+power-off that followed (`gxp_lpm_top_destroy`, ACPM DVFS rate 0,
+`pm_runtime_put_sync`) produced ACPM channel 0 and 9 timeouts, thermal
+`Temperature check failed (-62)` lines, and a reset. The phone came back on
+slot B in about a minute; the kernel, rootfs and `/root/gxp-loader.ko` were
+intact. The read itself did not abort the SoC; the shutdown did.
+
+The loader now leaves BLK_AUR powered: `gxp_hw_bringup` no longer calls
+`gxp_power_off`, `gxp_hw_start`'s failure paths unmap and return without
+powering off, and `gxp_remove` only logs that the block is left on.
+`gxp_power_off` is `__maybe_unused` for a future known-good sequence. The
+fixed module was loaded on the rebooted phone and the read repeated:
+`bringup=1`, `firmware_start=0`, no ACPM timeout, the phone stayed up, and
+the charger read online. A reboot is now the only way back to an unpowered
+AUR. No firmware start, AUR IOMMU overlay boot or TPU work has run.
 
 ## Stock-capture runbook (attended, 2026-11-11)
 

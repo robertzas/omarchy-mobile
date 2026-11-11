@@ -1,0 +1,51 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Test-only AUR IOMMU binding for the GXP firmware loader (TPU-PLAN.md U181).
+ *
+ * This is deliberately not in DTB_OVERLAYS. Enabling these SysMMUs makes the
+ * IOMMU driver touch AUR registers at boot, and the block may only be readable
+ * after ACPM has powered BLK_AUR. Build it explicitly for a gated boot, after
+ * the plain gxp-probe overlay, and keep the way back to an image without it.
+ *
+ * The nodes have no power-domains or s2mpus: our tree has no pd_aur or
+ * s2mpu_aur yet. Only the non-secure fault line is described, so the driver
+ * does not ioremap the secure register window.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0} {
+	iommu_group_aur: iommu-group-aur {
+		compatible = "samsung,sysmmu-group";
+	};
+
+	/* Often called sysmmu_aur0 in the vendor tree. */
+	sysmmu_aur_idma: sysmmu@25a50000 {
+		compatible = "samsung,sysmmu-v8";
+		reg = <0x25a50000 0x10000>;
+		interrupts = <0 136 4>;
+		qos = <15>;
+		port-name = "AUR_IDMA";
+		#iommu-cells = <0>;
+		sysmmu,no-s2pf;
+		sysmmu,async-fault;
+	};
+
+	/* Often called sysmmu_aur1 in the vendor tree. */
+	sysmmu_aur_inst_data: sysmmu@25a80000 {
+		compatible = "samsung,sysmmu-v8";
+		reg = <0x25a80000 0x10000>;
+		interrupts = <0 137 4>;
+		qos = <15>;
+		port-name = "AUR_INST_DATA";
+		#iommu-cells = <0>;
+		sysmmu,no-s2pf;
+		sysmmu,async-fault;
+	};
+};
+
+&{/soc@0/gxp@25c00000} {
+	iommus = <&sysmmu_aur_idma>, <&sysmmu_aur_inst_data>;
+	samsung,iommu-group = <&iommu_group_aur>;
+	status = "okay";
+};

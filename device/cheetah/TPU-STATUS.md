@@ -86,6 +86,27 @@ actual BLK_AUR revision/processor-ID read is the next owner-gated step
 ([TPU-PLAN.md](TPU-PLAN.md) T6.1), because the block's power state at Linux
 boot is still unknown. There is no TPU inference or benchmark yet.
 
+U181 builds the rest of the first start offline. The stock A17 `gxp.ko`'s
+config-resource function confirms the image-config v2 layout: core config
+`0xfac10000` + `0x8000`, VD `0xfac18000` + `0x1000`, system `0xfac20000` +
+`0x2000`, with the per-core 8 KiB slices in the 1 MiB scratchpad. The image
+is privilege 2 (non-secure), so the host maps every region and no GSA
+authentication is needed. `drivers/gxp/gxp.c` now loads `gxp_fw_core0`, maps
+the firmware, AUR and config regions, and starts core 0 under a
+`firmware_start` sysfs gate; it refuses before touching AUR when no IOMMU
+domain is attached. The firmware files are in the phone's `/lib/firmware`,
+and `/root/gxp-loader.ko` is staged. The register-free probe module loaded on
+the phone and `firmware_start` returned `ENODEV` on the old DT before any
+power or register access. The AUR SysMMU overlay is built and test-only; no
+firmware start, AUR read or TPU work ran.
+
+U182 (2026-11-11) ran T6.1 with the owner at the phone. The read passed:
+Aurora `0x00010104`, cores 0-3 with IDs `0x0-0x3`. The ACPM power-off that
+followed reset the phone (channel 0/9 timeouts and thermal -62); it came back
+on slot B in about a minute. The loader was changed to leave BLK_AUR powered,
+and a second read on the fixed module stayed up with `bringup=1` and
+`firmware_start=0`. There is still no firmware start or inference.
+
 ## Benchmark: 720p object detection
 
 `out/bench/mosaic12.mp4` is 1280x720, 60 frames, 12 person tiles. The model
@@ -109,11 +130,10 @@ setup succeeds, and no TPU number is claimed.
 
 ## Next steps
 
-1. Port the GXP driver from the GPL source in the order in
-   [TPU-PLAN.md](TPU-PLAN.md) U179/U180: `gxp_fw_init` is built and
-   probe-tested; run its owner-gated AUR read (T6.1), then add the DSPF
-   loader with `gsa_authenticate_image`, the AUR IOMMU mapping, and
-   `gxp_firmware_run` with the mailbox.
+1. Run the owner-gated T6.2 in [TPU-PLAN.md](TPU-PLAN.md): build a test image
+   with `gxp-iommu`, push it, load `/root/gxp-loader.ko`, and write
+   `firmware_start`. The pass line is `core 0 alive`; a boot that does not
+   return is the AUR-power failure, not a log to debug.
 2. If the port stalls, run the attended stock-capture runbook (slot A,
    `tools/nv-backup --check` before and after, AGENTS §1) as the fallback
    oracle.
