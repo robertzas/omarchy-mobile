@@ -46,6 +46,13 @@ hits the gate. So the missing piece is the element envelope the A17 HAL's
 `ViiCommandQueue` writes (litebuf vs legacy, and the type it carries), not the
 Command flatbuffer's root layout.
 
+U176 moves the target: the firmware's setup is not a VII element. With the
+device open, KCI code 6 (the value the in-tree enum skips between 5 and 7)
+answers 3 (INVALID_ARGUMENT) for the hook's zeroed 16-byte descriptor, while
+codes 0/2/5/20 answer 0 and 40/255 answer 12. Code 6 is the setup command, it
+carries the global scratches in its DMA payload, and the driver must send it;
+no VII element can set the firmware up.
+
 ## Benchmark: 720p object detection
 
 `out/bench/mosaic12.mp4` is 1280x720, 60 frames, 12 person tiles. The model
@@ -69,7 +76,11 @@ setup succeeds, and no TPU number is claimed.
 
 ## Next steps
 
-1. Read the A17 HAL's `ViiCommandQueue`/`ViiCommandBuffer` enqueue path: the
+1. Give the debugfs `kci_send` hook a payload (`kci_payload`, up to
+   `PAGE_SIZE`, `cmd.dma.size` = the write length), build the module and send
+   code 6 with the captured HAL setup blob and with our flatbuffer; a response
+   of 0 (or the firmware's scratch messages) is the setup landing.
+2. Read the A17 HAL's `ViiCommandQueue`/`ViiCommandBuffer` enqueue path: the
    element envelope (litebuf flag and the type it carries) is the remaining
    unknown, and `+11`/`+12` are the bytes that change the class.
 2. Capture the core's own setup element through a working chain (create

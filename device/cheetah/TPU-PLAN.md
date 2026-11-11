@@ -8075,10 +8075,73 @@ DMA descriptor (+32..+47, which stayed zero in every sweep). The A17 HAL's
 enqueue path is the only in-tree producer to read next; the chain's own setup
 element would confirm the same bytes, but it needs a working binderfs chain.
 
+## U176 (2026-11-11): KCI code 6 is the firmware's setup, and it is driver-side
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, same boot; chain up,
+`tpu-hold` holding `/dev/edgetpu` open.
+
+**The HAL's litebuf assertion is not the element.** The only reference to
+`buffer_type_ == ViiBufferType::kLitebuf` in `libdarwinn_hal.so` is the CHECK
+at `0x14e3618`: `ldrb w8,[x19,#0x1d3]; cmp w8,#1; b.ne fail`, on the command
+queue object, before it converts a `vector<u64>` to `vector<u32>`. It is a
+buffer-type invariant of the queue class, not the wire type of a command, so
+the HAL's enqueue path cannot supply the missing field from its shape alone.
+
+**The HAL's captured setup payload is not a flatbuffer.** The 128 bytes U75
+captured from the HAL's `SetupFirmware` have no plausible root table and
+vtable at any base 0..62 (the brute force over every even base finds none),
+while our rebuilt 256-byte `setup-hal-root.bin` parses cleanly (root `0x24`,
+vtable `0x18`, vtable size 10, table size 16, fields at 8 and 12). So the
+serializer we re-encoded and the bytes the HAL actually submits are different
+serializations, and the payload harness has only ever replayed our rebuild,
+not the captured bytes.
+
+**Only our own elements reach the driver's VII dump.** `dmesg` holds exactly
+two `vii-elem` lines, both from the `mapped` harness (seq 1 with `+12=1` at
+iova `0xffffd000`, then seq 2 plain). The core's own setup never appears
+there, consistent with it not being a VII element at all.
+
+**KCI code 6 is a real firmware command, and it rejects an empty setup.**
+With `tpu-hold` holding the device open, the debugfs hook answers:
+
+```
+code  0 -> 0     code  2 -> 0     code  5 -> 0     code 20 -> 0
+code 40 -> 12    code 255 -> 12   code  6 -> 3 (INVALID_ARGUMENT)
+```
+
+Code 6 is the one value between `KCI_CODE_MAP_TRACE_BUFFER` (5) and
+`KCI_CODE_SHUTDOWN` (7) that the in-tree enum skips, and the hook sends a
+zeroed page with a 16-byte DMA descriptor. The firmware recognises the
+command and rejects its argument, which is the shape of "No global scratches
+were provided in setup command.": code 6 is the setup, and the scratches
+travel in its DMA payload. The VII queue carries no setup at all, which is why
+every element, payload and code hit the gate and why `+11`/`+12` reached only
+the reserved-field check.
+
+**Next (one hook, then the chain):** give `kci_send` a payload
+(`kci_payload` debugfs, up to `PAGE_SIZE`, with `cmd.dma.size` set to the
+write length), build and push the module, replay the captured HAL blob (U75)
+and our flatbuffer through code 6, and expect response 0 followed by the VII
+commands answering instead of the gate. Then CreateExecution (9),
+BindInput/Output (12/13), Invoke (11) and the U118 benchmark.
+
+**State left:** the two stray `tpu-tachyon-client.u173` processes were killed;
+the chain services and `tpu-hold` stay up; `/tmp/ts.log` is 203 MB of the
+client's log spam on tmpfs.
+
 ## What would unblock it (2026-11-11)
 
-The register path needs a command the core can build, and the firmware path
-needs a setup the firmware accepts. In order of cost:
+The KCI result reorders this: code 6 is the setup, so the driver hook comes
+before any more VII work. The register path needs a command the core can
+build, and the firmware path needs a setup the firmware accepts. In order of
+cost:
+
+0. **Send KCI code 6 with a payload** (U176): add a `kci_payload` debugfs
+   file, copy it into the coherent page and set `cmd.dma.size` to its length,
+   build the module, then replay the captured HAL blob and our flatbuffer as
+   code 6's argument. A response of 0, or the firmware's own scratch
+   messages, tells us the payload format; the VII gate should then stop
+   answering.
 
 1. **Read the A17 HAL's `ViiCommandQueue` enqueue path** (`libdarwinn_hal.so`,
    the class whose strings are `ViiCommandQueue in state %d`,
