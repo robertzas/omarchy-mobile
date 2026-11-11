@@ -8327,6 +8327,75 @@ line matching `android14-11`, not the 5.10 `gxp-firmware.c` layout.
 The stock-capture runbook below is now the fallback: the port is
 source-backed, and the capture only confirms the setup arrives from the GXP.
 
+## U180 (2026-11-11): the first GXP port step is built and probe-tested; the AUR read is gated
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, worktree `wt-tpu`,
+output `out-tpu`. Nothing was flashed or rebooted; the module was built and
+loaded from `/tmp`, so the packaged old module is untouched.
+
+Built offline:
+
+- `drivers/gxp/gxp.c` maps AUR and CMU, takes `gxp-fw-region` and
+  `gxp-scratchpad-region`, acquires the ACPM handle from
+  `samsung,acpm-ipc` (falling back to the gs201 ACPM compatible), and
+  registers `/dev/gxp`. Probe **touches no register**. The `bringup` sysfs
+  attribute powers BLK_AUR through the AUR ACPM DVFS domain 17, starts the
+  TOP PSM, reads `GXP_REG_AURORA_REVISION` and the four
+  `GXP_REG_CORE_PROCESSOR_ID` values, then powers the block off. It does
+  nothing until written to.
+- `gs201.dtsi` splits the old 5 MiB GXP reservation into the stock 4 MiB
+  `gxp_fw_reserved` at `0x98000000` and 1 MiB `gxp_scratchpad_reserved` at
+  `0x98400000`, and adds `samsung,acpm-ipc`, `gxp-fw-region` and
+  `gxp-scratchpad-region` to the node. The running phone still has the old
+  base DT, so probe logs both regions missing; the first read does not use
+  them.
+
+Checks: `make ARCH=arm64 LLVM=1 O=out-tpu M=drivers/gxp modules` succeeds;
+`make ... dtbs` succeeds; checkpatch has 0 errors (one pre-existing
+`kzalloc` warning). The module vermagic matches the phone. On the phone,
+`insmod /tmp/gxp-new.ko` produced only:
+
+```
+gxp 25c00000.gxp: no gxp-fw-region reserved memory
+gxp 25c00000.gxp: no gxp-scratchpad-region reserved memory
+gxp 25c00000.gxp: AUR mapped (0x1400000), /dev/gxp registered
+gxp 25c00000.gxp: no register read at probe; write 1 to bringup to read AUR
+```
+
+`/dev/gxp` exists and
+`/sys/devices/platform/soc@0/25c00000.gxp/bringup` reads `0`.
+
+### T6.1: the first AUR read (owner go; risk high)
+
+This is the `gxp_fw_init` read from port order step 1. It is the hard-rule
+read of a block whose power state at Linux boot is not known: if ACPM does
+not power AUR before the first LPM access, the read can abort the SoC and
+the session. No software dead-man can undo that, so the owner is at the
+phone with the charger connected, and the command runs only on an explicit
+go.
+
+1. **Read-only.** `tools/phone-ssh 'uname -r; cat
+   /sys/devices/platform/soc@0/25c00000.gxp/bringup; dmesg | tail -8'`.
+   Expect `7.3.0-rc6-...-g052da70970d6-dirty`, `0`, and the four probe
+   lines above. Stop if the module is not loaded: insmod it first.
+2. **The read.** `tools/phone-ssh 'echo 1 >
+   /sys/devices/platform/soc@0/25c00000.gxp/bringup; sleep 1; cat
+   /sys/devices/platform/soc@0/25c00000.gxp/bringup; dmesg | tail -20'`.
+   **Expect** `Aurora revision: 0x...`, four `Aurora core N processor ID`
+   lines, `bringup` reading `1`, and no abort/oops. **Stop** on no SSH
+   reply, a reset, or any abort line: do not retry this boot. If the phone
+   is hung, hold Power about 30 s, then Power; after it boots, record
+   whether it came back on slot B.
+3. **Fresh SSH.** `tools/phone-ssh --fresh 'uname -r; lsmod | grep ^gxp;
+   dmesg | tail -8'`. Expect the same kernel, `gxp` loaded, and no new
+   fault. If it passed, the next step is the DSPF loader plus the GSA
+   command-1 wrapper and the AUR IOMMU mapping; the read result decides
+   whether ACPM alone is enough to power the block.
+
+**Rollback:** `rmmod gxp` if the phone answers; the module is only in
+`/tmp`, so a reboot restores the packaged skeleton. **Risk:** high (unknown
+power state, possible SoC abort). **Time:** under a minute if it passes.
+
 ## Stock-capture runbook (attended, 2026-11-11)
 
 Purpose: observe what a stock Android boot does to the TPU, as a fallback

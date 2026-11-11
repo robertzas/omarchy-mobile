@@ -77,6 +77,15 @@ the DSP never starts. Google publishes the driver's GPL-2.0 source
 has the TPU image-load path, so the next step is a source port, not more
 disassembly; the stock-capture runbook is the fallback.
 
+U180 starts that port. The GXP module now parses the firmware and scratchpad
+reserved-memory regions, acquires the ACPM AUR domain and exposes a
+`bringup` sysfs attribute; probe maps AUR/CMU and registers `/dev/gxp`
+without touching a register. It builds as `CONFIG_GXP=m`, matches the
+phone's vermagic, and loaded there cleanly. The attribute reads `0`; the
+actual BLK_AUR revision/processor-ID read is the next owner-gated step
+([TPU-PLAN.md](TPU-PLAN.md) T6.1), because the block's power state at Linux
+boot is still unknown. There is no TPU inference or benchmark yet.
+
 ## Benchmark: 720p object detection
 
 `out/bench/mosaic12.mp4` is 1280x720, 60 frames, 12 person tiles. The model
@@ -101,9 +110,10 @@ setup succeeds, and no TPU number is claimed.
 ## Next steps
 
 1. Port the GXP driver from the GPL source in the order in
-   [TPU-PLAN.md](TPU-PLAN.md) U179: `gxp_fw_init`, the DSPF loader with
-   `gsa_authenticate_image`, then `gxp_firmware_run` and the mailbox; build
-   `CONFIG_GXP=m` and boot `gxp-probe`.
+   [TPU-PLAN.md](TPU-PLAN.md) U179/U180: `gxp_fw_init` is built and
+   probe-tested; run its owner-gated AUR read (T6.1), then add the DSPF
+   loader with `gsa_authenticate_image`, the AUR IOMMU mapping, and
+   `gxp_firmware_run` with the mailbox.
 2. If the port stalls, run the attended stock-capture runbook (slot A,
    `tools/nv-backup --check` before and after, AGENTS §1) as the fallback
    oracle.
