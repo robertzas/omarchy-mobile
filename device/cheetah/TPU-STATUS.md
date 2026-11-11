@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Edge TPU bring-up: status and benchmark
 
-As of 2026-11-09, kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
+As of 2026-11-11, kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
 The details and the experiment log are in [TPU-PLAN.md](TPU-PLAN.md); this
 page is the summary.
 
@@ -15,38 +15,27 @@ page is the summary.
   `ImportMemoryFromFd` (twice), and `RegisterGraph` (type 7) with the
   command union's fields as memory handles (`UORDER=MDMK`).
 - `RegisterGraph` passes the core's dependency check and advances the
-  virtual device to `PENDING_FIRMWARE_SETUP`. This needs a development gdb
-  patch of the `+0x38` dereference at `core+0x5968c`; the code fix is not
-  in the client yet.
+  virtual device through `PENDING_FIRMWARE_BOOTUP`, `PENDING_FIRMWARE_SETUP`
+  and `PENDING_IMPORT_MEMORY` (U171-U173).
 
 ## The blocker
 
-The core wakes the firmware and sends its one-time firmware setup
-(`Sending firmware-setup VII command. type: 1 seq: 0`), and the firmware
-refuses it:
+The firmware refuses every command until its one-time setup has run, and the
+only producer of the setup it accepts is the A17 HAL:
 
-```
-ERR vii_handler_layer.cc:247 - Setup is not done yet received a command of type 0.
-vii-payload 0: 00000014 00000000 000a0000 00080012
-```
+- the Tachyon core sends a legacy setup the firmware parses as **type 0**;
+- the cheetah util runtime (`libedgetpu_util.so`) never sends a setup at all
+  (`Sync VII command failed: error_code=9`, the pre-setup answer);
+- the ring client's hand-built type-1 setup is suppressed by the core once the
+  core's own setup has been forced to success, and a direct submission of the
+  same payload through the driver still answers `received a command of type 0`;
+- the A17 HAL's device path, which is where the type-1 builder lives, **resets
+  the phone** (U174; the same reset U154 saw with the A14 HAL).
 
-The element is the same legacy three-field message the HAL sends (fields
-48/5/6), not the type-1 setup cheetah's A17 firmware expects, and it
-carries no global scratches. No userspace on the phone produces that
-message:
-
-- cheetah's own `libtachyon_core.so` is a stub;
-- the tegu core (the only real one available) emits the same legacy
-  message;
-- the stock delegate, run through the Tachyon client path, fails at the
-  same setup before sending any command (`create device status: 13`);
-- the driver defines no separate VII setup code, and the gxp stub is never
-  queried by the core.
-
-The firmware's own strings name the missing piece: a setup command with a
-cluster bitset and the global scratch list
-(`Setup is not done yet…`, `No global scratches were provided in setup
-command.`, `Global scratch is too small…`).
+On top of that, the tegu core's `RegisterGraph` now reaches its VII builder and
+dereferences a graph object field the client has never supplied (`+0x8a2a4`,
+after the documented `+0x88484` fix), so the register command itself is still
+incomplete.
 
 ## Benchmark: 720p object detection
 
@@ -71,10 +60,12 @@ setup succeeds, and no TPU number is claimed.
 
 ## Next steps
 
-1. Test whether the vendor service sends the firmware setup at boot as the
-   first TPU user (cold boot, chain up, no client, read `dmesg`).
-2. If not, reconstruct the type-1 setup message (cluster bitset plus global
-   scratch descriptors) and submit it as the setup element.
-3. Once the firmware is set up, run `CreateExecution` (9),
-   `BindInputBuffersToTensors` (12), `BindOutputBuffersToTensors` (13) and
-   `Invoke` (11), then the 60-frame benchmark above.
+1. Call the A17 HAL's type-1 serializer in-process (`libdarwinn_hal.so`
+   `0x14e0380`/`0x14de9cc`) and dump the payload it builds, instead of running
+   the HAL's device path that resets the phone.
+2. Feed that payload through `tools/tpu-setup-payload.py`'s harness
+   (`tools/tpu-fwsetup.sh` + `edgetpu-run mapped`) and read the firmware's own
+   log line; iterate until the setup is accepted.
+3. Once set up, run `CreateExecution` (9), `BindInputBuffersToTensors` (12),
+   `BindOutputBuffersToTensors` (13) and `Invoke` (11), then the 60-frame
+   benchmark above.

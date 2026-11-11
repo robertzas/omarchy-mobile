@@ -7909,3 +7909,137 @@ encoding - it is the dependent-memory set the cached graph names. The cheapest
 next step is to enumerate that list (each unmet handle is named in turn) and
 import a buffer under each name, then move on to CreateExecution (9),
 BindInputBuffers/OutputBuffers and Invoke. Nothing was flashed or rebooted.
+
+## U172 (2026-11-11): the chroot's compiler is the tegu build, and the cached DGC0 entry is its output
+
+Same boot, kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, read-only
+checks only.
+
+**Two containers, two runtimes.** The chroot's
+`vendor/lib64/libedgetpu_tflite_compiler.so` (68 651 120 B, the tegu build;
+`.tegu` keeps the copy it replaced on 2026-11-09) is the only file in the
+chroot whose strings carry `DGC0`, `DGD0` and `DWS0`. It wrote the executable
+cache entry `data/vendor/edgetpu/cache/_1000` (35-byte `1f 00 00 00` + name
+header, then the 4 460 544 B payload whose bytes 0-7 are `d0 0f 00 00 | 44 47
+43 30`, i.e. root uoffset 0xfd0 and identifier `DGC0`). The compiled model from
+the cheetah compiler (`/root/model.tflite`, 4 653 936 B) has **no** `DGC0` at
+any offset; its only container identifier is `DWN1` at 0x2074 (8308), and the
+stock cheetah runtime `vendor/lib64/libedgetpu_util.so` has none of the four
+identifier strings (its checks compare immediates). So the DGC0 container is
+the tegu core's format and DWN1 is the cheetah util runtime's: the two stacks
+are not interchangeable, which is what U155/U170 saw from the other side.
+
+**Pulling the container to the laptop** (`tools/phone-ssh 'cat …graph-dgc0.bin'
+> out/tpu/graph-dgc0.bin`, gitignored): root table at 0xfd0, eight fields;
+field 5 is the u32 `877631284`, the same "baseline cl number" the A17 HAL logs
+at startup, and 100 u64 values `0x100000` sit in an 8-byte-aligned table from
+0x409ee0 on. `0x100008` (the handle U171 was told about) is not stored in the
+file, so it is a core-assigned cross-session handle for one of those entries,
+not a compiler-written value.
+
+## U173 (2026-11-11): the register reaches PENDING_SEND_VII; the VII builder is the next null
+
+Same boot, chain restarted per run. `/root/tpu-u172.sh` replays U171's
+configuration (`HANDLE=1 FDH=1 TYPES=1,2,5,5,5,7 SETUP=1 UORDER=HDIJV
+H2=2 FDH2=2 H3=1048584 FDH3=1048584 IVH=1 SSIZE=1048576
+GFILE=/vendor/etc/graph-dgc0.bin`).
+
+Without a fix, the run dies at the known `libtachyon_core.so+0x88484`
+(`ldr x8, [x10, #16]` with `x10 = [x8, #0x88] = 0`) while the register is in
+`PENDING_IMPORT_MEMORY`. The documented fix (`mov x8, xzr` + `nop`, the bytes
+`08 00 80 d2 1f 20 03 d5`, exactly what `.u170-patched` and `.u170-bounds`
+carry) applied to the current core (backup `.u172-orig`) moves the state
+machine one step further:
+
+```
+[RegisterGraph Handle 2].state PENDING_FIRMWARE_SETUP to PENDING_IMPORT_MEMORY
+[RegisterGraph Handle 2].state PENDING_IMPORT_MEMORY to PENDING_SEND_VII
+SIG b addr 10  pc libtachyon_core.so+8a2a4  lr +8a28c
+```
+
+So the imports retire and the register is now handed to the VII builder, which
+dereferences another null (the same graph object's field, one level further).
+Skipping one dereference per pointer is not a path to a correct command: the
+object it wants is what the client has never supplied.
+
+**The firmware log keeps the negative result.** After the crash the driver's
+tear-down traces are in dmesg, but the `iommu_set_fault_handler` line is a
+**WARN, not an oops** (`WARNING: drivers/iommu/iommu.c:2061 … at
+iommu_set_fault_handler+0x1c/0x24`): this kernel's `iommu_set_fault_handler`
+warns when the domain's cookie type is DMA/SVA, and our pooled SysMMU domains
+come from `iommu_paging_domain_alloc()`, so the warn fires on every group and
+the driver continues. The `unmap_slpt`/`edgetpu_mmu_tpu_unmap_sgt` trace on
+client teardown is likewise not fatal. Neither is the register blocker; do not
+spend another session on them as if they were.
+
+## U174 (2026-11-11): the firmware setup gate is not reachable from userspace we control
+
+Same boot; this is the session's decisive negative result.
+
+**The stock cheetah util runtime never sends the setup.** `edgetpu-run
+/vendor/etc/model.tflite` (three create attempts, its own retry comment says
+the runtime sends setup when `firmware_setup_done_` is clear) answers each time
+with its own log line `INTERNAL: Sync VII command failed: error_code=9` and
+status 13. Error 9 is the firmware's pre-setup answer, so the runtime expects
+somebody else to have set the firmware up.
+
+**The ring client's type-1 setup does not reach the firmware.** With the core's
+setup-answer patch at `0xab754`, the core treats its *own* legacy setup as
+success and then suppresses the client's later type-1 command: a
+`TYPES=1 SETUP=1` round answers a 96-byte structured result, but the driver
+prints no `vii-payload` for it and the firmware gets no command. That is why
+U163's "no Setup is not done line" was not evidence of success.
+
+**The direct driver path does reach the firmware, and still says type 0.**
+`tools/tpu-setup-payload.py` builds the type-1 table from U162's field map
+(root Command table at 36 with {seq u64, privileged u8, union type u8 = 1,
+union uoffset}; setup table at 96 with field 2 a 3-entry vector of 16-byte
+{address, size} ranges and field 3 an empty 64-byte vector). Submitted with
+`edgetpu-run mapped 0 /vendor/etc/…` (one EDGETPU_MAP_BUFFER page, one VII
+element) the driver logs `vii-payload … copied 256` and the firmware answers
+`Setup is not done yet received a command of type 0.` — the same line it gives
+the core's legacy payload. Changing the element's code field (+8) to 1 changes
+nothing, and `edgetpu-run cmdsweep`'s 32-slot table with every slot pointing at
+a distinct byte also reads as type 0. So the firmware's command type is neither
+any Command-table vtable slot in 0..31 nor the element's +8 byte; the parse
+that produces it is in a schema we have not matched, and the "global scratch"
+messages are gated behind it.
+
+**The A17 HAL resets the phone.** `tools/tpu-hal-capture.sh` runs the A17 HAL's
+entry [5] (the virtual-device create, the first entry U162 found sending a
+setup) under the log and SIGSEGV shims, as root. The phone went from 19 h
+uptime to 1 min: the same class of reset U154 recorded with the A14 HAL's
+direct create. It is *not* a shim link failure (the first attempt failed on
+`liblazysvc`'s `AServiceManager_addService` and did nothing); with the correct
+preload set the HAL reached its device path and the phone reset. Do not repeat
+this unattended, and treat "drive the A17 HAL" as a step that needs the human
+and a plan for the reset.
+
+**State left on the phone:** nothing running (no Tachyon chain, no HAL,
+`janeiro` unloaded after the reset), kernel
+`7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, TPU platform device probed
+(`has sysmmu 1cc40000.sysmmu`, `attached with pgtable 0x89a1c0000`),
+`tpu-thermal` present. The core keeps U172's `0x88484` fix on top of the
+documented setup/null-load pair; `.u172-orig` is the two-patch core.
+
+## What would unblock it (2026-11-11)
+
+The register path needs a command the core can build, and the firmware path
+needs a setup the firmware accepts. In order of cost:
+
+1. **Call the A17 HAL's type-1 serializer in-process** (`libdarwinn_hal.so`
+   `0x14e0380`, the builder `0x14de9cc`), not through the HAL's device path:
+   give it a command entry with the Janeiro scratch ranges and dump the
+   flatbuffer it produces. That is the exact payload the firmware wants, and
+   it avoids the device path that resets the phone. `tools/tpu-setup-payload.py`
+   is the harness for testing whatever it produces.
+2. **Reconstruct the firmware setup schema** by sweeping the payload with the
+   firmware's own log as the oracle (the payload is 256 bytes; the type field
+   is not in the Command table slots 0..31, so the next sweep has to move the
+   root/union layout, not just a slot value).
+3. Only then the ring register: the core's missing object at `+0x88` is reached
+   after the imports retire, so the imports (dependent memories) are the right
+   half of the problem and the graph descriptor is not.
+
+None of this was flashed, pushed or boot-overlaid; the only write was the
+in-chroot core patch.
