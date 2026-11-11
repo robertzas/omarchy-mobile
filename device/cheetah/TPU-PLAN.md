@@ -7837,3 +7837,75 @@ question for the next session, now with the target values known exactly
 Core left on the documented minimal patch set (setup `0xab754`, null load
 `0x5968c`); the bypass and bounds sets are kept beside it as
 `.u170-patched` and `.u170-bounds`. Nothing was flashed or rebooted.
+
+## U171 (2026-11-11): the register descriptor is an inline struct, and the graph names its memories
+
+Same boot, kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`. The
+GraphDescriptor question U170b/U170c left open is answered.
+
+**The command's union table carries the buffer descriptor inline.** With
+`UORDER=MDMK` (four u64 scalars where the descriptor should be) gdb read
+`{1, 2, 0}` at the register check, and the error named the *uoffset* the
+client wrote into that slot as a memory handle (`48 = 144 - 96`). Both only
+fit a **24-byte struct** in the union table's third field: handle, base
+offset, size. The earlier table encoding (`'C'`/`'S'`) was never read at all,
+which is why every `ORDER2` sweep printed the same size.
+
+New client letters, all in `tools/tpu-tachyon-client.c`:
+
+| letter | what it writes |
+| --- | --- |
+| `I` | the container as an inline `{handle, 0, file size}` struct |
+| `J` | the same for the firmware scratch |
+| `V` | a one-element vector of 24-byte buffer structs at 512 (`IVH=1`: the graph's memory) |
+
+**The graph names a list of dependent memories.** With `UORDER=HDG` (descriptor
+as a table) the answer was `NOT_FOUND: Dependent memory handle was not added:
+48`. With `UORDER=HDI` and `HDIJ` the core instead died dereferencing an empty
+vector (`libtachyon_core.so+88484`, `ldr x10, [x8, #0x88]` then `[x10, #0x10]`),
+so the vector must be non-empty. With `UORDER=HDIJV` RegisterGraph is finally
+processed and answered, naming a memory the session has not imported:
+
+```
+NOT_FOUND: Dependent memory handle was not added: 1048584.
+```
+
+**`tools/tpu-exec.py`'s env whitelist ate every probe.** `SSIZE=4096`,
+`IVH=1`, `H2=` and `FDH2=` silently did nothing: the launcher only forwards a
+fixed list of names into the chroot. The whitelist on the phone now also
+carries `H2`, `FDH2`, `H3`, `FDH3`, `IVH`, `J2` and `CH`; every earlier
+"invariant" result is suspect where its knob was not on that list.
+
+With the knobs live, importing the same scratch dma-buf under three handles
+(`H2=2 FDH2=2 H3=1048584 FDH3=1048584`, `TYPES=1,2,5,5,5,7`) moves the command
+through
+
+```
+PENDING_VIRTUAL_DEVICE -> PENDING_FIRMWARE_BOOTUP -> PENDING_FIRMWARE_SETUP
+-> PENDING_IMPORT_MEMORY
+```
+
+and it stays there: no failure line, no completion, and the client's 64-byte
+response for that round is not a status. So the register now *parses*, passes
+both bounds checks, and waits on the memory side.
+
+1048584 is 0x100008, i.e. 1 MiB + 8: the shape of a core-assigned
+cross-session memory handle (`TachyonFunctions_getNextCrossSessionMemoryHandle`),
+not a value the client wrote. The cached DGC0 entry was therefore produced in a
+session whose memories were named that way, and it depends on them.
+
+**Direct route (new probe, `tools/tpu-darwinn-probe.c`).** The vendor runtime
+also exposes the stock C API, and `DarwinnDelegate_CreateVirtualDevice` takes
+device paths, so it can drive `/dev/edgetpu` with no binder at all. Measured:
+`DarwinnApi2_GetVersionInfo` = 62; `GetDefaultDeviceSpec` fills six outputs
+(type 5, flag 1, 0, 1, a `std::string` path - *not* a C string - and 1);
+`CreateVirtualDevice` then opens `/dev/edgetpu` and fails with
+`INTERNAL: Sync VII command failed: error_code=9` both with and without the
+Tachyon chain up. 9 is FAILED_PRECONDITION, the pre-setup answer, so that route
+needs the firmware setup that only the Tachyon session performs.
+
+**Where this leaves it:** the register gate is no longer the descriptor
+encoding - it is the dependent-memory set the cached graph names. The cheapest
+next step is to enumerate that list (each unmet handle is named in turn) and
+import a buffer under each name, then move on to CreateExecution (9),
+BindInputBuffers/OutputBuffers and Invoke. Nothing was flashed or rebooted.

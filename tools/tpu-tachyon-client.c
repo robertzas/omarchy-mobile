@@ -399,11 +399,16 @@ static unsigned build_reg2(unsigned char *b, const char *order, long seq) {
    beside the graph. */
 static unsigned build_reg3(unsigned char *b, const char *order, long seq,
                            const char *uo) {
-  unsigned nf = 0, nu = 0, k, cur = 8;
-  unsigned offs[8];
+  unsigned nf = 0, nu = 0, k, cur = 8, ucur = 8, ub;
+  unsigned offs[8], nuo[5];
 
   while (order[nf] && nf < 8) nf++;
   while (uo[nu] && nu < 5) nu++;
+  for (k = 0; k < nu; k++) {
+    nuo[k] = ucur;
+    ucur += (uo[k] == 'I' || uo[k] == 'J' || uo[k] == 'S') ? 24 : 8;
+  }
+  ub = nu > 4 ? 80 : 72;
   for (k = 0; k < nf; k++) {
     offs[k] = cur;
     cur += (order[k] == 'c' || order[k] == 's' || order[k] == 'i' ||
@@ -423,21 +428,19 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
   {
     /* A five-field vtable is 14 bytes and would overlap a table at 72;
        move the table past it. The header size is 4 + 2*nu, not 2 + 2*nu. */
-    unsigned ub = nu >= 5 ? 80 : 72;
-
     put32(b + 52, (unsigned)(ub - 52));
     put16(b + 60, (unsigned)(4 + 2 * nu));
-    put16(b + 62, (unsigned)(8 * nu + 8));
-    for (k = 0; k < nu; k++) put16(b + 64 + 2 * k, (unsigned)(8 + 8 * k));
+    put16(b + 62, (unsigned)(ucur + 8));
+    for (k = 0; k < nu; k++) put16(b + 64 + 2 * k, (unsigned)nuo[k]);
     put32(b + ub, (unsigned)(ub - 60));
   }
   for (k = 0; k < nu; k++) {
-    unsigned long fld = (nu >= 5 ? 80 : 72) + 8 + 8 * k;
+    unsigned long fld = ub + nuo[k];
     char f = uo[k];
 
     if (f == 'H') put64(b + fld, getenv("RH") ? g_handle : g_handle + 1);
     else if (f == 'D') put64(b + fld, g_devid);
-    else if (f == 'G') put32(b + fld, (unsigned)(144 - fld));
+    else if (f == 'G') put32(b + fld, (unsigned)(184 - fld));
     else if (f == 'X') put32(b + fld, (unsigned)(348 - fld));
     else if (f == 'V' || f == 'W') put32(b + fld, (unsigned)(440 - fld));
     else if (f == 'M') put64(b + fld, g_handle);
@@ -448,20 +451,52 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
       put32(b + fld + 4, env_num("BIDX", 0));
       put64(b + fld + 8, 0);
       put64(b + fld + 16, env_num("BSIZE", (unsigned)g_dma_size));
+    } else if (f == 'I') {
+      /* U170d: the graph's buffer descriptors are flatbuffer *structs*
+         inline in the union table, {handle, base_offset, size}, not tables.
+         gdb read the uoffset we used to write there as the memory handle
+         (48 = 144 - 96) and {1, 2, 0} for a slot holding a handle followed by
+         the next slot's value, which only fits an inline struct. */
+      put64(b + fld, g_handle);
+      put64(b + fld + 8, 0);
+      put64(b + fld + 16, g_dma_size);
+    } else if (f == 'J') {
+      /* The same struct for the firmware scratch buffer. */
+      put64(b + fld, reg_scratch_handle());
+      put64(b + fld + 8, 0);
+      put64(b + fld + 16, reg_scratch_size());
+    } else if (f == 'V') {
+      /* U171: a one-element vector of 24-byte buffer structs, at 512. The
+         core dereferences the list's first element right after the register
+         checks, so an empty list is a null dereference at +0x10; the element
+         that fits there is a buffer descriptor. IVH=1 points it at the graph's
+         own memory, the default at the firmware scratch. */
+      unsigned long vh = env_num("IVH", 0) == 1 ? g_handle
+                                                : reg_scratch_handle();
+      unsigned long vs = env_num("IVH", 0) == 1 ? g_dma_size
+                                                : reg_scratch_size();
+
+      put32(b + fld, (unsigned)(512 - fld));
+      put32(b + 512, 1);          /* element count */
+      put32(b + 516, 0);          /* padding to the 8-byte alignment */
+      put64(b + 520, vh);
+      put64(b + 528, 0);
+      put64(b + 536, vs);
     }
   }
-  /* GraphDescriptor table at 144; c/s/i are inline BufferLocations */
-  put16(b + 128, (unsigned)(2 + 2 * nf));
-  put16(b + 130, (unsigned)(cur + 16));
-  for (k = 0; k < nf; k++) put16(b + 132 + 2 * k, (unsigned)offs[k]);
-  put32(b + 144, 16);
+  /* GraphDescriptor table at 184 (its vtable at 160), clear of the union
+     table's inline structs; c/s/i are inline BufferLocations */
+  put16(b + 160, (unsigned)(2 + 2 * nf));
+  put16(b + 162, (unsigned)(cur + 16));
+  for (k = 0; k < nf; k++) put16(b + 164 + 2 * k, (unsigned)offs[k]);
+  put32(b + 184, 24);
   for (k = 0; k < nf; k++) {
-    unsigned long fld = 144 + offs[k];
+    unsigned long fld = 184 + offs[k];
     char f = order[k];
 
-    if (f == 'C') put32(b + fld, (unsigned)(252 - fld));
-    else if (f == 'S') put32(b + fld, (unsigned)(300 - fld));
-    else if (f == 'X') put32(b + fld, (unsigned)(348 - fld));
+    if (f == 'C') put32(b + fld, (unsigned)(300 - fld));
+    else if (f == 'S') put32(b + fld, (unsigned)(348 - fld));
+    else if (f == 'X') put32(b + fld, (unsigned)(300 - fld));
     else if (f == 'I' || f == 'E') put32(b + fld, (unsigned)(384 - fld));
     else if (f == 'J') put32(b + fld, (unsigned)(388 - fld));
     else if (f == 'T') put32(b + fld, (unsigned)(476 - fld));
@@ -520,40 +555,32 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
       put64(b + fld + 16, 0x7ffff000);
     }
   }
-  /* C: graph container table at 252 */
-  put16(b + 240, 10);
-  put16(b + 242, 32);
-  put16(b + 244, 8);
-  put16(b + 246, 16);
-  put16(b + 248, 24);
-  put32(b + 252, 12);
-  /* CH/SH/IH force an impossible memory handle into one buffer table. An
-     unknown handle is a clean error, so it says whether the core read that
-     table at all: the named error means it did, the VII-builder crash means
-     it did not. */
-  put64(b + 260, env_num("CH", (unsigned)g_handle));
-  put64(b + 268, 0);
-  put64(b + 276, g_dma_size);
-  /* S: firmware scratch table at 300 */
+  /* C: graph container table at 300 */
   put16(b + 288, 10);
   put16(b + 290, 32);
   put16(b + 292, 8);
   put16(b + 294, 16);
   put16(b + 296, 24);
   put32(b + 300, 12);
-  put64(b + 308, env_num("SH", (unsigned)reg_scratch_handle()));
+  /* CH/SH/IH force an impossible memory handle into one buffer table. An
+     unknown handle is a clean error, so it says whether the core read that
+     table at all: the named error means it did, the VII-builder crash means
+     it did not. */
+  put64(b + 308, env_num("CH", (unsigned)g_handle));
   put64(b + 316, 0);
-  put64(b + 324, reg_scratch_size());
-  /* X: a second buffer table at 348 */
+  put64(b + 324, g_dma_size);
+  /* S: firmware scratch table at 348 */
   put16(b + 336, 10);
   put16(b + 338, 32);
   put16(b + 340, 8);
   put16(b + 342, 16);
   put16(b + 344, 24);
   put32(b + 348, 12);
-  put64(b + 356, g_handle);
+  put64(b + 356, env_num("SH", (unsigned)reg_scratch_handle()));
   put64(b + 364, 0);
-  put64(b + 372, g_dma_size);
+  put64(b + 372, reg_scratch_size());
+  /* X shares the container table at 300 (same values, and the scratch table
+     now lives at 348). */
   /* I: the one-element intermediate vector at 384, table at 404 */
   put32(b + 384, 1);
   put32(b + 388, 16);
@@ -593,7 +620,7 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
   put32(b + 476, 12);
   put64(b + 484, 0);
   put64(b + 492, g_dma_size);
-  return 512;
+  return 544;   /* a V vector lives at 512 */
 }
 
 /* The A17 HAL's type-1 setup command (TPU-PLAN U162). The setup payload is a
@@ -1271,11 +1298,22 @@ int main(int argc, char **argv) {
                       sifd = (int)a2.fd;
                       g_scratch_size = ssize;
                       {
-                        long h2 = (long)g_fd_handle + 1;
+                        long h2 = (long)env_num("FDH2",
+                                                (unsigned)g_fd_handle + 1);
                         void *r = sendfds(session, &sifd, &h2, 1);
 
                         show_status(0, status_ok,
                                     "sendFileDescriptors scratch", r);
+                        /* U172: the cached graph names more than one dependent
+                           memory, so offer the same scratch buffer under a
+                           third handle too: the core only needs the handles to
+                           exist, and one import per handle is what
+                           ImportMemoryFromFd does. */
+                        h2 = (long)env_num("FDH3",
+                                           (unsigned)g_fd_handle + 2);
+                        r = sendfds(session, &sifd, &h2, 1);
+                        show_status(0, status_ok,
+                                    "sendFileDescriptors scratch2", r);
                       }
                     }
                   }
@@ -1344,7 +1382,7 @@ int main(int argc, char **argv) {
     } else if (!recv_rsp) {
       put("receiveResponse symbol missing\n");
     } else {
-      static unsigned char msg[512];
+      static unsigned char msg[640];
       long round;
       int import_no = 0;
 
@@ -1362,15 +1400,23 @@ int main(int argc, char **argv) {
               g_handle = base_handle;
               g_fd_handle = base_fd;
               g_dma_size = g_graph_size;
+            } else if (import_no == 1) {
+              /* U171: the register's second buffer is imported under the same
+                 handle the descriptor names, and the core wants the handle the
+                 fd was sent under to match it, so H2/FDH2 move both. */
+              g_handle = env_num("H2", (unsigned)base_handle + 1);
+              g_fd_handle = env_num("FDH2", (unsigned)base_fd + 1);
+              g_dma_size = g_scratch_size;
             } else {
-              g_handle = base_handle + 1;
-              g_fd_handle = base_fd + 1;
+              /* U172: further imports exist only to satisfy the handles the
+                 cached graph's dependent-memory list names (H3/FDH3). */
+              g_handle = env_num("H3", (unsigned)base_handle + 2);
+              g_fd_handle = env_num("FDH3", (unsigned)base_fd + 2);
               g_dma_size = g_scratch_size;
             }
             import_no++;
           } else if (this_type == 7) {
-            g_handle = base_handle;
-            g_scratch = base_handle + 1;
+            g_handle = base_handle;              g_scratch = env_num("J2", env_num("H2", (unsigned)base_handle + 1));
             g_dma_size = g_graph_size;
           }
         }
