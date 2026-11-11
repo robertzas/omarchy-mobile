@@ -7788,3 +7788,52 @@ own builder gives), or (b) capture the bytes a stock Android boot sends
 (ATTENDED: a slot-A boot rewrites `efs`/`persist`/`modem_userdata` and needs a
 fresh read-only NV backup afterwards, AGENTS.md section 1), then replay them.
 No inference yet; nothing was changed at boot, flashed, or rebooted for this.
+
+## U170c (2026-11-11): what the register bounds check is actually given
+
+Same boot, chain restarted per run. Method: `gdb` attached to the tachyon
+service (`hbreak` at the core's file offsets, base + offset from
+`/proc/<pid>/maps`; a software breakpoint will not insert into the mapped
+text). Two experiments, both repeatable:
+
+**Read the buffer at the check (offset `0x8c3bc`).** With the descriptor as
+`ORDER2=CSI` (container table, scratch table, one-element intermediate
+vector) the core is handed a struct `{1, 2, 0}` for `offset=7552,
+length=4452992` - i.e. handle 1, then **2**, then **0** - while the client
+wrote `{handle 1, offset 0, size 4460544}` into that table. So the core is
+not taking these three numbers from the descriptor table the client builds;
+the 2 is the value the client uses for the *next* handle, which is what the
+`S`/scratch slot carries.
+
+**Patch the value at the check and see what comes next.** Writing
+`4460544` into the struct's `+0x10` at the breakpoint moved the answer on to
+the second check in the same routine:
+
+```
+INVALID_ARGUMENT: The imported memory size (4460544) isn't large enough for
+slice: base_offset=2, offset=7552, length=4452992.
+```
+
+`base_offset=2` is the struct's `+0x8` field. The two checks are therefore
+`container.size >= offset + length` and `memory.size >= base_offset + offset +
+length`; with the whole file imported (4,460,544 B) both pass only when
+`base_offset` is 0 and the container size is the file size. Our descriptor
+gives `base_offset=2`, so the register misses by exactly 2 bytes - a
+one-field error, not a schema-wide one.
+
+Patching the two branch instructions instead of the data (`0x8c4c4` and
+`0x8c534`, `b.hs` -> `b`, backups `libtachyon_core.so.u170-bounds`) lets both
+checks pass and the service then dies in the VII build that follows, so
+skipping the checks is not a path forward: the size has to be right in the
+data.
+
+The `N`/`O` descriptor letters added for this (a u64 size and a u64 zero, to
+build `MON` = handle, offset 0, size) do **not** work yet: the core never
+reaches the check with them and dies in its parse, so the container field is
+neither a bare u64 triple nor the table we build - it is one more encoding
+question for the next session, now with the target values known exactly
+(`{handle, 0, <file size>}` and a memory of at least the file size).
+
+Core left on the documented minimal patch set (setup `0xab754`, null load
+`0x5968c`); the bypass and bounds sets are kept beside it as
+`.u170-patched` and `.u170-bounds`. Nothing was flashed or rebooted.

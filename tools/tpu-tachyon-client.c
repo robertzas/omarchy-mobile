@@ -494,6 +494,16 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
       put64(b + fld, reg_scratch_handle());
       put64(b + fld + 8, 0);
       put64(b + fld + 16, reg_scratch_size());
+    } else if (f == 'N') {
+      /* U170c: the graph container's three descriptor fields are separate
+         u64 scalars, not a nested table: handle, offset, size. gdb on the
+         core's bounds check showed {handle=1, offset=2, size=0} for a
+         CSI descriptor, i.e. field 1 became the offset (the scratch's handle)
+         and field 2 the size (the vector pointer, read as 0). MON is the
+         container: handle, offset 0, size. */
+      put64(b + fld, g_dma_size);
+    } else if (f == 'O') {
+      put64(b + fld, 0);
     } else if (f == 'P') {
       /* U170: a probe BufferLocation with a distinct value in each of the
          three 8-byte slots. The core's bounds check prints the size it
@@ -806,7 +816,12 @@ static unsigned build_cmd(unsigned char *b, int type, long seq) {
        With the length in field 4 the core's graph bounds check read the
        imported slice as 0 bytes ("The imported buffer slice size (0)"), so
        ISWAP=1 puts the length in field 3 to tell the two apart. */
-    if (getenv("ISWAP")) {
+    if (getenv("ISWAP") && getenv("ISWAP")[0] == '2') {
+      /* U170c: the length in both slots, to test whether the core takes the
+         imported slice from either of them at all. */
+      put64(b + 112, g_dma_size);
+      put64(b + 120, g_dma_size);
+    } else if (getenv("ISWAP")) {
       put64(b + 112, g_dma_size);
       put64(b + 120, 0);
     } else {
