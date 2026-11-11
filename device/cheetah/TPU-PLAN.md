@@ -7738,3 +7738,53 @@ BindOutputBuffers and Invoke come after that, then the U118 TPU row.
 file plus the two documented patches; `libtachyon_core.so.u170-patched` keeps
 the bypass set, and `out/tpu-core/libtachyon_core.stock.so` (gitignored) is
 the analysis copy.
+
+## U170b (2026-11-11): the slice size survives every descriptor and import probe
+
+Same boot, core `libtachyon_core.so` back on the bypass set
+(`.u170-patched`: setup, null, identifier, verifier NOPs), chain restarted
+before each run so `AllocateTpu` answers 1.
+
+The register check reads the imported slice as 0 bytes whatever we do to the
+command. Each of these was run against `graph-dgc0.bin` and answered the same
+`The imported buffer slice size (0) isn't large enough for access: offset=7552,
+length=4452992`:
+
+| probe | what it changes | result |
+| --- | --- | --- |
+| `ORDER2=CSI` (baseline) | container, scratch, one-element intermediate vector, all as tables | size 0 |
+| `ORDER2=CSJ` | the intermediate vector as a one-element vector of 24-byte inline structs | size 0 |
+| `ORDER2=C`, `CC`, `CCC`, `CCCC` | the container table in descriptor slot 0, 1, 2, 3 (the rest empty) | size 0 |
+| `ORDER2=PS` | the container as an inline probe struct with 0x1111 in slot 1 and 0x2222 in slot 2 | size 0 |
+| `ISWAP=1` | `ImportMemoryFromFd` with the length in field 3 and the offset in field 4 | size 0 |
+
+So the length is not the descriptor field the client writes and not the
+import's length field either: the core takes the graph container's slice from
+the graph flatbuffer's own description of it, which the cached DGC0 entry
+leaves at 0 (it was cached for the runtime's own re-register path, not as a
+standalone container).
+
+Registering the **whole** executable-cache entry (`data/vendor/edgetpu/cache/_1000`,
+4,460,579 B with its `1f 00 00 00` + name header, as `graph-cache.bin`) moves the
+answer off the slice check to a new one:
+`INVALID_ARGUMENT: No graph was set in the graph container.` The header bytes
+read as an identifier (not DGC0) and the payload is not a container, so that
+framing has no graph in it - the two messages are different gates, and only
+`graph-dgc0.bin` reaches the slice check.
+
+**The stock bytes are still out of reach.** The delegate cannot be used as the
+oracle for a correct RegisterGraph: as uid 10000 it stops at
+`create device status: 13`, and as root it goes direct to the driver
+(`device: 0x0`, `rc: 1`) without ever touching
+`TachyonComputeSession_sendCommand`, so `libcmddump` records nothing
+(`tpu-cmds.bin` stays 0 bytes). The VINTF manifest is already installed in the
+chroot (`vendor/etc/vintf/manifest.xml`), so the 13 is not the manifest.
+
+**Where this leaves it:** the register gate is now precisely located - the
+graph container's own slice description - and the remaining options are (a)
+build a RegisterGraph whose container carries that slice description (needs
+the DGC0 schema's container fields, which only a stock capture or the core's
+own builder gives), or (b) capture the bytes a stock Android boot sends
+(ATTENDED: a slot-A boot rewrites `efs`/`persist`/`modem_userdata` and needs a
+fresh read-only NV backup afterwards, AGENTS.md section 1), then replay them.
+No inference yet; nothing was changed at boot, flashed, or rebooted for this.
