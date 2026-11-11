@@ -262,6 +262,10 @@ static unsigned long g_scratch_size;  /* its size in bytes */
 static unsigned long g_graph_size;    /* the graph dma-buf's size */
 static unsigned long base_handle;     /* HANDLE: the graph's memory handle */
 static unsigned long base_fd;         /* FDH: the graph's fd handle */
+/* The virtual device AllocateTpu hands out: 1 on the first allocation of a
+   core process, 2 on the next. The core refuses any other id ("Device id must
+   be 2"), so DEVID names it and the default keeps the single-session case. */
+static unsigned long g_devid = 1;
 
 /* RegisterGraph with an arbitrary GraphDescriptor layout. ORDER2 is a list of
    field selectors, one per descriptor field (up to six):
@@ -308,7 +312,7 @@ static unsigned build_reg2(unsigned char *b, const char *order, long seq) {
   put16(b + 68, 24);
   put32(b + 72, 12);              /* soffset back to 60 */
   put64(b + 80, getenv("RH") ? g_handle : g_handle + 1); /* command handle */
-  put64(b + 88, 1);               /* device id */
+  put64(b + 88, g_devid);         /* device id */
   put32(b + 96, 24);              /* descriptor table at 120 */
   put16(b + 104, (unsigned)(2 + 2 * nf)); /* vtable: one entry per field */
   put16(b + 106, (unsigned)(8 * nf + 16)); /* table size, room for a struct */
@@ -432,7 +436,7 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
     char f = uo[k];
 
     if (f == 'H') put64(b + fld, getenv("RH") ? g_handle : g_handle + 1);
-    else if (f == 'D') put64(b + fld, 1);
+    else if (f == 'D') put64(b + fld, g_devid);
     else if (f == 'G') put32(b + fld, (unsigned)(144 - fld));
     else if (f == 'X') put32(b + fld, (unsigned)(348 - fld));
     else if (f == 'V' || f == 'W') put32(b + fld, (unsigned)(440 - fld));
@@ -490,6 +494,20 @@ static unsigned build_reg3(unsigned char *b, const char *order, long seq,
       put64(b + fld, reg_scratch_handle());
       put64(b + fld + 8, 0);
       put64(b + fld + 16, reg_scratch_size());
+    } else if (f == 'P') {
+      /* U170: a probe BufferLocation with a distinct value in each of the
+         three 8-byte slots. The core's bounds check prints the size it
+         read, so the printed number names the slot: 0x2222 means the third
+         (our handle/offset/size encoding), 0x1111 the second. */
+      put64(b + fld, g_handle);
+      put64(b + fld + 8, 0x1111);
+      put64(b + fld + 16, 0x2222);
+    } else if (f == 'Q') {
+      /* The same probe with a size large enough for any graph, to see whether
+         the descriptor's field is the one the check reads at all. */
+      put64(b + fld, g_handle);
+      put64(b + fld + 8, 0);
+      put64(b + fld + 16, 0x7ffff000);
     }
   }
   /* C: graph container table at 252 */
@@ -681,7 +699,7 @@ static unsigned build_cmd(unsigned char *b, int type, long seq) {
     put16(b + 68, 24);
     put32(b + 72, 12);              /* soffset back to 60 */
     put64(b + 80, getenv("RH") ? g_handle : g_handle + 1); /* command handle */
-    put64(b + 88, 1);               /* device id */
+    put64(b + 88, g_devid);         /* device id */
     put32(b + 96, 20);              /* descriptor table at 116 */
     put16(b + 104, (unsigned)(2 + 2 * nf)); /* vtable: one entry per field */
     put16(b + 106, (unsigned)(nf == 4 ? 48 : 32)); /* table size */
@@ -782,10 +800,19 @@ static unsigned build_cmd(unsigned char *b, int type, long seq) {
     put16(b + 76, 40);  /* field 4 at table+40 */
     put32(b + 80, 16);  /* soffset back to the vtable at 64 */
     put64(b + 88, g_handle ? g_handle : 1);
-    put64(b + 96, 1);   /* device id, the virtual device from AllocateTpu */
+    put64(b + 96, g_devid);  /* the virtual device from AllocateTpu */
     put64(b + 104, g_fd_handle);
-    put64(b + 112, 0);  /* offset into the dma-buf */
-    put64(b + 120, g_dma_size);  /* bytes to map */
+    /* U170: which of fields 3 and 4 is the offset and which the length.
+       With the length in field 4 the core's graph bounds check read the
+       imported slice as 0 bytes ("The imported buffer slice size (0)"), so
+       ISWAP=1 puts the length in field 3 to tell the two apart. */
+    if (getenv("ISWAP")) {
+      put64(b + 112, g_dma_size);
+      put64(b + 120, 0);
+    } else {
+      put64(b + 112, 0);  /* offset into the dma-buf */
+      put64(b + 120, g_dma_size);  /* bytes to map */
+    }
     return 128;
   }
   put32(b + 0, 36);
@@ -889,6 +916,8 @@ int main(int argc, char **argv) {
   int cmd_type = (int)parse_dec(getenv("TYPE"));
 
   g_handle = (unsigned long)parse_dec(getenv("HANDLE"));
+  g_devid = (unsigned long)parse_dec(getenv("DEVID"));
+  if (g_devid == 0) g_devid = 1;
   g_fd_handle = (unsigned long)parse_dec(getenv("FDH"));
   base_handle = g_handle;
   base_fd = g_fd_handle;

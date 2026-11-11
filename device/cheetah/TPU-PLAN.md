@@ -7628,3 +7628,113 @@ or search for the exact comparison instruction pattern in .text disassembly.
 **CPU baseline (laptop, re-run 2026-11-10):** `out/bench/mosaic12.mp4` 60 frames, `out/bench/detect.tflite`, LiteRT+XNNPACK → **11.36 ms/frame avg**, ~10 detections/frame (>0.5, class 0, scores ~0.70-0.73). U118 refs: CPU 4t 4.28 ms, GPU 3.00 ms (prior environment).
 
 **Next:** cold reboot to un-wedge TPU, start `tpu-hold` and `NO_DELEGATE=1` chain, then (1) locate/patch flatbuffer identifier-validation path (xref to `0x142ee` / bytes 4-7 check) or (2) try compatible compiled graph format for cheetah/A17 core. If RegisterGraph passes: CreateExecution(9)/Bind/Invoke on `detect.tflite`, 60-frame TPU benchmark for U118 row with date+`uname -r`.
+
+## U170 (2026-11-11): the chain runs again; the core wants a DGC0 container, not DWN1
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, slot B, one boot
+(uptime 15 h, `tpu-hold` from boot, no cold reboot). The PSM answered on the
+first power-up of this boot, so no reset was needed.
+
+**The chain could not start at all, and the cause was in the runner.** Every
+command `tools/tpu-tachyon-run` started on the host segfaulted, and the four
+services never came up (`servicemanager pid:` empty, then `chroot: error
+while loading shared libraries: libdl.so`). The script `export`ed
+`LD_PRELOAD` and `LD_LIBRARY_PATH` with the bionic shims and library path; the
+host Arch root now also has `/system/lib64` (`tpu-compile` runs from there),
+so the host's own `sleep`, `pkill`, `dmesg` and `chroot` resolved those .so
+files and died on their bionic `libdl.so`. Fixed in the tool: the chroot is
+now entered in-process (a small python launcher that keeps a clean environment
+and gives the shims to the exec'd vendor binary only), and `LD_PRELOAD` /
+`LD_LIBRARY_PATH` are no longer exported. With the fix the chain comes up on
+the first try: `servicemanager`, the Power HAL, the vendor Edge TPU service,
+`com.google.edge` and the app service all running, and the ring client's five
+rounds answer OK (`TYPES=1,2,5,5,7 SETUP=1 UORDER=MDMK`).
+
+**AllocateTpu's device id is per core process.** The first allocation in a
+service lifetime is device 1 and the next is device 2, and the core refuses
+any other value (`INVALID_ARGUMENT: Device id must be 2`), so
+`tools/tpu-tachyon-client.c` now takes `DEVID=` (default 1) instead of
+hard-coding 1 for the imports and every descriptor.
+
+**The identifier check names the format it wants.** Disassembling the core's
+`graph_utils.cc:653` (`libtachyon_core.stock.so`, pulled from the chroot to
+`out/tpu-core/`, .text VA = file offset) gives the check that produces
+`Invalid flatbuffer file identifier %s`:
+
+```
+b9da8: ldr  w10, [x0, #4]            ; the 4-byte identifier at buffer+4
+b9dac: mov  w8, #0x4744
+b9db0: movk w8, #0x3043, lsl #16     ; 0x30434744 = "DGC0"
+b9dc0: cmp  w10, w8
+b9dd0: b.eq accept                   ; DGC0
+b9dd8: add  w8, w8, #0x101, lsl #12  ; 0x30535744 = "DWS0"
+b9ddc: cmp  w9, w8
+b9de0: b.eq accept                   ; DWS0
+else -> "Invalid flatbuffer file identifier %s"
+```
+
+So the graph this core registers is a **DGC0** container (or the DWS0
+variant). The stock compiler's own output is not: `model-compile.tflite`
+(4,653,936 B, built on the phone by `tpu-compile`) carries a **DWN1**
+container at 0x2068 (8-byte header `31 00 34 00 | 00 e0 46 00`, flatbuffer at
+0x2070, 4,644,876 B) and the core rejects it exactly as the check says. The
+DGC0 graph we have comes from the stock executable cache instead:
+`$R/data/vendor/edgetpu/cache/_1000` is a 35-byte header (`1f 00 00 00` +
+the entry name) followed by a 4,460,544-byte flatbuffer whose bytes 0-7 are
+`d0 0f 00 00 44 47 43 30` (root 0xfd0, identifier `DGC0`). `graph-dgc0.bin`
+in the chroot is that payload.
+
+**With the stock core and the DGC0 payload, the identifier check passes and
+the next gate is the flatbuffer verifier.** Core restored from
+`.setupok-orig` with only the two documented patches (setup answer at
+`0xab754`, null load at `0x5968c`), so no identifier bypass and no NOP'd
+result checks. `RegisterGraph` (round 5) then kills the service with
+`SIG b addr 0x10` - a null dereference inside the verifier, with no
+`Flatbuffer verification failed` line, so the DGC0 payload does not pass
+verification and the verifier itself faults on it.
+
+With the earlier core (identifier bypass at `0xb9dd0` plus the four
+`tbz w0,#0` -> `nop` verifier-result patches at `0xb9ea8`, `0xb9f4c`,
+`0xba198`, `0xba878`) the same graph is accepted past verification and
+answered with a precise complaint:
+
+```
+INVALID_ARGUMENT: The imported buffer slice size (0) isn't large enough for
+access: offset=7552, length=4452992.
+```
+
+`7552 + 4452992 = 4460544`, the DGC0 payload's own size, so the graph did
+parse and the core is validating its executable section against a registered
+slice it reads as 0 bytes. The check is at `0x8c3bc`; its caller at `0x8a58c`
+passes `x2 = [x26+0x60]` (the parsed container buffer of the RegisterGraph
+command) and `x3/x4` from the graph's own table, and the size it prints is
+`[x2+0x10]`. A probe that wrote distinct values into all three 8-byte slots of
+the RegisterGraph container field (`ORDER2=PS`, new `P`/`Q` letters) still
+printed `(0)`, so the value is not the descriptor field we control: either
+the parser copies it from elsewhere or the slice comes from the imported
+memory's own record. An `ISWAP=1` run (length in field 3 of
+`ImportMemoryFromFd` rather than field 4) did not get that far on the stock
+core, so the offset/length order of the import is still open.
+
+**What works, recorded:** the chain (all five layers, repeatable), the ring
+client's setup/AllocateTpu/two imports/RegisterGraph rounds, and
+`Detect.tflite`'s CPU baseline (U118). **What does not:** RegisterGraph with
+any graph we have, so no CreateExecution, no inference, no TPU row.
+
+**Next, in order:** (1) find where the "imported buffer slice" size comes
+from - the import's own record (test `ISWAP=1` on a core that reaches the
+check, i.e. with the verifier NOPs) or the DGC0 cache entry's memory table;
+(2) make the DGC0 payload pass verification without NOPs, most likely by
+registering the *whole* cache entry (header included) or by taking a fresh one
+from a stock boot; (3) if the payload stays unverifiable, use a compiler that
+matches this core: the chroot's compiler is the 7 Pro's A17 build while the
+core is the tegu build, which is the "version/schema mismatch" this plan
+already suspected (U155). CreateExecution (9), BindInputBuffers,
+BindOutputBuffers and Invoke come after that, then the U118 TPU row.
+
+**Files:** `tools/tpu-tachyon-run` (in-process chroot launcher; no exported
+`LD_PRELOAD`/`LD_LIBRARY_PATH`), `tools/tpu-tachyon-client.c` (`DEVID`,
+`ISWAP`, the `P`/`Q` descriptor probes). The core on the phone is the stock
+file plus the two documented patches; `libtachyon_core.so.u170-patched` keeps
+the bypass set, and `out/tpu-core/libtachyon_core.stock.so` (gitignored) is
+the analysis copy.

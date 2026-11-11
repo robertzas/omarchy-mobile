@@ -45,6 +45,42 @@ run() {
 	"$@" >>"$LOG" 2>&1
 }
 
+# Enter the chroot in-process instead of through the host's chroot binary.
+# Why: the shims are bionic, and the host Arch root now also has
+# /system/lib64 (tpu-compile runs from there), so a host binary that inherits
+# LD_PRELOAD resolves those .so files - the host chroot then fails on their
+# NEEDED libdl.so, and every service dies before it starts (%s
+# "chroot: error while loading shared libraries: libdl.so"). python keeps a
+# clean environment and only the exec'd vendor binary sees the shims.
+# usage: tpuc UID PRELOAD PROGRAM [ARGS...]   (foreground)
+read -r -d '' PY <<'PYEOF'
+import os, sys
+uid = int(sys.argv[1])
+pre = sys.argv[2]
+env = {"LD_LIBRARY_PATH": "/apex/com.android.tethering/lib64:/system_ext/lib64"
+       ":/vendor/lib64:/system/lib64:/apex/com.android.runtime/lib64/bionic",
+       "PATH": "/system/bin:/vendor/bin", "ANDROID_ROOT": "/system",
+       "ANDROID_DATA": "/data"}
+if pre:
+    env["LD_PRELOAD"] = pre
+os.chroot("/usr/lib/omamobile-vendor/edgetpu/root")
+os.chdir("/")
+os.setgroups([])
+os.setgid(uid)
+os.setuid(uid)
+os.execve(sys.argv[3], sys.argv[3:], env)
+PYEOF
+
+tpuc() {
+	python3 -c "$PY" "$@"
+}
+
+# Background a service inside the chroot, detached from this shell.
+tpud() {
+	setsid sh -c 'exec python3 -c "$0" "$@"' "$PY" "$@" \
+		>>"$LOG" 2>&1 </dev/null &
+}
+
 log "kernel $(uname -r)"
 # The module must load exactly once per boot: a second load (or a load racing
 # udev's autoload at ~11 s) oopses in edgetpu_mmu_attach. Give udev 20 s to
@@ -157,27 +193,33 @@ cp /root/libvlogshim.so "$R/system/lib64/libvlogshim.so" 2>/dev/null
 cp /root/libpermissionshim.so "$R/system/lib64/libpermissionshim.so" 2>/dev/null
 
 # Vendor first: that is what makes libbinder pick /dev/vndbinder, the domain
-# the Edge TPU services and the delegate register and look up on.
-export LD_LIBRARY_PATH=/apex/com.android.tethering/lib64:/system_ext/lib64:/vendor/lib64:/system/lib64:/apex/com.android.runtime/lib64/bionic
-USPEC=
-[ -n "${RUN_UID:-}" ] && USPEC="--userspec=$RUN_UID:$RUN_UID"
+# the Edge TPU services and the delegate register and look up on. The services
+# get the same list from the launcher at the top of this script; this copy is
+# only for the gdb path below.
+LPATH=/apex/com.android.tethering/lib64:/system_ext/lib64:/vendor/lib64:/system/lib64:/apex/com.android.runtime/lib64/bionic
 # The delegate is the one caller that must run as an app uid: EACCES on
 # /dev/edgetpu is what makes the util library ask the app service for a
-# device instead of opening the driver itself. The services keep $USPEC
-# (root by default), because a service that cannot open /dev/janeiro cannot
-# serve a device to anyone, which is what made "RUN_UID=10000" report
+# device instead of opening the driver itself. The services run as root
+# (RUN_UID for all of them), because a service that cannot open /dev/janeiro
+# cannot serve a device to anyone, which is what made "RUN_UID=10000" report
 # status 13. DELEGATE_UID sets the delegate alone.
 DUID=${DELEGATE_UID:-10000}
-DUSPEC="--userspec=$DUID:$DUID"
 # servicemanager links libbinder (C++), not libbinder_ndk, so it must not get
 # the lazy-registration shim: that shim's AServiceManager_addService has no
 # provider there and the linker refuses to start the binary.
-export LD_PRELOAD="/system/lib64/liblogstderr.so /system/lib64/libselinuxshim.so /system/lib64/libpropsshim.so"
+#
+# This must NOT be exported. The shims are bionic, and /system/lib64 now also
+# exists on the Arch host (tpu-compile runs from there); an exported
+# LD_PRELOAD reaches every host child this script starts - sleep, pkill,
+# chroot, tail - and each one segfaults on the first bionic symbol, so the
+# whole chain silently fails to start. Each chroot invocation below passes
+# the shims itself, which is where they belong.
+SM_PRELOAD="/system/lib64/liblogstderr.so /system/lib64/libselinuxshim.so /system/lib64/libpropsshim.so"
 
 log "servicemanager (vendor binder domain)"
 pkill -x servicemanager 2>/dev/null
 sleep 0.5
-setsid chroot "$R" /system/bin/servicemanager /dev/vndbinder >>"$LOG" 2>&1 </dev/null &
+tpud 0 "$SM_PRELOAD" /system/bin/servicemanager /dev/vndbinder
 sleep 2
 echo "servicemanager pid: $(pgrep -x servicemanager)" >>"$LOG"
 
@@ -187,7 +229,7 @@ echo "servicemanager pid: $(pgrep -x servicemanager)" >>"$LOG"
 # Then the lazy-registration shim: the stock servicemanager answers
 # registerLazyService with ENOTSUP, and AidlLazyServiceRegistrar aborts the
 # service on any non-OK status.
-SVC_PRELOAD="/system/lib64/libsegvshim.so /system/lib64/libnosid.so /system/lib64/liblazysvc.so /system/lib64/libpermissionshim.so /system/lib64/libabortshim.so $LD_PRELOAD"
+SVC_PRELOAD="/system/lib64/libsegvshim.so /system/lib64/libnosid.so /system/lib64/liblazysvc.so /system/lib64/libpermissionshim.so /system/lib64/libabortshim.so $SM_PRELOAD"
 [ -n "${TPU_VLOG:-}" ] && SVC_PRELOAD="/system/lib64/libvlogshim.so $SVC_PRELOAD"
 
 # The Tachyon core connects to android.hardware.power.IPower/default while it
@@ -200,10 +242,10 @@ pkill -f 'android.hardware.power-service' 2>/dev/null
 sleep 0.5
 POWER_HAL=$(ls "$R"/vendor/bin/hw/android.hardware.power-service* 2>/dev/null | head -1)
 if [ -n "$POWER_HAL" ]; then
-	# $USPEC for the same reason as the Darwinn HAL below: RUN_UID must
-	# reach every service the runner starts, or a run "as the app uid"
-	# still starts this one as root.
-	setsid env LD_PRELOAD="$SVC_PRELOAD" chroot $USPEC "$R" "${POWER_HAL#"$R"}" >>"$LOG" 2>&1 </dev/null &
+	# RUN_UID for the same reason as the Darwinn HAL below: it must reach
+	# every service the runner starts, or a run "as the app uid" still
+	# starts this one as root.
+	tpud "${RUN_UID:-0}" "$SVC_PRELOAD" "${POWER_HAL#"$R"}"
 	sleep 3
 	echo "power hal: ${POWER_HAL##*/} pid $(pgrep -f 'android.hardware.power-service' | head -1)" >>"$LOG"
 else
@@ -215,7 +257,7 @@ fi
 log "vendor edgetpu service"
 pkill -x vendor.google.e 2>/dev/null
 sleep 0.5
-setsid env LD_PRELOAD="$SVC_PRELOAD" chroot "$R" /vendor/bin/hw/vendor.google.edgetpu_vendor_service@1.0-service >>"$LOG" 2>&1 </dev/null &
+tpud 0 "$SVC_PRELOAD" /vendor/bin/hw/vendor.google.edgetpu_vendor_service@1.0-service
 sleep 3
 echo "vendor pid: $(pgrep -f vendor.google.edgetpu_vendor | head -1)" >>"$LOG"
 
@@ -237,7 +279,7 @@ sleep 0.5
 # SYS_NICE/IPC_LOCK. As root the core's GXP main actor fails to set up (its
 # scoped eventfd comes back empty) and the service dies at startup (U65), so
 # run it as system, like stock.
-setsid env LD_PRELOAD="$SVC_PRELOAD" chroot --userspec=1000:1000 "$R" /vendor/bin/hw/com.google.edgetpu.tachyon-service >>"$LOG" 2>&1 </dev/null &
+tpud 1000 "$SVC_PRELOAD" /vendor/bin/hw/com.google.edgetpu.tachyon-service
 sleep 3
 echo "tachyon pid: $(pgrep -x com.google.edge)" >>"$LOG"
 
@@ -249,7 +291,7 @@ sleep 0.5
 # ask it for the device fd before they create a group. On stock it lives in
 # system_ext and runs as the system user; its init rc declares the AIDL
 # interface. It is not in the vendor image, so earlier runs had no host.
-setsid env LD_PRELOAD="$SVC_PRELOAD" chroot --userspec=1000:1000 "$R" /system_ext/bin/hw/vendor.google.edgetpu_app_service@1.0-service >>"$LOG" 2>&1 </dev/null &
+tpud 1000 "$SVC_PRELOAD" /system_ext/bin/hw/vendor.google.edgetpu_app_service@1.0-service
 sleep 3
 echo "app service pid: $(pgrep -f vendor.google.edgetpu_app_service | head -1)" >>"$LOG"
 
@@ -274,7 +316,7 @@ rm -f "$R/data/vendor/hal_neuralnetworks_darwinn/NnapiHalSocketHalProcess"
 # HAL_PRELOAD is for the HAL alone: android-addservice-shim.c answers its
 # NNAPI registration with OK, which servicemanager refuses a uid-10000 caller.
 # The services that must really be visible never get it.
-setsid env LD_PRELOAD="${HAL_PRELOAD:-} $SVC_PRELOAD" chroot $USPEC "$R" /vendor/bin/hw/android.hardware.neuralnetworks@service-darwinn-aidl >>"$LOG" 2>&1 </dev/null &
+tpud "${RUN_UID:-0}" "${HAL_PRELOAD:-} $SVC_PRELOAD" /vendor/bin/hw/android.hardware.neuralnetworks@service-darwinn-aidl
 sleep 4
 echo "hal pid: $(pgrep -x android.hardwar)" >>"$LOG"
 # HAL_ONLY=1 stops here: the point is the HAL's own firmware setup, and the
@@ -311,14 +353,14 @@ if [ "${GDB:-0}" = "1" ]; then
 	gdb -batch -q \
 		-ex "set sysroot $R" \
 		-ex "set follow-exec-mode same" \
-		-ex "set environment LD_LIBRARY_PATH=$LD_LIBRARY_PATH" \
+		-ex "set environment LD_LIBRARY_PATH=$LPATH" \
 		-ex "set environment LD_PRELOAD=$DELEGATE_PRELOAD" \
 		-ex "file /usr/bin/chroot" \
 		-ex "set args $R /vendor/bin/edgetpu-run /vendor/etc/model.tflite" \
 		-ex run -ex "bt 25" >>"$LOG" 2>&1
 	echo "gdb rc: $?" >>"$LOG"
 elif [ "${BT:-0}" = "1" ]; then
-	LD_PRELOAD="$DELEGATE_PRELOAD" chroot $DUSPEC "$R" /vendor/bin/edgetpu-run /vendor/etc/model.tflite >>"$LOG" 2>&1 &
+	tpuc "$DUID" "$DELEGATE_PRELOAD" /vendor/bin/edgetpu-run /vendor/etc/model.tflite >>"$LOG" 2>&1 &
 	dpid=$!
 	sleep 6
 	log "backtrace of $dpid"
@@ -327,8 +369,8 @@ elif [ "${BT:-0}" = "1" ]; then
 	kill "$dpid" 2>/dev/null
 	wait "$dpid" 2>/dev/null
 else
-	LD_PRELOAD="$DELEGATE_PRELOAD" timeout 25 \
-		chroot $DUSPEC "$R" /vendor/bin/edgetpu-run /vendor/etc/model.tflite >>"$LOG" 2>&1
+	timeout 25 python3 -c "$PY" "$DUID" "$DELEGATE_PRELOAD" \
+		/vendor/bin/edgetpu-run /vendor/etc/model.tflite >>"$LOG" 2>&1
 	echo "delegate rc: $?" >>"$LOG"
 fi
 
