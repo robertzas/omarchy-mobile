@@ -806,7 +806,8 @@ static void payload_mode(unsigned code, unsigned p0) {
 // reach, and the command queue is not in that set ("Buffer cannot be reached by
 // firmware"). EDGETPU_MAP_BUFFER pins a user page and returns the device
 // address, so use that for the payload instead.
-static void mapped_mode(unsigned code, unsigned p0, const char *file) {
+static void mapped_mode(unsigned code, unsigned p0, const char *file,
+                        unsigned type12) {
   unsigned plen = 0x80;
   unsigned attr[5] = {24, 12, 48, 24, 0x58};
   int ev[2] = {0, -1};
@@ -888,6 +889,7 @@ static void mapped_mode(unsigned code, unsigned p0, const char *file) {
   *(unsigned long *)(e + 0) = 1;
   *(unsigned short *)(e + 8) = (unsigned short)code;
   e[10] = 0x0b;
+  *(unsigned *)(e + 12) = type12;
   *(unsigned long *)(e + 16) = map[2];
   *(unsigned long *)(e + 24) = plen;
   put("mapped: element");
@@ -906,6 +908,27 @@ static void mapped_mode(unsigned code, unsigned p0, const char *file) {
     puthex(*(unsigned *)(rq + i));
   }
   put("\n");
+  if (type12) {
+    unsigned char *e2 = cq + 48;
+
+    for (i = 0; i < 48; i++)
+      e2[i] = 0;
+    *(unsigned long *)(e2 + 0) = 2;
+    *(unsigned short *)(e2 + 8) = (unsigned short)code;
+    e2[10] = 0x0b;
+    *(unsigned long *)(e2 + 16) = map[2];
+    *(unsigned long *)(e2 + 24) = plen;
+    *(volatile unsigned *)(csr + 12) = 2;
+    *(volatile unsigned *)(csr + 0) = 1;
+    for (i = 0; i < 400000; i++)
+      __asm__ __volatile__("");
+    put("mapped: rsp2");
+    for (i = 0; i < 24; i += 4) {
+      put(" ");
+      puthex(*(unsigned *)(rq + 24 + i));
+    }
+    put("\n");
+  }
 }
 
 static void scratch_mode(unsigned code, unsigned flags) {
@@ -2600,7 +2623,8 @@ int main(int argc, char **argv) {
   if (argc > 1 && streq(argv[1], "mapped")) {
     mapped_mode(argc > 2 ? (unsigned)argdec(argv[2]) : 11,
                 argc > 3 ? (unsigned)argdec(argv[3]) : 0,
-                argc > 4 ? argv[4] : 0);
+                argc > 4 ? argv[4] : 0,
+                argc > 5 ? (unsigned)argdec(argv[5]) : 0);
     return 0;
   }
   if (argc > 1 && streq(argv[1], "payload")) {

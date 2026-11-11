@@ -37,6 +37,15 @@ dereferences a graph object field the client has never supplied (`+0x8a2a4`,
 after the documented `+0x88484` fix), so the register command itself is still
 incomplete.
 
+The gate itself reads no payload (U175): 256 zero bytes, an invalid root and a
+valid table with a broken union all answer the same `type 0` line and
+`0xf000009`. The element's `+11`/`+12` bytes select a different command class
+(the line disappears, the response becomes `0x9 0x14140000`) but `+12 = 1` is
+not the setup type: a plain element submitted after it in the same group still
+hits the gate. So the missing piece is the element envelope the A17 HAL's
+`ViiCommandQueue` writes (litebuf vs legacy, and the type it carries), not the
+Command flatbuffer's root layout.
+
 ## Benchmark: 720p object detection
 
 `out/bench/mosaic12.mp4` is 1280x720, 60 frames, 12 person tiles. The model
@@ -60,12 +69,15 @@ setup succeeds, and no TPU number is claimed.
 
 ## Next steps
 
-1. Call the A17 HAL's type-1 serializer in-process (`libdarwinn_hal.so`
-   `0x14e0380`/`0x14de9cc`) and dump the payload it builds, instead of running
-   the HAL's device path that resets the phone.
-2. Feed that payload through `tools/tpu-setup-payload.py`'s harness
-   (`tools/tpu-fwsetup.sh` + `edgetpu-run mapped`) and read the firmware's own
-   log line; iterate until the setup is accepted.
-3. Once set up, run `CreateExecution` (9), `BindInputBuffersToTensors` (12),
+1. Read the A17 HAL's `ViiCommandQueue`/`ViiCommandBuffer` enqueue path: the
+   element envelope (litebuf flag and the type it carries) is the remaining
+   unknown, and `+11`/`+12` are the bytes that change the class.
+2. Capture the core's own setup element through a working chain (create
+   `/dev/binderfs` first) and compare its 48 bytes with ours byte for byte.
+3. Feed the accepted payload through `tools/tpu-setup-payload.py`'s harness
+   (`tools/tpu-fwsetup.sh` + `edgetpu-run mapped <code> <p0> <file> <type12>`);
+   the firmware's own log line is the oracle, and the `+12` element byte is
+   now settable.
+4. Once set up, run `CreateExecution` (9), `BindInputBuffersToTensors` (12),
    `BindOutputBuffersToTensors` (13) and `Invoke` (11), then the 60-frame
    benchmark above.

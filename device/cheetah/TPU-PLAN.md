@@ -8022,21 +8022,75 @@ and a plan for the reset.
 `tpu-thermal` present. The core keeps U172's `0x88484` fix on top of the
 documented setup/null-load pair; `.u172-orig` is the two-patch core.
 
+## U175 (2026-11-11): the gate reads no payload; +11/+12 select a silent path
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, slot B, one boot;
+`janeiro` loaded and `tpu-hold` holding the wakelock, so many device groups
+run in one boot (a second power-up still wedges the PSM: `finalize group:
+power on failed: -110`, and only a reboot clears it).
+
+**The one-time setup gate does not parse the payload.** Three payloads — 256
+zero bytes, a root uoffset of `0xffffff00`, and our type-1 table with the
+union value pointing outside it — all produce the same
+`ERR vii_handler_layer.cc:247 - Setup is not done yet received a command of
+type 0.` and the same response `0xf000009`. The payload is only resolved as
+a DMA buffer: an unmapped iova (`0xdeadbee000`) answers `0x3` instead of the
+gate, and an unreachable 0xdeadbee... buffer never reaches it.
+
+**The payload schema is not the gate's type.** `--type-field 0..7 --no-value`
+(each root slot present alone, the type byte = 1), type/value pairs at
+`(0,1)`, `(0,2)`, `(2,1)`, and the HAL's own `(1,2)` layout all read type 0.
+A payload whose every 4-byte word carries a distinct marker (`0x1000+i`)
+also reads 0, so the type is not a fixed word in the payload either. The
+`typesweep` (scalar fields 0..8, v = 1..200), `elsweep` (element code 0..199)
+and `e12sweep` (element +12 u32, 1..200) results stand.
+
+**The element's +11 (u8) and +12 (u32) change the command class, silently.**
+With either nonzero the gate line disappears and the response becomes
+`0x9 0x14140000`; the values are indistinguishable (1, 2, 5, 8, 17, 90, 255
+all the same). A new `mapped ... [type12]` mode submits the setup element
+(`+12 = 1`) and a plain element (`+12 = 0`) in the *same group*: the first
+answers `0x9 0x14140000`, the second still answers `0xf000009` and logs the
+gate. So `+12 = 1` is not the setup type and does not set the firmware up.
+Elements with `+11 = 0`, `+12 = 0`, code 0..199 and any reachable payload hit
+the gate; `+4` is the high half of the 64-bit seq (the response echoes it).
+
+**Build and node notes.** `tools/edgetpu-run.c` now takes an optional fourth
+`mapped` argument (the u32 at element +12) and submits a second plain element
+when it is nonzero; it builds with the plan's Android-clang line unchanged.
+The chroot's `/dev/janeiro` is a static node from Nov 7 (501,0) and the boot's
+TPU device may be 502,0, so the harness's `open` fails until the node is
+recreated with the boot's major/minor; `/dev/edgetpu` is only a symlink to it
+and must exist before `tpu-hold`, or tpu-hold logs `open failed` and the
+firmware never powers up. `/dev/binderfs` also has to exist for the Tachyon
+chain to start.
+
+**The remaining suspects.** The type is not in the Command flatbuffer or the
+known element fields, so it is likely part of the *element kind* the A17 HAL's
+`ViiCommandQueue` writes (the HAL has `ViiCommandQueue in state %d`, `It's
+invalid to send kReady power state to VII with litebufs` and
+`buffer_type_ == ViiBufferType::kLitebuf`), i.e. a litebuf/non-litebuf
+envelope above the Command table, or a `type` field in the 16 bytes after the
+DMA descriptor (+32..+47, which stayed zero in every sweep). The A17 HAL's
+enqueue path is the only in-tree producer to read next; the chain's own setup
+element would confirm the same bytes, but it needs a working binderfs chain.
+
 ## What would unblock it (2026-11-11)
 
 The register path needs a command the core can build, and the firmware path
 needs a setup the firmware accepts. In order of cost:
 
-1. **Call the A17 HAL's type-1 serializer in-process** (`libdarwinn_hal.so`
-   `0x14e0380`, the builder `0x14de9cc`), not through the HAL's device path:
-   give it a command entry with the Janeiro scratch ranges and dump the
-   flatbuffer it produces. That is the exact payload the firmware wants, and
-   it avoids the device path that resets the phone. `tools/tpu-setup-payload.py`
-   is the harness for testing whatever it produces.
-2. **Reconstruct the firmware setup schema** by sweeping the payload with the
-   firmware's own log as the oracle (the payload is 256 bytes; the type field
-   is not in the Command table slots 0..31, so the next sweep has to move the
-   root/union layout, not just a slot value).
+1. **Read the A17 HAL's `ViiCommandQueue` enqueue path** (`libdarwinn_hal.so`,
+   the class whose strings are `ViiCommandQueue in state %d`,
+   `buffer_type_ == ViiBufferType::kLitebuf` and `It's invalid to send kReady
+   power state to VII with litebufs`). The element envelope, not the Command
+   table, is the remaining unknown (U175): `+11`/`+12` change the command
+   class, the payload is not parsed before the gate, and `+12 = 1` is not the
+   setup selector.
+2. **Capture the core's own setup element** through a working chain (create
+   `/dev/binderfs`, then `sh /root/tpu-u172.sh`) and compare its 48 bytes with
+   the harness's; the core is the other in-tree producer of a setup element.
+   `tools/tpu-setup-payload.py` remains the payload harness.
 3. Only then the ring register: the core's missing object at `+0x88` is reached
    after the imports retire, so the imports (dependent memories) are the right
    half of the problem and the graph descriptor is not.

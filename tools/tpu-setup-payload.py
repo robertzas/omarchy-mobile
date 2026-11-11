@@ -13,10 +13,13 @@ through the driver (`edgetpu-run mapped 0 FILE`) and the firmware's own log line
 in dmesg says what it still wants: "No global scratches were provided in setup
 command.", "Global scratch is too small...", or the pre-setup gate.
 
-Layout, matching the client's build_setup(): root Command table at 36 (vtable
-at 24) with {seq u64, privileged u8, union type u8 = 1, union uoffset}; the
-setup table at 96 (vtable at 56) with 13 slots; the scratch vector at 160 and
-the resource vector at 224.
+Layout, taken from the A17 HAL's own CreateCommand (0x14dff4c) rather than the
+client's build_setup(): root Command table at 36 (vtable at 24) with field 0 a
+vector<u64> offset, field 1 the union type as a u8, and field 2 the union value
+as a uoffset.  The client wrote the type in field 2 and the value in field 3, so
+the firmware read field 1 as absent and answered "received a command of type 0"
+(TPU-PLAN U175).  The setup table stays at 96 (vtable at 56) with 13 slots, the
+scratch vector at 160 and the resource vector at 224.
 """
 import argparse
 import struct
@@ -44,6 +47,15 @@ def main():
     ap.add_argument("--type", type=lambda s: int(s, 0), default=1,
                     help="union type byte (1 = setup)")
     ap.add_argument("--out", default="setup-t1.bin")
+    ap.add_argument("--legacy-wrapper", action="store_true",
+                    help="write the client's old root layout (type in field 2,"\
+                         " value in field 3) instead of the HAL's")
+    ap.add_argument("--type-field", type=int, default=1,
+                    help="root table slot holding the union type (u8)")
+    ap.add_argument("--value-field", type=int, default=2,
+                    help="root table slot holding the union value (uoffset)")
+    ap.add_argument("--no-value", action="store_true",
+                    help="write only the type slot, as a field-presence probe")
     args = ap.parse_args()
 
     scr = ranges(args.scratch)
@@ -59,19 +71,39 @@ def main():
     def u64(off, v):
         struct.pack_into("<Q", b, off, v)
 
-    # Root Command table at 36, vtable at 24: seq, privileged, union type, union.
     u32(0, 36)
-    u16(24, 0x0C)
-    u16(26, 0x18)
-    u16(28, 4)
-    u16(30, 12)
-    u16(32, 13)
-    u16(34, 16)
-    u32(36, 12)                 # soffset back to vtable 24
-    u64(40, args.seq)
-    b[48] = 1                   # privileged
-    b[49] = args.type & 0xFF    # union type
-    u32(52, 96 - 52)            # union table at 96
+    if args.legacy_wrapper:
+        # Client layout: seq u64, privileged u8, union type, union.
+        u16(24, 0x0C)
+        u16(26, 0x18)
+        u16(28, 4)
+        u16(30, 12)
+        u16(32, 13)
+        u16(34, 16)
+        u32(36, 12)             # soffset back to vtable 24
+        u64(40, args.seq)
+        b[48] = 1               # privileged
+        b[49] = args.type & 0xFF    # union type
+        u32(52, 96 - 52)        # union table at 96
+    else:
+        # The HAL's CreateCommand: field 0 vector<u64>, field 1 type u8,
+        # field 2 union uoffset.  --type-field/--value-field move the two
+        # present fields for the schema sweep; every field gets a 4-byte
+        # slot, so (1, 2) reproduces the layout tested in U175.
+        present = {args.type_field}
+        if not args.no_value:
+            present.add(args.value_field)
+        n = max(present) + 1
+        vt = 24 if n <= 4 else 8
+        u16(vt, 4 + 2 * n)
+        u16(vt + 2, 4 + 4 * n)
+        for i in range(n):
+            u16(vt + 4 + 2 * i, 4 + 4 * i if i in present else 0)
+        u32(36, 36 - vt)        # soffset back to the vtable
+        b[36 + 4 + 4 * args.type_field] = args.type & 0xFF
+        if not args.no_value:
+            vo = 36 + 4 + 4 * args.value_field
+            u32(vo, 96 - vo)    # union table at 96
 
     # Setup table at 96, vtable at 56: 13 slots, field 2 and field 3 vectors.
     u16(56, 4 + 2 * 13)
