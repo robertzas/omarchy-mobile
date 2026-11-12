@@ -8736,3 +8736,66 @@ when it has no IOMMU domain, so the overlay must stay in `DTB_OVERLAYS`
 while this driver is in use.
 
 No inference and no benchmark yet.
+
+## U187 (2026-11-12): the HAL's element header is fully sampled; the AP side is closed
+
+Same boot as U186 (kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`).
+The captured `vii-elem` carries the four words after the DMA descriptor that
+no earlier sweep ever set, because every earlier element was built by
+`tools/edgetpu-run.c`, which leaves `+32..+47` zero:
+
+```
++32 = 0x00000000   +36 = 0x00000002
++40 = 0x00000000   +44 = 0x00000100
+```
+
+The producer is the A17 HAL's `ViiCommandQueue` (the delegate talks to the
+HAL service, the service builds the element), the payload is the 128-byte
+blob U176 already showed is not a flatbuffer, and the firmware still answers
+`error_code=9`. So every AP-side knob is sampled now: the element header, the
+Command table, `+8/+10/+11/+12`, the code sweep, the payload shapes and KCI 6
+(U174-U177). No AP-side producer is left to differ, so the setup state is
+created before Linux (U177) and the oracle is a stock Android boot or a
+reverse pass of the bootloader's ARM32 `tpu-mgr`.
+
+## Gated runbook: GXP<->TPU interop probe (U186/U187 state)
+
+Risk: medium. It loads a vendor module that powers BLK_AUR and maps the TPU
+mailbox, and it has oopsed once without an IOMMU domain. Slot B only; nothing
+is flashed.
+
+Preconditions: the boot carries `gxp-iommu` (device.conf's `DTB_OVERLAYS`
+ends `tpu-enable gxp-probe gxp-iommu`), and `janeiro` is blacklisted so
+nothing autoloads it out of order.
+
+1. Read-only, after boot:
+   `dmesg | grep -E "25a[58]0000.sysmmu|iommu group|pgtable"`.
+   Expect both `initialized IOMMU. Ver 8.1.0`, `Adding to iommu group 0` and
+   `attached with pgtable`. Pass: all three. Stop if either SysMMU is
+   missing: without its domain the GXP probe fails (see U187a).
+   Rollback: none, read-only.
+2. One change per boot: `modprobe janeiro && insmod /root/gxp-stock.ko`.
+   Expect `/dev/gxp` 0600, `Aurora version: 0x10104`, core IDs 0-3,
+   `Powering on BLK`/`Powering off BLK`, and no "TPU will not be available
+   for interop". Pass: all of it, with the phone still up.
+   Stop: a reset or an oops means the module is not loaded; reboot with
+   `systemctl reboot` (`reboot-to` hung after the probe's error path in U186).
+   Rollback: reboot; do not `rmmod` a GXP module whose probe failed.
+3. One TPU client per cold boot: run the step's single client (the HAL
+   capture or the runtime harness). Expect `OPEN_DEVICE ret 0`.
+   Pass: ret 0. Stop on `KCI timeout code 11` or
+   `firmware handshake failed: -110`: the boot's one TPU session is spent;
+   reboot.
+4. Record `uname -r`, the lines above and the `vii-elem`/`vii-payload` lines
+   here with the date.
+
+## U187a: the GXP probe's missing-IOMMU oops is fixed (compile-verified)
+
+`gcip_resource_accessor_create()` created a debugfs file under a NULL/ERR
+parent, and `gcip_resource_accessor_destroy()` then ran `debugfs_lookup()` on
+that, which oopsed when the GXP got no IOMMU domain (the U186 boot). The
+accessor now skips the debugfs file when there is no real parent, and the
+destroy returns early for a NULL/ERR accessor or dentry, so debugfs stays
+optional. `gxp.ko` builds clean against `out-tpu` with vermagic
+`7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`. Not yet exercised on a boot
+without the overlay; that boot is its test.

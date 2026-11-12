@@ -18,8 +18,11 @@ Android's vendor-hook config. The AUR SysMMUs probe cleanly at boot
 On a fresh boot the TPU firmware answers the driver's KCI 11 handshake and
 the runtime finalizes a device group (`OPEN_DEVICE ret 0`). The remaining
 blocker is narrower than before: the A17 HAL's setup element is now captured
-(type word `0x000b0000`, 128-byte payload at IOVA `0xffdff000`) and the
-firmware still answers `error_code=9`. No inference or benchmark yet.
+(type word `0x000b0000`, 128-byte payload at IOVA `0xffdff000`, and the
+element fields `+36 = 2`, `+44 = 0x100` no earlier sweep had) and the firmware
+still answers `error_code=9`. Every AP-side knob is sampled now, so the setup
+state is created before Linux: the oracle is a stock Android boot or the
+bootloader's ARM32 `tpu-mgr`. No inference or benchmark yet.
 
 ## 2026-11-11 update: the GXP core boots
 
