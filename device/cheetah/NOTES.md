@@ -23,11 +23,13 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
   Run gxp clients only on a fresh boot with the log streamed.
 - `tools/tpu-exec.py`'s chroot-per-process pattern avoids the installed
   tachyon runner's `LD_PRELOAD` leak, which segfaults host tools.
-- **The full vendor chain sends the VII setup (U220):** on a fresh boot
-  with the repo runner, the HAL path sent a 128-byte setup payload at
-  `0xffdff000` and the firmware answered (mailbox IRQ, KCI codes 10 and
-  21). The delegate still fails with status 13; a direct client after the
-  setup is the next try.
+- **The full vendor chain sends the VII setup (U220), but it does not
+  take (U221):** on a fresh boot with the repo runner, the HAL path sent a
+  128-byte setup payload at `0xffdff000` and the firmware answered
+  (mailbox IRQ, KCI codes 10 and 21). A direct client then sends the same
+  payload and the firmware answers its graph command "Setup is not done
+  yet received a command of type 0": the type/ordering still needs the
+  stock oracle.
 
 ## 2026-11-09: the 2026.11.08 test install, and an update run as root
 

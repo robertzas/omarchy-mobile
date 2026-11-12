@@ -380,12 +380,22 @@ setup succeeds, and no TPU number is claimed.
   `vii-payload` dumps — and got the mailbox IRQ and KCI responses (codes
   10 and 21). The delegate still returns status 13, but the setup itself
   now reaches the firmware.
+- **U221 (2026-11-12): the firmware still refuses the graph command.**
+  After the service chain's 128-byte setup payload, a direct
+  `edgetpu-run` creates and finalizes its group and sends the same
+  128-byte payload, then the firmware's own log answers the graph
+  command: "Setup is not done yet received a command of type 0"
+  (`vii_handler_layer.cc:247`). The payload reaches the firmware, but the
+  setup state is still unset; the element's type field at +8 is 0 in both
+  paths. The next step is the setup command's type and ordering, not the
+  driver.
 ## Next steps
 
-1. Follow U220: the service chain now sends the VII setup. Run a direct
-   client after it (or a second delegate) to register a graph, and check
-   whether the firmware's setup state persists for that group. No
-   inference has run.
+1. Determine the setup command's type and ordering (U221): both the HAL
+   and the direct client send a 128-byte payload as a type-0 element, and
+   the firmware still answers "Setup is not done yet". The attended stock
+   capture on slot A is the oracle for the type the stock service sends.
+   No inference has run.
 2. Or continue the repo's own DDI path: get past the firmware's VII setup
    gate, then `CreateExecution` (9), `BindInputBuffersToTensors` (12),
    `BindOutputBuffersToTensors` (13) and `Invoke` (11), then the 60-frame
