@@ -416,8 +416,16 @@ setup succeeds, and no TPU number is claimed.
   vendor, tachyon and app services up) the HAL created and finalized its
   group and the response ring still read `0xf000009`. The driver logged KCI
   codes 9, 21, 10 and 21 and no new VII payload; the GXP client's own log
-  was empty, so core 0's start is unconfirmed. The stock boot remains the
+  (`allocate_vd cores 1 -> -1 (Invalid argument)`) shows the VD was never
+  allocated, so core 0 never started. The stock boot remains the
   only oracle for the setup element.
+- **U225 (2026-11-12): the TPU-first order starts core 0, and the gate
+  still holds.** U224's GXP client had never allocated its VD (EINVAL, the
+  TPU was off); with `tpu-hold` verified first (`power-up ok` at 9.46 s) the
+  stock gxp module and the VD client started core 0 (`Core 0 is alive!`,
+  `TOP access from core 0 successful!`) at 13.45 s. The HAL's group at
+  17.58 s still answered `0xf000009`, and the phone reset at 42.5 s (the
+  U219 class). The stock boot remains the only oracle.
 
 ## Next steps
 

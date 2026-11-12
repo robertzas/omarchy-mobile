@@ -43,8 +43,13 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
   fresh boot the stock gxp module, the vendor chain (servicemanager,
   power, vendor, tachyon, app) and the HAL ran; the HAL's group finalized
   and the ring still answered `0xf000009`, with KCI 9/21/10/21 and no VII
-  payload. The detached GXP client's log was empty, so core 0's start is
-  unconfirmed. The stock boot remains the oracle.
+  payload. The detached GXP client's log (`allocate_vd ... -1 (Invalid
+  argument)`) shows the VD was never allocated, so core 0 never started.
+- **The TPU-first order starts the GXP core; the gate still holds (U225):**
+  with `tpu-hold` verified first (`power-up ok` at 9.46 s), the stock gxp
+  module and the VD client reached `Core 0 is alive!` and `TOP access from
+  core 0 successful!` at 13.45 s; the HAL still answered `0xf000009`, and
+  the phone reset at ~42 s (the U219 class). The stock boot is the oracle.
 - **The phone charges only to 50 % by the owner's Omarchy configuration.**
   On 2026-11-12 the battery read 50 % and `Discharging` with the charger
   online and about 11 mA drawn. That is the configured limit, not a

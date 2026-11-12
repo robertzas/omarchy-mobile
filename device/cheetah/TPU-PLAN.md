@@ -9229,8 +9229,25 @@ warned that its mount point did not exist, as in earlier runs; the HAL
 (`/root/tpu-hal.sh`) found the function table (version 4), took the
 wakelock, created and finalized its group, and its response ring still read
 `0xf000009`. The driver logged `KCI tx code 9` (OPEN_DEVICE), then 21, 10
-and 21, and no new `vii-payload`/`vii-elem`. The GXP client's empty log
-leaves core 0's start unconfirmed this run, so the combination was not
-proven; but U220 (chain, no GXP) and U223 (GXP, no chain) failed, and the
+and 21, and no new `vii-payload`/`vii-elem`. The GXP client's log
+(`allocate_vd cores 1 -> -1 (Invalid argument)`) shows the VD was never
+allocated, so core 0 never started; U224 therefore never tested the
+combination. U220 (chain, no GXP) and U223 (GXP, no chain) failed, and the
 stock boot (gated, AGENTS §1) is still the only oracle for the setup
 element. No inference ran.
+
+
+## U225 (2026-11-12): the TPU-first order starts core 0; the gate still holds
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, fresh boot, slot B.
+The TPU was brought up and verified first (`modprobe janeiro`,
+`/dev/edgetpu` linked to it, `tpu-hold`: `fd 3`, `wakelock -> 0`, the
+driver's `power-up ok` at 9.46 s), then the stock gxp module (`insmod` rc 0)
+and `/root/gxp-tachyon-start 1 90` at 13.45 s: the driver logged `Core 0 is
+alive!` and `TOP access from core 0 successful!`. The HAL at 17.58 s opened
+the device (`OPEN_DEVICE ret 0`, KCI 9) and its response ring still read
+`0xf000009`; KCI 21 and 10 followed at 42.5 s, and the SSH link then reset
+(the U219 reset class). So U224 never started the core: its EINVAL was the
+VD allocation while the TPU was off. With the order fixed the core starts,
+but the GXP firmware alone still does not set the TPU up, and the stock
+boot remains the oracle. No inference ran.
