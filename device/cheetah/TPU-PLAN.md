@@ -9426,3 +9426,15 @@ were cut off: the SSH session died mid-run (the U219 reset class), so their
 results are not recorded. The phone is checked after; on a fresh boot the
 sequence to run is the chain, the registration line in `/tmp/ts.log`, then
 `pkill -f edgetpu_app_service` and the replay with the map held.
+
+## U233 (2026-11-12): the app-stopped replay still died with the session
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, up 232 s. The chain
+with the fixed binder nodes started (sm 5003, power 5017, vendor 5034,
+tachyon 5051, app 5070); the tachyon registration line did not appear in the
+log tail. With the app host stopped (`pkill -f edgetpu_app_service`) the
+replay was started and the SSH session died mid-replay — the U219 reset
+class again, with no result recorded. That the reset follows the replay even
+without the app host makes the long-held map client's wake (200 s at that
+point) the next suspect, and the next test should keep every hold short and
+run the chain first, then the map, then the replay immediately.

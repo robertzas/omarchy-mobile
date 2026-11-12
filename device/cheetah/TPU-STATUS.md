@@ -448,6 +448,9 @@ setup succeeds, and no TPU number is claimed.
 
 - **U232:** the chroot's `vndbinder`/`hwbinder` pointed at a missing `binderfs/vndbinder`; both now point at the working `binderfs/binder`. The chain restart and app-stopped replay were cut off by a session death (the U219 class), so their results are unrecorded; next run captures the registration line and the replay response.
 
+
+- **U233:** the chain with fixed binder nodes started, but the tachyon registration line did not appear; the app-stopped replay still died with the session (U219 class) and recorded no result. Next: fresh boot, chain first, short holds, map then replay immediately.
+
 ## Next steps
 
 1. The firmware's setup schema is the wall (U222), and a running GXP
