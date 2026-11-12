@@ -9007,3 +9007,30 @@ on stock; the retail build on slot A does not provide it, and the runbook
 forbids flashing a stock boot image to get root. Booting stock would rewrite
 `efs`/`persist`/`modem_userdata` with no capture. The fresh read-only NV
 backup (`out/nv-cheetah-20261112`) is in place for a debuggable stock boot.
+
+## U194 (2026-11-12): the 0x83000 config page and AUR 0x200000 window do not wake the core
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B, one boot. The
+two windows the working in-tree port mapped (U184) were added to the stock
+path's VD domain: `0x200000 -> AUR+0x200000` (0x40000, the firmware's CSR
+base) and `0x83000 -> fwdatabuf + 0x10000` (0x1000), with the firmware header's
+config copied from offset `0x57c` into that page at load (module
+`9bb2fff9…`). The result is unchanged:
+
+```
+New Aurora reset vector for core 0: wrote 0xfa000000 (paddr 0x98000000), read back 0xfa000000
+Core 0 diag: reset vec 0xfa000000, psm state 0 (powered 1), intmask0 0x1, doorbell 0x0
+Core 0 did not respond! (magic 0x0, boot_status 0x0, top_access 0x0, fw 0x2c06 0x0)
+```
+
+So neither window is the gap. The mappings stay (the firmware needs them once
+it runs), but they are not the cold-boot blocker.
+
+**Next lead:** the firmware image arrangement. The in-tree's GSA call logged
+`preloaded segment 0xfa400000 (0x3bbc bytes)`; the stock path's GSA load logs
+no preload, and its `gxp_firmware_rearrange_elf()` copies the ELF segments into
+the carveout **after** authentication (`phdr: da 0xfa040e24 …` at 7.541, after
+the GSA at 7.534). The in-tree's NS segment went to IOVA `0xfa400000`, the
+stock path's copy goes to carveout offset `0x40e24`; if the firmware expects the
+NS data at the NS region, that page is empty. Compare the two GSA calls and the
+NS placement next, using the in-tree driver's working log as the reference.
