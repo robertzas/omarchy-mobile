@@ -442,6 +442,9 @@ setup succeeds, and no TPU number is claimed.
 
 - **U230:** the kernel has `CONFIG_ANDROID_BINDER_IPC`/`BINDERFS`; `/dev/binder` was missing because binderfs was never mounted. With it mounted, the chain registers the tachyon `IComputeService` and the vendor service, and the Darwinn app host runs (its app-signature flags are the malformed `app1..app20=1` placeholders). The replay still gates; the delegate host needs a real model signature/client to send the setup.
 
+
+- **U231:** the Darwinn NNAPI service starts, but the chain's services still fail on `/dev/vndbinder` (binderfs has only `binder`; the chroot's symlinks dangle), and with the app host up its TPU group blocks the raw replay (`create_group -1`). Next: real vndbinder/hwbinder nodes and the app host stopped for the raw probe.
+
 ## Next steps
 
 1. The firmware's setup schema is the wall (U222), and a running GXP

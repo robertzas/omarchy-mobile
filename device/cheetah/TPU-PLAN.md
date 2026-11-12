@@ -9391,3 +9391,25 @@ it. That is the remaining piece on the stock path — the app host needs a
 real model signature (the earcheek classifier) or the NNAPI client that
 sends one. The mapping client held through all of it; the phone stayed up
 (up 197 s).
+
+## U231 (2026-11-12): the NNAPI Darwinn service starts; chroot binder nodes and the app host's group block the delegate
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, boot at 41 s: TPU
+first, the map held (map 0), binderfs mounted, the chain up (sm 4003,
+power 4015, vendor 4034, tachyon 4044, app 4068), then the Darwinn NNAPI
+service through the chain's own launcher (`tpu-exec.py daemon nn
+/vendor/bin/hw/android.hardware.neuralnetworks@service-darwinn-aidl`, nn
+4115).
+
+The chain's services still log `Binder ioctl to obtain version failed22` on
+`/dev/vndbinder`: binderfs holds only `binder` and `binder-control`, and the
+chroot's `/dev` symlinks are relative (`binderfs/binder`), so they dangle
+inside the chroot. The servicemanager never reaches the services. The gate
+replay then failed at `create_group -> -1`: with the chain's app host (uid
+1000) running, its TPU group owns the device and the raw client cannot
+create another. So the delegate path needs two fixes before a model client
+can drive it: real `vndbinder`/`hwbinder` nodes (`BINDER_CTL_ADD` on
+`binder-control`, or absolute symlinks into the bind-mounted `/dev`), and
+the app host stopped (or its group released) for the raw probe. The map
+client held; up 108 s. The app host's `app1..app20` signature flags are its
+own defaults, not a model allowlist entry; the parser wants 3 parts.
