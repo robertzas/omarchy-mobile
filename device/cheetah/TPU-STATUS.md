@@ -115,6 +115,15 @@ ten more candidates:
   driver logs `Core 0 is alive!` after U214 shows the window mapped in
   the default domain. This is the first time the stock 6.1 port has run
   the firmware.
+- **The default domain has no gcip IOVA allocator (U217).** With U216 the
+  core is alive and `TOP access from core 0 successful!`, then the client
+  faults: `gxp_dma_alloc_coherent_buf()` calls `gcip_iommu_alloc_iova()`
+  on the default domain, whose `ops` is not a gcip pool ops table (NULL
+  dereference; the link reset and the phone rebooted). U217 gives the
+  default domain the `dma_alloc_coherent()` address as `dsp_addr` (its map
+  step already returns early) and skips `free_iova`. Any other
+  `gcip_iommu_alloc_iova()` caller (`gcip_iommu_map()` with iova 0) still
+  needs the same treatment.
 - **A hand-written stub at the reset vector does not execute either.**
   With `tpu_stub=1` the stock writes a 24-byte A64 stub to
   `0xfa000000` (`str 0x1234beef` to `0xfac10000`, then spin); the U199

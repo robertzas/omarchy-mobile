@@ -9103,6 +9103,13 @@ this round removed every remaining host-side explanation.
   core's fetch context does not use. With
   `KCFLAGS=-DGXP_USE_DEFAULT_DOMAIN` the stock driver logs
   `Core 0 is alive!` — the port's first successful firmware start.
+- **U217, the IOVA allocator.** The default domain's `ops` is not a gcip
+  pool ops table, so `gcip_iommu_alloc_iova()` on it faults (NULL ops);
+  the first run reached `Core 0 is alive!` and `TOP access from core 0
+  successful!`, then the client's DCI/mailbox allocation oopsed and the
+  phone rebooted. U217 uses the coherent buffer's `dma_addr` as
+  `dsp_addr` in the default domain (the map step already returns early
+  for it) and skips `free_iova`.
 
 **Next:** the audit is complete and the difference is below the driver's
 register model: the AUR's own core-release condition (PLL lock or the core
