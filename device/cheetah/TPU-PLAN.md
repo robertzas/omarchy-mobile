@@ -9609,3 +9609,15 @@ the header check past and leaves `enforceInterface() ... read ''`. The mismatch 
 the vendor libbinder's IPC prologue, not in the AIDL arguments, and it is not worth
 more guessing: the next attempt links the client against libbinder (NDK) and lets it
 write the parcel. No inference has run.
+
+### U242 — the header is a build variant, and the chroot's libbinder is the wrong one (2026-11-12)
+
+Disassembly of the chroot's `system/lib64/libbinder.so` puts the header constant in
+`Parcel::enforceInterface` as `movk w8, #0x5359, lsl #16` — the `SYST` variant. The
+running servicemanager logs that it expects `0x564e4452` (`VNDR`), so it is the vendor
+variant of libbinder, a different build from the one whose bytes the client mirrors.
+That, not the AIDL arguments, is what the hand-written client keeps getting wrong: the
+kernel's binder does not translate between `SYST` and `VNDR` parcels, and the vendor
+build's prologue is not the system build's. A client must be built against the vendor
+libbinder (NDK/vndk variant) or ask the system manager instead, which is not where the
+tachyon service is registered. No inference has run.
