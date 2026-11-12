@@ -23,8 +23,12 @@ element fields `+36 = 2`, `+44 = 0x100` no earlier sweep had) and the firmware
 still answers `error_code=9`. Every AP-side knob is sampled now, so the setup
 state is created before Linux: the oracle is a stock Android boot or the
 bootloader's ARM32 `tpu-mgr`. The last AP-side combination, KCI 6 carrying
-the captured HAL blob, also answers `3` (INVALID_ARGUMENT). No inference or
-benchmark yet.
+the captured HAL blob, also answers `3` (INVALID_ARGUMENT). The missing
+producer was found to be the GXP's Tachyon firmware, which no Linux client
+had started: a `/dev/gxp` VD client now exists (`tools/gxp-tachyon-start.c`),
+and its first `-EINVAL` was traced to an unaligned TPU mailbox paddr. The
+fix's test boot did not come back and needs a physical restart. No inference
+or benchmark yet.
 
 ## 2026-11-11 update: the GXP core boots
 

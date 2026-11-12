@@ -8815,3 +8815,43 @@ every other payload shape. So the last AP-side producer/argument pair is
 closed, and U177's conclusion stands: the firmware's setup state is created
 before Linux. Going further needs the stock-boot capture (owner-gated, AGENTS
 §1) or the bootloader's ARM32 `tpu-mgr` reverse pass.
+
+## U189 (2026-11-12): the VD allocation's EINVAL is the unaligned TPU mailbox; the test boot did not come back
+
+The stock GXP driver's `GXP_ALLOCATE_VIRTUAL_DEVICE` returned `-EINVAL`
+(0xc00cee06, one-core VD). Instrumenting `gxp_vd_allocate`'s silent steps
+localized it:
+
+```
+gxp_platform 25c00000.gxp: vd_alloc: map_core_resources -> -22
+```
+
+`gxp_dma_map_core_resources()` maps, in order, the AUR CSRs, the four GXP
+mailboxes, and then — with `HAS_TPU_EXT` — the TPU mailboxes at
+`GXP_IOVA_EXT_TPU_MBX + i * EXT_TPU_MBX_SIZE` from
+`gxp->tpu_dev.mbx_paddr`. That address is `tpu-device`'s `reg[0]` plus
+`gxp-tpu-mbx-offset`; with the offset now `0xc00` the sum ends in `0xc00`,
+and `iommu_map()` rejects a non-page-aligned physical address with
+`-EINVAL`. The stock value must have kept the sum page-aligned (the factory
+DT's one-cell `0xc0000` does; a page offset does not).
+
+The fix under test maps the page containing the mailbox
+(`ALIGN_DOWN(mbx_paddr, PAGE_SIZE)`), so the GXP still reaches it at the same
+offset inside `GXP_IOVA_EXT_TPU_MBX`. `gxp.ko` built clean and was staged at
+`/root/gxp-stock.ko`.
+
+**The test boot did not return.** After `systemctl reboot` the phone left the
+USB bus and did not come back within eight minutes: no USB device, no
+network, no ping, and neither `fastboot devices` nor `adb devices` sees it.
+Nothing loads `gxp` at boot (that test always `insmod`s it by hand), so the
+module is not in this boot's path; whether this was the shutdown's modem stop,
+the initramfs USB safety net looping, or an ABL fallback is not known from
+here. The phone is on slot B's kernel and no slot was written.
+
+**Needed:** the owner's physical restart (hold Power about 30 s, then Power;
+do not use Volume Down + Power, which is fastboot). Then the test resumes at
+`modprobe janeiro && insmod /root/gxp-stock.ko && /root/gxp-tachyon-start 1 4`.
+
+Operational note: `rmmod gxp` on this kernel **segfaults** and leaves the
+platform device bound, so a new `gxp.ko` needs a reboot; do not try to
+replace the module by `rmmod`/`insmod`.
