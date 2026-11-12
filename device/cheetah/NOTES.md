@@ -4,6 +4,8 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
 
 ## 2026-11-12: the TPU core boots; the runtime stops at the VII gate
 
+- TPU U235 corrected: the kernel's `BINDER_VERSION` is `_IOWR('b', 9, ...)` (binder.h:267); the A17 libbinder uses command 1, so the services cannot register. Fix: a kernel binder that accepts the Android numbers, or a matching libbinder.
+
 - TPU U235: the chroot's binder node (507:1) opens but `BINDER_VERSION` is refused EINVAL for both the A17 and alternate numbers; the kernel logs the ioctl. The stock delegate path needs a libbinder matching the kernel's binder UAPI.
 
 - TPU U234: chain-first with a 60 s map hold works end to end (map 0, replay group 0, `0xf000009` for the sync payload). `libedgetpu_tachyon` exposes `CreateComputeSession`/`ComputeSession::Create` — the delegate's session call. The chroot's binder node (wrong 507:1) blocks registration.

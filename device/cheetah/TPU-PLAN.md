@@ -9483,3 +9483,14 @@ returns EINVAL for both the A17 number (`0xc0046201`) and the alternate
 delegate path cannot start. The next step is to match the kernel's binder
 UAPI number (`include/uapi/linux/android/binder.h`) with the A17 libbinder,
 or give the chroot a libbinder built against the kernel's UAPI.
+
+**Correction (same day): the exact mismatch.** The kernel's header reads
+`BINDER_VERSION = _IOWR('b', 9, struct binder_version)` at
+`include/uapi/linux/android/binder.h:267`, while the A17 libbinder uses
+command 1 (`0xc0046201`). The kernel's binder command numbering is not the
+A17 userspace's, so the tachyon service cannot register and the stock
+delegate path cannot start. The fix is either a kernel binder that accepts
+the Android numbers (a kernel change: build, push, reboot) or a libbinder
+built against the kernel's UAPI. The number sweep (`0x40046201`,
+`0xc0046201`, `0x40086201`, `0xc0086201`, `0x6201`, ...) all returned
+EINVAL, consistent with the renumbering.

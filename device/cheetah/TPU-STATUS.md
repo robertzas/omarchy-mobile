@@ -457,6 +457,9 @@ setup succeeds, and no TPU number is claimed.
 
 - **U235:** the chroot's binder node is real (507:1) and opens, but `BINDER_VERSION` returns EINVAL for the A17 number and the alternate, so the tachyon service cannot register. Next: match the kernel's binder UAPI with the A17 libbinder (or rebuild the client against it).
 
+
+- **U235 corrected:** the kernel's binder header has `BINDER_VERSION = _IOWR('b', 9, ...)` (binder.h:267) while the A17 libbinder uses command 1 — the numbering does not match, so no service can register. Fix: a kernel binder accepting the Android numbers, or a libbinder built against the kernel's UAPI.
+
 ## Next steps
 
 1. The firmware's setup schema is the wall (U222), and a running GXP
