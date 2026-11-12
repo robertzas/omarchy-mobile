@@ -124,6 +124,14 @@ ten more candidates:
   step already returns early) and skips `free_iova`. Any other
   `gcip_iommu_alloc_iova()` caller (`gcip_iommu_map()` with iova 0) still
   needs the same treatment.
+- **The stock VD wakelock now succeeds end to end (U216+U217).** Built
+  with `KCFLAGS=-DGXP_USE_DEFAULT_DOMAIN` plus U217, the client logs
+  `allocate_vd cores 1 -> 0 (ok) vdid 1`, `acquire_wake -> 0 (ok)`,
+  `tachyon running, holding 4 s`; the driver logs `Core 0 is alive!`,
+  `TOP access from core 0 successful!`, then `Mailbox 0 released` and a
+  clean `Core 0 powered down`. This is the first full run of the stock
+  6.1 VD ABI on this port. A job/DDI execution from a client is the next
+  step to a real inference.
 - **A hand-written stub at the reset vector does not execute either.**
   With `tpu_stub=1` the stock writes a 24-byte A64 stub to
   `0xfa000000` (`str 0x1234beef` to `0xfac10000`, then spin); the U199

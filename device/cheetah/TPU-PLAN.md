@@ -9110,6 +9110,12 @@ this round removed every remaining host-side explanation.
   phone rebooted. U217 uses the coherent buffer's `dma_addr` as
   `dsp_addr` in the default domain (the map step already returns early
   for it) and skips `free_iova`.
+- **U217 result: the wakelock works.** With the default domain and the
+  U217 coherent-buffer fix, the client reports
+  `allocate_vd cores 1 -> 0 (ok) vdid 1`, `acquire_wake -> 0 (ok)`,
+  `tachyon running, holding 4 s`; the driver reports `Core 0 is alive!`,
+  `TOP access from core 0 successful!`, then `Mailbox 0 released` and a
+  clean `Core 0 powered down`.
 
 **Next:** the audit is complete and the difference is below the driver's
 register model: the AUR's own core-release condition (PLL lock or the core
