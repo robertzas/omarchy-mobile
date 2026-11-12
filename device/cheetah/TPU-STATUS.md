@@ -340,13 +340,31 @@ The CPU rows are XNNPACK on the laptop; the GPU row is LiteRT
 TPU row is deliberately empty: there is no inference until the firmware
 setup succeeds, and no TPU number is claimed.
 
+- **U218 (2026-11-12): the runtime binds to janeiro, not gxp.** The
+  vendor chroot at `/usr/lib/omamobile-vendor/edgetpu/root` is complete,
+  and `/vendor/bin/edgetpu-run` parses the model and gets the runtime's
+  own spec (`/dev/edgetpu`, 5 cores, 1 path). It then calls
+  `EDGETPU_CREATE_GROUP` and gets `ENOTTY` through both `/dev/edgetpu-soc`
+  and `/dev/janeiro` on this kernel (`a78d26f63e56`), so the delegate
+  never reaches the driver; U29's working create-group (2026-11-07) did
+  not reproduce after these reboots. `tpu-core-session` aborts earlier in
+  `edgetpu_android_property_util.cc:284`, "Unknown platform ID on
+  Android: 6", before touching a device.
+- **The installed `/root/tpu-tachyon-run` (Nov 9) leaks `LD_PRELOAD`.**
+  Its host `sleep`, `pkill` and `chroot` children load the bionic shims
+  and segfault, so no service starts; the repo's `tools/tpu-exec.py`
+  pattern (chroot in-process, clean env) does not have this fault.
+- **Load `gxp-stock.ko` after `gsa`.** An `insmod` before gsa's autoload
+  fails with "Unknown symbol in module"; after `gsa` is up the probe
+  completes.
+
 ## Next steps
 
-1. Run the vendor runtime from the chroot already on the phone
-   (`/usr/lib/omamobile-vendor/edgetpu/root`) against `/dev/gxp`:
-   `tpu-exec.py run /vendor/bin/edgetpu-run /vendor/model.tflite`, with
-   the stock gxp module loaded. The chroot has the runtime; no inference
-   has run yet.
+1. Resolve the janeiro UAPI wall (U218): `edgetpu-run` reaches
+   `EDGETPU_CREATE_GROUP` and the node answers `ENOTTY`, so a real graph
+   registration is blocked before the firmware. Either fix that node (the
+   stock module and its interface names) or drive the gxp DCI path
+   directly. No inference has run.
 2. Or continue the repo's own DDI path: get past the firmware's VII setup
    gate, then `CreateExecution` (9), `BindInputBuffersToTensors` (12),
    `BindOutputBuffersToTensors` (13) and `Invoke` (11), then the 60-frame
