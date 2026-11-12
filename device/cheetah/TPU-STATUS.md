@@ -410,6 +410,15 @@ setup succeeds, and no TPU number is claimed.
   sends, or the setup is created before Linux (U187). The chroot's
   `/dev/janeiro` must be rebuilt *after* `modprobe janeiro`, because the
   sysfs device exists only then.
+- **U224 (2026-11-12): the GXP core, the vendor chain and the HAL together
+  still gate.** On a fresh boot (`janeiro` 502:0, the stock gxp module
+  loaded, the VD client detached, the vendor chain's servicemanager, power,
+  vendor, tachyon and app services up) the HAL created and finalized its
+  group and the response ring still read `0xf000009`. The driver logged KCI
+  codes 9, 21, 10 and 21 and no new VII payload; the GXP client's own log
+  was empty, so core 0's start is unconfirmed. The stock boot remains the
+  only oracle for the setup element.
+
 ## Next steps
 
 1. The firmware's setup schema is the wall (U222), and a running GXP

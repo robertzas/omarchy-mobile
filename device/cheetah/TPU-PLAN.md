@@ -9215,3 +9215,22 @@ runtime speaks janeiro, not `/dev/gxp`. The remaining oracle stands, the
 stock boot (gated) or a GXP DCI reverse pass. The chroot's
 `/dev/janeiro` must be rebuilt after `modprobe janeiro`, whose probe is
 what creates `/sys/class/edgetpu/janeiro`.
+
+
+## U224 (2026-11-12): the GXP core, the chain and the HAL together still gate
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, fresh boot, slot B.
+`modprobe janeiro` gave 502:0; `insmod /root/gxp-stock.ko` returned 0;
+`/root/gxp-tachyon-start 1 90` was detached with its output in
+`/tmp/gxp-tachyon.log`, which was empty; the vendor chain
+(`/root/tpu-chain-exec.sh`) started servicemanager (3819), power (3899),
+vendor (3921), tachyon (3954) and app (3973) — the `/dev/binderfs` mount
+warned that its mount point did not exist, as in earlier runs; the HAL
+(`/root/tpu-hal.sh`) found the function table (version 4), took the
+wakelock, created and finalized its group, and its response ring still read
+`0xf000009`. The driver logged `KCI tx code 9` (OPEN_DEVICE), then 21, 10
+and 21, and no new `vii-payload`/`vii-elem`. The GXP client's empty log
+leaves core 0's start unconfirmed this run, so the combination was not
+proven; but U220 (chain, no GXP) and U223 (GXP, no chain) failed, and the
+stock boot (gated, AGENTS §1) is still the only oracle for the setup
+element. No inference ran.

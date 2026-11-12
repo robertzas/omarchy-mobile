@@ -39,6 +39,12 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
   (VD 1, wakelock 0, 20 s) a TPU client in the same boot still hits the
   type-0 gate, so the setup needs the AP's GXP DCI/job, not the firmware's
   start alone.
+- **The GXP core, the chain and the HAL together still gate (U224):** on a
+  fresh boot the stock gxp module, the vendor chain (servicemanager,
+  power, vendor, tachyon, app) and the HAL ran; the HAL's group finalized
+  and the ring still answered `0xf000009`, with KCI 9/21/10/21 and no VII
+  payload. The detached GXP client's log was empty, so core 0's start is
+  unconfirmed. The stock boot remains the oracle.
 - **The phone charges only to 50 % by the owner's Omarchy configuration.**
   On 2026-11-12 the battery read 50 % and `Discharging` with the charger
   online and about 11 mA drawn. That is the configured limit, not a
