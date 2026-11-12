@@ -5,6 +5,38 @@ As of 2026-11-11, kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
 The details and the experiment log are in [TPU-PLAN.md](TPU-PLAN.md); this
 page is the summary.
 
+## 2026-11-12 update: the GXP interop path is open; the setup envelope is not
+
+The stock 6.1 GXP driver now has its TPU interop path compiled in
+(`HAS_TPU_EXT`, U186). Three fixes got there: the `gxp-tpu-mbx-offset`
+property is read as the 32-bit cell it is (`0xc00`, the live stock value,
+not the `0xc0000` we had in our DTS), and `HAS_TPU_EXT` is no longer gated on
+Android's vendor-hook config. The AUR SysMMUs probe cleanly at boot
+(`gxp-iommu` is now in `DTB_OVERLAYS`), the GXP gets its IOMMU domain, and
+`/dev/gxp` loads with firmware authentication and the Aurora read.
+
+On a fresh boot the TPU firmware answers the driver's KCI 11 handshake and
+the runtime finalizes a device group (`OPEN_DEVICE ret 0`). The remaining
+blocker is narrower than before: the A17 HAL's setup element is now captured
+(type word `0x000b0000`, 128-byte payload at IOVA `0xffdff000`) and the
+firmware still answers `error_code=9`. No inference or benchmark yet.
+
+## 2026-11-11 update: the GXP core boots
+
+The GXP firmware now starts on core 0: it writes the alive magic and
+completes the TOP access handshake (`TPU-PLAN.md` U184). Three fixes got it
+there: the sync barrier at IOVA `0x100000` is backed by DMA32 memory instead
+of the AUR barrier registers, the AUR core CSR blocks are mapped at IOVA
+`0x200000` because the firmware addresses the AUR from a zero base, and the
+`0x83000` config page plus the GSA authentication are in place. The phone
+stays up and `firmware_start` reads 1.
+
+The blocker has moved: the core idles after the handshake because the host
+mailbox and queue interface is not implemented yet. The port target is the
+stock driver's `gxp-common-platform.c` ioctl surface with the
+`GXP_IOVA_MAILBOX(i)`, `GXP_IOVA_EXT_TPU_MBX` and `GXP_IOVA_TPU_MBX_BUFFER(core)`
+mappings.
+
 ## What works
 
 - The vendor Tachyon stack runs on the Linux userspace: servicemanager on

@@ -8566,3 +8566,173 @@ anything else. **Rollback:** `fastboot --set-active=b` and boot the saved
 slot-B set; slot A's stock install is unchanged. **Risk:** high (slot write,
 stock rewrites modem NV, B may lose its successful mark). **Time:** about
 30 minutes.
+
+## U184 (2026-11-11): core 0 boots, alive magic and TOP handshake
+
+Kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`, worktree `wt-tpu`.
+The GXP module was built in-tree; the log below is from a clean AUR after a
+reboot, with dmesg streamed to the laptop for the whole start.
+
+```
+gxp 25c00000.gxp: IOMMU map 0x0000000000083000 -> 0x0000000098410000 size 0x1000
+gxp 25c00000.gxp: IOMMU map 0x0000000000200000 -> 0x0000000025e00000 size 0x40000
+gxp 25c00000.gxp: IOMMU map 0x0000000000100000 -> 0x0000000082f00000 size 0x100000
+gxp 25c00000.gxp: GSA authenticated gxp_fw_core0 (0x8fd00 bytes at 0x0000000098000000)
+gxp 25c00000.gxp: preloaded segment 0xfa400000 (0x3bbc bytes) into NS 0x00000000fa400000
+gxp 25c00000.gxp: core 0 PSM after wake: 0x29490, doorbell 0x0 (wake 9 us)
+gxp 25c00000.gxp: core 0 alive (boot status 1)
+gxp 25c00000.gxp: core 0 TOP access handshake ok
+```
+
+`firmware_start` reads 1 and the phone stays up. The three changes that got
+the core from crash stage 1 to the handshake:
+
+- The sync barrier at IOVA `0x100000` is backed by a DMA32 page, not the
+  AUR's sync-barrier register block (`AUR + 0x100000`). The firmware's byte
+  read of that block took a load/store error (cause 3, no SysMMU fault).
+- The AUR core CSR blocks are mapped at IOVA `0x200000`
+  (`aur_paddr + 0x200000`, `0x40000`). The firmware addresses the AUR with a
+  zero base: its first CSR read after the alive magic was at `0x00204010`
+  (core 0, offset `0x4010`) and the SysMMU reported an unmapped read there.
+- The `0x83000` firmware image-config page and the GSA authentication run as
+  before; the log now proves both (`GSA authenticated ...`).
+
+**Never patch the firmware body after it is loaded.** A one-byte `retw.n`
+write to the text at `gxp->fwbuf + 0x1a5bb` reset the palmtop with no log:
+the authenticated carveout is protected. Firmware changes belong in the image
+or in a proper relocatable patch before GSA authentication, not in the live
+carveout.
+
+**Build and deploy path:** `make M=$PWD/drivers/gxp` with `O=out-tpu` writes
+the module **in the source tree**, `wt-tpu/drivers/gxp/gxp.ko`;
+`out-tpu/drivers/gxp/gxp.ko` is a stale file from an earlier in-output-dir
+build. Deploy the former. A stale module cost several test cycles: it had no
+`IOMMU map` log lines and no `0x83000` mapping, and the SysMMU showed the
+config-page fault that looked like a source bug.
+
+The core now idles after the handshake. The live DT node
+(`/proc/device-tree/soc@0/gxp@25c00000`) carries the stock resources: `aur`
+`0x25c00000+0x1400000`, `mailbox0..3` at `0x18380000`, `0x183a0000`,
+`0x183c0000` and `0x183e0000` (`0x10000` each), `cmu` `0x25a00000+0x10000`,
+`ssmt_idma` `0x25ad0000+0x10000` and `ssmt_inst_data` `0x25ae0000+0x10000`.
+The mailbox device interface is at `+0x10000`, i.e. the identity IOVA
+`0x18390000 + 0x20000*core`, exactly `GXP_IOVA_MAILBOX(core)`; the queues
+belong at `GXP_IOVA_TPU_MBX_BUFFER(core)` = `0xFE100000 + 0x40000*core`.
+Our probe reads only `aur`/`cmu`/`ssmt_*`, so the next port is the
+`mailbox0..3` resources, the DCI descriptor and queues, and the stock
+`/dev/gxp` mailbox ioctls (`gxp-mailbox*.c`, `gxp-dci.c`,
+`gxp-common-platform.c`). The telemetry ring at `GXP_TELEM_IOVA` still holds
+only its magic, so the firmware's own log does not land there; the mailbox is
+the state channel. Leave the core on the idle, powered AUR; a reboot is the
+way back to an unpowered one.
+
+
+## U185 (2026-11-12): the stock 6.1 GXP driver builds and loads on 7.3; the vendor stack uses janeiro
+
+The stock A17 GXP source tree (`~/omamobile-kernel/gxp-source-6.1`, 33 files,
+19.6k lines, `google,gxp`, `GXP_HAS_MCU=0`) was copied to
+`~/omamobile-kernel/gxp-stock` and built as an external module against
+`wt-tpu`/`out-tpu`. The 6.1->7.3 port is mechanical: `dma_fence_lock_irqsave`,
+`eventfd_signal(ctx)`, `iommu_paging_domain_alloc`,
+`iommu_attach_device_pasid(..., NULL)`, `iommu_set_fault_handler`,
+`thermal_of_cooling_device_register(np, 0, ...)`,
+`<linux/soc/google/gsa.h>`, `<linux/of_platform.h>`, `<linux/vmalloc.h>`,
+`noop_llseek`, a void `.remove`, `sched_set_fifo`,
+`MODULE_IMPORT_NS("DMA_BUF")`, plus bring-up shims for
+`exynos_acpm_set_rate` and `exynos_pm_qos_*`. GCIP builds clean and `gxp.ko`
+carries the phone's vermagic.
+
+On a fresh boot the stock module probes: Aurora `0x10104`, cores 0-3 with
+IDs 0-3, GSA authenticates all four `/lib/firmware/gxp_fw_core*` images, and
+`/dev/gxp` exposes the full stock ABI. The first open loads and parses every
+image. Warnings, all non-fatal: no `pmu` resource; `gxp-tpu-mbx-offset` is a
+u32 `0xc00` in the live DT but the driver reads u64, so "TPU will not be
+available for interop"; the `gxp-secure-data-region` is absent; the ACPM DVFS
+table and external thermal cooling fail. `iommu_set_fault_handler` warns on
+the DMA domain. `HAS_TPU_EXT` is 0 because `GCIP_IS_GKI` needs
+`CONFIG_ANDROID_VENDOR_HOOKS`.
+
+The vendor stack does not use it: `tools/tpu-tachyon-run` and the vendor
+Tachyon/app/Darwinn services in the chroot drive **janeiro** (`/dev/edgetpu`,
+VII ioctls `0xedxx`), and no process opens `/dev/gxp`. The stock driver's VD
+start (the core boot and mailbox allocation) therefore never ran, and the
+firmware setup gate on the janeiro path is unchanged ("Setup is not done yet
+received a command of type 0"). The stock driver is a complete transport, but
+this vendor image is not a libgxp client.
+
+**Next:** (1) read `gxp-tpu-mbx-offset` as u32 and enable `HAS_TPU_EXT`
+(`CONFIG_GXP_TEST` or `CONFIG_ANDROID_VENDOR_HOOKS`) so the GXP<->TPU ext
+mailbox is mapped; (2) run `HAL_ONLY=1` alone as root and check whether the
+A17 HAL opens `/dev/gxp` and starts the VD; (3) if it still uses janeiro, the
+wall is the setup envelope (U175) or the attended stock-boot capture, and no
+inference or benchmark has run.
+
+## U186 (2026-11-12): GXP<->TPU interop is mapped; the HAL's setup element is still refused with error 9
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B, worktree
+`wt-tpu`. Three defects kept the GXP interop path closed, and all three are
+now fixed:
+
+- The stock 6.1 port reads `gxp-tpu-mbx-offset` with `of_property_read_u64`,
+  but gs201's property is one 32-bit cell (live stock DT: `00 0c 00 00`,
+  i.e. `0xc00`), so the read returned `-EOVERFLOW` and probe logged "TPU will
+  not be available for interop". It is `of_property_read_u32` now.
+- Our `gs201.dtsi` carried `0xc0000`, copied from the wrong register; it is
+  `0xc00` now, matching the live stock DT. The base + offset lands at
+  `0x1ce00c00`, the TPU's external mailbox block.
+- `HAS_TPU_EXT` was 0 because it is gated on Android's vendor-hook config.
+  The bring-up port now sets it unconditionally (`gxp-config.h`); this pulls
+  in `<soc/google/tpu-ext.h>`, copied into the port's shim include dir rather
+  than added as an `-I` (that `-I` shadowed the PM-QoS shim and broke the
+  build).
+
+The AUR SysMMU overlay moved from test-only to `DTB_OVERLAYS`
+(`gxp-probe gxp-iommu`), and the gated boot passed:
+
+```
+samsung-sysmmu 25a80000.sysmmu: initialized IOMMU. Ver 8.1.0, no gate clock
+samsung-sysmmu 25a50000.sysmmu: initialized IOMMU. Ver 8.1.0, no gate clock
+platform 25c00000.gxp: has sysmmu 25a50000.sysmmu (total count:1)
+platform 25c00000.gxp: has sysmmu 25a80000.sysmmu (total count:2)
+platform 25c00000.gxp: Adding to iommu group 0
+platform 25c00000.gxp: attached with pgtable 0x...
+```
+
+No abort, and the phone stayed up. The stock GXP module then loads
+(`insmod`, rc 0, `/dev/gxp` 0600) and probe runs the full `gxp_fw_init`:
+`Powering on BLK`, Aurora `0x10104`, core IDs 0-3, `Powering off BLK`, no
+"TPU will not be available for interop". The BLK_AUR power-off that reset the
+phone in U182 did not reset it here (the IOMMU is attached; three boots).
+
+With `janeiro` and `gxp` loaded, a fresh boot behaves differently from every
+earlier session: the driver's KCI 11 firmware handshake is answered and the
+runtime finalizes a device group against the live firmware
+(`OPEN_DEVICE: mailbox_map 0x2 ... state_ret 0`, `OPEN_DEVICE ret 0`,
+`finalize: kci_finalized ret 0`). The runtime is the first TPU client of the
+boot; a second client on the same boot still times out at KCI 11
+(`firmware handshake failed: -110`), so the one-client-per-cold-boot rule
+stands.
+
+The setup gate itself is not passed. The A17 HAL's device path sent its own
+element, and the driver's VII log now carries the exact envelope (this is
+the capture U175 lacked):
+
+```
+vii-elem: 00000000 00000000 000b0000 00000000 ffdff000 00000000 00000080 ...
+vii-payload iova 0xffdff000 size 128 off 0 copied 0
+vii-payload 0: 00000014 00000000 000a0000 00080012
+...
+```
+
+The firmware answers `error_code=9` (the pre-setup answer) and the client
+reports `create device status: 13`. So the producer, its payload and its
+element are known now; what remains is the envelope/type the firmware
+accepts, not a missing path.
+
+Two operational notes for the next run: `reboot-to` hung after the crashed
+GXP probe (a lock left by the probe's error path; `systemctl reboot` worked),
+and the GXP probe still null-derefs in `gcip_resource_accessor_destroy`
+when it has no IOMMU domain, so the overlay must stay in `DTB_OVERLAYS`
+while this driver is in use.
+
+No inference and no benchmark yet.
