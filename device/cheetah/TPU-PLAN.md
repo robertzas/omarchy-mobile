@@ -9595,3 +9595,17 @@ so a word the reader depends on is still not set. Hand-writing the AIDL parcel i
 the wrong end of this; the next attempt uses a real libbinder client (NDK, or the
 chroot's `dumpsys` as a parcel reference by extracting `/system/bin/service` from
 a system image). No inference has run.
+
+### U241 — AOSP's parcel layout is known; the manager still reads an empty token (2026-11-12)
+
+The layout is no longer a guess: AOSP `Parcel::writeInterfaceToken()` writes
+`writeInt32(workSource)`, `writeInt32(kHeader)` with `kHeader = B_PACK_CHARS('V','N','D','R')`
+for the vendor VNDK build, then `writeString16(interface)`, and `enforceInterface()`
+reads exactly those two ints before the descriptor. Sending that layout
+(`0xffffffff` workSource, `0x564e4452`, descriptor, args) still fails, and the manager's
+own message puts its header check at offset 8, not 4 — so this libbinder consumes one
+word before `workSource` that upstream does not write. Adding a leading zero word gets
+the header check past and leaves `enforceInterface() ... read ''`. The mismatch is in
+the vendor libbinder's IPC prologue, not in the AIDL arguments, and it is not worth
+more guessing: the next attempt links the client against libbinder (NDK) and lets it
+write the parcel. No inference has run.
