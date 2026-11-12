@@ -4,6 +4,8 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
 
 ## 2026-11-12: the TPU core boots; the runtime stops at the VII gate
 
+- TPU U238: `tools/tpu-session.c` calls `TachyonComputeService_create` (x0 out, x1 name) and `createSession` (service, config, ret; all null-checked), pinned by disassembly. Two ABI walls on the first run: the bionic chroot has no glibc loader (glibc client exec fails ENOENT), and a static glibc build cannot dlopen a bionic library (SIGTRAP before its first print). The client must be bionic; the NDK is not on the laptop.
+
 - TPU U237: the ndk binding `com.google.edgetpu.tachyon-ndk.so` exposes `BpComputeService::createSession` and `IComputeServiceDefault`; with `TachyonComputeSession_setupCommandQueue` the session client is a small NDK program.
 
 - TPU U236: the chroot's `/dev/binderfs` was stale (ENXIO); the chain now bind-mounts the host's `/dev/binderfs` into the chroot, and the tachyon service registers (`IComputeService/default`, up 964 s).

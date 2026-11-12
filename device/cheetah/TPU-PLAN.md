@@ -9532,3 +9532,25 @@ registered `IComputeService/default`). The session object follows with
 program: get the default service, fill a 0x28-byte `SessionConfig`, call
 `createSession`, set up the queues, then send the model's setup/execute
 commands over them — the first real inference attempt.
+
+### U238 — the session client is written; its first run hits the C++ ABI wall (2026-11-12)
+
+The disassembly of `libedgetpu_tachyon.google.so` pins the two entry points
+`tools/tpu-session.c` needs: `TachyonComputeService_create` takes two
+arguments (`x0` out pointer, `x1` captured — the service name), and
+`TachyonComputeService_createSession` takes three (`x0` service, `x1`
+config, `x2` return object), each null-checked at 0x10bdc–0x10be4, which
+matches the plan's `createSession(service, &config, &ret)`. The client
+dlopens the library, creates the service, builds a
+`TachyonComputeSessionConfig` (privileged set), and calls `createSession`,
+logging a null `TachyonStatus` as success.
+
+Two build facts stop the first run, both recorded rather than worked
+around. The vendor chroot is bionic, so a glibc-linked client cannot
+execve there (ENOENT on the missing `/lib/ld-linux-aarch64.so.1`); rebuilt
+`-static`, it starts but dies with SIGTRAP (rc -5) before its first
+`printf`, because a static glibc process cannot `dlopen` a library that
+calls bionic libc. The next build must be bionic: the NDK is not on the
+laptop (only `/usr/bin/clang`, no Android sysroot), so this needs either
+the NDK in the project container or a client built with the Android clang
+that `tools/kernel-pr-check` already uses. No inference has run.

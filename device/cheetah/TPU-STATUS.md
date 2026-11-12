@@ -469,6 +469,9 @@ setup succeeds, and no TPU number is claimed.
 
 - **U237: the NDK client API is mapped** — `BpComputeService::createSession` + `IComputeServiceDefault`, then `TachyonComputeSession_setupCommandQueue`. The session client is the next build.
 
+
+- **U238: the session client is written; the first run hits the C++ ABI wall.** `tools/tpu-session.c` calls `TachyonComputeService_create` (2 args) and `createSession` (3 args, all null-checked) as the disassembly pins them, then builds a config and creates the session. A glibc client cannot run in the bionic chroot (no glibc loader), and a static one cannot dlopen a bionic library (SIGTRAP before its first print). The client must be built with bionic (NDK), which the laptop does not have. No inference has run.
+
 ## Next steps
 
 1. The firmware's setup schema is the wall (U222), and a running GXP
