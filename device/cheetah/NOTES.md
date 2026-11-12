@@ -30,6 +30,11 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
   payload and the firmware answers its graph command "Setup is not done
   yet received a command of type 0": the type/ordering still needs the
   stock oracle.
+- **The HAL's type-1 payload still reads as type 0 (U222):** built with
+  `tools/tpu-setup-payload.py` and submitted through `EDGETPU_MAP_BUFFER`,
+  the bytes match the driver's dump and the firmware's ring still says
+  "Setup is not done yet ... type 0". The firmware's schema is not the
+  HAL's, so only the stock boot's setup element can name it.
 
 ## 2026-11-09: the 2026.11.08 test install, and an update run as root
 

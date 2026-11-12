@@ -389,13 +389,23 @@ setup succeeds, and no TPU number is claimed.
   setup state is still unset; the element's type field at +8 is 0 in both
   paths. The next step is the setup command's type and ordering, not the
   driver.
+- **U222 (2026-11-12): the HAL's type-1 payload still reads as type 0.** Built
+  with `tools/tpu-setup-payload.py` from the A17 HAL's field map (root
+  table at 36, union type 1 in field 1, setup table at 96, three scratch
+  ranges) and submitted through `edgetpu-run mapped 0 0` with one
+  `EDGETPU_MAP_BUFFER` page: the driver's `vii-payload` dump matches the
+  file byte for byte, and the firmware still logs "Setup is not done yet
+  received a command of type 0." This reproduces U175: the firmware's
+  command schema is not the HAL's. `edgetpu-run fwlog` reads the ring
+  (mmap `0x1B00000`) and shows the same line, so the log is available for
+  the next attempt.
 ## Next steps
 
-1. Determine the setup command's type and ordering (U221): both the HAL
-   and the direct client send a 128-byte payload as a type-0 element, and
-   the firmware still answers "Setup is not done yet". The attended stock
-   capture on slot A is the oracle for the type the stock service sends.
-   No inference has run.
+1. The firmware's setup schema is the wall (U222): the HAL's type-1
+   payload reads as type 0, and no client-side field selects it. The
+   stock boot's setup is the oracle, so the attended slot-A capture
+   (gated, AGENTS §1, NV checks before and after) is needed to see the
+   stock setup element. No inference has run.
 2. Or continue the repo's own DDI path: get past the firmware's VII setup
    gate, then `CreateExecution` (9), `BindInputBuffersToTensors` (12),
    `BindOutputBuffersToTensors` (13) and `Invoke` (11), then the 60-frame
