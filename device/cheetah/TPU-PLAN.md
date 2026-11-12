@@ -9290,3 +9290,30 @@ output streamed to the laptop and read dmesg within 2 s of the map; then
 the chain's mounts and the HAL while the client holds. The verdict is the
 HAL's response ring: `0xf000009` still means the mapping did not produce the
 setup; a different answer means it did. One GXP client per cold boot (U219).
+
+## U227 (2026-11-12): the map runs but answers EINVAL; two candidate causes
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, fresh boot, slot B.
+TPU first (`tpu-hold`, driver `power-up ok`, GSA state=2 at 81.6 s),
+`insmod gxp-stock.ko` 0, then `tools/gxp-tpu-connect 1 6`:
+
+    tpu fd 4
+    allocate_vd cores 1 -> 0 (ok) vdid 1
+    map_tpu_mbx_queue fd 4 -> -1 (Invalid argument)
+    acquire_wake -> 0 (ok)
+
+So the A17 stock ABI accepts the VD and the wake; the map is refused. Two
+candidates, both EINVAL on this path: (a) `gxp->tpu_dev.mbx_paddr` is 0
+("TPU is not available for interop"), i.e. the gxp node lacks the
+`tpu-device` phandle or `gxp-tpu-mbx-offset`, or the TPU platform device was
+not found; (b) the client's `/dev/edgetpu` fd has no device group
+(`edgetpu_external_mailbox_alloc` refuses a client without one), which the
+HAL creates with `EDGETPU_CREATE_DEVICE_GROUP` before its own mailbox use.
+The session died right after the wake (U219 class), so the dmesg lines that
+name the failing branch were lost; the phone is being checked.
+
+**Next:** (1) print dmesg immediately after the map, before the wake, and
+grepping "interop|ext TPU mailboxes"; (2) if it is the group, add
+`EDGETPU_CREATE_DEVICE_GROUP` to the client before the map; (3) if it is
+the phandle, add `tpu-device`/`gxp-tpu-mbx-offset` to the gxp node in the
+port's DT (the probe's own warning names which is missing).

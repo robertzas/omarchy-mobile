@@ -4,6 +4,8 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
 
 ## 2026-11-12: the TPU core boots; the runtime stops at the VII gate
 
+- TPU U227: the stock map handshake now runs; VD alloc and wake are 0, `GXP_MAP_TPU_MBX_QUEUE` answers -EINVAL. Either the gxp node lacks the `tpu-device` link/offset or the client's TPU fd has no device group. The phone reset after the wake (U219 class), so dmesg is unread.
+
 - TPU U226: stock's `GxpCapi_ConnectTpu` is the missing call; its kernel side, `GXP_MAP_TPU_MBX_QUEUE`, maps the TPU's DSP queues into the GXP firmware. `tools/gxp-tpu-connect.c` is built for that; the trial runs lost their output and the three boots reset in the known GXP-client class, so the map's return is unrecorded. The phone is back on slot B.
 
 - **Core 0 boots from the stock 6.1 gxp driver** on the default IOMMU

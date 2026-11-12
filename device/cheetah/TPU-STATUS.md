@@ -430,6 +430,9 @@ setup succeeds, and no TPU number is claimed.
 
 - **U226:** the missing AP call is stock's `GxpCapi_ConnectTpu` -> `GXP_MAP_TPU_MBX_QUEUE`, which maps the TPU's DSP mailbox queues into the GXP firmware; `tools/gxp-tpu-connect.c` does it. Trial runs: buffering lost the client's output, the HAL lacked the chroot `/dev` bind, then two U219-class resets; the map's return is unrecorded. Next: a clean boot with the client's output streamed and dmesg read at the map.
 
+
+- **U227:** the stock map handshake runs: VD alloc 0 (vdid 1), wake 0, `map_tpu_mbx_queue` -EINVAL. Candidates: the gxp node's `tpu-device`/`gxp-tpu-mbx-offset` (mbx_paddr 0) or the TPU fd having no device group (the HAL creates one first). The boot reset after the wake, so dmesg is unread; next test prints it before the wake.
+
 ## Next steps
 
 1. The firmware's setup schema is the wall (U222), and a running GXP
