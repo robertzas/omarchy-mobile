@@ -484,7 +484,7 @@ setup succeeds, and no TPU number is claimed.
 - **U245 checks (2026-11-12):** the branch is rebased on `origin/main` (221 commits,
   repaired with `15719387`), `tools/pr-check` passes every check, and `tools/phone-smoke`
   reports slot b, kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, storage guard
-  holding 55 partitions, no oops/BUG, and 3 new dmesg error lines still to read. The
+  holding 55 partitions, no oops/BUG, and 3 new dmesg errors that were the client's own unknown binder commands (a malformed `BC_FREE_BUFFER` of 8 bytes instead of 12); fixed in `tools/tpu-binder-client.c`. The
   vendor `writeInterfaceToken` disassembly writes `0xffffffff` workSource then `VNDR`
   then the descriptor, so the wire layout is known; the manager still reads an empty
   interface token from the hand-built client. No inference has run.

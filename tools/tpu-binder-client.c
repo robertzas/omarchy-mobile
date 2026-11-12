@@ -205,14 +205,14 @@ static int transact(int fd, u32 handle, u32 code, struct parcel *p,
 			}
 			free_ptr = r->data.ptr.buffer;
 			{
-				u8 fbuf[8];
+				u8 fbuf[16];
 				u32 fcmd = BC_FREE_BUFFER;
 				struct binder_write_read f;
 
 				memcpy(fbuf, &fcmd, 4);
-				memcpy(fbuf + 4, &free_ptr, 4);
+				memcpy(fbuf + 4, &free_ptr, 8);
 				memset(&f, 0, sizeof f);
-				f.write_size = 8;
+				f.write_size = 12;	/* u32 command + u64 pointer */
 				f.write_buffer = (uintptr_t)fbuf;
 				ioctl(fd, BINDER_WRITE_READ, &f);
 			}
