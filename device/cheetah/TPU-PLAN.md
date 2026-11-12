@@ -8953,3 +8953,52 @@ A fresh read-only NV backup of the radio and calibration partitions was taken
 after the reboot (`tools/nv-backup`, 657 MiB, all seven partitions verified
 against the phone; private, in gitignored `out/`), so the stock-boot oracle
 only waits on the owner's per-step go.
+
+## U193 (2026-11-12): the IOVA reset vector and the wake doorbell are ruled out; the NS backing is next
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B, one boot per
+change.
+
+**The reset vector.** U190's edit wrote `fwbufs[core].paddr` but logged
+`daddr`, so the "New Aurora reset vector ... 0xfa000000" line in U190/U191
+never described the register. The write is back to stock's `daddr` and reads
+the register back:
+
+```
+Current Aurora reset vector for core 0: 0x90000000
+New Aurora reset vector for core 0: wrote 0xfa000000 (paddr 0x98000000), read back 0xfa000000
+Powered up!
+Core 0 diag: reset vec 0xfa000000, psm state 0 (powered 1), intmask0 0x1, doorbell 0x1
+```
+
+The core is in PS0 and the register holds the IOVA, so neither the value nor
+the power state is the gap.
+
+**The wake doorbell.** The diag showed the wake doorbell still asserted at
+the 5 s timeout. The in-tree port (U184, the one that ran the core) cleared
+it right after PS0: an asserted doorbell aborts the firmware's boot in
+`SystemImpl::Initialize`. `gxp_firmware_wakeup_cores()` now waits for PS0 and
+`gxp_doorbell_clear()`s it before the handshake. The re-run:
+
+```
+Core 0 diag: reset vec 0xfa000000, psm state 0 (powered 1), intmask0 0x1, doorbell 0x0
+Core 0 did not respond! (magic 0x0, boot_status 0x0, top_access 0x0, fw 0x2c06 0x0)
+```
+
+Both are now ruled out. The GSA loads and authenticates all four bodies
+(`cmd 1`/`cmd 151`, body `0x98000000 + core * 0x100000`), both CMU muxes read
+`0x10` (normal), and `/sys/kernel/debug/gxp/log` holds no firmware record.
+
+**Next:** the in-tree driver backed every NS region with a fresh DMA32 page
+(including the sync barrier at IOVA `0x100000`) and mapped the AUR CSR window
+at IOVA `0x200000`; the stock path maps the image config's NS physical
+addresses (`gcip-image-config.c`'s `setup_ns_iommu_mappings()`) and the AUR at
+`GXP_IOVA_AURORA_TOP` (`0x25c00000`). Print those mappings at load and check
+the `0x100000` entry; if it names the AUR barrier registers, back it with a
+DMA page as the in-tree port did.
+
+**The stock-boot oracle was checked and not run.** Its step 3 needs `adb root`
+on stock; the retail build on slot A does not provide it, and the runbook
+forbids flashing a stock boot image to get root. Booting stock would rewrite
+`efs`/`persist`/`modem_userdata` with no capture. The fresh read-only NV
+backup (`out/nv-cheetah-20261112`) is in place for a debuggable stock boot.

@@ -34,7 +34,11 @@ image verified in its carveout, but never writes the alive magic), so the
 Tachyon producer has not run; a handshake bypass let the wakelock succeed but
 no TPU client got further. The last AP-side suspect, the ETM core-reset bit
 that `hold_core_in_reset()` sets and never clears, cannot be checked from the
-AP: reading it raises a data abort (U192). No inference or benchmark yet.
+AP: reading it raises a data abort (U192). U193 rules out the reset-vector value
+and the wake doorbell (the register holds the IOVA `0xfa000000`, the core is in
+PS0, the doorbell is cleared, the GSA authentication and CMU muxes are clean),
+so the next lead is the stock path's NS-region/AUR-CSR backing. No inference or
+benchmark yet.
 
 ## 2026-11-11 update: the GXP core boots
 
