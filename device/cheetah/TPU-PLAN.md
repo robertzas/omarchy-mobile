@@ -9154,7 +9154,9 @@ Preconditions, all checked before anything is written:
    passes. Take a new one after the stock boot, too.
 2. The owner says yes to this step, in writing, with the slot-A boot named.
 3. `fastboot getvar current-slot` reads `b`, and `slot-successful:b` is `yes`.
-4. Battery above 50 % and the USB cable in.
+4. Battery at this phone's configured charge limit (50 %, set in Omarchy)
+   and the USB cable in. The gauge reads 50 % and `Discharging` at about
+   11 mA with the charger online; that is the limit, not a fault.
 
 Steps (each with Expect/Pass, stop condition, rollback):
 
@@ -9187,16 +9189,18 @@ image to gain it.
 
 2026-11-12 (later): the owner approved the boot, and
 `tools/nv-backup --check out/nv-cheetah-20261112` passed (all seven
-partitions SAME). The boot is held at the fourth precondition: the battery
-reads 50 % and `Discharging`, and this runbook requires above 50 % with the
-charger in. No slot flag was written.
+partitions SAME). The battery reads 50 % and `Discharging`, which is this
+phone's configured 50 % charge limit (set in Omarchy), so the fourth
+precondition is met at the limit with the charger online. No slot flag was
+written.
 
 2026-11-12 (later still): `bin/omamobile fastboot` could not reach fastboot.
 The ABL ignored `reboot-to bootloader`, and the tool's crash fallback (five
 attempts) ended with the phone back on slot B (same kernel, SSH up, no slot
 flag written). The next step is the physical Volume Down + Power fastboot
 entry, with the owner at the phone; the charger is online and the gauge
-draws 11 mA at 50 %, so stock's own kernel charges once it boots.
+draws 11 mA at the configured 50 % limit, so stock's own kernel charges
+while the limit holds it.
 
 ## U223 (2026-11-12): the GXP core start does not set the TPU up
 

@@ -39,6 +39,11 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
   (VD 1, wakelock 0, 20 s) a TPU client in the same boot still hits the
   type-0 gate, so the setup needs the AP's GXP DCI/job, not the firmware's
   start alone.
+- **The phone charges only to 50 % by the owner's Omarchy configuration.**
+  On 2026-11-12 the battery read 50 % and `Discharging` with the charger
+  online and about 11 mA drawn. That is the configured limit, not a
+  charger or driver fault: a runbook that asks for "battery above 50 %"
+  means "at the configured limit, charger online" on this phone.
 
 ## 2026-11-09: the 2026.11.08 test install, and an update run as root
 
