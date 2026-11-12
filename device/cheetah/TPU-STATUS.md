@@ -371,13 +371,21 @@ setup succeeds, and no TPU number is claimed.
   debugfs resource-access test), so the reset's cause is unproven. Treat a
   gxp client run as reset-capable: fresh boot, log streamed, and no second
   run in the same boot. U217's core start remains the last known-good run.
+- **U220 (2026-11-12): the vendor chain sends the VII setup.** On a fresh
+  boot with the repo's runner (the installed copy was the old leaky
+  version), servicemanager, the power HAL, the vendor service, the tachyon
+  service, the app service and the Darwinn HAL all started; the HAL's path
+  sent the first real VII setup element — a 128-byte payload at
+  `0xffdff000`, `0x0b` in the element, the driver's `vii-elem` and
+  `vii-payload` dumps — and got the mailbox IRQ and KCI responses (codes
+  10 and 21). The delegate still returns status 13, but the setup itself
+  now reaches the firmware.
 ## Next steps
 
-1. Open the VII setup gate through the stock Tachyon service path (U218):
-   the delegate reaches finalize and waits, and the service's setup
-   command is what the firmware accepts. Run the repo's
-   `tools/tpu-tachyon-run` on a fresh boot with the chroot's device nodes
-   real. No inference has run.
+1. Follow U220: the service chain now sends the VII setup. Run a direct
+   client after it (or a second delegate) to register a graph, and check
+   whether the firmware's setup state persists for that group. No
+   inference has run.
 2. Or continue the repo's own DDI path: get past the firmware's VII setup
    gate, then `CreateExecution` (9), `BindInputBuffersToTensors` (12),
    `BindOutputBuffersToTensors` (13) and `Invoke` (11), then the 60-frame
