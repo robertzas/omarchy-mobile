@@ -9658,3 +9658,22 @@ position rather than at the argument order. That is the state a real libbinder c
 avoids by construction. `tools/pr-check` is green after removing the committed
 `detect_edgetpu.tflite` (Google's model must come from the user's own image). No
 inference has run.
+
+### U246 — the parcel is right; the lazy service exits before the handle arrives (2026-11-12)
+
+Attaching gdb to the running servicemanager and breaking on `Parcel::enforceInterface`
+(address = libbinder base + 0x7da60) dumped a working client's parcel during `dumpsys -l`:
+`0x80000000, 0xffffffff, 0x564e4452, 0x0000001a, "android.os.IServiceManager"`, then a
+NUL char and padding. Two things were wrong in the client: the leading `0x80000000`
+stamp, and the missing NUL terminator on the string16 (libbinder writes it, and
+`readString16Inplace` returns empty without it). With both fixed the manager parses the
+interface token and the service name and looks the name up — the enforceInterface
+failure is gone.
+
+The remaining failure is the service's lazy registrar: the log shows it notifying
+`com.google.edgetpu.tachyon.IComputeService/default` that it has clients, then, when the
+failed reply releases them, `they don't ... no record of a client`, unregistering and
+exiting. `getService` therefore returns `BR_FAILED_REPLY` (0x720c) because the node is
+dead by the time the handle is delivered. The next step is to keep that process alive
+across the lookup (hold a client, or run it with its registrar in always-on mode), not
+to change the parcel. No inference has run.
