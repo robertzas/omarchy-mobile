@@ -694,6 +694,18 @@ service only after a client request is pending).
 Rollback: the chain script is idempotent; replacing `liblazysvc.so` is reversible
 from `out/tpu-client/`.
 
+Follow-up (2026-11-12): the eager shim was being ignored, not wrong. The service
+imports `AServiceManager_registerLazyService@LIBBINDER_NDK31`, a versioned
+symbol, and an unversioned preload does not satisfy it. Rebuilt with a version
+script that exports `LIBBINDER_NDK31` (confirmed `@@LIBBINDER_NDK31` in
+`readelf`), the shim still does not keep the service alive: servicemanager logs
+`they don't (previously: do) have clients ... no record of a client` and the
+service calls `unregisterService` itself. The registrar is in `libbinder.so`
+(the `No clients in use` string lives there), so its bookkeeping runs below the
+NDK C API and a preload cannot reach it. The one client that ever held tachyon
+open was the app service (uid 1000); the remaining Phase A approach is a holder
+that keeps *that* client alive, not another shim.
+
 ### Phase B - createSession
 
 Requires A. Then `tools/tpu-binder-client` creates the service handle and calls
