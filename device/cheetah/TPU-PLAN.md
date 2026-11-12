@@ -9116,13 +9116,13 @@ this round removed every remaining host-side explanation.
   `tachyon running, holding 4 s`; the driver reports `Core 0 is alive!`,
   `TOP access from core 0 successful!`, then `Mailbox 0 released` and a
   clean `Core 0 powered down`.
-- **What a real inference still needs.** The stock runtime client
-  (`edgetpu-run`) needs the vendor chroot with `/vendor/lib64` (built on
-  the laptop from the owner's factory image with
-  `tools/extract-vendor-chroot`); the phone has neither the chroot nor the
-  libraries. The repo's own HAL clients (`tools/tpu-*-hal.c`,
-  `tools/edgetpu-run.c`) are the alternative, and its header records that
-  the stock path still stops at graph registration.
+- **What a real inference still needs.** The vendor chroot is on the
+  phone (`/usr/lib/omamobile-vendor/edgetpu/root`, built from the factory
+  image with `tools/extract-vendor-chroot -p edgetpu`), so the stock
+  runtime is available; it now needs to be pointed at the working
+  `/dev/gxp` and the model registered. The repo's own HAL clients
+  (`tools/tpu-*-hal.c`) are the alternative, and `edgetpu-run.c`'s header
+  records that the stock path still stops at graph registration.
 
 **Next:** the audit is complete and the difference is below the driver's
 register model: the AUR's own core-release condition (PLL lock or the core

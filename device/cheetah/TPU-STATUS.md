@@ -132,12 +132,13 @@ ten more candidates:
   clean `Core 0 powered down`. This is the first full run of the stock
   6.1 VD ABI on this port. A job/DDI execution from a client is the next
   step to a real inference.
-- **A real inference needs the vendor runtime, which is not on the phone.**
-  `/root/edgetpu-run` dlopens `/vendor/lib64/libedgetpu_util.so` from a
-  vendor chroot; the phone has no chroot and no vendor libraries (only
-  `/root/bench/venv`). That chroot is built on the laptop from the
-  owner's own factory image with `tools/extract-vendor-chroot` and must
-  be pushed before a model can even be registered. No inference has run
+- **The vendor runtime chroot is on the phone.** An earlier find was too
+  shallow: `/usr/lib/omamobile-vendor/edgetpu/root` holds
+  `vendor/lib64/libedgetpu_util.so`, `libdarwinn_hal.so`,
+  `libtachyon_core.so` and the rest, built with
+  `tools/extract-vendor-chroot -p edgetpu` from the factory image (now
+  at `~/omamobile-kernel/downloads/cheetah-cp3a.261005.002.a1-factory-5b5b06ad.zip`).
+  The phone-side runtime path is therefore open; no inference has run
   yet.
 - **A hand-written stub at the reset vector does not execute either.**
   With `tpu_stub=1` the stock writes a 24-byte A64 stub to
@@ -341,12 +342,11 @@ setup succeeds, and no TPU number is claimed.
 
 ## Next steps
 
-1. The core now boots on the stock port (U216/U217): `Core 0 is alive!`,
-   `TOP access from core 0 successful!`, and the VD wakelock holds end to
-   end. A real inference still needs a runtime: build the vendor chroot on
-   the laptop from the owner's factory image (`tools/extract-vendor-chroot`),
-   push it, and run `edgetpu-run MODEL`. The factory image is not on the
-   laptop and the phone has no chroot.
+1. Run the vendor runtime from the chroot already on the phone
+   (`/usr/lib/omamobile-vendor/edgetpu/root`) against `/dev/gxp`:
+   `tpu-exec.py run /vendor/bin/edgetpu-run /vendor/model.tflite`, with
+   the stock gxp module loaded. The chroot has the runtime; no inference
+   has run yet.
 2. Or continue the repo's own DDI path: get past the firmware's VII setup
    gate, then `CreateExecution` (9), `BindInputBuffersToTensors` (12),
    `BindOutputBuffersToTensors` (13) and `Invoke` (11), then the 60-frame
