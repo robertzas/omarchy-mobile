@@ -9088,15 +9088,20 @@ this round removed every remaining host-side explanation.
   in reset. Reading it while the core is in PS3 hangs the thread (the core
   CSR block is gated), so the read moved to the failure dump at PS0, where
   it returns `0x0`. The core is not held in reset.
+- **U214, the fetch address.** `iommu_iova_to_phys()` in the device's
+  default domain reads `0xfa000000 -> 0x98000000` (the firmware carveout),
+  `0x83000 -> 0x98410000` and `0xfac10000 -> 0x98400000`, all correct, and
+  the wake logs no sysmmu fault.
 
-**Next:** with image, config, clock, mapping, doorbell, GSA auth and reset
-hold all excluded, the difference is below the driver's register model:
-the AUR context the core's fetch uses, the AUR PLL's lock state, or the
-S2MPU's view of the authenticated carveout. None is safely reachable from
-the driver (the core CSR block is gated in PS3, and the PMU is off limits
-from userspace). The remaining oracle is a stock Android boot, where the
+**Next:** the audit is complete and the difference is below the driver's
+register model: the AUR's own core-release condition (PLL lock or the core
+clock gate) or the S2MPU's view of the authenticated carveout. Neither is
+safely readable from the driver — the core CSR block is gated in PS3 (a
+read there hung a thread in `D`), and the PMU is off limits from
+userspace. The remaining oracle is a stock Android boot, where the
 bootloader has already started the firmware and Linux only handshakes;
-owner-gated under AGENTS.md section 1.
+the gated runbook is above and it is not approved by the development
+grant (AGENTS.md section 1).
 
 ## Gated runbook: the stock-Android slot-A oracle (HIGH risk, owner's go per step)
 

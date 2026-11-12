@@ -94,6 +94,11 @@ ten more candidates:
   reads `0x0` at the failure point, and reading it while the core is in
   PS3 hangs the calling thread, so the core CSR block is gated before the
   wake and the register is only safe to read at PS0.
+- **The reset vector resolves to the firmware (U214).** In the device's
+  default IOMMU domain, `iommu_iova_to_phys()` reads `0xfa000000 ->
+  0x98000000` (the firmware carveout), `0x83000 -> 0x98410000` and
+  `0xfac10000 -> 0x98400000` — all correct — and the wake logs no sysmmu
+  fault. The core's fetch address reaches the image in both drivers.
 - **A hand-written stub at the reset vector does not execute either.**
   With `tpu_stub=1` the stock writes a 24-byte A64 stub to
   `0xfa000000` (`str 0x1234beef` to `0xfac10000`, then spin); the U199
