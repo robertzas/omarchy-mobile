@@ -445,6 +445,9 @@ setup succeeds, and no TPU number is claimed.
 
 - **U231:** the Darwinn NNAPI service starts, but the chain's services still fail on `/dev/vndbinder` (binderfs has only `binder`; the chroot's symlinks dangle), and with the app host up its TPU group blocks the raw replay (`create_group -1`). Next: real vndbinder/hwbinder nodes and the app host stopped for the raw probe.
 
+
+- **U232:** the chroot's `vndbinder`/`hwbinder` pointed at a missing `binderfs/vndbinder`; both now point at the working `binderfs/binder`. The chain restart and app-stopped replay were cut off by a session death (the U219 class), so their results are unrecorded; next run captures the registration line and the replay response.
+
 ## Next steps
 
 1. The firmware's setup schema is the wall (U222), and a running GXP

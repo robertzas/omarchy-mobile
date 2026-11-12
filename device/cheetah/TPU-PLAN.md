@@ -9413,3 +9413,16 @@ can drive it: real `vndbinder`/`hwbinder` nodes (`BINDER_CTL_ADD` on
 the app host stopped (or its group released) for the raw probe. The map
 client held; up 108 s. The app host's `app1..app20` signature flags are its
 own defaults, not a model allowlist entry; the parser wants 3 parts.
+
+## U232 (2026-11-12): the chroot's vndbinder/hwbinder now point at the working binder node
+
+The chroot's `/dev` is its own directory, not a bind of the host's: its
+`binder` symlink resolves to `binderfs/binder`, a node inside the chroot,
+while `vndbinder`/`hwbinder` were dangling at `binderfs/vndbinder`. Both now
+point at the same `binderfs/binder` node — the one that registered the
+tachyon service in U230 — and the host's `/dev` symlinks were fixed the
+same way. The chain restart and the app-stopped gate replay that followed
+were cut off: the SSH session died mid-run (the U219 reset class), so their
+results are not recorded. The phone is checked after; on a fresh boot the
+sequence to run is the chain, the registration line in `/tmp/ts.log`, then
+`pkill -f edgetpu_app_service` and the replay with the map held.

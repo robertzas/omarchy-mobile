@@ -4,6 +4,8 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
 
 ## 2026-11-12: the TPU core boots; the runtime stops at the VII gate
 
+- TPU U232: the chroot's `vndbinder`/`hwbinder` symlinks pointed at a missing `binderfs/vndbinder`; they now point at `binderfs/binder`, the node that registered the tachyon service. The chain restart and replay were cut off by a session death, so the next run must capture the registration and the replay response.
+
 - TPU U231: the Darwinn NNAPI service starts through the chain's launcher, but the services still cannot use `/dev/vndbinder` (binderfs has only `binder`; the chroot's symlinks dangle), and the app host's TPU group blocks the raw replay's `create_group`. Next: real vndbinder/hwbinder nodes and the app host stopped.
 
 - TPU U230: binder was never missing from the kernel (`CONFIG_ANDROID_BINDER_IPC`/`BINDERFS`); binderfs was not mounted. With it mounted, the vendor chain registers the tachyon service and the Darwinn app host, which runs but has no real model signature. The setup still waits for the delegate's `CreateDevice`.
