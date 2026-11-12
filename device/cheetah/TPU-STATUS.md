@@ -439,6 +439,9 @@ setup succeeds, and no TPU number is claimed.
 
 - **U229:** with the map held, the gate's sync replay still reads `0xf000009` — the payload is the sync request, not the setup. The chain's services cannot open `/dev/binder`, so the stock app/tachyon delegate host has never run; that is the next gap, or the runtime's setup builder.
 
+
+- **U230:** the kernel has `CONFIG_ANDROID_BINDER_IPC`/`BINDERFS`; `/dev/binder` was missing because binderfs was never mounted. With it mounted, the chain registers the tachyon `IComputeService` and the vendor service, and the Darwinn app host runs (its app-signature flags are the malformed `app1..app20=1` placeholders). The replay still gates; the delegate host needs a real model signature/client to send the setup.
+
 ## Next steps
 
 1. The firmware's setup schema is the wall (U222), and a running GXP

@@ -9370,3 +9370,24 @@ service) has never reached the tachyon service on this port. That gap, not
 the GXP map, is now the block on the stock setup path; the alternative is
 the runtime's own setup builder (U5's `0x13befc`). The mapping client held
 and the phone stayed up through the replay (up 143 s).
+
+## U230 (2026-11-12): the kernel has binder; mounting binderfs was the missing service step
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, same boot as U229.
+
+The kernel has `CONFIG_ANDROID_BINDER_IPC=y` and
+`CONFIG_ANDROID_BINDERFS=y`; `/dev/binder` was absent only because binderfs
+had never been mounted. After `mount -t binder binder /dev/binderfs` and
+the `/dev/binder` symlink, a fresh chain run registers
+`com.google.edgetpu.tachyon.IComputeService/default` (tachyon 4863), the
+vendor service (`IEdgeTpuVendorService/default`) and the Darwinn app host
+(app 4882). The app host's log shows its app-signature allow-list parse:
+the chain's `app1..app20=1` placeholders are malformed ("Signature entry
+should have 3 parts"), so it has not loaded a model.
+
+The gate replay with the chain up still reads `0xf000009`: the delegate
+host has not sent a `CreateDevice`/setup yet, and no model client drives
+it. That is the remaining piece on the stock path — the app host needs a
+real model signature (the earcheek classifier) or the NNAPI client that
+sends one. The mapping client held through all of it; the phone stayed up
+(up 197 s).
