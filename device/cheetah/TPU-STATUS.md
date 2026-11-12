@@ -32,7 +32,9 @@ read with `of_address_to_resource()`. The virtual device now allocates. The
 GXP's core 0 still does not execute its firmware (it powers to PS0 with the
 image verified in its carveout, but never writes the alive magic), so the
 Tachyon producer has not run; a handshake bypass let the wakelock succeed but
-no TPU client got further. No inference or benchmark yet.
+no TPU client got further. The last AP-side suspect, the ETM core-reset bit
+that `hold_core_in_reset()` sets and never clears, cannot be checked from the
+AP: reading it raises a data abort (U192). No inference or benchmark yet.
 
 ## 2026-11-11 update: the GXP core boots
 

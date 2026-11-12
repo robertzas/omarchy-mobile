@@ -8926,3 +8926,25 @@ executes it. Remaining routes: the stock-boot oracle (owner-gated, AGENTS §1,
 with a fresh `tools/nv-backup --check` and the `efs`/`persist`/`modem_userdata`
 rewrite cost) or the bootloader/GSA `tpu-mgr` reverse pass (U157/U158). Neither
 has been run.
+
+## U192 (2026-11-12): the ETM core-reset bit aborts on a read from the AP
+
+`hold_core_in_reset()` (`gxp-vd.c`) writes bit 16 of
+`GXP_REG_CORE_ETM_PWRCTL(core)` (AUR CSR offset `0xB020`) and nothing in the
+driver ever clears it. Its callers are in the stop and suspend paths only, so a
+bit left set by the bootloader, or by a hold after a stuck core, would survive
+the next core power-on. That made it the last AP-side candidate for the cold
+boot: the core reaches PS0 with its reset vector programmed but never fetches
+the firmware.
+
+The register cannot be read (or cleared) from Linux. Reading it at the top of
+`gxp_program_reset_vector()` raised a synchronous data abort (`do_mem_abort`,
+`gxp_program_reset_vector+0x4c`), and the ioctl caller stayed in D state
+(`gxp_client_destroy` and a second client in
+`gxp_client_allocate_virtual_device`) until `systemctl reboot`. So the
+ETM/debug sub-block of the AUR CSRs is not accessible from the AP; the
+hypothesis is closed, not answered. Never read or write ETM_PWRCTL from Linux.
+
+The access was reverted and the honest module rebuilt (`/root/gxp-stock.ko`,
+no ETM strings); the phone rebooted cleanly onto the same kernel
+(`7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`), the D-state clients gone.
