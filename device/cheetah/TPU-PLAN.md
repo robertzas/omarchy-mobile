@@ -34,6 +34,21 @@ Written against `omamobile` (Linux
 build `cheetah-cp2a.260705.006`. Kernel branch `omamobile-tpu`, worktree
 `~/omamobile-kernel/wt-tpu`, output `~/omamobile-kernel/out-tpu`.
 
+Status (2026-11-12): **T6 is blocked on two fronts, and the binder one is now
+characterized.** The userspace protocol is solved: gdb on servicemanager's
+`Parcel::enforceInterface` (driven by the chroot's own `dumpsys -l`) dumped a
+working parcel - `0x80000000`, workSource, `VNDR`, then a NUL-terminated
+string16 descriptor - and `tools/tpu-binder-client` now sends exactly that, so
+`getService` parses and looks the name up instead of failing the interface
+check (U246). What still fails is the service's lifetime: the tachyon process is
+a lazy `oneshot` AIDL service whose registrar asks for its client count at
+startup, is told zero, and unregisters in the same instant it registers
+(`No clients in use for any service in process. Unregistered all clients and
+exiting`, U247). `getService` therefore returns `BR_FAILED_REPLY` and no
+session exists to create. On the driver side the wall is unchanged: the
+firmware's one-time VII setup has no producer in the A17 image (U56), and every
+command before it is rejected as `type 0` (U222/U229). No inference has run.
+
 Goal: run one real int8 model on the phone's Edge TPU from Linux, then make it
 usable as a normal accelerator (a TFLite delegate or a small runtime), with
 thermal and power limits, without touching the radio, calibration data or
@@ -631,6 +646,120 @@ them. The tool must be root-only initially (the device node is `0600` or
   image. The user runs it on the laptop.
 
 ---
+
+## 5.1 Roadmap to a fully working TPU (2026-11-12)
+
+This is the plan of record from T6 on. The U-entries below are the evidence log;
+this section says what is left, in order, each with a gate, a stop condition and
+a rollback. Phases A-E are the userspace/binder path, F-G the driver/VII path,
+H-I the product work. Nothing here overrides AGENTS.md section 1.
+
+### Phase A - a Tachyon service that stays registered
+
+Why: a session cannot exist while the service unregisters at startup (U247).
+Done when: after the chain starts, `/vendor/bin/dumpsys -l` lists
+`com.google.edgetpu.tachyon.IComputeService/default` for 60 s and
+`pgrep -x com.google.edge` still answers at the end.
+
+Approaches, in order:
+1. Chain order: start the app service (`vendor.google.edgetpu_app_service`) side
+   by side with tachyon, or first, so a client attaches as tachyon registers.
+   The app service is itself a client of tachyon and is what produced the one
+   observed "they do have clients" window.
+2. Eager registration: `tools/android-lazysvc-eager.c` redirects
+   `AServiceManager_registerLazyService` to `addService`; the chroot already
+   loads it as `/system/lib64/liblazysvc.so` (the shipped copy is built from
+   it). Verify with `LAZYSVC-EAGER` on stderr, then check the service's lifetime.
+3. Shutdown stub: if the registrar still exits, build one more shim with
+   `clang --target=aarch64-linux-android30 -shared -fPIC -nostdlib` that also
+   returns success from the registrar's client-callback path, so no shutdown
+   signal can arrive.
+4. Hold from startup: run a holder that loops `getService` and keeps the first
+   handle alive (`tpu-hold` does this for the TPU device, not for binder).
+
+Stop condition: three approaches without a 60 s lifetime -> stop and disassemble
+`AidlLazyServiceRegistrar` in the service instead of writing more shims.
+Rollback: the chain script is idempotent; replacing `liblazysvc.so` is reversible
+from `out/tpu-client/`.
+
+### Phase B - createSession
+
+Requires A. Then `tools/tpu-binder-client` creates the service handle and calls
+`createSession` (method 1) with the 0x28-byte config: privileged=1, zeros
+elsewhere (stock's HAL defaults).
+Done when: the reply is a normal `BR_REPLY` carrying a session binder (a
+`flat_binder_object`) and the service logs the session, with no
+`BR_FAILED_REPLY`.
+Stop: if the service answers with a status instead of a binder, read that status
+first (`TachyonStatusCode_toString` from the vendor library) before changing the
+config. Rollback: none needed; sessions are per-process.
+
+### Phase C - command and response queues
+
+Use `TachyonComputeSession_setupCommandQueue`/`setupResponseQueue` semantics: the
+session owns an FMQ pair; the client maps the command buffer for writing and the
+response buffer for reading.
+Done when: setup returns success and the service reports the queues.
+Stop: a failure here means the session ABI differs from the NDK binding
+(U237); re-read the binding before guessing layouts.
+
+### Phase D - the firmware's setup command
+
+This is the same wall as the direct VII path (U222): the firmware refuses every
+command until its one-time setup runs, and the A17 userspace contains no setup
+producer (U56). With a session, the setup arrives through the command queue.
+Done when: the firmware stops answering `0xf000009`/`type 0` and acknowledges the
+setup element.
+Stop: if the session accepts commands but the firmware still refuses, the setup
+producer must come from the stock stack (attended slot-A capture, gated by
+AGENTS section 1) - do not brute-force schema bytes again (U8, U18).
+
+### Phase E - the first inference
+
+Send the earcheek model's setup and execute commands, read the output tensor,
+compare with the stock result.
+Done when: the classifier's top label matches stock on the same input, repeated
+100 times without a timeout, and `dmesg` shows no TPU or IOMMU errors.
+Rollback: the TPU is per-boot; a bad run only costs a reboot (stop the modem
+first, AGENTS section 2).
+
+### Phase F - a real client (removes the hand-built parcel)
+
+The raw-binder client exists to characterize the protocol; production code
+should link the vendor libbinder (`out/vendor-chroot-edgetpu/root/vendor/lib64/
+libbinder.so`) or use the NDK binding. The host has no NDK, but host clang can
+target bionic for freestanding shims; a linked C++ client needs an NDK or the
+chroot's headers.
+Done when: `BpComputeService::createSession` is called from a compiled binary,
+not raw bytes.
+
+### Phase G - the driver path as the fallback
+
+If the userspace path stays blocked, recover the setup element from the stock
+boot (attended slot-A capture, NV checks before and after, AGENTS section 1) and
+replay it over the VII ring (U229).
+Done when: the firmware accepts the replayed setup and VII `Invoke` returns
+output.
+
+### Phase H - packaging and power
+
+A TFLite delegate or a small runtime, thermal and power limits, one TPU power-up
+per cold boot, and no interaction with the modem's UFS error-handler pass.
+
+### Phase I - validation
+
+60-frame benchmark against the CPU and GPU numbers (U118), battery drain under
+load, suspend with a session open, and the pull-request gate
+(`tools/pr-check`).
+
+### Immediate next actions
+
+1. Reorder the chain so the app service starts before tachyon; confirm 60 s.
+2. If it exits, rebuild the eager shim with the shutdown stub and retest.
+3. With a live service, run `/root/tpu-binder-client /mnt/tpufs/vndbinder` and
+   record the reply; then `createSession`.
+4. If the service cannot be kept alive, build the client bionic against the
+   vendor libbinder and retry Phase B there.
 
 ## 6. Bring-up gates
 
