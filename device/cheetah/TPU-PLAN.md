@@ -9092,6 +9092,10 @@ this round removed every remaining host-side explanation.
   default domain reads `0xfa000000 -> 0x98000000` (the firmware carveout),
   `0x83000 -> 0x98410000` and `0xfac10000 -> 0x98400000`, all correct, and
   the wake logs no sysmmu fault.
+- **U215, the AUR block.** At PS0 the readable core block is
+  `4000:0 4004:0 4008:fa000000 400c:1 4010:1 4014:1f5600ff 4018:0
+  401c:101`, the in-tree's working values, and a read of `4020` hangs the
+  thread, so the remainder of the block cannot be audited from the driver.
 
 **Next:** the audit is complete and the difference is below the driver's
 register model: the AUR's own core-release condition (PLL lock or the core

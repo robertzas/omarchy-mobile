@@ -99,6 +99,13 @@ ten more candidates:
   0x98000000` (the firmware carveout), `0x83000 -> 0x98410000` and
   `0xfac10000 -> 0x98400000` — all correct — and the wake logs no sysmmu
   fault. The core's fetch address reaches the image in both drivers.
+- **The readable AUR block matches, and the rest is unreadable (U215).** At
+  PS0 the core block reads `0x4000 0x0`, `0x4004 0x0`, `0x4008
+  0xfa000000`, `0x400c 0x1`, `0x4010 0x1`, `0x4014 0x1f5600ff`, `0x4018
+  0x0`, `0x401c 0x101` — the in-tree's working values — and a read of
+  `0x4020` hangs the calling thread, so the rest of the AUR block cannot
+  be audited from the driver. The CMU mux reads `16` at `0x100` and
+  `0x610` (normal).
 - **A hand-written stub at the reset vector does not execute either.**
   With `tpu_stub=1` the stock writes a 24-byte A64 stub to
   `0xfa000000` (`str 0x1234beef` to `0xfac10000`, then spin); the U199
