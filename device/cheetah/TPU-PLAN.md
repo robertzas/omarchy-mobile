@@ -9519,3 +9519,16 @@ logs `Registering service com.google.edgetpu.tachyon.IComputeService/default`
 tachyon 8944 / app 8971). The chroot nodes now answer `BINDER_VERSION`
 (binder, vndbinder: protocol 8). The remaining step is the client that
 drives `CreateComputeSession` with a model.
+
+### U237 — the NDK client API is mapped (2026-11-12)
+
+`com.google.edgetpu.tachyon-ndk.so` (stripped, Android 37, aarch64) is the
+client binding: `BpComputeService::createSession(const
+IComputeService::SessionConfig&, IComputeService::CreateSessionReturn*)`,
+`BnComputeService`, and `IComputeServiceDefault` (which resolves the
+registered `IComputeService/default`). The session object follows with
+`TachyonComputeSession_setupCommandQueue`/`setupResponseQueue` from
+`libedgetpu_tachyon.google.so`. The client is therefore a small NDK
+program: get the default service, fill a 0x28-byte `SessionConfig`, call
+`createSession`, set up the queues, then send the model's setup/execute
+commands over them — the first real inference attempt.

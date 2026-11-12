@@ -466,6 +466,9 @@ setup succeeds, and no TPU number is claimed.
 
 - **U236: the tachyon service registers.** The chroot's binderfs was stale; the chain now bind-mounts the host's `/dev/binderfs` into it, and `com.google.edgetpu.tachyon.IComputeService/default` registers. Next: the CreateComputeSession client.
 
+
+- **U237: the NDK client API is mapped** — `BpComputeService::createSession` + `IComputeServiceDefault`, then `TachyonComputeSession_setupCommandQueue`. The session client is the next build.
+
 ## Next steps
 
 1. The firmware's setup schema is the wall (U222), and a running GXP

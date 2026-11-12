@@ -4,6 +4,8 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
 
 ## 2026-11-12: the TPU core boots; the runtime stops at the VII gate
 
+- TPU U237: the ndk binding `com.google.edgetpu.tachyon-ndk.so` exposes `BpComputeService::createSession` and `IComputeServiceDefault`; with `TachyonComputeSession_setupCommandQueue` the session client is a small NDK program.
+
 - TPU U236: the chroot's `/dev/binderfs` was stale (ENXIO); the chain now bind-mounts the host's `/dev/binderfs` into the chroot, and the tachyon service registers (`IComputeService/default`, up 964 s).
 
 - TPU U235 correction 2: the kernel's `BINDER_VERSION` is command 9, the AOSP numbering (the A17 libbinder's too). The command-1 probe was the wrong test; the registration failure is the chroot's device path, not the UAPI numbering.
