@@ -354,9 +354,11 @@ setup succeeds, and no TPU number is claimed.
   Its host `sleep`, `pkill` and `chroot` children load the bionic shims
   and segfault, so no service starts; the repo's `tools/tpu-exec.py`
   pattern (chroot in-process, clean env) does not have this fault.
-- **Load `gxp-stock.ko` after `gsa`.** An `insmod` before gsa's autoload
-  fails with "Unknown symbol in module"; after `gsa` is up the probe
-  completes.
+- **Load `gxp-stock.ko` after janeiro autoloads.** At uptime 52 s, with
+  `gsa` already up but janeiro not yet, an `insmod` still fails with
+  "Unknown symbol in module"; at 95 s, after janeiro's autoload brought
+  its dependencies, the probe completes. Wait for `/dev/janeiro` (about
+  70 s) and a settled system before loading it.
 
 ## Next steps
 
