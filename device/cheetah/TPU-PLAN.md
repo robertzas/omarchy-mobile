@@ -9494,3 +9494,14 @@ the Android numbers (a kernel change: build, push, reboot) or a libbinder
 built against the kernel's UAPI. The number sweep (`0x40046201`,
 `0xc0046201`, `0x40086201`, `0xc0086201`, `0x6201`, ...) all returned
 EINVAL, consistent with the renumbering.
+
+### Correction 2 to U235
+
+The kernel's `BINDER_VERSION` is `_IOWR('b', 9, struct binder_version)` —
+the AOSP numbering, which the A17 libbinder also uses. The earlier probe
+tested command 1 (and other variants), none of which is the AOSP
+`BINDER_VERSION`, so its EINVAL proved nothing about the UAPI. The
+command-9 probe (`0xc0046209`/`0xc0086209`) is the relevant one; the
+services' registration failure is therefore not the command numbering and
+must come from the device path (the chroot's `/dev/vndbinder`, the node
+mode, or `tpu-exec.py`'s `/dev` handling).

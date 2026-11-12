@@ -460,6 +460,9 @@ setup succeeds, and no TPU number is claimed.
 
 - **U235 corrected:** the kernel's binder header has `BINDER_VERSION = _IOWR('b', 9, ...)` (binder.h:267) while the A17 libbinder uses command 1 — the numbering does not match, so no service can register. Fix: a kernel binder accepting the Android numbers, or a libbinder built against the kernel's UAPI.
 
+
+- **U235 correction 2:** the kernel's `BINDER_VERSION` is command 9 (AOSP numbering, the A17 libbinder's too); the earlier command-1 probe's EINVAL proved nothing. The command-9 probe is the relevant one; the registration failure is a device-path issue, not numbering.
+
 ## Next steps
 
 1. The firmware's setup schema is the wall (U222), and a running GXP
