@@ -8948,3 +8948,8 @@ hypothesis is closed, not answered. Never read or write ETM_PWRCTL from Linux.
 The access was reverted and the honest module rebuilt (`/root/gxp-stock.ko`,
 no ETM strings); the phone rebooted cleanly onto the same kernel
 (`7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`), the D-state clients gone.
+
+A fresh read-only NV backup of the radio and calibration partitions was taken
+after the reboot (`tools/nv-backup`, 657 MiB, all seven partitions verified
+against the phone; private, in gitignored `out/`), so the stock-boot oracle
+only waits on the owner's per-step go.
