@@ -9646,3 +9646,15 @@ separate arms for a parcel whose request header is already present (descriptor f
 one where it is not (workSource, header, descriptor). Which arm the manager takes on our
 transaction is now the single remaining unknown, and the binary that answers it is on
 disk. No inference has run.
+
+### U245 — the descriptor sweep reads empty at every offset; the repo gate is green (2026-11-12)
+
+With the `VNDR` word held at offset 8 (the one position the manager accepts), the client
+moved the interface descriptor from 12 to 28 in 4-byte steps and sent `getService` for
+each. All five runs log `enforceInterface() expected 'android.os.IServiceManager' but
+read ''`, and none receives a reply. So the manager's descriptor read is not landing on
+any of the bytes the client writes, which points at the reader's recorded work-source
+position rather than at the argument order. That is the state a real libbinder client
+avoids by construction. `tools/pr-check` is green after removing the committed
+`detect_edgetpu.tflite` (Google's model must come from the user's own image). No
+inference has run.

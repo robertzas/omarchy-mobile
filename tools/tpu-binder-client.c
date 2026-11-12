@@ -251,12 +251,14 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	for (pad = 0; pad < 1; pad++) {
-		printf("== getService ==\n");
+	for (pad = 0; pad <= 4; pad++) {
+		printf("== gap %u ==\n", pad);
 		memset(&p, 0, sizeof p);
-		put32(&p, 0);	/* strict policy */
-		put32(&p, 0xffffffff);	/* kUnsetWorkSource */
-		put32(&p, 0x564e4452);	/* kHeader, VNDR */
+		put32(&p, 0xffffffff);
+		put32(&p, 0);
+		put32(&p, 0x564e4452);
+		for (i = 0; i < pad; i++)
+			put32(&p, 0);
 		putstr16(&p, iface);
 		putstr16(&p, name);
 		binder = 0;
@@ -264,20 +266,9 @@ int main(int argc, char **argv)
 		printf("getService: rc %d handle %u\n", rc, binder);
 		if (rc == 0) {
 			dump_parcel("reply", reply.buf, reply.len, reply.off, reply.noff);
-			memset(&p, 0, sizeof p);
-			put32(&p, 0);
-			put32(&p, 0xffffffff);
-			put32(&p, 0x564e4452);
-			putstr16(&p, "com.google.edgetpu.tachyon.IComputeService");
-			put32(&p, 1);	/* privileged */
-			for (i = 3; i < (u32)argc; i++)
-				put32(&p, (u32)strtoul(argv[i], NULL, 0));
-			rc = transact(fd, binder, 1, &p, &reply, &binder);
-			printf("createSession: rc %d\n", rc);
-			if (rc == 0)
-				dump_parcel("session reply", reply.buf, reply.len,
-					    reply.off, reply.noff);
+			break;
 		}
+		usleep(150000);
 	}
 	close(fd);
 	return 0;
