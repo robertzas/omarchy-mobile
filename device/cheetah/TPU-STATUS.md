@@ -463,6 +463,9 @@ setup succeeds, and no TPU number is claimed.
 
 - **U235 correction 2:** the kernel's `BINDER_VERSION` is command 9 (AOSP numbering, the A17 libbinder's too); the earlier command-1 probe's EINVAL proved nothing. The command-9 probe is the relevant one; the registration failure is a device-path issue, not numbering.
 
+
+- **U236: the tachyon service registers.** The chroot's binderfs was stale; the chain now bind-mounts the host's `/dev/binderfs` into it, and `com.google.edgetpu.tachyon.IComputeService/default` registers. Next: the CreateComputeSession client.
+
 ## Next steps
 
 1. The firmware's setup schema is the wall (U222), and a running GXP

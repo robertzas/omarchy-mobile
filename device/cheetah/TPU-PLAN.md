@@ -9505,3 +9505,17 @@ command-9 probe (`0xc0046209`/`0xc0086209`) is the relevant one; the
 services' registration failure is therefore not the command numbering and
 must come from the device path (the chroot's `/dev/vndbinder`, the node
 mode, or `tpu-exec.py`'s `/dev` handling).
+
+### U236 — the chroot's binderfs was stale; the host's is bind-mounted (2026-11-12)
+
+The registration failure was not the UAPI (command 9 works: `0xc0046209`
+returns protocol 8) but the chroot's device path: `$R/dev/binderfs/binder`
+was a stale node (open ENXIO) and `hwbinder`/`vndbinder` did not exist
+there. The chain now bind-mounts the host's `/dev/binderfs` into the chroot
+(`mount --bind /dev/binderfs "$R/dev/binderfs"` before the symlinks), and
+the servicemanager, vendor, tachyon and app services start; the tachyon
+logs `Registering service com.google.edgetpu.tachyon.IComputeService/default`
+(chain run at up 964 s, pids sm 8901 / power 8913 / vendor 8934 /
+tachyon 8944 / app 8971). The chroot nodes now answer `BINDER_VERSION`
+(binder, vndbinder: protocol 8). The remaining step is the client that
+drives `CreateComputeSession` with a model.
