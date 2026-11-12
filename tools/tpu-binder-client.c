@@ -273,7 +273,7 @@ int main(int argc, char **argv)
 			printf("getService try %u: rc %d handle %u\n", i, rc, binder);
 			if (rc == 0 && binder)
 				break;
-			sleep(1);
+			usleep(100000);
 		}
 		if (!binder)
 			goto out;
