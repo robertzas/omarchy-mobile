@@ -26,9 +26,12 @@ bootloader's ARM32 `tpu-mgr`. The last AP-side combination, KCI 6 carrying
 the captured HAL blob, also answers `3` (INVALID_ARGUMENT). The missing
 producer was found to be the GXP's Tachyon firmware, which no Linux client
 had started: a `/dev/gxp` VD client now exists (`tools/gxp-tachyon-start.c`),
-and its first `-EINVAL` was traced to an unaligned TPU mailbox paddr. The
-fix's test boot did not come back and needs a physical restart. No inference
-or benchmark yet.
+and its `-EINVAL` is fixed: the stock DT's `gxp-tpu-mbx-offset` is `0xc0000`
+(not `0xc00`), which puts the mailbox at `0x1cec0000`, and the base address is
+read with `of_address_to_resource()`. The virtual device now allocates. The
+GXP's core 0 still does not execute its firmware (it powers to PS0 with the
+image verified in its carveout, but never writes the alive magic), so the
+Tachyon producer has not run. No inference or benchmark yet.
 
 ## 2026-11-11 update: the GXP core boots
 

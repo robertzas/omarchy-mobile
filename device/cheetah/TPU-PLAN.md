@@ -8855,3 +8855,44 @@ do not use Volume Down + Power, which is fastboot). Then the test resumes at
 Operational note: `rmmod gxp` on this kernel **segfaults** and leaves the
 platform device bound, so a new `gxp.ko` needs a reboot; do not try to
 replace the module by `rmmod`/`insmod`.
+
+## U190 (2026-11-12): the TPU mailbox is at 0x1cec0000; the GXP cold boot still does not execute
+
+Two fixes took the stock `/dev/gxp` client from `-EINVAL` to a successful virtual
+device, and then a third wall appeared.
+
+* **The mailbox value.** Stock's `gxp-tpu-mbx-offset` is two cells,
+  `<0x0 0xc0000>` (U84 read it as one cell; U186 then changed ours to
+  `0xc00`). The property bytes `00 0c 00 00` are `0xc0000`, not `0xc00`: U186
+  read an `od -tx4` line through the wrong endianness. With `0xc0000` the
+  mailbox is `0x1ce00000 + 0xc0000 = 0x1cec0000`, exactly
+  `GXP_IOVA_EXT_TPU_MBX`, which is the strongest confirmation that the value
+  is right.
+* **The base address.** `of_property_read_u64_index(np, "reg", 0)` folded our
+  one-address-cell `janeiro` reg (`<0x1ce00000 0x200000 …>`) into
+  `0x1ce00000_00200000`, so the mailbox mapped at a nonsense paddr. Stock's
+  two-cell DT made that read work there. `of_address_to_resource()` reads the
+  node's real cell count.
+* **Result:** `allocate_vd cores 1 -> 0 (ok) vdid 1` and a map at
+  `0x1cec0000`. The wakelock then fails because core 0 does not run.
+
+**The cold boot.** Core 0 is powered (PS0, `Core 0 powered up`), its alternate
+reset vector is programmed (both the SSMT IOVA `0xfa000000` and the carveout
+paddr `0x98000000` were tried), and the image is demonstrably in the carveout:
+the first words read `0x2c06 0x0`, matching the ELF segment at file offset
+`0xc0`. The GSA loaded and authenticated all four bodies at
+`0x98000000`+core, and the ELF is rearranged after authentication. Yet no
+`Q7_ALIVE_MAGIC` arrives after a 5 s window (`magic 0x0, boot_status 0x0,
+top_access 0x0`). The image side is sound; the core does not execute.
+
+Also added: stock's `gcip-dvfs-table`/`-size` (thermal only) and a note that
+the PMU warning (`pmu-aur-status`, absent on stock too) is normal.
+
+**Do not write `/sys/kernel/debug/gxp/cmumux{1,2}` casually.**
+`AUR_CMU_MUX_NORMAL` is **1** (`AUR_CMU_MUX_LOW` is 0); the muxes read `0x10`
+(state 1, normal). Writing 0 selects the low mux under a running AUR and reset
+the phone. The mix-up is here so nobody repeats it.
+
+**Next route:** the bootloader/GSA `tpu-mgr` start of the GXP/Tachyon (U157,
+U158) or the stock-boot oracle. The driver's own cold boot does not run the
+core, so more of its parameters are unlikely to help first.
