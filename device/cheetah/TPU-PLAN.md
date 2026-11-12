@@ -9632,3 +9632,17 @@ The chroot holds only the system libbinder (whose header constant is `SYST`, see
 U242), no vendor libbinder, so the vendor prologue cannot be read from this image.
 That single extra word is the last unknown; a client built against the vendor
 libbinder writes it itself. No inference has run.
+
+### U244 — the vendor libbinder is in the repo extraction, and its writer confirms the layout (2026-11-12)
+
+U243 said no vendor libbinder was available; that was true of the phone's chroot, but the
+repo's extraction has one at `out/vendor-chroot-edgetpu/root/vendor/lib64/libbinder.so`
+(`writeInterfaceToken(const char16_t*, size_t)` at 0x93650, `enforceInterface` at 0x7da60).
+Its writer stores the `VNDR` word (`mov w10, #0x4452; movk w10, #0x564e, lsl #16`) at the
+current data position and only then writes the descriptor string: the layout is
+`[workSource][VNDR][string16 interface][args]`, with the workSource word reserved by
+`updateWorkSourceRequestHeaderPosition()` and filled in at transact time. The reader has
+separate arms for a parcel whose request header is already present (descriptor first) and
+one where it is not (workSource, header, descriptor). Which arm the manager takes on our
+transaction is now the single remaining unknown, and the binary that answers it is on
+disk. No inference has run.
