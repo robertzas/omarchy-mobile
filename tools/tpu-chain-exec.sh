@@ -63,7 +63,7 @@ if ! pgrep -x tpu-hold >/dev/null; then
 fi
 PRELOAD="$SVC" TPU_UID=1000 TPU_GID=1000 LOG=/tmp/ts.log \
 	/root/tpu-exec.py daemon tachyon /vendor/bin/hw/com.google.edgetpu.tachyon-service
-sleep 3
+sleep 0.5
 PRELOAD="$SVC" TPU_UID=1000 TPU_GID=1000 LOG=/tmp/as.log \
 	/root/tpu-exec.py daemon app \
 	/system_ext/bin/hw/vendor.google.edgetpu_app_service@1.0-service

@@ -679,6 +679,18 @@ Approaches, in order:
 
 Stop condition: three approaches without a 60 s lifetime -> stop and disassemble
 `AidlLazyServiceRegistrar` in the service instead of writing more shims.
+
+Result (2026-11-12): approaches 1 and 2 are spent. Starting the app service 0.5 s
+behind tachyon (`tools/tpu-chain-exec.sh`, changed from 3 s) still leaves no
+tachyon process after 25 s, and the chroot's `liblazysvc.so` is now the eager
+build (`tools/android-lazysvc-eager.c`, md5 `6f310f4e...`) yet the service still
+logs `Unregistered all clients and exiting` and calls `unregisterService` about a
+second after registering. `getService` from a client retrying every 100 ms still
+answers `BR_FAILED_REPLY`. Approach 3 cannot help as written: the service imports
+only `AServiceManager_registerLazyService@LIBBINDER_NDK31`, so there is no client
+callback symbol to stub. The stop condition is therefore reached for shims; the
+next step is the registrar disassembly (or an init-style starter that begins the
+service only after a client request is pending).
 Rollback: the chain script is idempotent; replacing `liblazysvc.so` is reversible
 from `out/tpu-client/`.
 
