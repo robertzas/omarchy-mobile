@@ -9185,6 +9185,12 @@ Recorded as **not run** on 2026-11-12: the previous attempt found no `adb
 root` on slot A's retail build, and the runbook forbids flashing a stock boot
 image to gain it.
 
+2026-11-12 (later): the owner approved the boot, and
+`tools/nv-backup --check out/nv-cheetah-20261112` passed (all seven
+partitions SAME). The boot is held at the fourth precondition: the battery
+reads 50 % and `Discharging`, and this runbook requires above 50 % with the
+charger in. No slot flag was written.
+
 ## U223 (2026-11-12): the GXP core start does not set the TPU up
 
 Fresh boot on `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`: `modprobe
