@@ -2,6 +2,28 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-12: the TPU core boots; the runtime stops at the VII gate
+
+- **Core 0 boots from the stock 6.1 gxp driver** on the default IOMMU
+  domain (built with `KCFLAGS=-DGXP_USE_DEFAULT_DOMAIN`): `Core 0 is
+  alive!`, `TOP access from core 0 successful!`, and the VD wakelock
+  serves `allocate_vd`/`acquire_wake` end to end (U216, U217).
+- **Load order:** `modprobe janeiro` first (gxp imports
+  `edgetpu_ext_driver_cmd`), then `insmod /root/gxp-stock.ko`; janeiro
+  does not autoload.
+- **The stock runtime works from the phone's vendor chroot**
+  (`/usr/lib/omamobile-vendor/edgetpu/root`). Its `/dev/janeiro` must be a
+  real cdev node: the tachyon runner leaves a regular file there, and a
+  regular file answers `ENOTTY` to every ioctl, which looked like a driver
+  UAPI failure for a day. With a real node, `edgetpu-run` creates the
+  group, sets its eventfd, finalizes and maps its queues, then waits at
+  the firmware's VII setup gate (U218).
+- **A gxp VD client run can reset the phone** (U219): it did once, with no
+  pstore entry. The probe's secure-data warning is a non-fatal `dev_warn`.
+  Run gxp clients only on a fresh boot with the log streamed.
+- `tools/tpu-exec.py`'s chroot-per-process pattern avoids the installed
+  tachyon runner's `LD_PRELOAD` leak, which segfaults host tools.
+
 ## 2026-11-09: the 2026.11.08 test install, and an update run as root
 
 The release's signed bundle, `omamobile-cheetah-2026.11.08`, installed on the

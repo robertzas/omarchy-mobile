@@ -340,14 +340,16 @@ The CPU rows are XNNPACK on the laptop; the GPU row is LiteRT
 TPU row is deliberately empty: there is no inference until the firmware
 setup succeeds, and no TPU number is claimed.
 
-- **U218 (2026-11-12): the runtime binds to janeiro, not gxp.** The
+- **U218 (2026-11-12): the runtime works; the hang is the VII gate.** The
   vendor chroot at `/usr/lib/omamobile-vendor/edgetpu/root` is complete,
-  and `/vendor/bin/edgetpu-run` parses the model and gets the runtime's
-  own spec (`/dev/edgetpu`, 5 cores, 1 path). It then calls
-  `EDGETPU_CREATE_GROUP` and gets `ENOTTY` through both `/dev/edgetpu-soc`
-  and `/dev/janeiro` on this kernel (`a78d26f63e56`), so the delegate
-  never reaches the driver; U29's working create-group (2026-11-07) did
-  not reproduce after these reboots. `tpu-core-session` aborts earlier in
+  and `/vendor/bin/edgetpu-run` parses the model, gets the runtime's own
+  spec (`/dev/edgetpu`, 5 cores, 1 path), and — once the chroot's
+  `/dev/janeiro` is a real cdev node rather than the stale regular file
+  an earlier tachyon run left behind (a regular file answers `ENOTTY` to
+  every ioctl) — gets `CREATE_GROUP` 0, `SET_EVENTFD` 0,
+  `FINALIZE_GROUP` 0 and its CSR/queue mmaps, then waits for a VII
+  response until killed. That is U29's VII setup gate, not a driver UAPI
+  problem. `tpu-core-session` still aborts earlier in
   `edgetpu_android_property_util.cc:284`, "Unknown platform ID on
   Android: 6", before touching a device.
 - **The installed `/root/tpu-tachyon-run` (Nov 9) leaks `LD_PRELOAD`.**
@@ -361,21 +363,21 @@ setup succeeds, and no TPU number is claimed.
   for `/dev/janeiro`, then load gxp; that is the sequence that boots core
   0.
 
-- **U219 (2026-11-12): without the secure-data region, a VD client resets
-  the phone.** After the day's reboots the gxp probe logs "Unable to
-  acquire firmware secure data reserved memory", and running
-  `/root/gxp-tachyon-start 1 4` immediately after reset the phone: the SSH
-  connection dropped mid-run with no client output and no pstore entry,
-  and the phone came back on the next boot. U217's core start remains the
-  last known-good run. That warning is now a stop condition: no further
-  gxp client run until the reserved-memory lookup is fixed and a fresh
-  boot's probe acquires the region.
+- **U219 (2026-11-12): a gxp VD client can reset the phone.** Running
+  `/root/gxp-tachyon-start 1 4` after the probe's secure-data warning reset
+  the phone: SSH dropped mid-run, no client output, no pstore entry, and
+  it came back on the next boot. The warning itself is not fatal: the
+  driver logs it with `dev_warn` and continues (the region is for the
+  debugfs resource-access test), so the reset's cause is unproven. Treat a
+  gxp client run as reset-capable: fresh boot, log streamed, and no second
+  run in the same boot. U217's core start remains the last known-good run.
 ## Next steps
 
-1. Fix the gxp probe's firmware secure-data reserved-memory lookup (U219)
-   and repeat the U217 run on a fresh boot; until then, no VD client. The
-   stock runtime's janeiro UAPI wall (U218) is the other blocker: its
-   `EDGETPU_CREATE_GROUP` answers `ENOTTY`. No inference has run.
+1. Open the VII setup gate through the stock Tachyon service path (U218):
+   the delegate reaches finalize and waits, and the service's setup
+   command is what the firmware accepts. Run the repo's
+   `tools/tpu-tachyon-run` on a fresh boot with the chroot's device nodes
+   real. No inference has run.
 2. Or continue the repo's own DDI path: get past the firmware's VII setup
    gate, then `CreateExecution` (9), `BindInputBuffersToTensors` (12),
    `BindOutputBuffersToTensors` (13) and `Invoke` (11), then the 60-frame
