@@ -9051,3 +9051,93 @@ into the NS region page (as `gxp_ns_preload()` did) when the NS region is
 mapped, or once into a shared page before the VD; the firmware manager holds
 the loaded image. That is a code change plus one boot, not another register
 probe.
+
+## U207-U213 (2026-11-12): the image, the clock and the mapping are exonerated
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B. The stock
+6.1 port still powers core 0 to PS0 and never gets the alive magic, but
+this round removed every remaining host-side explanation.
+
+- **U207, the doorbell order.** The in-tree sets the wake doorbell, polls
+  for PS0, then clears it; its U205 dump reads `doorbell 0x0`, so U198's
+  reading ("the in-tree leaves it asserted") was wrong. With the clear
+  moved after the PS0 poll the stock reads `psm state 0 (powered 1),
+  intmask0 0x1, doorbell 0x0` — the same CSR state as the working in-tree
+  boot — and still no magic.
+- **U208, the clock.** `gxp_pm_blk_on()` discards the ACPM result, so it
+  was logged: `AUR state 2: rate 178000, set 0` (accepted), and
+  `/sys/kernel/debug/gxp/cmumux1` and `cmumux2` both read `16` =
+  `AUR_CMU_MUX_NORMAL`. U202's removal was a no-op because
+  `gxp_pm_force_clkmux_normal()` only acts when `curr_low_clkmux` is set.
+- **U209/U211, the image.** The file is `[0x1000-byte header][ELF]`; the
+  ELF has four `PT_LOAD` segments (`0xfa000000`, `0xfa001000`,
+  `0xfa002000`, `0xfa040e24`), `e_entry` `0xfa000000`, and the entry
+  segment's bytes are `06 2c 00 00`. The stock's `fw 0x2c06 0x0` is
+  therefore correct, and the working in-tree reads the same
+  `U211 fw before wake: 0x2c06 0x0` before `core 0 alive (boot status 1)`.
+  The image is not the difference.
+- **The stub test.** With `tpu_stub=1` the stock wrote a 24-byte A64 stub
+  to `0xfa000000` (`str 0x1234beef` to `0xfac10000`, then spin); the U199
+  dump still read core config word 0 `0x00000000`. In the stock flow the
+  core never fetches from the reset vector at all.
+- **U212, the translation.** Mapping `0xfa000000 -> fwbuf` with the raw
+  `iommu_map()` on the device's default domain returns `-98`
+  (`-EADDRINUSE`), so the range is already mapped there, and no sysmmu
+  fault appears at the wake. The fetch address is translated.
+- **U213, the reset hold.** `GXP_REG_CORE_ETM_PWRCTL` bit 16 holds a core
+  in reset. Reading it while the core is in PS3 hangs the thread (the core
+  CSR block is gated), so the read moved to the failure dump at PS0, where
+  it returns `0x0`. The core is not held in reset.
+
+**Next:** with image, config, clock, mapping, doorbell, GSA auth and reset
+hold all excluded, the difference is below the driver's register model:
+the AUR context the core's fetch uses, the AUR PLL's lock state, or the
+S2MPU's view of the authenticated carveout. None is safely reachable from
+the driver (the core CSR block is gated in PS3, and the PMU is off limits
+from userspace). The remaining oracle is a stock Android boot, where the
+bootloader has already started the firmware and Linux only handshakes;
+owner-gated under AGENTS.md section 1.
+
+## Gated runbook: the stock-Android slot-A oracle (HIGH risk, owner's go per step)
+
+Purpose: observe the GXP with its firmware already started by the bootloader,
+which is the one oracle left for the AUR-level core release. It is **not**
+approved by the development grant: a slot-A boot rewrites `efs`, `persist`
+and `modem_userdata` (AGENTS.md section 1), and slot A is the way back.
+
+Preconditions, all checked before anything is written:
+
+1. A fresh read-only NV backup in this boot and `tools/nv-backup --check DIR`
+   passes. Take a new one after the stock boot, too.
+2. The owner says yes to this step, in writing, with the slot-A boot named.
+3. `fastboot getvar current-slot` reads `b`, and `slot-successful:b` is `yes`.
+4. Battery above 50 % and the USB cable in.
+
+Steps (each with Expect/Pass, stop condition, rollback):
+
+1. **Read-only:** `adb devices` from slot B. Expect no device or a
+   "no permissions" line; stock's adb only answers once stock runs.
+   Stop if fastboot is not reachable with `bin/omamobile fastboot`.
+2. **Gated write:** `fastboot --set-active=a`. Expect `Setting current slot
+   to 'a'` and `Finished`. Stop on any other line; rerun the same command
+   until it reports success, then boot.
+3. **Boot stock:** `fastboot reboot`. Expect the Android boot animation.
+   Stop if the phone lands in fastboot or recovery: choose neither option,
+   hold Volume Down + Power about 20 s for fastboot, then roll back.
+4. **Capture what a retail build allows:** `adb shell getprop
+   ro.build.version.release`, `adb logcat -d > logs/stock-tpu.logcat`, and
+   `adb shell dumpsys android.hardware.neuralnetworks` (or the NNAPI service
+   dump). Without `adb root` the AUR CSRs and `dmesg` are not reachable, so
+   the AUR state stays unobserved; the value here is proving the hardware and
+   capturing how stock's own runtime drives the device.
+5. **Rollback:** `fastboot --set-active=b`, `fastboot reboot`, then confirm
+   slot B boots and `omamobile-boot-success` fires.
+
+Risk: HIGH. Slot A is the fallback path; a failed rollback costs the Linux
+root (and on the 9a, `userdata`). The oracle cannot read the AUR registers
+on a retail build, so the expected knowledge gain is limited to "the hardware
+works and stock's runtime is alive", not the register state this plan needs.
+
+Recorded as **not run** on 2026-11-12: the previous attempt found no `adb
+root` on slot A's retail build, and the runbook forbids flashing a stock boot
+image to gain it.

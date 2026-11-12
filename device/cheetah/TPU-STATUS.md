@@ -5,6 +5,121 @@ As of 2026-11-11, kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
 The details and the experiment log are in [TPU-PLAN.md](TPU-PLAN.md); this
 page is the summary.
 
+## 2026-11-12 later: core 0 boot, what is verified and what is ruled out
+
+On `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty` the stock 6.1 port
+(`/root/gxp-stock.ko`) still powers core 0 to PS0 and never gets the alive
+magic. This session verified the host side is correct and ruled out
+ten more candidates:
+
+- **Pool contents are right.** The U199 dump at the failure point reads the
+  core config (`magic 0`, `top_access 0`, `boot_mode 1`, `boot_status 0`),
+  the VD config (`application_id 1`, `vd_is_initialized 0`), the image
+  config at IOVA `0x83000` (`version 2`, `privilege 2`, core `0xfac10000`,
+  VD `0xfac18000`), and a populated system config (`debug_dump_dev_addr
+  0xf5000000`, telemetry `0xf6000000`/`0x10000`).
+- **The firmware carveout is already mapped.** Adding `0xfa000000` to
+  `gxp_dma_map_core_resources()` returns `-EADDRINUSE`: stock's
+  `map_fw_image()` (`gxp-vd.c:508`) maps `fwbufs[0]` for `size *
+  GXP_NUM_CORES` (4 MiB). Reverted.
+- **The NS regions are not the gap (U197).** The in-tree maps five
+  (`0xfa400000`, `0xfa600000`, `0xfa800000`, `0xfaa00000`, `0xfac00000`);
+  explicit extra maps for the middle three changed nothing, and the skip
+  guard shows the image-config parser already mapped them.
+- **The wake doorbell assertion is not it (U198).** Leaving the wake
+  doorbell asserted (the in-tree's behavior) instead of clearing it after
+  PS0 left the core in PS0 with `doorbell 0x1` and still no magic.
+- **Store ordering is not it (U200).** A full `wmb()` before the doorbell,
+  ordering the write-combining pool stores against the wake, changed
+  nothing.
+- **The SSMT/default-domain hypothesis is not it (U201).** Shadowing the
+  whole boot window (firmware, `0x83000`, AUR CSRs `0x200000`, sync
+  barrier, core/VD cfg slices) in the device's default domain changed
+  nothing; the core still never executes.
+
+- **The clock mux switch is not it (U202).** Skipping
+  `gxp_pm_force_clkmux_normal()` before the wake changed nothing.
+- **janeiro is not it.** The in-tree port boots core 0 with janeiro
+  loaded (`core 0 alive`), so janeiro's MMU setup does not block the
+  GXP's core.
+- **GSA authentication was never running.** The stock port's
+  `gsa_authenticate_image()` was a stub (`#define … (0)`) and
+  `gxp_firmware_authenticate()` returned early in direct mode, so the
+  image was never handed to the GSA. Both are fixed (U203/U204): the
+  loader authenticates in direct mode and `gxp-firmware.c` calls
+  `gsa_load_dsp_fw_image`. It succeeds for core 0 (`U204: GSA auth loop
+  (direct 1, gsa 1)`, no failure logged) and the core still does not
+  start. The in-tree's own comment records that its core boots even when
+  the GSA rejects the image, so authentication is not what releases it.
+- **The core never executes one instruction.** The crash-stage words the
+  firmware writes at `cfg+0x80..0x94` still hold the `0x66` pool fill, so
+  this is not an early firmware crash. The CSR masks read back `mask1
+  0x1f5600ff`, `dedicated 0x101`, `procid 0x0`.
+- **The live CSR state is identical to the working in-tree boot (U205).**
+  The in-tree, on the same boot and firmware, reads `procid 0x0 reset
+  0xfa000000 mask0 0x1 mask1 0x1f5600ff ded 0x101 psm 0x29490 doorbell
+  0x0`; the stock reads the same values, with the PSM state 0 inside
+  0x29490 and the doorbell left asserted (U198). So the core is in the
+  same architectural state in both cases; only its fetch is missing.
+- **The NS region is seeded.** The stock logs `NS 0xfa400000 phys
+  0xb0000000 size 0x110000` and `seeded NS 0xfa400000 from gxp_fw_core0:
+  0x3bbc bytes`, so the firmware's `.data` page holds the image segment.
+- **Attaching the VD domain changes nothing (U206).** Setting
+  `GXP_MMU_REQUIRE_ATTACH=1` produced no attach error and no change.
+- **The wake doorbell must be cleared after PS0 (U207).** The in-tree
+  sets the doorbell, polls for PS0 and only then clears it; its U205
+  dump reads `doorbell 0x0`, so U198's "the in-tree leaves it asserted"
+  was a misreading. The stock now clears after the PS0 poll and reads
+  `doorbell 0x0` at the failure point. Still no alive magic.
+- **The AUR block has its rate vote and its normal clock mux (U208).**
+  The stock's `gxp_pm_blk_on()` discards the ACPM result, so it was
+  logged: `AUR state 2: rate 178000, set 0` (accepted; the shim's
+  `get_rate` readback is 0, and the in-tree never reads it back), and
+  `/sys/kernel/debug/gxp/cmumux1` and `cmumux2` both read `16` =
+  `AUR_CMU_MUX_NORMAL`. U202's removal was a no-op because
+  `gxp_pm_force_clkmux_normal()` only acts when `curr_low_clkmux` is
+  already set.
+- **The firmware image is identical in both cases and is exonerated
+  (U209, U211).** The image file is `[0x1000-byte header][ELF]`; the
+  ELF has four `PT_LOAD` segments (`0xfa000000`, `0xfa001000`,
+  `0xfa002000`, `0xfa040e24`) and `e_entry` `0xfa000000`. The bytes at
+  the entry segment (`file 0x1000 + 0xc0`) are `06 2c 00 00`, so the
+  stock's `fw 0x2c06 0x0` at the reset vector is **correct**, and the
+  working in-tree reads the same `0x2c06 0x0` and boots.
+- **The fetch address is translated (U212).** Mapping `0xfa000000 ->
+  fwbuf` with the raw kernel `iommu_map()` on the device's default domain
+  returns `-98` (`-EADDRINUSE`), so the range is already mapped there, and
+  the wake produces no sysmmu fault.
+- **The core is not held in reset (U213).** `GXP_REG_CORE_ETM_PWRCTL`
+  reads `0x0` at the failure point, and reading it while the core is in
+  PS3 hangs the calling thread, so the core CSR block is gated before the
+  wake and the register is only safe to read at PS0.
+- **A hand-written stub at the reset vector does not execute either.**
+  With `tpu_stub=1` the stock writes a 24-byte A64 stub to
+  `0xfa000000` (`str 0x1234beef` to `0xfac10000`, then spin); the U199
+  dump still reads core config word 0 `0x00000000`. So in the stock
+  flow the core does not fetch from `0xfa000000` at all, while the
+  in-tree flow does.
+
+The in-tree port (`gxp-intree.ko`) still boots core 0 reliably (PSM
+`0xc493` -> `0x29490`, alive, TOP handshake) on the same firmware, but it
+has no VD/queue ABI: its `/dev/gxp` implements only `CREATE_DEVICE`,
+`FREE_DEVICE` and `DEVICE_INFO` stubs, so the stock-ABI VD client cannot
+drive it, and `tools/tpu-tachyon-client.c` speaks the DMA-heap/HAL path,
+not `/dev/gxp`.
+
+Next lead: the AUR's translation of `0xfa000000` in the stock flow. The
+CSR state (U205), the image bytes (U211) and the stub test all point the
+same way: the core never fetches, although its reset vector, PSM and
+configuration match the working in-tree boot. The stock's
+`gxp_firmware_run()` and the in-tree's `gxp_core_start()` are now the
+remaining diff: dump the in-tree's core config region (the equivalent of
+U199's first line) and compare it field by field with the stock's
+`00000000 00000000 00000001 00000000`, then print the AUR mapping the
+stock installs for `0xfa000000`. If both match, the next oracle is a
+stock Android boot, where the bootloader has already started the
+firmware and Linux only handshakes (owner-gated, AGENTS.md section 1).
+
 ## 2026-11-12 update: the GXP interop path is open; the setup envelope is not
 
 The stock 6.1 GXP driver now has its TPU interop path compiled in
