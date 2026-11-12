@@ -267,7 +267,7 @@ int main(int argc, char **argv)
 		put32(&p, 0x564e4452);
 		putstr16(&p, iface);
 		putstr16(&p, name);
-		for (i = 0; i < 12; i++) {
+		for (i = 0; i < 120; i++) {
 			binder = 0;
 			rc = transact(fd, 0, 1, &p, &reply, &binder);
 			printf("getService try %u: rc %d handle %u\n", i, rc, binder);
