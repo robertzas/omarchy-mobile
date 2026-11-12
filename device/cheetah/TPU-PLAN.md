@@ -9677,3 +9677,15 @@ exiting. `getService` therefore returns `BR_FAILED_REPLY` (0x720c) because the n
 dead by the time the handle is delivered. The next step is to keep that process alive
 across the lookup (hold a client, or run it with its registrar in always-on mode), not
 to change the parcel. No inference has run.
+
+### U247 — the lazy registrar exits before any client can arrive (2026-11-12)
+
+Starting the tachyon service every 200 ms for ten starts while `getService` retried every
+100 ms for 25 s still produced no handle, and `ps` afterwards shows no tachyon process.
+Its own log says it plainly: `Trying to shut down the service. No clients in use for any
+service in process. Unregistered all clients and exiting`. The lazy registrar asks
+servicemanager for its client count at startup, is told zero, and unregisters in the same
+instant it registers, so there is no window in which a lookup can find it. The parcel and
+the name are right (U246); what the chain lacks is a tachyon process that stays
+registered. That needs the registrar kept always-on, or a client holding it before the
+startup check, and the shipped binary exposes no switch for either. No inference has run.
