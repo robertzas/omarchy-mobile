@@ -472,6 +472,15 @@ setup succeeds, and no TPU number is claimed.
 
 - **U238: the session client is written; the first run hits the C++ ABI wall.** `tools/tpu-session.c` calls `TachyonComputeService_create` (2 args) and `createSession` (3 args, all null-checked) as the disassembly pins them, then builds a config and creates the session. A glibc client cannot run in the bionic chroot (no glibc loader), and a static one cannot dlopen a bionic library (SIGTRAP before its first print). The client must be built with bionic (NDK), which the laptop does not have. No inference has run.
 
+- **U239: the chain has its own binderfs instance.** U236's bind mount was a no-op
+  (`mountpoint -q` short-circuited), so servicemanager and tachyon live on a
+  superblock the host's `/dev/binderfs` is not; `mount --bind $R/dev/binderfs
+  /mnt/tpufs` gives a host process the same manager. `tools/tpu-binder-client.c`
+  (glibc, raw binder) gets its transaction delivered, but the hand-built parcel
+  fails libbinder's data-header check in all 16 layouts tried — the interface
+  token reads empty. A correct AIDL parcel needs the NDK or a bionic `service`
+  binary; neither is on the phone.
+
 ## Next steps
 
 1. The firmware's setup schema is the wall (U222), and a running GXP

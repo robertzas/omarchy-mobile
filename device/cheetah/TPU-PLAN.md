@@ -9554,3 +9554,29 @@ calls bionic libc. The next build must be bionic: the NDK is not on the
 laptop (only `/usr/bin/clang`, no Android sysroot), so this needs either
 the NDK in the project container or a client built with the Android clang
 that `tools/kernel-pr-check` already uses. No inference has run.
+
+### U239 — the chain has its own binderfs; a host client reaches it, but the parcel format is not reproduced (2026-11-12)
+
+U236's bind mount never happened: the chain's `mountpoint -q "$R/dev/binderfs"`
+already found that directory mounted (its own binderfs instance), so the
+`mount --bind` was skipped. `findmnt` shows `$R/dev/binderfs` as a separate
+`binder` mount, and servicemanager runs as `/system/bin/servicemanager
+/dev/vndbinder` inside it. The host's `/dev/binderfs` is therefore a
+different superblock with no context manager: a transaction to handle 0
+there returns `EINVAL`, while `binder` and `hwbinder` answer with a failed
+reply (they have a manager, but not this service). Binding the chain's
+instance into the host namespace (`mount --bind $R/dev/binderfs
+/mnt/tpufs`) reaches the right manager.
+
+`tools/tpu-binder-client.c` is a glibc raw-binder client for exactly that:
+`getService(android.os.IServiceManager)` then the tachyon transaction, no
+bionic library involved. The kernel accepts the write and the transaction
+is delivered — the manager logs it — but the parcel does not pass
+libbinder's data-header check. The manager's own messages place the header
+at word 2 and the payload after it, yet every layout tried (leading pads
+0–3 crossed with 0–3 words after the magic, 16 transactions) reads the
+interface token as empty (`enforceInterface() expected
+'android.os.IServiceManager' but read ''`). Hand-writing an AIDL parcel is
+the remaining unknown here, not the TPU. The chroot holds no bionic tool
+(`/system/bin/service` was never extracted) to copy a correct parcel from,
+so the next attempt needs either that binary or the NDK.

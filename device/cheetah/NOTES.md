@@ -4,6 +4,8 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
 
 ## 2026-11-12: the TPU core boots; the runtime stops at the VII gate
 
+- TPU U239: U236's bind mount never ran — the chain's `mountpoint -q "$R/dev/binderfs"` found its own binderfs mount and skipped it, so servicemanager (`/dev/vndbinder`) and tachyon are on a superblock the host's `/dev/binderfs` is not; `mount --bind $R/dev/binderfs /mnt/tpufs` reaches the right manager. `tools/tpu-binder-client.c` (glibc, raw binder) gets its transaction delivered but the hand-built parcel fails libbinder's data-header check in 16 layouts; the interface token reads empty. A correct AIDL parcel needs the NDK or a bionic `service` binary, and neither is on the phone.
+
 - TPU U238: `tools/tpu-session.c` calls `TachyonComputeService_create` (x0 out, x1 name) and `createSession` (service, config, ret; all null-checked), pinned by disassembly. Two ABI walls on the first run: the bionic chroot has no glibc loader (glibc client exec fails ENOENT), and a static glibc build cannot dlopen a bionic library (SIGTRAP before its first print). The client must be bionic; the NDK is not on the laptop.
 
 - TPU U237: the ndk binding `com.google.edgetpu.tachyon-ndk.so` exposes `BpComputeService::createSession` and `IComputeServiceDefault`; with `TachyonComputeSession_setupCommandQueue` the session client is a small NDK program.
