@@ -132,6 +132,13 @@ ten more candidates:
   clean `Core 0 powered down`. This is the first full run of the stock
   6.1 VD ABI on this port. A job/DDI execution from a client is the next
   step to a real inference.
+- **A real inference needs the vendor runtime, which is not on the phone.**
+  `/root/edgetpu-run` dlopens `/vendor/lib64/libedgetpu_util.so` from a
+  vendor chroot; the phone has no chroot and no vendor libraries (only
+  `/root/bench/venv`). That chroot is built on the laptop from the
+  owner's own factory image with `tools/extract-vendor-chroot` and must
+  be pushed before a model can even be registered. No inference has run
+  yet.
 - **A hand-written stub at the reset vector does not execute either.**
   With `tpu_stub=1` the stock writes a 24-byte A64 stub to
   `0xfa000000` (`str 0x1234beef` to `0xfac10000`, then spin); the U199
