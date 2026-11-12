@@ -8799,3 +8799,19 @@ destroy returns early for a NULL/ERR accessor or dentry, so debugfs stays
 optional. `gxp.ko` builds clean against `out-tpu` with vermagic
 `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`. Not yet exercised on a boot
 without the overlay; that boot is its test.
+
+## U188 (2026-11-12): KCI 6 rejects the captured HAL blob too; the AP side is done
+
+Same boot as U186/U187. The one combination U177's list left out — the exact
+128 bytes the A17 HAL submits (U186) as KCI 6's DMA payload — was sent through
+the driver's `kci_payload`/`kci_send` debugfs hook:
+
+```
+edgetpu janeiro: kci_send code 6 tpu_addr 0xffdff000 len 128 -> 3
+```
+
+`3` is INVALID_ARGUMENT, with no firmware log line, exactly as U177 saw for
+every other payload shape. So the last AP-side producer/argument pair is
+closed, and U177's conclusion stands: the firmware's setup state is created
+before Linux. Going further needs the stock-boot capture (owner-gated, AGENTS
+§1) or the bootloader's ARM32 `tpu-mgr` reverse pass.

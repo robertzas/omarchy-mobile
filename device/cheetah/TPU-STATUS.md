@@ -22,7 +22,9 @@ blocker is narrower than before: the A17 HAL's setup element is now captured
 element fields `+36 = 2`, `+44 = 0x100` no earlier sweep had) and the firmware
 still answers `error_code=9`. Every AP-side knob is sampled now, so the setup
 state is created before Linux: the oracle is a stock Android boot or the
-bootloader's ARM32 `tpu-mgr`. No inference or benchmark yet.
+bootloader's ARM32 `tpu-mgr`. The last AP-side combination, KCI 6 carrying
+the captured HAL blob, also answers `3` (INVALID_ARGUMENT). No inference or
+benchmark yet.
 
 ## 2026-11-11 update: the GXP core boots
 
