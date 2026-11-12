@@ -451,6 +451,9 @@ setup succeeds, and no TPU number is claimed.
 
 - **U233:** the chain with fixed binder nodes started, but the tachyon registration line did not appear; the app-stopped replay still died with the session (U219 class) and recorded no result. Next: fresh boot, chain first, short holds, map then replay immediately.
 
+
+- **U234:** chain-first + a short hold makes the full sequence work: map 0, wake 0, and the replay's own group 0 with `0xf000009`. The tachyon model API is found (`CreateComputeSession`, `ComputeSession::Create`). The chroot's binder node is the remaining stopper for registration.
+
 ## Next steps
 
 1. The firmware's setup schema is the wall (U222), and a running GXP

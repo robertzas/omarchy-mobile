@@ -9446,3 +9446,28 @@ with `pkill -f edgetpu_app_service` and `pkill -f tachyon-service`, and
 `pkill -f` matched the `bash -c` process running the script, whose command
 line contains those strings. The phone stayed up (up 245 s, same boot, no
 reset). The replay's result with the app host stopped is still unrecorded.
+
+## U234 (2026-11-12): chain-first with a short hold makes the whole sequence work; the tachyon model API is found
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, fresh boot at 6.6 s.
+The chain with the fixed vndbinder/hwbinder first (sm 1205, power 1534,
+vendor 2149, tachyon 2897, app 3009), then janeiro, `tpu-hold`, the stock
+gxp module and `gxp-tpu-connect` with a 60 s hold: `create_group` 0,
+`finalize` 0, `allocate_vd` 0 (vdid 1), **map 0**, wake 0. The replay
+immediately after: `create_group` 0, `finalize` 0, and the response
+`0xf000009` — the sync payload, as before. So the chain-first, short-hold
+ordering removes the group refusals; the map and the raw path both work with
+the services up.
+
+The model entry points are in `libedgetpu_tachyon.google.so`:
+`TachyonComputeSessionConfig_create/setSessionType/setPrivileged/...`,
+`android::edgetpu::tachyon::CreateComputeSession(IComputeService,
+CreateSessionReturn, shared_ptr<SessionConfig>)` and
+`ComputeSession::Create`. That is the delegate's session call — the one
+expected to send the setup the firmware waits for.
+
+The registration is the remaining stopper: the chroot's
+`/dev/binderfs/binder` is not the real 507:1 binder node (`Binder ioctl to
+obtain version failed22`), so the tachyon service does not register. The
+chroot node is being replaced with the binderfs device; then the session
+API can be driven.
