@@ -9438,3 +9438,11 @@ class again, with no result recorded. That the reset follows the replay even
 without the app host makes the long-held map client's wake (200 s at that
 point) the next suspect, and the next test should keep every hold short and
 run the chain first, then the map, then the replay immediately.
+
+### Correction to U232/U233 (2026-11-12)
+
+The "session death" recorded there was not the phone: those scripts ended
+with `pkill -f edgetpu_app_service` and `pkill -f tachyon-service`, and
+`pkill -f` matched the `bash -c` process running the script, whose command
+line contains those strings. The phone stayed up (up 245 s, same boot, no
+reset). The replay's result with the app host stopped is still unrecorded.

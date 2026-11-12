@@ -4,6 +4,8 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
 
 ## 2026-11-12: the TPU core boots; the runtime stops at the VII gate
 
+- TPU correction: the U232/U233 "session deaths" were not phone resets — `pkill -f edgetpu_app_service`/`pkill -f tachyon-service` matched the `bash -c` running the script itself. The phone stayed up. Kill chain services by pid, not by `-f` pattern.
+
 - TPU U233: with the chain restarted on the fixed binder nodes and the app host stopped, the replay still died with the session (U219 class), no result recorded. The long-held map wake is the next suspect; keep holds short and chain first.
 
 - TPU U232: the chroot's `vndbinder`/`hwbinder` symlinks pointed at a missing `binderfs/vndbinder`; they now point at `binderfs/binder`, the node that registered the tachyon service. The chain restart and replay were cut off by a session death, so the next run must capture the registration and the replay response.
