@@ -9184,3 +9184,17 @@ works and stock's runtime is alive", not the register state this plan needs.
 Recorded as **not run** on 2026-11-12: the previous attempt found no `adb
 root` on slot A's retail build, and the runbook forbids flashing a stock boot
 image to gain it.
+
+## U223 (2026-11-12): the GXP core start does not set the TPU up
+
+Fresh boot on `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`: `modprobe
+janeiro`, the stock gxp module, and `/root/gxp-tachyon-start 1 20` started
+core 0 (VD 1, wakelock 0, 20 s hold) before one TPU client in the same
+boot. The client finalized its group and its 256-byte type-1 payload still
+answered `0xf000009` with the "Setup is not done yet ... type 0" line, so
+the GXP firmware's start alone is not the setup producer. The AP-side
+DCI/job path (libgxp's job submission) has no client here: the vendor
+runtime speaks janeiro, not `/dev/gxp`. The remaining oracle stands, the
+stock boot (gated) or a GXP DCI reverse pass. The chroot's
+`/dev/janeiro` must be rebuilt after `modprobe janeiro`, whose probe is
+what creates `/sys/class/edgetpu/janeiro`.

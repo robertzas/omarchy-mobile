@@ -7,10 +7,11 @@ page is the summary.
 
 ## 2026-11-12 later: core 0 boot, what is verified and what is ruled out
 
-On `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty` the stock 6.1 port
-(`/root/gxp-stock.ko`) still powers core 0 to PS0 and never gets the alive
-magic. This session verified the host side is correct and ruled out
-ten more candidates:
+On `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty` the stock 6.1 port's
+first attempts powered core 0 to PS0 without the alive magic; the
+default-domain fix then booted it (`Core 0 is alive!`, U216) and the
+VD/wakelock ABI completed (U217). The candidates below are the ones ruled
+out before that fix, kept because each is a closed hypothesis:
 
 - **Pool contents are right.** The U199 dump at the failure point reads the
   core config (`magic 0`, `top_access 0`, `boot_mode 1`, `boot_status 0`),
@@ -399,13 +400,23 @@ setup succeeds, and no TPU number is claimed.
   command schema is not the HAL's. `edgetpu-run fwlog` reads the ring
   (mmap `0x1B00000`) and shows the same line, so the log is available for
   the next attempt.
+- **U223 (2026-11-12): a running GXP core does not set the TPU up.** On a
+  fresh boot, `janeiro` probed, the stock gxp module loaded, and the GXP
+  VD client started core 0 (`allocate_vd` and `acquire_wake` both 0, a
+  20 s hold) before one TPU client in the same boot. That client's group
+  finalized and its 256-byte type-1 payload still answered `0xf000009`
+  with "Setup is not done yet ... type 0". The GXP firmware's start alone
+  is not the producer: it needs the AP's DCI/job, which no current client
+  sends, or the setup is created before Linux (U187). The chroot's
+  `/dev/janeiro` must be rebuilt *after* `modprobe janeiro`, because the
+  sysfs device exists only then.
 ## Next steps
 
-1. The firmware's setup schema is the wall (U222): the HAL's type-1
-   payload reads as type 0, and no client-side field selects it. The
-   stock boot's setup is the oracle, so the attended slot-A capture
-   (gated, AGENTS §1, NV checks before and after) is needed to see the
-   stock setup element. No inference has run.
+1. The firmware's setup schema is the wall (U222), and a running GXP
+   core did not set it either (U223). The next AP-side route is the GXP
+   DCI/job path; the stock boot's setup remains the oracle, so the
+   attended slot-A capture (gated, AGENTS §1, NV checks before and after)
+   is needed to see the stock setup element. No inference has run.
 2. Or continue the repo's own DDI path: get past the firmware's VII setup
    gate, then `CreateExecution` (9), `BindInputBuffersToTensors` (12),
    `BindOutputBuffersToTensors` (13) and `Invoke` (11), then the 60-frame

@@ -35,6 +35,10 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
   the bytes match the driver's dump and the firmware's ring still says
   "Setup is not done yet ... type 0". The firmware's schema is not the
   HAL's, so only the stock boot's setup element can name it.
+- **The GXP start does not set the TPU up (U223):** with core 0 alive
+  (VD 1, wakelock 0, 20 s) a TPU client in the same boot still hits the
+  type-0 gate, so the setup needs the AP's GXP DCI/job, not the firmware's
+  start alone.
 
 ## 2026-11-09: the 2026.11.08 test install, and an update run as root
 
