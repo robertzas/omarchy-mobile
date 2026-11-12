@@ -361,13 +361,21 @@ setup succeeds, and no TPU number is claimed.
   for `/dev/janeiro`, then load gxp; that is the sequence that boots core
   0.
 
+- **U219 (2026-11-12): without the secure-data region, a VD client resets
+  the phone.** After the day's reboots the gxp probe logs "Unable to
+  acquire firmware secure data reserved memory", and running
+  `/root/gxp-tachyon-start 1 4` immediately after reset the phone: the SSH
+  connection dropped mid-run with no client output and no pstore entry,
+  and the phone came back on the next boot. U217's core start remains the
+  last known-good run. That warning is now a stop condition: no further
+  gxp client run until the reserved-memory lookup is fixed and a fresh
+  boot's probe acquires the region.
 ## Next steps
 
-1. Resolve the janeiro UAPI wall (U218): `edgetpu-run` reaches
-   `EDGETPU_CREATE_GROUP` and the node answers `ENOTTY`, so a real graph
-   registration is blocked before the firmware. Either fix that node (the
-   stock module and its interface names) or drive the gxp DCI path
-   directly. No inference has run.
+1. Fix the gxp probe's firmware secure-data reserved-memory lookup (U219)
+   and repeat the U217 run on a fresh boot; until then, no VD client. The
+   stock runtime's janeiro UAPI wall (U218) is the other blocker: its
+   `EDGETPU_CREATE_GROUP` answers `ENOTTY`. No inference has run.
 2. Or continue the repo's own DDI path: get past the firmware's VII setup
    gate, then `CreateExecution` (9), `BindInputBuffersToTensors` (12),
    `BindOutputBuffersToTensors` (13) and `Invoke` (11), then the 60-frame

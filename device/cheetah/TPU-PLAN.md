@@ -9123,6 +9123,12 @@ this round removed every remaining host-side explanation.
   `/dev/gxp` and the model registered. The repo's own HAL clients
   (`tools/tpu-*-hal.c`) are the alternative, and `edgetpu-run.c`'s header
   records that the stock path still stops at graph registration.
+- **Stop condition (U219, 2026-11-12).** If the gxp probe logs "Unable to
+  acquire firmware secure data reserved memory", do not run a VD client:
+  with that region missing, `/root/gxp-tachyon-start 1 4` reset the phone.
+  Fix the lookup and confirm a fresh boot's probe acquires the region
+  before the next run. The stock runtime path also meets a janeiro UAPI
+  wall: `EDGETPU_CREATE_GROUP` answers `ENOTTY` on the current kernel.
 
 **Next:** the audit is complete and the difference is below the driver's
 register model: the AUR's own core-release condition (PLL lock or the core
