@@ -454,6 +454,9 @@ setup succeeds, and no TPU number is claimed.
 
 - **U234:** chain-first + a short hold makes the full sequence work: map 0, wake 0, and the replay's own group 0 with `0xf000009`. The tachyon model API is found (`CreateComputeSession`, `ComputeSession::Create`). The chroot's binder node is the remaining stopper for registration.
 
+
+- **U235:** the chroot's binder node is real (507:1) and opens, but `BINDER_VERSION` returns EINVAL for the A17 number and the alternate, so the tachyon service cannot register. Next: match the kernel's binder UAPI with the A17 libbinder (or rebuild the client against it).
+
 ## Next steps
 
 1. The firmware's setup schema is the wall (U222), and a running GXP

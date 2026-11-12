@@ -9471,3 +9471,15 @@ The registration is the remaining stopper: the chroot's
 obtain version failed22`), so the tachyon service does not register. The
 chroot node is being replaced with the binderfs device; then the session
 API can be driven.
+
+## U235 (2026-11-12): the binder device opens but BINDER_VERSION is refused; the delegate path needs a matching UAPI
+
+`tpu-exec.py` recreates the chroot's `/dev/binder` symlink at every chain
+start; its target `$R/dev/binderfs/binder` is now a real binderfs device
+(507:1, mode 666). A direct probe opens that node, the kernel logs the ioctl
+(`binder: ... ioctl c0046201 ... returned -22`), but `BINDER_VERSION`
+returns EINVAL for both the A17 number (`0xc0046201`) and the alternate
+(`0x40046201`), so the tachyon service cannot register and the stock
+delegate path cannot start. The next step is to match the kernel's binder
+UAPI number (`include/uapi/linux/android/binder.h`) with the A17 libbinder,
+or give the chroot a libbinder built against the kernel's UAPI.
