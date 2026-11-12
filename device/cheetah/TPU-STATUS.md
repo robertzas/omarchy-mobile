@@ -106,6 +106,15 @@ ten more candidates:
   `0x4020` hangs the calling thread, so the rest of the AUR block cannot
   be audited from the driver. The CMU mux reads `16` at `0x100` and
   `0x610` (normal).
+- **The PASID domain was the blocker (U216).** `gxp-vd.c` selects
+  `vd->domain` by `#ifdef GXP_USE_DEFAULT_DOMAIN`: the device's default
+  IOMMU domain, which is what the working in-tree port maps into, or a
+  domain from the PASID pool. The stock was built with the PASID branch,
+  so the boot window was mapped in a table the core's fetch context does
+  not use. Built with `KCFLAGS=-DGXP_USE_DEFAULT_DOMAIN`, the stock
+  driver logs `Core 0 is alive!` after U214 shows the window mapped in
+  the default domain. This is the first time the stock 6.1 port has run
+  the firmware.
 - **A hand-written stub at the reset vector does not execute either.**
   With `tpu_stub=1` the stock writes a 24-byte A64 stub to
   `0xfa000000` (`str 0x1234beef` to `0xfac10000`, then spin); the U199

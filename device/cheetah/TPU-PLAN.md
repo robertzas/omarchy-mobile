@@ -9096,6 +9096,13 @@ this round removed every remaining host-side explanation.
   `4000:0 4004:0 4008:fa000000 400c:1 4010:1 4014:1f5600ff 4018:0
   401c:101`, the in-tree's working values, and a read of `4020` hangs the
   thread, so the remainder of the block cannot be audited from the driver.
+- **U216, the domain.** `gxp-vd.c` chooses `vd->domain` by
+  `#ifdef GXP_USE_DEFAULT_DOMAIN` (the device's default domain, as the
+  in-tree uses) or from the PASID pool. The stock was built with the
+  PASID branch; its boot-window mappings went into a PASID table the
+  core's fetch context does not use. With
+  `KCFLAGS=-DGXP_USE_DEFAULT_DOMAIN` the stock driver logs
+  `Core 0 is alive!` — the port's first successful firmware start.
 
 **Next:** the audit is complete and the difference is below the driver's
 register model: the AUR's own core-release condition (PLL lock or the core
