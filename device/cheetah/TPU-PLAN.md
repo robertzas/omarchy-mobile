@@ -9621,3 +9621,14 @@ kernel's binder does not translate between `SYST` and `VNDR` parcels, and the ve
 build's prologue is not the system build's. A client must be built against the vendor
 libbinder (NDK/vndk variant) or ask the system manager instead, which is not where the
 tachyon service is registered. No inference has run.
+
+### U243 — the AOSP prologue is one word short for the vendor manager (2026-11-12)
+
+With the exact AOSP layout (`0xffffffff` workSource, `0x564e4452` header, descriptor),
+the manager's fresh log line reads `Expecting header 0x564e4452 but found 0x1a before
+position 12`: it looks for the header at offset 8, i.e. it consumes two words before
+it, while upstream `enforceInterface` reads workSource then header (offsets 0 and 4).
+The chroot holds only the system libbinder (whose header constant is `SYST`, see
+U242), no vendor libbinder, so the vendor prologue cannot be read from this image.
+That single extra word is the last unknown; a client built against the vendor
+libbinder writes it itself. No inference has run.

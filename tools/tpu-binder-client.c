@@ -254,7 +254,6 @@ int main(int argc, char **argv)
 	for (pad = 0; pad < 1; pad++) {
 		printf("== getService ==\n");
 		memset(&p, 0, sizeof p);
-		put32(&p, 0);	/* strict policy */
 		put32(&p, 0xffffffff);	/* kUnsetWorkSource */
 		put32(&p, 0x564e4452);	/* kHeader, VNDR */
 		putstr16(&p, iface);
@@ -265,7 +264,6 @@ int main(int argc, char **argv)
 		if (rc == 0) {
 			dump_parcel("reply", reply.buf, reply.len, reply.off, reply.noff);
 			memset(&p, 0, sizeof p);
-			put32(&p, 0);
 			put32(&p, 0xffffffff);
 			put32(&p, 0x564e4452);
 			putstr16(&p, "com.google.edgetpu.tachyon.IComputeService");
