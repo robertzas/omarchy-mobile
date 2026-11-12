@@ -31,7 +31,8 @@ and its `-EINVAL` is fixed: the stock DT's `gxp-tpu-mbx-offset` is `0xc0000`
 read with `of_address_to_resource()`. The virtual device now allocates. The
 GXP's core 0 still does not execute its firmware (it powers to PS0 with the
 image verified in its carveout, but never writes the alive magic), so the
-Tachyon producer has not run. No inference or benchmark yet.
+Tachyon producer has not run; a handshake bypass let the wakelock succeed but
+no TPU client got further. No inference or benchmark yet.
 
 ## 2026-11-11 update: the GXP core boots
 

@@ -8896,3 +8896,33 @@ the phone. The mix-up is here so nobody repeats it.
 **Next route:** the bootloader/GSA `tpu-mgr` start of the GXP/Tachyon (U157,
 U158) or the stock-boot oracle. The driver's own cold boot does not run the
 core, so more of its parameters are unlikely to help first.
+
+## U191 (2026-11-12): the handshake bypass proves the wakelock path, not Tachyon
+
+To separate "the core is not running" from "the core is running but its handshake
+lands elsewhere", `gxp_firmware_handshake()` was made to keep the core powered
+and return success when `Q7_ALIVE_MAGIC` did not arrive. On the resulting boot:
+
+* `allocate_vd cores 1 -> 0 (ok) vdid 2` and **`acquire_wake -> 0 (ok)`**, so
+  the host-side VD and wakelock path is complete; it is no longer the blocker.
+* The core still logged `magic 0x0, boot_status 0x0, top_access 0x0`, and the
+  first TPU client after it (`tools/tpu-hal-capture.sh`, `UTIMEOUT=20`) printed
+  no `vii-payload` lines and the phone reset before the dmesg tail was read.
+  The firmware setup gate therefore remains **unproven either way**; nothing
+  shows the Tachyon firmware ran.
+
+The bypass was then reverted: the driver returns `-EIO` again rather than
+reporting a firmware whose alive magic never arrived. The honest module is
+staged at `/root/gxp-stock.ko`; the next boot loads it.
+
+The boot-time `platform 25c00000.gxp: has sysmmu … / attached with pgtable`
+lines are the IOMMU core attaching the device, not a second gxp driver:
+`CONFIG_GXP` is not set in the build and `modinfo gxp` finds no module on the
+phone, so the manual stock module is the only GXP driver in play.
+
+**State:** the VD allocation, TPU mailbox mapping and wakelock path work; the
+AUR core powers to PS0 with a verified firmware image in its carveout but never
+executes it. Remaining routes: the stock-boot oracle (owner-gated, AGENTS §1,
+with a fresh `tools/nv-backup --check` and the `efs`/`persist`/`modem_userdata`
+rewrite cost) or the bootloader/GSA `tpu-mgr` reverse pass (U157/U158). Neither
+has been run.
