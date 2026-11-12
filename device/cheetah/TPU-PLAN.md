@@ -9191,6 +9191,13 @@ partitions SAME). The boot is held at the fourth precondition: the battery
 reads 50 % and `Discharging`, and this runbook requires above 50 % with the
 charger in. No slot flag was written.
 
+2026-11-12 (later still): `bin/omamobile fastboot` could not reach fastboot.
+The ABL ignored `reboot-to bootloader`, and the tool's crash fallback (five
+attempts) ended with the phone back on slot B (same kernel, SSH up, no slot
+flag written). The next step is the physical Volume Down + Power fastboot
+entry, with the owner at the phone; the charger is online and the gauge
+draws 11 mA at 50 %, so stock's own kernel charges once it boots.
+
 ## U223 (2026-11-12): the GXP core start does not set the TPU up
 
 Fresh boot on `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`: `modprobe
