@@ -436,6 +436,9 @@ setup succeeds, and no TPU number is claimed.
 
 - **U228 (breakthrough):** with the driver wakelock + `EDGETPU_CREATE_GROUP` (24/12/48/24, flags 0x38) + finalize, the client's whole stock handshake returns 0: VD 0 (vdid 1), `map_tpu_mbx_queue` 0, wake 0. The HAL attaches (`OPEN_DEVICE ret 0`) and its watch line no longer shows `0xf000009` (`0x10001 0x200 ...`); the boot stayed up. The next probe is the type-0 command/delegate, which is the gate's own test.
 
+
+- **U229:** with the map held, the gate's sync replay still reads `0xf000009` — the payload is the sync request, not the setup. The chain's services cannot open `/dev/binder`, so the stock app/tachyon delegate host has never run; that is the next gap, or the runtime's setup builder.
+
 ## Next steps
 
 1. The firmware's setup schema is the wall (U222), and a running GXP

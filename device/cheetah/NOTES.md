@@ -4,6 +4,8 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
 
 ## 2026-11-12: the TPU core boots; the runtime stops at the VII gate
 
+- TPU U229: with the TPU-to-GXP map held, the gate replay still answers `0xf000009`; the payload is only the sync request. The vendor chain's services fail on `/dev/binder`, so stock's delegate host never reaches the tachyon service. Next: binder, or the runtime's setup builder (U5).
+
 - TPU U228: the stock TPU-to-GXP handshake now completes on slot B. The missing pieces were the driver wakelock (0xed1a) and the real group creation (0x4014ed06, 24/12/48/24, flags 0x38) before finalize; with them `map_tpu_mbx_queue` returns 0 and the HAL's watch line no longer carries `0xf000009`. The boot survived. The type-0 command/delegate probe is the next test.
 
 - TPU U227: the stock map handshake now runs; VD alloc and wake are 0, `GXP_MAP_TPU_MBX_QUEUE` answers -EINVAL. Either the gxp node lacks the `tpu-device` link/offset or the client's TPU fd has no device group. The phone reset after the wake (U219 class), so dmesg is unread.

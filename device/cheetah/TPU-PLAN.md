@@ -9349,3 +9349,24 @@ completes. Whether the firmware's setup is done needs the type-0
 command/delegate probe (U108: the delegate's first Sync VII command is the
 gate's own probe). The HAL's group flags are 0x38; the client now uses them
 (0x58 came from the older raw path and the map works either way).
+
+## U229 (2026-11-12): with the map held the sync replay still reads 0xf000009; the stock setup path needs binder
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, boot at 62 s: TPU
+first, the stock gxp module, `gxp-tpu-connect` held for 300 s (map 0, wake
+0), then the vendor chain and the replay.
+
+`edgetpu-run mapped 0 /vendor/payload.bin` inside the chroot (with
+`LD_LIBRARY_PATH=/system/lib64:/vendor/lib64:/apex/com.android.runtime/lib64/bionic`)
+submitted its element and read back `rsp 0x1 0x0 0xf000009 0x100164f5`,
+unchanged from U3: the payload is the sync request, not the setup command,
+and the TPU-to-GXP map alone does not unblock it. The HAL's watch line in
+the same boot did change (`0x3000c 0x11 ... 0x372d0 ... 0xec158`), but that
+is command-queue memory, not a firmware response.
+
+The chain's services (vendor 4121, tachyon 4140, app 4155) all log that
+`/dev/binder` could not be opened, so the stock delegate host (the app
+service) has never reached the tachyon service on this port. That gap, not
+the GXP map, is now the block on the stock setup path; the alternative is
+the runtime's own setup builder (U5's `0x13befc`). The mapping client held
+and the phone stayed up through the replay (up 143 s).
