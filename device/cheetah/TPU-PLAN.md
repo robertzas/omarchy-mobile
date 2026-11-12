@@ -9580,3 +9580,18 @@ interface token as empty (`enforceInterface() expected
 the remaining unknown here, not the TPU. The chroot holds no bionic tool
 (`/system/bin/service` was never extracted) to copy a correct parcel from,
 so the next attempt needs either that binary or the NDK.
+
+### U240 — the service is registered; the hand-built parcel still fails (2026-11-12)
+
+The chroot's own libbinder client confirms the target: `/vendor/bin/dumpsys -l` (run
+through `tpu-exec.py`) lists `com.google.edgetpu.tachyon.IComputeService/default`
+beside `IEdgeTpuAppService/default` and `IEdgeTpuVendorService/default`, so the
+registration is real and the name is right. The raw client's parcel still fails:
+with the leading words set to zero, to the payload size, and to (total length, 12)
+the manager keeps logging `Expecting header 0x564e4452` or
+`enforceInterface() expected 'android.os.IServiceManager' but read ''`. The header
+check passes only when the magic sits in word 2, and the token then reads empty,
+so a word the reader depends on is still not set. Hand-writing the AIDL parcel is
+the wrong end of this; the next attempt uses a real libbinder client (NDK, or the
+chroot's `dumpsys` as a parcel reference by extracting `/system/bin/service` from
+a system image). No inference has run.

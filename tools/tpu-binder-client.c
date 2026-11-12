@@ -251,10 +251,10 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	for (pad = 0; pad <= 3; pad++) {
+	for (pad = 2; pad <= 2; pad++) {
 		u32 extra;
 
-		for (extra = 0; extra <= 3; extra++) {
+		for (extra = 0; extra <= 0; extra++) {
 			printf("== pad %u extra %u ==\n", pad, extra);
 			memset(&p, 0, sizeof p);
 			for (i = 0; i < pad; i++)
@@ -264,6 +264,13 @@ int main(int argc, char **argv)
 				put32(&p, 0);
 			putstr16(&p, iface);
 			putstr16(&p, name);
+			{
+				u32 total = p.len, hdr = 12;
+
+				/* Candidate header: total length, header length, magic. */
+				memcpy(p.buf, &total, 4);
+				memcpy(p.buf + 4, &hdr, 4);
+			}
 			binder = 0;
 			rc = transact(fd, 0, 1, &p, &reply, &binder);
 			printf("getService: rc %d handle %u\n", rc, binder);
