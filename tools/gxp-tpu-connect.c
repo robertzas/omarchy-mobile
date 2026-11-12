@@ -68,6 +68,7 @@ int main(int argc, char **argv)
 	struct gxp_wake_ioctl wl = {0};
 	unsigned int cores = argc > 1 ? (unsigned int)atoi(argv[1]) : 1;
 	unsigned int hold = argc > 2 ? (unsigned int)atoi(argv[2]) : 30;
+	int nowake = argc > 3 && !strcmp(argv[3], "nowake");
 	int gxp, tpu, ret;
 
 	setvbuf(stdout, NULL, _IONBF, 0);
@@ -84,6 +85,31 @@ int main(int argc, char **argv)
 	if (tpu < 0)
 		return 1;
 
+	/* Stock holds the driver wakelock from open; without it the driver
+	 * skips the VII attach at finalize. */
+	errno = 0;
+	ret = ioctl(tpu, 0xed1a, 0);
+	printf("tpu wakelock -> %d (%s)\n", ret, ret ? strerror(errno) : "ok");
+
+	/* EDGETPU_CREATE_GROUP carries struct edgetpu_mailbox_attr (20
+	 * bytes: cmdq KiB, rspq KiB, cmd element size, rsp element size,
+	 * flags), with the HAL's probe values; 0xed08 then finalizes it. A
+	 * client without a group makes edgetpu_external_mailbox_alloc
+	 * answer -EINVAL. */
+	{
+		struct {
+			uint32_t cmdq_kb, rspq_kb, cmd_elem, rsp_elem, flags;
+		} attr = {24, 12, 48, 24, 0x38};
+
+		errno = 0;
+		ret = ioctl(tpu, 0x4014ed06, &attr);
+		printf("create_group 24/12/48/24 -> %d (%s)\n", ret,
+		       ret ? strerror(errno) : "ok");
+	}
+	errno = 0;
+	ret = ioctl(tpu, 0xed08, 0);
+	printf("finalize -> %d (%s)\n", ret, ret ? strerror(errno) : "ok");
+
 	vd.core_count = (uint8_t)cores;
 	ret = ioctl(gxp, GXP_ALLOCATE_VD, &vd);
 	printf("allocate_vd cores %u -> %d (%s) vdid %u\n", cores, ret,
@@ -98,6 +124,10 @@ int main(int argc, char **argv)
 	ret = ioctl(gxp, GXP_MAP_TPU_MBX, &mbx);
 	printf("map_tpu_mbx_queue fd %u -> %d (%s)\n", mbx.tpu_fd, ret,
 	       ret ? strerror(errno) : "ok");
+	if (nowake) {
+		printf("nowake: stopping before the wake\n");
+		return ret ? 1 : 0;
+	}
 
 	wl.components_to_wake = WAKELOCK_BLOCK | WAKELOCK_VD;
 	wl.gxp_power_state = GXP_POWER_STATE_UUD;

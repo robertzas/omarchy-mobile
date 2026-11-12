@@ -433,6 +433,9 @@ setup succeeds, and no TPU number is claimed.
 
 - **U227:** the stock map handshake runs: VD alloc 0 (vdid 1), wake 0, `map_tpu_mbx_queue` -EINVAL. Candidates: the gxp node's `tpu-device`/`gxp-tpu-mbx-offset` (mbx_paddr 0) or the TPU fd having no device group (the HAL creates one first). The boot reset after the wake, so dmesg is unread; next test prints it before the wake.
 
+
+- **U228 (breakthrough):** with the driver wakelock + `EDGETPU_CREATE_GROUP` (24/12/48/24, flags 0x38) + finalize, the client's whole stock handshake returns 0: VD 0 (vdid 1), `map_tpu_mbx_queue` 0, wake 0. The HAL attaches (`OPEN_DEVICE ret 0`) and its watch line no longer shows `0xf000009` (`0x10001 0x200 ...`); the boot stayed up. The next probe is the type-0 command/delegate, which is the gate's own test.
+
 ## Next steps
 
 1. The firmware's setup schema is the wall (U222), and a running GXP

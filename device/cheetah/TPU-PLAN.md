@@ -9317,3 +9317,35 @@ grepping "interop|ext TPU mailboxes"; (2) if it is the group, add
 `EDGETPU_CREATE_DEVICE_GROUP` to the client before the map; (3) if it is
 the phandle, add `tpu-device`/`gxp-tpu-mbx-offset` to the gxp node in the
 port's DT (the probe's own warning names which is missing).
+
+## U228 (2026-11-12): the TPU-to-GXP map completes; the HAL attaches and the boot survives
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, fresh boot, slot B.
+
+The EINVAL in U227 was the TPU client, not the GXP. The stock sequence needs
+the driver wakelock first (without it the driver skips the VII attach at
+finalize), then `EDGETPU_CREATE_GROUP` (`0x4014ed06`) with the HAL's 20-byte
+attr (24 KiB cmdq, 12 KiB rspq, 48-/24-byte elements), then the `0xed08`
+finalize. With those added, `tools/gxp-tpu-connect.c` returned 0 at every
+step:
+
+    tpu fd 4; tpu wakelock 0; create_group 24/12/48/24 0; finalize 0
+    allocate_vd cores 1 -> 0 (ok) vdid 1
+    map_tpu_mbx_queue fd 4 -> 0 (ok)
+    acquire_wake -> 0 (ok)
+
+The GXP started core 0 (`Core 0 is alive!`, `TOP access ... successful!`),
+and the HAL (`tpu-hal.sh`) created its own group (`attr ... flags 0x38`),
+attached the VII mailbox and opened the device (`OPEN_DEVICE ret 0`,
+`mailbox_attached 1`, KCI 9/21/10, the mmaps). Its watch line, which carried
+the setup gate in U225 (`rq 0x1 0x0 0xf000009 ...`), now reads
+`0x10001 0x200 0x0 ...`, and the phone stayed up (up 62 s) with the mapping
+client holding; no U219 reset. The chain script was not executable
+(`/root/tpu-chain-exec.sh`), but the chroot's mounts were already in place
+and the HAL ran.
+
+This is the first boot in which stock's TPU-to-GXP ConnectTpu handshake
+completes. Whether the firmware's setup is done needs the type-0
+command/delegate probe (U108: the delegate's first Sync VII command is the
+gate's own probe). The HAL's group flags are 0x38; the client now uses them
+(0x58 came from the older raw path and the map works either way).
