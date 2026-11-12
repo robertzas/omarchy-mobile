@@ -9251,3 +9251,42 @@ the device (`OPEN_DEVICE ret 0`, KCI 9) and its response ring still read
 VD allocation while the TPU was off. With the order fixed the core starts,
 but the GXP firmware alone still does not set the TPU up, and the stock
 boot remains the oracle. No inference ran.
+
+## U226 (2026-11-12): stock's ConnectTpu is the missing AP call; the client is built, the trial runs are inconclusive
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B.
+
+**The missing AP call is found.** The stock user-space handshake is
+`libgxp.so`'s `GxpCapi_ConnectTpu` (0xc5848), and the HAL's own
+`libedgetpu_util.so` calls it. Its kernel side is
+`GXP_MAP_TPU_MBX_QUEUE` (`gxp-common-platform.c:743`): the TPU driver
+allocates the DSP external mailbox for the opened TPU fd
+(`ALLOCATE_EXTERNAL_MAILBOX`; a NULL attr uses the group's mailbox
+attributes), then `gxp_dma_map_tpu_buffer` maps the TPU's cmd/rsp queue pair
+into the virtual device's GXP address space at
+`GXP_IOVA_TPU_MBX_BUFFER(core)`, so the Tachyon firmware can read the TPU's
+queues. The gxp node must carry the `tpu-device` phandle and
+`gxp-tpu-mbx-offset` (`gxp_get_tpu_dev`); without them the ioctl answers
+"TPU is not available for interop".
+
+**The client.** `tools/gxp-tpu-connect.c` (glibc, stock A17 ABI): open
+`/dev/gxp` and `/dev/edgetpu`, `GXP_ALLOCATE_VIRTUAL_DEVICE` (the TPU must
+already be powered, U225), `GXP_MAP_TPU_MBX_QUEUE` (fd, core list 1, attr
+0), `GXP_ACQUIRE_WAKE_LOCK` (BLOCK|VD, UUD), then hold so the mapping lives
+while the HAL talks. It builds on the phone (`gcc -O2`, build=0).
+
+**Trial runs.** With the TPU powered (`tpu-hold`, driver `power-up ok`,
+GSA state=2) and the stock module loaded (`insmod` 0), the client ran but
+its output was lost to stdio buffering; the standalone HAL then failed to
+open the chroot's `/dev/edgetpu` (the chain's `/dev` bind was missing) and
+the phone reset (U219 class). A fresh boot had no `/dev/gxp` (the module is
+gone after a reset); the full rerun with the chain timed out at 200 s and
+the phone reset again, back on slot B at uptime 46 s. The map's ioctl
+return and the HAL's ring are therefore not recorded.
+
+**Next:** one clean boot; `modprobe janeiro`, the `/dev/edgetpu` link,
+`tpu-hold`, `insmod /root/gxp-stock.ko`; run the client unbuffered with its
+output streamed to the laptop and read dmesg within 2 s of the map; then
+the chain's mounts and the HAL while the client holds. The verdict is the
+HAL's response ring: `0xf000009` still means the mapping did not produce the
+setup; a different answer means it did. One GXP client per cold boot (U219).
