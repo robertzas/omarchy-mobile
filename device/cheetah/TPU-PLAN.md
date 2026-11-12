@@ -8989,13 +8989,18 @@ Both are now ruled out. The GSA loads and authenticates all four bodies
 (`cmd 1`/`cmd 151`, body `0x98000000 + core * 0x100000`), both CMU muxes read
 `0x10` (normal), and `/sys/kernel/debug/gxp/log` holds no firmware record.
 
-**Next:** the in-tree driver backed every NS region with a fresh DMA32 page
-(including the sync barrier at IOVA `0x100000`) and mapped the AUR CSR window
-at IOVA `0x200000`; the stock path maps the image config's NS physical
-addresses (`gcip-image-config.c`'s `setup_ns_iommu_mappings()`) and the AUR at
-`GXP_IOVA_AURORA_TOP` (`0x25c00000`). Print those mappings at load and check
-the `0x100000` entry; if it names the AUR barrier registers, back it with a
-DMA page as the in-tree port did.
+**NS backing is not the gap.** `gcip-image-config.c`'s
+`setup_ns_iommu_mappings()` passes `paddr = 0` and advances by size, but the
+VD's op (`map_ns_region()` in `gxp-vd.c`) allocates non-contiguous DMA for
+each entry, exactly as the in-tree port's `gxp_map_ns()` did. The sync
+barrier at IOVA `0x100000` is DMA-backed here too.
+
+**Next:** the two in-tree fixes still absent from this path are the image
+config page at IOVA `0x83000` (the in-tree copied the firmware header's
+config there and mapped it) and the AUR CSR window at IOVA `0x200000`
+(`gxp_map_csrs()` maps the AUR identity at `GXP_IOVA_AURORA_TOP`, `0x25c00000`,
+not at the firmware's zero-based `0x200000`). Check the stock path's `0x83000`
+mapping at load; if it is absent, add it as the in-tree port did.
 
 **The stock-boot oracle was checked and not run.** Its step 3 needs `adb root`
 on stock; the retail build on slot A does not provide it, and the runbook
