@@ -341,13 +341,15 @@ setup succeeds, and no TPU number is claimed.
 
 ## Next steps
 
-1. Run the owner-gated T6.2 in [TPU-PLAN.md](TPU-PLAN.md): build a test image
-   with `gxp-iommu`, push it, load `/root/gxp-loader.ko`, and write
-   `firmware_start`. The pass line is `core 0 alive`; a boot that does not
-   return is the AUR-power failure, not a log to debug.
-2. If the port stalls, run the attended stock-capture runbook (slot A,
-   `tools/nv-backup --check` before and after, AGENTS §1) as the fallback
-   oracle.
-3. With an accepted setup, run `CreateExecution` (9),
-   `BindInputBuffersToTensors` (12), `BindOutputBuffersToTensors` (13) and
-   `Invoke` (11), then the 60-frame benchmark above.
+1. The core now boots on the stock port (U216/U217): `Core 0 is alive!`,
+   `TOP access from core 0 successful!`, and the VD wakelock holds end to
+   end. A real inference still needs a runtime: build the vendor chroot on
+   the laptop from the owner's factory image (`tools/extract-vendor-chroot`),
+   push it, and run `edgetpu-run MODEL`. The factory image is not on the
+   laptop and the phone has no chroot.
+2. Or continue the repo's own DDI path: get past the firmware's VII setup
+   gate, then `CreateExecution` (9), `BindInputBuffersToTensors` (12),
+   `BindOutputBuffersToTensors` (13) and `Invoke` (11), then the 60-frame
+   benchmark above.
+3. The attended stock capture on slot A stays the gated oracle (AGENTS §1;
+   it rewrites `efs`/`persist`/`modem_userdata`).
