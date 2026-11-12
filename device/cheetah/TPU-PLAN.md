@@ -9034,3 +9034,20 @@ the GSA at 7.534). The in-tree's NS segment went to IOVA `0xfa400000`, the
 stock path's copy goes to carveout offset `0x40e24`; if the firmware expects the
 NS data at the NS region, that page is empty. Compare the two GSA calls and the
 NS placement next, using the in-tree driver's working log as the reference.
+
+## U195 (2026-11-12): the stock path copies the NS segment to the carveout, not the NS region
+
+The ELF comparison pins the next gap. The `0x3bbc` segment carries the
+firmware's NS data: the in-tree's `gxp_ns_preload()` copied it to its DMA page
+at IOVA `0xfa400000` ("preloaded segment 0xfa400000 (0x3bbc bytes) into NS"),
+and core 0 ran. The stock path's `elf_load_segments()` uses the segment's
+`p_paddr` (`0xfa040e24`, inside the `0xfa000000`-`0xfa100000` carveout) and
+copies it there; its four logged phdrs are all core segments, and nothing
+fills the VD's NS region at `0xfa400000` (the `map_ns_region()` DMA page).
+
+So the firmware reads its NS data at `0xfa400e24` and finds the carveout's
+copy at `0xfa040e24` instead. Next: copy the segment at `p_paddr 0xfa040e24`
+into the NS region page (as `gxp_ns_preload()` did) when the NS region is
+mapped, or once into a shared page before the VD; the firmware manager holds
+the loaded image. That is a code change plus one boot, not another register
+probe.
