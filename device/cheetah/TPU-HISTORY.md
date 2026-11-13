@@ -13077,3 +13077,19 @@ made by `libdarwinn_dba_hal_runtime.so` do, so "the factory calls no
 cond_wait/sem_wait/mutex_lock/join" rests on the interposer being first in the
 global scope, which was assumed and not shown. The honest statement is: no
 interposed symbol was called, and the mechanism is still unnamed.
+
+
+**U316, the TPU is alive and the HAL is a client, not a driver.** While the
+harness was failing, the kernel was answering the TPU's own heartbeat:
+
+    [ 7627.749374] edgetpu janeiro: KCI tx code 21 seq 129 tail 129 head 129
+    [ 7627.749479] edgetpu janeiro: irq 152 idx 0 mailbox ffff00080a3a7c40 status 1
+
+`/dev/janeiro` is a real character node (505:0), `1ce00000.janeiro` is bound to
+`edgetpu_platform`, and the KCI sequence counter is climbing one step every
+~61 s: the TPU firmware is loaded and talking. So the plan's Gate D premise
+("the firmware has never been loaded") is wrong, and the HAL's silence has a
+different cause: it opens **no** device node at all, which means it is a client
+that expects a service (binder) rather than the driver. That retires the
+in-process route: no amount of waiting instrumentation will make `create`
+succeed in a process with no peer.

@@ -240,14 +240,29 @@ this is "no interposed call was observed", not "the factory cannot make one". So
 semaphore, not a join and not a poll on a descriptor: it is a raw futex or an
 in-kernel wait reached without a PLT symbol.
 
-### 1.6.6 Leading hypothesis after rev 13's strides
+### 1.6.6 The route change (U316)
 
-The device node `/dev/edgetpu` exists (symlink to `janeiro`), the
-`edgetpu_platform` driver is registered, and the HAL neither opens the node nor
-polls for it nor sleeps: it creates a worker pool and waits on it. That is the
-signature of a HAL waiting for firmware that has never been loaded, which is
-Gate D. The in-process route cannot get past create before Gate D opens, so the
-next real move is firmware bootstrap, not another wait instrument.
+The TPU is **alive**: `1ce00000.janeiro` is bound to `edgetpu_platform`,
+`/dev/janeiro` is a real character node, and the kernel logs the TPU's own KCI
+heartbeat (code 21) with the sequence counter climbing every ~61 s and irq 152
+asserting. Gate D's premise, that the firmware has never been loaded, is
+therefore wrong and Gate D is re-scoped to "drive the device", not "start it".
+
+What the HAL does not do is open any node. It builds a worker pool and waits, so
+it is a **client of a service**, not a driver of the hardware. That retires the
+in-process route for good: `create` cannot succeed in a process with no peer.
+
+Two routes remain, in order of cost:
+
+1. **Direct KCI client (cheap, no Android).** The kernel driver already owns the
+   mailbox and the heartbeats. Write a small userspace client against
+   `/dev/janeiro` that sends the KCI commands the HAL would have sent, and read
+   the responses the driver already logs. This is the shortest path to a first
+   inference and needs no binder, no servicemanager and no chroot.
+2. **The service route (expensive).** Mount binderfs inside the chroot, run
+   `servicemanager` and `dba-service`, then `create` has the peer it waits for.
+   This is the parked route and stays parked until route 1 is shown to lack a
+   command the service alone implements.
 
 ### 1.6.5 Two environment facts for in-process experiments
 

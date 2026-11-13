@@ -23,6 +23,14 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U316: the TPU is alive; the HAL is a client, so the route changes)
+
+The driver `edgetpu_platform` is bound to `1ce00000.janeiro`, `/dev/janeiro` is a
+real node, and the KCI heartbeat (code 21) climbs every ~61 s with irq 152
+asserting: firmware is loaded and the device talks. The HAL opens no node at all,
+so it waits for a service peer, not for hardware. The in-process route is retired;
+the plan now goes to a direct KCI client against `/dev/janeiro`.
+
 ## 2026-11-13 (U310-U314: the block is not a libc wait and not an I/O syscall)
 
 The interposer is proven (`BLK sem_wait ra=0x...`), so the factory's silence on
