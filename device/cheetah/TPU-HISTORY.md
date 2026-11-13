@@ -12676,3 +12676,37 @@ either driver names in a log. The HAL's known models are `janeiro_a0` and
 HAL recognises, built into `janeiro.ko`, pushed and tried on one boot. It is the
 last value between the DBA HAL and its own firmware setup, which is the only
 firmware-setup producer in the image.
+
+## U279 (2026-11-13): the DBA HAL runs; its chip version is our own property
+
+The DBA service's abort (`Unknown chip_version found from device.`) is two
+values of ours, not a hardware fault. The string sits next to
+`ro.board.platform` in the binary, and the service's only properties are that
+and `vendor.darwinn.log_level`. Our cmdline-keyed shim answered `mmio` for
+every process but the Tachyon service, so the DBA service read a driver
+platform type where it wanted a chip name.
+
+**Changed and tried on the phone:**
+
+- `tools/android-props-stub.c` now answers `gs201` for
+  `com.google.edgetpu.dba-service` as well as the Tachyon service; rebuilt and
+  pushed as `/system/lib64/libpropsshim-gs201.so`.
+- `tools/tpu-tachyon-run` derives `DBA_PRELOAD` from `SVC_PRELOAD` (swapping
+  the property shim) so the DBA service gets the chip value.
+- the kernel driver gained a read-only `chip_model` attribute on the
+  `edgetpu` class device (`janeiro_a0`), the `<class device>/chip_model` both
+  HALs carry; built as `janeiro.ko` and installed with
+  `janeiro.ko.orig-chipmodel` beside it. It is live at
+  `/sys/class/edgetpu/janeiro/chip_model`.
+
+**Result:** the DBA service loads its HAL and stays up (`dba service pid:
+4855`, `InitGoogle completed for LibDarwinnDbaHal`). The attribute alone did
+not clear the abort; the property did. The phone booted clean on the patched
+module (PSM0_STATUS `0x4b37890`, GSA state 2, firmware `1.0 895567958`).
+
+**The gate is still closed.** A `T10=11` probe answers `0xf000009` as before.
+The DBA service performs setup inside `Hal::CreatePredictor` (per-cluster
+commands with the global scratches), not at service start, so it needs a
+client that calls `prepareModel` on `com.google.edgetpu.dba.IDevice/default`.
+The service is up and that client is now the only missing piece of the AP-side
+setup path.

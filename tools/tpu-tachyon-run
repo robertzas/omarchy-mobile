@@ -318,7 +318,15 @@ log "edgetpu dba service"
 if [ "${DBA:-1}" = "1" ]; then
 	pkill -f 'com.google.edgetpu.dba-service' 2>/dev/null
 	sleep 0.5
-	tpud 1000 "$SVC_PRELOAD" /vendor/bin/hw/com.google.edgetpu.dba-service
+	# The DBA service reads ro.board.platform as its chip version (gs201 =
+	# Janeiro). The delegate's shim answers "mmio" for the driver provider,
+	# and with that value the service aborts with "Unknown chip_version found
+	# from device" (TPU-STATUS U279). DBA_PRELOAD carries a cmdline-keyed shim.
+	if [ -z "${DBA_PRELOAD:-}" ]; then
+		DBA_PRELOAD=$(echo "$SVC_PRELOAD" | sed \
+			's#/system/lib64/libpropsshim.so#/system/lib64/libpropsshim-gs201.so#')
+	fi
+	tpud 1000 "$DBA_PRELOAD" /vendor/bin/hw/com.google.edgetpu.dba-service
 	sleep 4
 	echo "dba service pid: $(pgrep -f com.google.edgetpu.dba-service | head -1)" >>"$LOG"
 fi

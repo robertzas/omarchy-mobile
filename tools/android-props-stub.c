@@ -76,8 +76,11 @@ static int contains(const char *hay, const char *needle)
 	return 0;
 }
 
-/* The Tachyon service is the one process whose core maps ro.board.platform to
- * a Darwinn platform type. Read the process's own cmdline, never argv. */
+/* Two processes map ro.board.platform themselves: the Tachyon service's core
+ * hashes it into a Darwinn platform type, and the NNAPI DBA service reads it
+ * as its chip version ("Unknown chip_version found from device" otherwise,
+ * TPU-STATUS U279). Both need gs201; the delegate keeps mmio. Read the
+ * process's own cmdline, never argv. */
 static int is_tachyon_service(void)
 {
 	static int cached = -1;
@@ -96,7 +99,8 @@ static int is_tachyon_service(void)
 	if (n <= 0)
 		return 0;
 	buf[n] = 0;
-	cached = contains(buf, "com.google.edgetpu.tachyon-service");
+	cached = contains(buf, "com.google.edgetpu.tachyon-service") ||
+		 contains(buf, "com.google.edgetpu.dba-service");
 	return cached;
 }
 
