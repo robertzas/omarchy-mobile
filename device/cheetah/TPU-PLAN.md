@@ -1,14 +1,12 @@
 <!-- SPDX-License-Identifier: MIT -->
 # TPU / NPU plan: the Edge TPU (Abrolhos / Janeiro) on cheetah (gs201)
 
-Status (2026-11-13, rev 15): **the TPU is alive and addressable; the VII
-transport, the firmware handshake and the client group all work; the in-process
-HAL and three of our own conclusions are retired; no inference is claimed.**
-Rev 15 exists because rev 14 recorded claims that the driver's own header and
-binary then refuted. It keeps the corrections and states the ledger as three
-lists - established, refuted, unknown - so the next session does not rebuild on
-a wrong premise. The one unknown left is the vendor HAL's own VII element, and
-the image that contains it is now identified (U325).
+Status (2026-11-13, rev 16): **the TPU is alive; the VII element format and the
+setup builder's type-5 conversion are both known; the value set and the
+observation channel are what remain; no inference is claimed.** Rev 16 folds in
+the last offline strides (U324-U332), including two more retractions of our own
+claims, and states plainly that this kernel offers no tracing at all, so the
+firmware's reply is the only oracle.
 
 ## 0. Rules this plan runs under
 
@@ -668,6 +666,20 @@ gate K fails? -> stop: driver/session regression.
   -> R3 stock oracle whenever the human is at Fastboot.
 ```
 
+### 1.12 Rev 16: the builder's conversion, and no observation channel
+
+`SetupFirmware` walks a vector of 24-byte commands and converts each with
+`0x14d9e60`, which stamps the object's type byte with **5** and stores a pointer
+to a freshly allocated **24-byte payload** (U331). That is the same type 5 the
+element carries at `+0x0a` (U328), so the builder side and the wire side finally
+agree: the unknown values are the payload's three words.
+
+There is no observation channel on this kernel: no dynamic debug (U330) and no
+ftrace or kprobes (U332) - `/sys/kernel/debug/tracing/` is absent and the config
+has no tracer options. So every step must be judged by the firmware's own reply
+or by `dmesg` lines the driver prints at normal level, and no step may promise
+"we will see it in the trace".
+
 ### 1.11 The KCI door, corrected (U329)
 
 Userspace reaches KCI through **debugfs**, not an ioctl:
@@ -684,12 +696,12 @@ from `dmesg`; use the firmware's own reply, or a kprobe on
 
 ## 11. Immediate actions (ordered, rev 15)
 
-1. **R-KCI-4 (offline, DONE, U326-U328):** the enqueue is `0x152977c`
-   (`base + (tail & 0x3ff) * 0x30`), the fill is `0x152989c`, and the field map
-   is complete: `+0x00`(8), `+0x08`(2), `+0x0a`(1), `+0x0b`(5), `+0x10`(8),
-   `+0x18`(4), `+0x1c`(4), `+0x28`(4), `+0x2c`(1), `+0x2d`(1), `+0x2e`(1) are
-   copied from the command object; `+0x20..+0x27` and `+0x2f` are never
-   written. The wire format is settled.
+1. **R-KCI-4 (offline, DONE, U326-U328, U331):** the enqueue is `0x152977c`
+   (`base + (tail & 0x3ff) * 0x30`), the fill is `0x152989c`, the field map is
+   complete (`+0x00`(8), `+0x08`(2), `+0x0a`(1), `+0x0b`(5), `+0x10`(8),
+   `+0x18`(4), `+0x1c`(4), `+0x28`(4), `+0x2c`(1), `+0x2d`(1), `+0x2e`(1);
+   `+0x20..+0x27` and `+0x2f` never written), and the builder stamps type 5 with
+   a 24-byte payload. The remaining values are that payload's three words.
 2. **R-KCI-5 (offline):** diff that element against ours (U319). Only a
    difference earns a send; an identical element is the known negative.
 3. **R-KCI-6 (phone, one attempt):** send the different element through the

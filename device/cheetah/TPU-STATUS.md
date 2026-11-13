@@ -23,6 +23,14 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U331-U332: type 5 confirmed on the builder side; no tracing at all)
+
+`0x14d9e60` stamps union type 5 and wraps a 24-byte payload, so the U262 command
+and the element's `+0x0a` finally agree, and the remaining values are that
+payload's three words. `/sys/kernel/debug/tracing/` is absent and the config has
+no tracer options, so neither dynamic debug nor ftrace can observe the group
+handshake: the firmware's reply is the only oracle.
+
 ## 2026-11-13 (U330: dynamic debug is off, so the group line cannot be seen)
 
 `/sys/kernel/debug/dynamic_debug/control` does not exist on this kernel, so the

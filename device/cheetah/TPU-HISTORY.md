@@ -13455,3 +13455,29 @@ KCI response (it answers JOIN_GROUP, and a wrong group is refused) or a
 `ftrace`/kprobe on `edgetpu_kci_join_group` if function tracing is configured.
 Also: `kci_send` is not readable (`head` gets EACCES), which fits a write-only
 debugfs command file - it is written, not read.
+
+
+**U331, the builder's converter stamps union type 5 and wraps a 24-byte
+payload.** `SetupFirmware` walks a vector of 24-byte commands and calls
+`0x14d9e60` once per entry. That helper is short enough to read whole:
+
+    14d9e74  mov  w8, #0x5            // union type 5
+    14d9e78  mov  w0, #0x18           // 24-byte payload
+    14d9e7c  strb w8, [x20]           // the object's type byte = 5
+    14d9e80  bl   0x163e614           // allocate 24
+    14d9e84  ldr  q0, [x19]           // the 24-byte command, first 16
+    14d9e88  ldr  x8, [x19, #0x10]    // and its last 8
+    14d9e94  str  x0, [x20, #8]       // object = {u8 type=5, ..., payload*}
+
+So the U262 128-byte command is exactly this: a type-5 union whose payload is a
+24-byte struct, and the values to recover are that struct's three words, not the
+element. This is the builder's side of the same type 5 the element's `+0x0a`
+carries (U328), which makes the two halves consistent for the first time.
+
+**U332, no tracing is available either.** `/sys/kernel/debug/tracing/` does not
+exist, `available_filter_functions` has zero `edgetpu` entries, and
+`/proc/config.gz` has no `CONFIG_FUNCTION_TRACER`, `CONFIG_KPROBE_EVENTS`,
+`CONFIG_FTRACE` or `CONFIG_DYNAMIC_FTRACE` line at all. So the join-group
+handshake cannot be observed by dynamic debug (U330) **or** by ftrace/kprobes:
+the firmware's own reply is the only oracle on this kernel, and that closes
+suggestion 3 for good.
