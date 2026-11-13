@@ -32,9 +32,14 @@ page is the summary.
   powered.
 - **Omarchy track.** Latest stable is 4.5.0-3 (the live stable DB and
   `rootfs/packages.pinned` agree), the same version the phone runs. The
-  2026.11.12 stable rootfs build is running with `--allow-missing
-  linux-omamobile` (the repository's kernel package is an older release); its
-  MANIFEST is checked when it completes.
+  2026.11.12 stable rootfs built in 20 min and passed its smoke tests:
+  `out/cheetah/omamobile-rootfs-cheetah-2026.11.12-aarch64.img.zst` (2.9G,
+  sha256 OK), MANIFEST `omarchy 4.5.0-3` and `omarchy-settings 4.5.0-3`, 28
+  patches applied, none already upstream. It is a local test image
+  (`keys/cheetah`). `linux-omamobile` is absent: the local repo's older
+  package was moved to `out/cheetah/repo-removed/` and the index re-signed, so
+  the image uses the current `out-tpu` modules tarball and leaves
+  `omamobile-boot-update` out. Not for install until the phone trusts the key.
 - No inference; gate D is unchanged.
 
 ## 2026-11-12 (K): a real session, both queues and a command round trip
