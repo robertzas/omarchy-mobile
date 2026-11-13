@@ -132,25 +132,8 @@ extern int kill(int, int);
    futex. The alarm's frame list, offset by the HAL's own base, names the
    library function that is waiting. */
 static void on_alarm(int sig) {
-  void *bt[40];
-  int n, i;
-
   (void)sig;
-  put("\nbacktrace hal_base=");
-  puthex(hal_base);
-  put("\n");
-  n = backtrace(bt, 40);
-  for (i = 0; i < n; i++) {
-    unsigned long a = (unsigned long)bt[i];
-
-    put(" bt ");
-    puthex(a);
-    if (a >= hal_base && a < hal_base + 0x400000) {
-      put(" +");
-      puthex(a - hal_base);
-    }
-    put("\n");
-  }
+  put("\nalarm: still inside the call\n");
   _exit(3);
 }
 
@@ -232,18 +215,19 @@ static unsigned long *table(void) {
 /* The factory (word 2) takes a 16-byte options object, per the service's own
    call site; 64 bytes leaves room to grow it without a rebuild. */
 static int call_create_opts(unsigned long *t, unsigned char *opts,
-                            unsigned long *out, int with_cb) {
+                           unsigned long *out, int flags) {
   unsigned char ctx[0x80];
+  void *cb = (flags & 1) ? (void *)harness_cb : 0;
+  void *cp = 0;
   int i;
 
   for (i = 0; i < (int)sizeof(ctx); i++) ctx[i] = 0;
   ctx[0x10] = 1;
   ctx[0x7c] = (char)(2000 & 0xff);
   ctx[0x7d] = (char)((2000 >> 8) & 0xff);
+  if (flags & 2) cp = ctx;
   *out = 0;
-  if (with_cb)
-    return ((fn4)t[2])(opts, (void **)out, (void *)harness_cb, ctx);
-  return ((fn4)t[2])(opts, (void **)out, 0, 0);
+  return ((fn4)t[2])(opts, (void **)out, cb, cp);
 }
 
 static int call_create(unsigned long *t, unsigned long *out, int with_cb) {
@@ -251,7 +235,7 @@ static int call_create(unsigned long *t, unsigned long *out, int with_cb) {
   int i;
 
   for (i = 0; i < (int)sizeof(opts); i++) opts[i] = 0;
-  return call_create_opts(t, opts, out, with_cb);
+  return call_create_opts(t, opts, out, with_cb ? 3 : 0);
 }
 
 int main(int argc, char **argv) { (void)argc; (void)argv; return 0; }
@@ -286,7 +270,7 @@ __attribute__((constructor)) static void start(void) {
     _exit(0);
   }
 
-  if (mode[0] == 'o' && mode[4] == '2') {
+  if (mode[0] == 'o' && mode[1] == 'p') {
     n = -1;
   } else if (mode[0] == 'o') {
     n = 0;
@@ -322,7 +306,7 @@ __attribute__((constructor)) static void start(void) {
       put(" str=");
       put(devpath);
       put("\n");
-      rc = call_create_opts(t, opts, &out, 1);
+      rc = call_create_opts(t, opts, &out, 1 + 2 * (mode[4] != '3'));
       if (out) {
         unsigned long *v = *(unsigned long **)out;
 
@@ -351,7 +335,7 @@ __attribute__((constructor)) static void start(void) {
       for (i = 0; i < 16; i++) putb(sb[8 + i]);
       put("\n");
       for (i = 0; i < 16; i++) opts[i] = sb[8 + i];
-      rc = call_create_opts(t, opts, &out, 1);
+      rc = call_create_opts(t, opts, &out, 1 + 2 * (mode[4] != '3'));
     } else if (n == 2) {
       rc = call_create(t, &out, mode[0] == 'c' && mode[6] == '2');
     } else {

@@ -126,7 +126,12 @@ contract, not on firmware. The service's fourth argument is a
 `__shared_ptr_pointer` control block built at `0x9200`, and the third is a code
 thunk at `0x8d10`; S2 is now "satisfy that callback contract", and the
 `exe_base` shortcut is retired (U293). Do not use `backtrace()` in the alarm
-handler: it deadlocks (U296). The service fills it before the call at `0x850c`-`0x8524`; reading that
+handler: it deadlocks (U296, U299); it is now a plain `_exit(3)`.
+The wait is independent of the callback and context (U298: all three
+combinations block identically), and `+0x10` is confirmed as the factory from
+the caller's own register use (U300). S2's next instrument is a ptrace sampler
+that reads the blocked thread's user stack and subtracts the HAL's mapping base
+from `/proc/<pid>/maps`; `backtrace()` cannot be used. The service fills it before the call at `0x850c`-`0x8524`; reading that
 fill and the library's `DarwinnHalOptions` uses is stride S2.
 
 ### 1.4 The RTTI names are next to the table, not in it

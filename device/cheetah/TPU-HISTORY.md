@@ -12913,3 +12913,22 @@ the service's own thunk and a properly constructed control block (call
 `0x9200`), or to find which entry the HAL signals when the callback contract is
 met. Full plan status: S1 (create) reaches the HAL's own wait; gate D is still
 closed.
+
+**U298, the callback is not what the factory waits for.** Three runs with the
+valid options and every combination of callback/context (both, callback only,
+context only) block exactly the same way: alarm at 3 s, no return. So the
+userspace handshake is inside create itself, not a completion the caller must
+supply.
+
+**U299, the 300 s timeout was the alarm handler, not the HAL.** The log ended at
+`backtrace hal_base=...`: `backtrace()` deadlocks in the blocked thread (U296)
+and the run never exits. The handler is now a plain message plus `_exit(3)`, and
+every run terminates in 3 s again. Keep it that way.
+
+**U300, the call target is confirmed.** At the service's call site `x19` holds
+the table (`ldr w8,[x19]` is the version check, `ldr x8,[x19,#8]` the init
+entry), and `[x29-0x28]` carries the same table into `ldr x8,[x8,#0x10]` before
+the call. So `+0x10` (word 2) is the factory, and the wait is inside it: it
+spawns an eventpoll/eventfd/timerfd trio and three threads, opens no device
+node, and blocks on a futex. The next question is what task that event loop is
+waiting for; a ptrace sampler (not `backtrace()`) is the way to name it.

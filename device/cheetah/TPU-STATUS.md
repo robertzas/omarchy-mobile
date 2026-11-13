@@ -23,6 +23,15 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U298-U300: the wait is inside the factory, and the callback is irrelevant)
+
+All three callback/context combinations (both, callback only, context only)
+block identically, so the handshake is inside create. The alarm handler is now
+a plain `_exit(3)`; its `backtrace()` was what made a run take 300 s (U296,
+U299). The call target is confirmed: `x19` is the table at the caller's site and
+`[x29-0x28]` carries it into `ldr x8,[x8,#0x10]` (U300). Next instrument: a
+ptrace sampler for the blocked thread's user stack.
+
 ## 2026-11-13 (U293-U297: the factory allocates, then waits without opening the device)
 
 Handing the factory the builder's exact output (`{1, 1, "/dev/edgetpu"}`)
