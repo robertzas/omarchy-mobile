@@ -13177,3 +13177,11 @@ kernel.** KCI is kernel-internal (`edgetpu_kci_send_cmd` and friends).
 from U317 is the read-only half: the firmware is alive, and
 `EDGETPU_FIRMWARE_VERSION` still answers **1.0, VII 2, KCI 3**. Userspace
 reaches the firmware only through the mailbox/VII queues, which is gate K.
+
+
+**U323, the property block goes nowhere in this driver.** `grep` over the whole
+`drivers/edgetpu/` tree finds `EDGETPU_DEV_PROP_SIZE` only in `edgetpu.h:588`;
+no `.c` file stores, copies or forwards the opaque 256-byte block, and there is
+no handler for `SET_DEVICE_PROPERTIES` under any name we can find. So the ioctl
+is declared in the UAPI and unimplemented in this tree: it is not a firmware
+setup path, and U322's accidental use of it changed nothing that matters.

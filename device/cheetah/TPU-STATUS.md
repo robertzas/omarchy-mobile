@@ -43,6 +43,12 @@ copy a 16-byte parameter from `x1`, with `x2`/`x3` as the callback pair on five
 of them; the next target is the firmware's client context (`OPEN_DEVICE`'s
 `{client_priv, vcid, flags}`).
 
+## 2026-11-13 (U323: the property ioctl has no consumer, so it is not the setup path)
+
+`EDGETPU_DEV_PROP_SIZE` appears only in `edgetpu.h`; no `.c` file stores, copies or
+forwards the block, and nothing handles `SET_DEVICE_PROPERTIES`. The ioctl is
+declared and unimplemented here.
+
 ## 2026-11-13 (U317 real, U318 retracted: KCI is kernel-internal)
 
 `tools/tpu-info --json` returns **firmware 1.0, VII 2, KCI 3** (DRAM 0/0), so the
