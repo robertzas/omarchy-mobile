@@ -10371,9 +10371,14 @@ write and then takes the normal path:
     edgetpu janeiro: power-up ok: ... GSA state=2
 
 GSA state 0 is INACTIVE: the bootloader has not left the image running, so
-there is nothing for `adopt_running_fw` to keep. The parameter still skips the
-block-down wait, which is why the boot unit's wakelock is `0`; that wait is a
-separate defect to fix properly (the block's ACPM state is up while the
-firmware is in reset). The setup gate remains the wall, and the next steps are
-the stock oracle capture (L1a, needs the owner and a slot-A boot) and the
-GXP/DCI inspection (L1b targets 1-2).
+there is nothing for `adopt_running_fw` to keep.
+
+**The 20:33 boot removed the workaround.** With `adopt_running_fw` off and the
+normal probe shutdown, the block is down at first open, the block-down wait
+passes and `tpu-hold` holds the wakelock (`tpu-hold: wakelock -> 0`); the
+firmware loads normally and reaches GSA state 2. The earlier `-11` came from
+the adopt build skipping the probe shutdown, not from the production path. An
+ACPM guard now skips the block-down wait only when the block is already
+powered (the adopt case); a normal boot does not need it. The setup gate
+remains the wall, and the next steps are the stock oracle capture (L1a, needs
+the owner and a slot-A boot) and the GXP/DCI inspection (L1b targets 1-2).

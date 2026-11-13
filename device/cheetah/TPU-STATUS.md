@@ -24,6 +24,17 @@ page is the summary.
   path (`loaded prod firmware`): the bootloader does not leave the TPU running,
   so there is no pre-Linux state to adopt. The setup gate is still the wall;
   the stock oracle (L1a) and the GXP/DCI paths (L1b 1-2) remain.
+- **The boot unit works without the workaround.** With no `adopt_running_fw`
+  option, the normal probe shutdown leaves the block down, the block-down wait
+  passes, `tpu-hold` logs `wakelock -> 0`, and the firmware loads normally
+  (`GSA state=2`). The earlier `-11` was the adopt build's skipped probe
+  shutdown. An ACPM guard now skips the wait only when the block is already
+  powered.
+- **Omarchy track.** Latest stable is 4.5.0-3 (the live stable DB and
+  `rootfs/packages.pinned` agree), the same version the phone runs. The
+  2026.11.12 stable rootfs build is running with `--allow-missing
+  linux-omamobile` (the repository's kernel package is an older release); its
+  MANIFEST is checked when it completes.
 - No inference; gate D is unchanged.
 
 ## 2026-11-12 (K): a real session, both queues and a command round trip
