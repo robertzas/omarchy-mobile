@@ -469,9 +469,11 @@ consumer), "our client has no group" (U324), and "the rebuilt element is the
 HAL's" (U324: it is our own producer's).
 
 **Unknown, and the only thing worth a boot.** What the vendor HAL's VII element
-actually contains. Its enqueue is in
-`out/vendor-chroot-edgetpu/root/vendor/lib64/libdarwinn_hal.so` at `0x1529648`
-and composes the element from a command object (U325).
+actually contains. Its enqueue is `0x152977c` in
+`out/vendor-chroot-edgetpu/root/vendor/lib64/libdarwinn_hal.so`: slot =
+`base + (tail & 0x3ff) * 0x30`, filled by the helper at `0x152989c`, then
+`dmb ish` and the tail publish (U326/U327). The field map in that helper is the
+last offline artifact.
 
 ### 6.1 Track S — the in-process HAL (retired by U316; findings stand)
 
@@ -669,11 +671,11 @@ gate K fails? -> stop: driver/session regression.
 
 ## 11. Immediate actions (ordered, rev 15)
 
-1. **R-KCI-4 (offline, next):** finish reading the HAL's enqueue in
-   `out/vendor-chroot-edgetpu/root/vendor/lib64/libdarwinn_hal.so` at
-   `0x1529648`-`0x1529960`. It reads a command object at `x2` (`+0`, `+8`,
-   `+0x10`, `+0x18`) and writes the 48-byte element at `x19` (U325). Recover
-   every field, then build our element from those fields.
+1. **R-KCI-4 (offline, in progress, U326/U327):** the enqueue is `0x152977c`
+   (slot = base + (tail & 0x3ff) * 0x30, fill at `0x152989c`, `dmb ish`, then
+   the tail publish). `0x1529648` is a validation function, not the enqueue.
+   Read the fill helper `0x152989c` and map each source field to its element
+   offset; that map is the last offline artifact R-KCI needs.
 2. **R-KCI-5 (offline):** diff that element against ours (U319). Only a
    difference earns a send; an identical element is the known negative.
 3. **R-KCI-6 (phone, one attempt):** send the different element through the

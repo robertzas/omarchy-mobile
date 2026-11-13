@@ -13313,3 +13313,94 @@ Disassembly of section .text:
 152973c: 97dcaf96     	bl	0xc55594 <.text+0x3114>
 1529740: 97fe4663     	bl	0x14bb0cc <.text+0x868c4c>
 1529744: f94017e0     	ldr	x0, [sp, #0x28]
+
+
+**U326, correction to U325 and the enqueue itself.** `0x1529648` is not the
+enqueue: it validates the command object's four fields (any non-zero jumps to a
+log path) and writes a 9-byte result `{u64 1, u8 0}` through its fourth
+argument. The enqueue is the branch target `0x152977c`, and it matches U264
+exactly:
+
+    152977c  ldr  w8, [x20, #0x5c]     tail
+    1529780  mov  w9, #0x30            element size 48
+    1529784  ldr  x10, [x20, #0x38]    queue base
+    152978c  and  x8, x8, #0x3ff       1024 entries
+    1529790  umaddl x0, w8, w9, x10    base + (tail & 0x3ff) * 48
+    1529794  bl   0x152989c            fill the slot
+    1529798  dmb  ish
+    15297b8  str  w8, [x20, #0x5c]     tail = (tail + 1) & 0x3ff
+    15297bc  str  w8, [x9]             publish to the queue register
+
+So the producer's shape is settled; what we never had is the *fill*.
+
+**U327, the slot fill is at `0x152989c`.** The helper is quoted in full below;
+it is the one place where the HAL decides which command-object fields become
+which element bytes, and it is readable offline:
+
+Disassembly of section .text:
+
+0000000000c52480 <.text>:
+152989c: f9400029     	ldr	x9, [x1]
+15298a0: aa1f03e8     	mov	x8, xzr
+15298a4: 91002c0a     	add	x10, x0, #0xb
+15298a8: f9000009     	str	x9, [x0]
+15298ac: 79401029     	ldrh	w9, [x1, #0x8]
+15298b0: 79001009     	strh	w9, [x0, #0x8]
+15298b4: 39402829     	ldrb	w9, [x1, #0xa]
+15298b8: 39002809     	strb	w9, [x0, #0xa]
+15298bc: b9401829     	ldr	w9, [x1, #0x18]
+15298c0: b9001809     	str	w9, [x0, #0x18]
+15298c4: f9400829     	ldr	x9, [x1, #0x10]
+15298c8: f9000809     	str	x9, [x0, #0x10]
+15298cc: b9401c29     	ldr	w9, [x1, #0x1c]
+15298d0: b9001c09     	str	w9, [x0, #0x1c]
+15298d4: b9402829     	ldr	w9, [x1, #0x28]
+15298d8: b9002809     	str	w9, [x0, #0x28]
+15298dc: 3940b029     	ldrb	w9, [x1, #0x2c]
+15298e0: 3900b009     	strb	w9, [x0, #0x2c]
+15298e4: 91002c29     	add	x9, x1, #0xb
+15298e8: f100151f     	cmp	x8, #0x5
+15298ec: 540000a0     	b.eq	0x1529900 <.text+0x8d7480>
+15298f0: 3868692b     	ldrb	w11, [x9, x8]
+15298f4: 3828694b     	strb	w11, [x10, x8]
+15298f8: 91000508     	add	x8, x8, #0x1
+15298fc: 17fffffb     	b	0x15298e8 <.text+0x8d7468>
+1529900: 3940b428     	ldrb	w8, [x1, #0x2d]
+1529904: 3900b408     	strb	w8, [x0, #0x2d]
+1529908: 3940b828     	ldrb	w8, [x1, #0x2e]
+152990c: 3900b808     	strb	w8, [x0, #0x2e]
+1529910: d65f03c0     	ret
+1529914: f81e0ffe     	str	x30, [sp, #-0x20]!
+1529918: a9014ff4     	stp	x20, x19, [sp, #0x10]
+152991c: 94000032     	bl	0x15299e4 <.text+0x8d7564>
+1529920: aa1403e8     	mov	x8, x20
+1529924: aa1303e0     	mov	x0, x19
+1529928: 97ffffbf     	bl	0x1529824 <.text+0x8d73a4>
+152992c: 91004260     	add	x0, x19, #0x10
+1529930: a9414ff4     	ldp	x20, x19, [sp, #0x10]
+1529934: f84207fe     	ldr	x30, [sp], #0x20
+1529938: 1404fcbe     	b	0x1668c30 <.text+0xa167b0>
+152993c: f0006528     	adrp	x8, 0x21d0000
+1529940: 913e6108     	add	x8, x8, #0xf98
+1529944: 91004108     	add	x8, x8, #0x10
+1529948: f8010408     	str	x8, [x0], #0x10
+152994c: 1404fca6     	b	0x1668be4 <.text+0xa16764>
+1529950: a9bf4ffe     	stp	x30, x19, [sp, #-0x10]!
+1529954: aa0003f3     	mov	x19, x0
+1529958: 97fffff9     	bl	0x152993c <.text+0x8d74bc>
+152995c: aa1303e0     	mov	x0, x19
+1529960: 52800d01     	mov	w1, #0x68               // =104
+1529964: a8c14ffe     	ldp	x30, x19, [sp], #0x10
+1529968: 14045351     	b	0x163e6ac <.text+0x9ec22c>
+152996c: f0006528     	adrp	x8, 0x21d0000
+1529970: 913fc108     	add	x8, x8, #0xff0
+1529974: 91004108     	add	x8, x8, #0x10
+1529978: f8010408     	str	x8, [x0], #0x10
+152997c: 1404fc9a     	b	0x1668be4 <.text+0xa16764>
+1529980: a9bf4ffe     	stp	x30, x19, [sp, #-0x10]!
+1529984: aa0003f3     	mov	x19, x0
+1529988: 97fffff9     	bl	0x152996c <.text+0x8d74ec>
+152998c: aa1303e0     	mov	x0, x19
+1529990: 52800d01     	mov	w1, #0x68               // =104
+1529994: a8c14ffe     	ldp	x30, x19, [sp], #0x10
+1529998: 14045345     	b	0x163e6ac <.text+0x9ec22c>

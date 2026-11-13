@@ -23,6 +23,14 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U326-U327: the enqueue is 0x152977c and the fill is 0x152989c)
+
+The enqueue computes `base + (tail & 0x3ff) * 0x30`, fills the slot at
+`0x152989c`, issues `dmb ish` and publishes the tail - exactly U264's shape. The
+address U325 named (`0x1529648`) is a validation function that writes a 9-byte
+result, so it is corrected. The fill helper is the last offline artifact needed
+to build a *different* element instead of re-sending the known negative.
+
 ## 2026-11-13 (rev 15: the corrected ledger, and where the HAL's element lives)
 
 Established: the firmware answers 1.0/VII 2/KCI 3, gate K passes, and the client
