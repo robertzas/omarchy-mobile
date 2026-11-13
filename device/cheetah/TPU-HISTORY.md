@@ -12773,3 +12773,52 @@ the path entirely.
 
 The props shim now also answers `vendor.darwinn.log_level` = `3`, the property
 the DBA service reads.
+
+## U285-U286 (2026-11-13): a serving thread that does not serve, and the HAL's table
+
+**U285, the binder route is stalled below the HAL.** `tools/android-dba-serve.c`
+is a preloaded constructor that spawns one thread which waits 2 s and then
+joins the binder pool; the chain now prefixes it to `DBA_PRELOAD`. It works as
+written: the service logs `DBASERVE spawned the serving thread` and
+`DBASERVE joining the binder pool`, and the process then shows **two** threads
+parked in `binder_ioctl_write_read` (its main one and ours). The call still does
+not run. A plain `INTERFACE_TRANSACTION` (`0x5f4e5446`), which `BBinder` answers
+without entering `onTransact` at all, gets no reply either, and the kernel still
+reports `tr 1` pending on the service's node while both readers wait. So the
+missing piece is not the HAL, the interface token or the parcel: the transaction
+is queued on a node that these threads never claim. The process holds exactly
+one binder fd, `/dev/binderfs/vndbinder` (fd 9). Worth trying next: register the
+serving thread on the same `ProcessState` the service uses (`android::
+ProcessState::self()->startThreadPool()`, C++ signature, rather than the NDK
+entry point), or abandon binder for the in-process route below.
+
+**U286, the DBA HAL's whole API is a 14-entry table, and it can be reached
+with no binder at all.** `tools/tpu-dba-hal-probe.c` (built as a preloaded
+`.so` with `-DPROBE_AS_SO`, run inside the vendor chroot) calls the library's
+only export:
+
+```
+loaded /vendor/lib64/libdarwinn_dba_hal_runtime.so
+calling GetDarwinnHalFunctions
+table = 0xffff92ba1cb8
+  +0 0x2
+  +8  0xf7738   +16 0xf7764   +24 0xf78dc   +32 0xf7900
+  +40 0xf7a4c  +48 0xf7b98   +56 0xf7c70   +64 0xf7f5c
+  +72 0xf8094  +80 0xf816c   +88 0xf8448   +96 0xf8520
+  +104 0xf8664  +112 0xf87a4
+```
+
+The first word is the API version (`2`); the 14 pointers are contiguous
+wrappers at `0xf7738`-`0xf87a4`, right after `GetDarwinnHalFunctions` at
+`0xf772c`, and every one of them names
+`platforms/darwinn/nnapi/dba/hal/api/libdarwinn_dba_hal_runtime.cc` in its
+logs, so they are the HAL's own entry points (create/destroy/session/config/
+run), not inlined library helpers. The library is 3,785,000 bytes and its
+`.text` after `0xf8b00` is the Darwinn core. This is the binder-free path the
+plan wanted as the alternative: a harness can create the HAL object and drive
+setup directly, with no servicemanager, no AIDL and no thread pool.
+
+Next: name the 14 entries by their per-function strings and argument shapes
+(the probe printed only the shared file path, so walk each body separately),
+then call the create entry with `/dev/edgetpu` and watch `dmesg` for
+`Setup is already done`/`global scratches`, the same oracle gate D3 uses.

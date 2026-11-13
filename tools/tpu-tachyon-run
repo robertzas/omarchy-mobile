@@ -347,6 +347,10 @@ if [ "${DBA:-1}" = "1" ]; then
 		DBA_PRELOAD=$(echo "$SVC_PRELOAD" | sed \
 			's#/system/lib64/libpropsshim.so#/system/lib64/libpropsshim-gs201.so#')
 	fi
+	# Its own thread blocks in libperfmgr and never joins the binder pool,
+	# so a client's createSession is queued with no consumer (U284); this
+	# shim adds one serving thread.
+	DBA_PRELOAD="/system/lib64/libdbaserve.so $DBA_PRELOAD"
 	tpud 1000 "$DBA_PRELOAD" /vendor/bin/hw/com.google.edgetpu.dba-service
 	sleep 4
 	echo "dba service pid: $(pgrep -f com.google.edgetpu.dba-service | head -1)" >>"$LOG"

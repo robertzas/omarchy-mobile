@@ -23,6 +23,19 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U285-U286: binder stalls below the HAL; the HAL's 14-entry table is reachable)
+
+A preloaded serving thread (`tools/android-dba-serve.c`) does join the DBA
+service's binder pool - the process then shows two threads in
+`binder_ioctl_write_read` - and the queued call is still not claimed: even
+`INTERFACE_TRANSACTION`, which never enters `onTransact`, gets no reply, with
+`tr 1` pending on the node. That route is stalled below the HAL. In exchange,
+the HAL is now reachable with no binder at all: `GetDarwinnHalFunctions`
+returns a table whose first word is API version 2 and whose 14 pointers
+(`+8`..`+112`, `0xf7738`..`0xf87a4`) are the HAL's own entry points
+(`tools/tpu-dba-hal-probe.c`). Naming them and calling the create entry with
+`/dev/edgetpu` is the next step.
+
 ## 2026-11-13 (U280-U284: the DBA service registers; a queued call has no thread)
 
 The vendor DBA service was aborting at registration, not at its HAL: Android
