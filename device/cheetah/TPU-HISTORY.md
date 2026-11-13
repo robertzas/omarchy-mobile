@@ -12832,3 +12832,27 @@ and `..._CreateRepeatedExecutionEP10Darwinn...`, i.e.
 the vendor's own factory: `create(options, &hal)`, then the session/predictor
 calls on the returned object. The options struct is the only unknown left, and
 its size can be read off `DarwinnHal_Create`'s `ldr` offsets.
+
+## U288-U290 (2026-11-13): the HAL runs in-process; the factory needs a callback
+
+**U288, the table is real and init works.** `tools/tpu-hal-harness.c` (preloaded
+`.so`, chroot) prints `version=2`, calls word 1 (entry `+8`) and gets `rc=0`
+with the library's own line `InitGoogle completed for LibDarwinnDbaHal at
+LogLevel: 0`. Init is one-shot: a second call in the same process aborts with
+`Check failed: previous_init_google_state == BEFORE_INIT_GOOGLE (2 vs. 0)`
+(`init_google.cc:641`), so census and factory must be separate processes.
+
+**U289, the mode channel.** A preloaded constructor sees `getenv()` as NULL and
+bionic does not export `__environ` to the linker namespace, so the harness
+takes its mode from `/tmp/tpu-mode` *inside the chroot root*
+(`$R/tmp/tpu-mode`), not the host's `/tmp`. Two runs were lost to this before
+the file path was moved; keep the recipe.
+
+**U290, entry `+16` faults on a zeroed options object.** With `MODE=create`
+(table word 2, 64 zeroed bytes, `x2=0`, `x3=0`) the child dies
+`SIGSEGV fault addr 0x0`. The service's own call passes `x2=0x8d10` (a `b`
+thunk to `0x9360`) and `x3` = a fresh 0x80-byte object whose byte `+0x10` is 1
+and word `+0x7c` is 2000. So the fourth argument is a real callback/context
+pair, not optional, and the 16-byte options buffer is read somewhere. Next:
+build the callback thunk and a context object of the same shape, or name the
+option fields from the service's fill at `0x850c`-`0x8524` before the next call.

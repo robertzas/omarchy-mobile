@@ -23,6 +23,16 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U288-U290: the HAL runs in-process; the factory needs a callback)
+
+`tools/tpu-hal-harness.c` loads the DBA HAL inside the chroot, reads
+`version=2`, and calls the table's init (word 1) to `rc=0`. The factory (word
+2, entry `+16`) faults at address 0 with a zeroed options object: the service
+passes a callback thunk (`0x8d10`) and a 0x80-byte context as arguments 3 and
+4, so both must be supplied. Init is one-shot (`init_google.cc:641`), and the
+harness reads its mode from `$R/tmp/tpu-mode` because a preloaded constructor
+cannot see the environment.
+
 ## 2026-11-13 (U285-U286: binder stalls below the HAL; the HAL's 14-entry table is reachable)
 
 A preloaded serving thread (`tools/android-dba-serve.c`) does join the DBA
