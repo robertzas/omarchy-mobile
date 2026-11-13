@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Google Edge TPU (janeiro) and its driver wakelock
+Documentation=https://github.com/derekross/omarchy-mobile/blob/main/device/cheetah/TPU-PLAN.md
+After=systemd-modules-load.service
+
+[Service]
+Type=simple
+# janeiro is blacklisted so only this unit loads it. It must load exactly once
+# per boot: a second load oopses in edgetpu_mmu_attach, and the probe needs the
+# Trusty GSA hwmgr, which modprobe pulls in as a dependency.
+ExecStartPre=/usr/bin/modprobe janeiro
+# The HAL enumerates with a detachable group and no wakelock, so the driver
+# powers the TPU down at finalize; the next power-up in the same boot wedges the
+# PSM. Holding the wakelock makes the HAL's probe and every later group reuse
+# the one power-up.
+ExecStart=/usr/bin/tpu-hold
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

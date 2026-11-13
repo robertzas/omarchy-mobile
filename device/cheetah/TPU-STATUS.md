@@ -5,6 +5,39 @@ As of 2026-11-11, kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
 The details and the experiment log are in [TPU-PLAN.md](TPU-PLAN.md); this
 page is the summary.
 
+## 2026-11-12 (K): a real session, both queues and a command round trip
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, with `janeiro` loaded.
+
+`tools/tpu-tachyon-client.c`, built for bionic with the pinned Android clang
+(`-x c`, with `-x none` before the vendor `.so`, or clang parses the library
+as source) and run in the chroot, printed:
+
+    create: OK
+    get_fds_callback set
+    createSession: OK
+    setupCommandQueue: OK fds=11,12
+    setupResponseQueue: OK fds=14,15
+    round 1 sendCommand: OK
+    receiveResponse: OK
+    response size=88
+
+So the compute service creates a real client session, the two FMQ queues
+are accepted, and a command round trip completes. That is gate K. The raw
+glibc client's createSession hang was its own fault: without a `get_fds`
+callback the libbinder client gets `exception -3 "Missing get_fds_callback
+in SessionConfig"`, and the raw client got no answer at all.
+
+The delegate (`tools/tpu-tachyon-run`, `NO_HAL=1`) now reaches the hardware:
+dmesg shows `vii-elem`, `vii-payload` and `KCI tx code 10/21` from janeiro,
+but it still fails at `create device status: 13` / `device: 0x0`, rc 1, so
+**no model output exists yet**.
+
+`janeiro` now loads at boot through `omamobile-tpu.service` (in
+`omamobile-device-cheetah`): one `modprobe janeiro` and `/usr/bin/tpu-hold`
+for the boot's single power-up. It is enabled on the phone; the first boot
+under it is not run yet.
+
 ## 2026-11-12 (J2): the binder blocker is gone, and the TPU device is missing
 
 Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty` (the tree stays dirty,

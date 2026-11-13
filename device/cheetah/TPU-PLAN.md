@@ -10095,3 +10095,36 @@ and even `getService` hangs 12 s, so the client stays a plain transacting
 thread. Next: print `t->flags` and which branch `binder_transaction()`
 takes for code 1, or move to the J3 libbinder_ndk client, which owns this
 bookkeeping. No session, model or inference has run.
+
+### K result 2026-11-12: session, queues, and a command round trip
+
+The raw client's silence was a missing callback, not the driver: the
+libbinder_ndk client (`tools/tpu-tachyon-client.c`) gets a real status,
+`exception -3 "Missing get_fds_callback in SessionConfig"`, from the same
+service. With the callback set it printed, on this boot:
+
+    create: OK
+    get_fds_callback set
+    createSession: OK
+    setupCommandQueue: OK fds=11,12
+    setupResponseQueue: OK fds=14,15
+    round 1 sendCommand: OK
+    receiveResponse: OK
+    response size=88
+
+Build note: the pinned Android clang needs `-x c` for the client and a
+`-x none` before `libedgetpu_tachyon.google.so`; without it clang parses the
+library as source and reports 280 warnings and 20 errors.
+
+Gate K therefore passes: a real client session, both FMQ queues, and a
+command/response round trip. The kernel trace from the J2 list was built
+(`out-tpu`, `kbuild_rc=0`) but **not booted**: the client answered the
+question, and a reboot would have cost the working TPU state, so the trace
+stays available without being needed.
+
+L1 is the remaining gate. The delegate (`tools/tpu-tachyon-run`,
+`NO_HAL=1`) reaches the hardware - dmesg shows `vii-elem`, `vii-payload`
+and `KCI tx code 10/21` - but ends at `create device status: 13`, `device:
+0x0`, rc 1. Next: find why device creation returns 13 while the session's
+VII path works, or send the compiled graph through the session that does
+work. No model has produced output on the TPU yet.
