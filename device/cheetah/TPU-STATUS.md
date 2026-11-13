@@ -15,14 +15,15 @@ page is the summary.
   ships `blacklist janeiro` in `vendor/modprobe.d/omamobile-tpu.conf`. On the
   reboot: `tpu-hold: wakelock -> 0`, unit active, both links present.
   `omamobile-device-cheetah` 0.1.55.
-- **Adoption lead.** The driver unloads a running image
+- **Adoption lead closed (negative).** The driver unloads a running image
   (`mobile_firmware_gsa_authenticate`) and powers the block down at probe end
-  (`edgetpu_pm_shutdown`), so a setup made before Linux cannot survive. A test
-  kernel's `adopt_running_fw=1` skips the probe shutdown and the block-down
-  wait; the wakelock then succeeds, but `loaded prod firmware` shows the
-  power-up path (`mobile_pwr_state_set`/`lpm_up`/`edgetpu_chip_init`) still
-  resets the block before the firmware check. Next: skip those writes when GSA
-  reports RUNNING, then adopt.
+  (`edgetpu_pm_shutdown`), so a setup made before Linux could not survive. A
+  test kernel's `adopt_running_fw=1` skips the probe shutdown, the block-down
+  wait and the power-up writes when GSA reports RUNNING. On the 20:27 boot the
+  driver logged `GSA state before power-up: 0` (INACTIVE) and took the normal
+  path (`loaded prod firmware`): the bootloader does not leave the TPU running,
+  so there is no pre-Linux state to adopt. The setup gate is still the wall;
+  the stock oracle (L1a) and the GXP/DCI paths (L1b 1-2) remain.
 - No inference; gate D is unchanged.
 
 ## 2026-11-12 (K): a real session, both queues and a command round trip

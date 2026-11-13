@@ -86,13 +86,14 @@ shows the TPU working with no host setup (then R2 is the only route). Stop: no
    set the TPU up;
 3. only then, the vendor HAL's serializer (already sampled, U162/U187).
 
-A third, newer lead (2026-11-12, U236): the driver's own probe unloads a
-running image and powers the TPU down, and its power-up path resets the block
-before the firmware check. A test kernel's `adopt_running_fw` parameter skips
-the probe shutdown and the block-down wait; the next step is to skip the
-remaining power-up writes when GSA reports RUNNING, so the bootloader's setup
-survives and the driver adopts it instead of reloading. The unit's wakelock
-succeeds (0) on that build, but the firmware still reloads normally.
+The adoption lead is closed (2026-11-12, U236). The driver does unload a
+running image and power the block down at probe, but on the reference phone GSA
+already reports INACTIVE (`GSA state before power-up: 0`) before the first
+power-up, even with the probe shutdown, the block-down wait and the power-up
+writes bypassed. The bootloader does not leave the TPU running by the time
+Linux owns it, so there is no pre-Linux setup to adopt. `adopt_running_fw`
+stays a development parameter, default off; the setup gate must be broken by
+the stock oracle (L1a) or the GXP/DCI paths (L1b targets 1-2).
 
 Deliverable: a reconstructed setup element or a job sequence, testable with
 `tools/tpu-setup-payload.py` + `edgetpu-run mapped` (direct VII) or the session
@@ -10360,3 +10361,19 @@ change and one boot; the current build is the control.
 The `__setup_irq` stack trace in dmesg is a warning in IRQ setup, not fatal:
 the driver initializes and the VII/KCI paths have worked on every boot that
 showed it. It is left for the packaging pass.
+
+**The 20:27 boot closed the lead.** The fast path logs the state before any
+write and then takes the normal path:
+
+    edgetpu janeiro: GSA state before power-up: 0
+    edgetpu janeiro: Powering up
+    edgetpu janeiro: loaded prod firmware (1.0 895567958)
+    edgetpu janeiro: power-up ok: ... GSA state=2
+
+GSA state 0 is INACTIVE: the bootloader has not left the image running, so
+there is nothing for `adopt_running_fw` to keep. The parameter still skips the
+block-down wait, which is why the boot unit's wakelock is `0`; that wait is a
+separate defect to fix properly (the block's ACPM state is up while the
+firmware is in reset). The setup gate remains the wall, and the next steps are
+the stock oracle capture (L1a, needs the owner and a slot-A boot) and the
+GXP/DCI inspection (L1b targets 1-2).
