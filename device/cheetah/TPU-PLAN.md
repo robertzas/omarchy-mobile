@@ -115,7 +115,18 @@ context are still not enough: the call faults at `0x0` with the options zeroed
 `0x11660` in the service is the options builder: it builds two SSO strings and
 calls `android::base::GetProperty`, then copies the result into the factory's
 options slot (U292), so S2 reads the property name at `0x4b77` and the string
-layout rather than guessing a pointer table. The service fills it before the call at `0x850c`-`0x8524`; reading that
+layout rather than guessing a pointer table.
+
+**S1 result (U293-U297).** With the builder's output synthesized
+(`{1, 1, "/dev/edgetpu"}`) the factory no longer faults: it allocates, starts an
+eventpoll/eventfd/timerfd trio and three threads, and then blocks in a futex
+**without ever opening `/dev/edgetpu`** (the fd list has no device node, and
+`dmesg` shows no KCI traffic from it). So create waits on a userspace callback
+contract, not on firmware. The service's fourth argument is a
+`__shared_ptr_pointer` control block built at `0x9200`, and the third is a code
+thunk at `0x8d10`; S2 is now "satisfy that callback contract", and the
+`exe_base` shortcut is retired (U293). Do not use `backtrace()` in the alarm
+handler: it deadlocks (U296). The service fills it before the call at `0x850c`-`0x8524`; reading that
 fill and the library's `DarwinnHalOptions` uses is stride S2.
 
 ### 1.4 The RTTI names are next to the table, not in it

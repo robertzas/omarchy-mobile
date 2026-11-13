@@ -23,6 +23,16 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U293-U297: the factory allocates, then waits without opening the device)
+
+Handing the factory the builder's exact output (`{1, 1, "/dev/edgetpu"}`)
+replaces the crash with a wait: the HAL allocates, starts an
+eventpoll/eventfd/timerfd trio and three threads, and blocks in `futex_wait`
+with **no `/dev/edgetpu` fd open** and no KCI traffic from it. The wait is a
+userspace callback contract (arg 3 is a code thunk, arg 4 a shared_ptr control
+block), not firmware. `backtrace()` in an alarm handler deadlocks this process;
+use the fd and thread listing instead.
+
 ## 2026-11-13 (U288-U290: the HAL runs in-process; the factory needs a callback)
 
 `tools/tpu-hal-harness.c` loads the DBA HAL inside the chroot, reads

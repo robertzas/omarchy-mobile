@@ -12877,3 +12877,39 @@ So the options object is not a table of pointers: it is built from a property
 value (a board or path string) and the fault at `0x0` (U291) means one field is
 a pointer to that value, left NULL by a zeroed buffer. S2 should read the
 constant at `0x4b77` and the string layout, then pass the same bytes.
+
+## U293-U297 (2026-11-13): the factory runs, then waits before touching the device
+
+**U293, `exe_base` is not the load base.** `/proc/self/maps` matched a line
+whose start is not the image base, so `base + 0x11660` executed somewhere else
+and `base + 0x50a2` (`"/dev/edgetpu"`, read from the service at that file
+offset) faulted MAPERR. Don't call into the service by a guessed base: pass our
+own copy of the string instead.
+
+**U294, the synthesized options are accepted.** The builder's success path
+(`0x11a00`-`0x11a14`) writes status 0 and `{u32 1, u32 1, const char
+*"/dev/edgetpu"}`. Handing exactly that to table word 2 no longer faults: the
+HAL returns from the null-deref path and starts allocating.
+
+**U295, it blocks before any device I/O.** With the alarm off the child sits in
+`futex_wait` while a second thread sits in `epoll_wait`. Its file descriptors
+are `eventpoll`/`eventfd`/`timerfd` only: **no `/dev/edgetpu` is ever opened**,
+and `dmesg` shows no new KCI line from it (the periodic `KCI tx code 21` is the
+driver's own, every 61 s). So the wait is a userspace handshake inside the HAL,
+not a device or firmware wait.
+
+**U296, never `backtrace()` from the alarm handler here.** It hung the whole
+process (the dl loader's locks are held by the blocked thread) and the run had
+to be killed. Use the fd list and thread states instead, or a ptrace-based
+sampler; don't retry this.
+
+**U297, what the fourth argument is.** The service's `new(0x80)` followed by
+`bl 0x9200` is the `__shared_ptr_pointer` control-block constructor, and the
+call passes `x2 = 0x8d10` (code, an `adr`) with `x3` = that block. So the
+factory's last two arguments are a callback and a shared_ptr control block, and
+the three-thread/epoll wait is consistent with it waiting on a callback that a
+real client wires to its own completion state. The next experiment is to pass
+the service's own thunk and a properly constructed control block (call
+`0x9200`), or to find which entry the HAL signals when the callback contract is
+met. Full plan status: S1 (create) reaches the HAL's own wait; gate D is still
+closed.
