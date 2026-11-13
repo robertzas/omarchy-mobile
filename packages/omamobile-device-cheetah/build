@@ -11,6 +11,9 @@ ${CC:-cc} ${CFLAGS:--O2} -Wall -Wextra -o "$out/reboot-to" src/reboot-to.c ${LDF
 # PIE. A build host's x86 compiler gets the empty unit instead (see the file).
 hold_flags=
 if ${CC:-cc} -dumpmachine 2>/dev/null | grep -q aarch64; then
-  hold_flags="-nostdlib -static"
+  # The phone's makepkg CFLAGS add -fstack-protector-strong, and the compiler
+  # turns put()'s length loop into a strlen call; neither resolves without a
+  # libc.  Keep the freestanding unit self-contained on the phone's build.
+  hold_flags="-nostdlib -static -fno-builtin -fno-stack-protector"
 fi
 ${CC:-cc} ${CFLAGS:--O2} -Wall -Wextra $hold_flags -o "$out/tpu-hold" src/tpu-hold.c
