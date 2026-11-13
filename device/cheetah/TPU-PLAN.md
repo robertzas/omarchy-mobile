@@ -361,16 +361,15 @@ the element already replayed on 2026-11-09**, which the firmware gated (U265).
 The U262 128-byte artifact is a different object. So the element is not the
 missing piece, and R-KCI-3 must not spend a power-up repeating a known negative.
 
-**What the capture does not contain, and is therefore the next target:** the
-firmware's *client context*. The driver opens a device through
-`edgetpu_kci_open_device(kci, mailbox_map, client_priv, vcid, first_open)` from
-`edgetpu-mailbox.c:1227`, and joins a **device group** through
-`edgetpu_kci_join_group(kci, n_clients, vid)` from
-`edgetpu-device-group.c:103`. Our Tachyon client creates no group and sends no
-join (U321), so every setup element so far arrived with no client context at
-all. A firmware that gates before parsing the payload is exactly what that
-produces. R-KCI-3 is therefore: **create a device group first**, then send the
-element unchanged.
+**What the capture does not contain (corrected, U324):** not the client
+context. `EDGETPU_CREATE_GROUP` (ioctl 6), `EDGETPU_JOIN_GROUP` (ioctl 7) and
+`_IO(0xED, 8)` exist, and our own client already creates and finalizes a group
+before it submits (`0x4014ed06`, `0xed08`). What has never been captured is the
+**vendor HAL's own element**: `out/bench/chain-dwn1.log` is a dump of *our*
+producer's element, so the rebuild in U319 is authentic only to our
+construction. The next offline stride is therefore to derive the HAL's element
+fields from its own struct fill (`0x1529648`, copy at `0x152989c`), not to
+re-send ours.
 
 ### 1.7 What rev 13 withdraws
 
@@ -667,11 +666,11 @@ gate K fails? -> stop: driver/session regression.
 3. **R-KCI-2 (offline, DONE, U319):** the rebuilt element and 80-byte payload
    are byte-identical to the 2026-11-09 replay, which gated. The element is not
    the gap, and re-sending it is a known negative. Pass: a *difference* to test.
-4. **R-KCI-3 (phone, one attempt):** create a device group through the
-   driver's group ioctls (U321: `JOIN_GROUP` carries `{n_clients, vid}` and is
-   sent per group), then send the element unchanged through the Tachyon
-   session. Oracle: the firmware log's setup line, or `T10=11` answering
-   anything but `0xf000009`. This is the first send that is not a repeat.
+4. **R-KCI-3 (offline first, U324):** derive the vendor HAL's element fields
+   from its struct fill (`0x1529648`, copy at `0x152989c`); the group context is
+   already provided by our client. Then, and only with a *different* element,
+   send once through the Tachyon session. Oracle: the firmware log's setup
+   line, or `T10=11` answering anything but `0xf000009`.
 5. **R-SERVICE (parked):** only after R-KCI-3 fails; needs binderfs plus an
    answer to U285's unclaimed queue.
 6. **R-STOCK (owner):** section 7, unchanged.

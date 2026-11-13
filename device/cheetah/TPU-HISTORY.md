@@ -13185,3 +13185,52 @@ no `.c` file stores, copies or forwards the opaque 256-byte block, and there is
 no handler for `SET_DEVICE_PROPERTIES` under any name we can find. So the ioctl
 is declared in the UAPI and unimplemented in this tree: it is not a firmware
 setup path, and U322's accidental use of it changed nothing that matters.
+
+
+**U324, RETRACTION of U321: the group ioctl exists and our client already uses
+it.** The macro is `EDGETPU_CREATE_GROUP`, not `...DEVICE_GROUP`, which is why
+the earlier grep missed it:
+
+};
+
+/*
+ * Create a new device group with the caller as the master.
+ *
+ * EINVAL: If the caller already belongs to a group.
+ * EINVAL: If @cmd_queue_size or @resp_queue_size equals 0.
+ * EINVAL: If @sizeof_cmd or @sizeof_resp equals 0.
+ * EINVAL: If @cmd_queue_size * 1024 / @sizeof_cmd >= 1024, this is a hardware
+ *         limitation. Same rule for the response sizes pair.
+ */
+#define EDGETPU_CREATE_GROUP \
+	_IOW(EDGETPU_IOCTL_BASE, 6, struct edgetpu_mailbox_attr)
+
+/*
+ * Join the calling fd to the device group of the supplied fd.
+ *
+ * EINVAL: If the caller already belongs to a group.
+ * EINVAL: If the supplied FD is not for an open EdgeTPU device file.
+ */
+#define EDGETPU_JOIN_GROUP \
+	_IOW(EDGETPU_IOCTL_BASE, 7, __u32)
+
+/*
+ * Finalize the device group with the caller as the leader.
+ *
+ * EINVAL: If the dies in this group are not allowed to form a device group.
+ * ETIMEDOUT: If the handshake with TPU firmware times out.
+ */
+#define EDGETPU_FINALIZE_GROUP \
+
+`EDGETPU_CREATE_GROUP` is ioctl 6 with `struct edgetpu_mailbox_attr`,
+`EDGETPU_JOIN_GROUP` is ioctl 7 with a `u32`, and `_IO(0xED, 8)` finalizes. Our
+own client already sends them: `ioctl(fd, 0x4014ed06, attr)` is create-group
+(size 0x14) and `ioctl(fd, 0xed08, 0)` is the finalize. So every setup element
+so far was sent **inside a created and finalized group**, and U321's "no client
+context" is wrong.
+
+**Correction to U319 as well.** `out/bench/chain-dwn1.log` is the driver's dump
+of what **our** producer wrote on 2026-11-09, not a capture of the vendor HAL's
+element. So the rebuilt bytes are "authentic" only to our construction; the
+HAL's own element has never been captured. That keeps the known-negative result
+and removes the stronger claim.
