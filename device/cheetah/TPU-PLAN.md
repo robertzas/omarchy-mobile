@@ -1,14 +1,15 @@
 <!-- SPDX-License-Identifier: MIT -->
 # TPU / NPU plan: the Edge TPU (Abrolhos / Janeiro) on cheetah (gs201)
 
-Status (2026-11-13, rev 13): **gate K passes; the vendor DBA HAL runs
-in-process with no binder; the factory enters its own startup and blocks in a
-futex before it opens `/dev/edgetpu`; the firmware's one-time setup has still
-not run, so no inference is claimed.** Rev 13 is a re-evaluation after three
-instruments in a row failed to name the waiting function. It keeps every fact
-rev 12 established, withdraws the ptrace sampler as an instrument, restates the
-wall as five testable hypotheses, and renumbers the strides to match what is
-actually done. The route is unchanged: the producer, not the goal.
+Status (2026-11-13, rev 14): **the TPU is alive and the kernel is talking to
+it; the in-process HAL route is retired; the plan now drives the device through
+the kernel's own KCI interface, and the firmware's VII setup is still not done,
+so no inference is claimed.** Rev 14 is a route decision, not another
+instrument. It records that `edgetpu_platform` is bound to `1ce00000.janeiro`,
+that the firmware's KCI heartbeat climbs every ~61 s, and that the DBA HAL opens
+no device node at all — it is a client of a service, so `create` can never
+return in a process with no peer (U316). Everything rev 13 established about
+the HAL stands and stays in the record; it is simply no longer the road.
 
 The definition of done is unchanged (DoD-1..5): a model runs on the TPU; its
 raw output tensor matches a CPU reference (integer tensors exact unless a
@@ -272,6 +273,89 @@ Two routes remain, in order of cost:
 - **The chroot's `libandroid.so` exports no `ALooper_prepare`** (U313), so H1
   is not testable through it as written.
 
+### 1.8 Rev 14: the route decision, and the protocol it runs on
+
+**The fact that ended rev 13's route.** The TPU is alive on this boot. The
+kernel logs its own KCI heartbeat while our harness sits blocked:
+
+    edgetpu janeiro: KCI tx code 21 seq 129 tail 129 head 129
+    edgetpu janeiro: irq 152 idx 0 mailbox ffff00080a3a7c40 status 1
+
+`1ce00000.janeiro` is bound to `edgetpu_platform` and `/dev/janeiro` is a real
+character node (505:0). Meanwhile the vendor HAL opened **no** node at all: not
+`/dev/edgetpu`, not `/dev/janeiro`, not `/dev/binder` by any symbol we could
+interpose. A HAL that opens nothing and waits is a client, not a driver. So
+`DarwinnHal_Create` cannot return in a process with no peer, and rev 13's
+Track S is retired as a *route* even though its findings stand (U293-U316).
+
+**What the kernel already implements.** The driver in
+`~/omamobile-kernel/edgetpu-janeiro/drivers/edgetpu/` owns the protocol the HAL
+would have spoken:
+
+| KCI code | Name | Sent by the driver |
+| --- | --- | --- |
+| 0 | `ACK` | yes |
+| 1 | `UNMAP_BUFFER` | yes |
+| 2 | `MAP_LOG_BUFFER` | yes |
+| 3 | `JOIN_GROUP` | yes |
+| 4 | `LEAVE_GROUP` | yes |
+| 5 | `MAP_TRACE_BUFFER` | yes |
+| 7 | `SHUTDOWN` | yes (`edgetpu_kci_shutdown`) |
+| 8 | `GET_DEBUG_DUMP` | yes |
+| 9 | `OPEN_DEVICE` | yes, with `{client_priv, vcid, flags = (mailbox_map << 1) | first_open}` |
+| 10 | `CLOSE_DEVICE` | yes |
+| 11 | `FIRMWARE_INFO` | yes, into an iremap buffer, returns `edgetpu_fw_info` |
+| 12 | `GET_USAGE_V1` | yes |
+| 13 | `NOTIFY_THROTTLING` | yes |
+| 14 | `BLOCK_BUS_SPEED_CONTROL` | yes |
+| 19 | `FIRMWARE_TRACING_LEVEL` | yes |
+| 21 | (heartbeat) | firmware → AP, once a minute |
+
+The enum has **no setup command** (U269), which is why the VII gate is where
+setup lives: `KCI_CODE_OPEN_DEVICE` and `FIRMWARE_INFO` are the *handshake* the
+driver completes at power-up, not the firmware's scratch setup. The setup
+remains the VII type-5 command whose only proven producer is the DBA HAL's
+`SetupFirmware`.
+
+**Three routes, ordered by cost.**
+
+- **R-KCI (primary).** Drive the device from userspace through the kernel's own
+  interface: `/dev/janeiro` for the handshake, and the Tachyon session (gate K,
+  already passing) for VII. The gap is not transport; it is the exact VII
+  element the HAL's enqueue writes (`base + (tail & 0x3ff) * 0x30`, 48 bytes,
+  fields `0..7`, `8..9`, `10`, `11..15`, `16..23`, `24..27`, `28..31`,
+  `40..43`, `44`; U264). Every producer so far wrote the wrong combination of
+  those fields, which is why the firmware answers the gate before parsing.
+  R-KCI's job is to make one element byte-identical to the HAL's, then send the
+  U262 type-5 payload inside it.
+- **R-SERVICE (parked, but no longer a mystery).** Mount binderfs inside the
+  chroot, run `servicemanager` and the vendor DBA service, and `create` gets the
+  peer it waits for. Rev 12's stall (U285) says the queue does not move even
+  with a serving thread, so this route needs a *driver/lazy-service* answer
+  before it is worth a boot.
+- **R-STOCK (owner-gated oracle).** A stock boot captures the real producer at
+  the VII boundary. Unchanged from rev 12, and still the only route proven to
+  make the firmware's setup happen.
+
+**What rev 14 therefore withdraws.** Track S as the primary route, the
+`ALooper`/property hypotheses (they explain a wait that no longer matters), and
+any further instrument aimed at naming `create`'s waiter. The instruments stay
+in the tree as diagnostics.
+
+### 1.9 The VII element, as the target of R-KCI
+
+The HAL's enqueue (U264) is the reference. A VII command element is 48 bytes in
+a 1024-entry ring, published with a `dmb ish` after the body and before the
+tail. Fields 0..7 are the header (the first eight bytes are the sequence),
+`8..9` is the code, `10` the command class, `11..15` reserved, `16..23` and
+`24..27` are the DMA descriptor pair `{address, size}`, `28..31` the flags, and
+`40..43`/`44` are the extension the U265 replay set to `2` and `0x100`.
+
+Every producer that failed wrote a *VII code 0* element (U248/U249/U273), so
+changing only the class byte was never going to be the producer. R-KCI-1 is
+therefore: build the element field by field from the HAL's own struct copy,
+diff it byte-for-byte against the captured one, and only then send it.
+
 ### 1.7 What rev 13 withdraws
 
 - **The ptrace sampler** (`MODE=bt`) as evidence. Keep the code for the record,
@@ -332,7 +416,9 @@ Two routes remain, in order of cost:
 | D1 | the vendor DBA service publishes `IDevice/default` and stays up | **pass** (U279) | R1 only |
 | D2 | a raw-binder client gets an AIDL reply | **blocked** (U285) | R1, parked |
 | D2c | `GetDarwinnHalFunctions` returns a table with version 2 | **pass** (U286) | none |
-| D2d | the table's factory returns a HAL object | **open**: it runs its startup and blocks before the device (U293-U302) | S2b names the waiter |
+| D2d | the table's factory returns a HAL object | **retired** (U316): the HAL is a service client and opens nothing | R-KCI |
+| D0g | userspace sends a KCI command and the driver returns status 0 | **pass** (U318) | none |
+| D0h | the firmware reports its own version and protocol numbers | **pass** (U317): 1.0, VII 2, KCI 3 | none |
 | D2e | the HAL object's setup path builds and submits the setup command | **open** | R0, stride S3 |
 | D3b | the firmware's setup is done (gate probe answers differently) | **open** | R0 oracle |
 | D3 | `createCompilationFromFile` (or its HAL equivalent) runs `CreatePredictor` | **open** | after D2d |
@@ -358,7 +444,7 @@ Everything rev 11 closed, plus:
 
 ## 6. The program
 
-### 6.1 Track S — the in-process HAL, stride by stride (primary)
+### 6.1 Track S — the in-process HAL (retired by U316; findings stand)
 
 **S1 (R0, done): call the factory.** `tools/tpu-hal-harness.c`, built as a
 preloaded `.so`, calls `table[0]` (init), then `table[2]` = entry `+16`, in a
@@ -552,25 +638,25 @@ gate K fails? -> stop: driver/session regression.
   -> R3 stock oracle whenever the human is at Fastboot.
 ```
 
-## 11. Immediate actions (ordered)
+## 11. Immediate actions (ordered, rev 14)
 
-1. **S4 (done):** `0x12a710` registers into containers, it does not wait
-   (U309); the trio is a map insert, not a lock. The remaining candidate is the
-   direct `bl 0xf8aa8` inside `0xfd3d8` and the `blr` dispatches.
-2. **S5 (next, on the phone):** read `/proc/<pid>/syscall` from the parent while
-   the child is blocked (harness `sample_peer`) and name the syscall and pc,
-   then map the pc to a function. No ptrace, no handler, no threads.
-2. **S2b fix** (harness): set `watch_pid` before the self-test so the control
-   is real; a `MODE=cw` run then either names the waiter or proves a raw futex.
-3. **H1** (offline build, one run): `ALooper_prepare(0)` before the call, if
-   the window shows a Looper task rather than an options field.
-4. **H5** (offline): every `GetProperty` key on the create path.
-4. **S3** (phone): the session/setup entries in order, one per run, with the
-   firmware oracle after each.
-5. **F4** (offline): the setup builder's command vector at `0x1610cc`.
-6. **F1/A5'** (offline): the log-site index, unchanged.
-7. **R1** (parked): binder, only after S1-S4 report.
-8. **R3** (owner): the stock oracle, section 7.
+1. **R-KCI-0 (read-only, PASS, U317):** `tools/tpu-info --json` answers
+   **firmware 1.0, VII 2, KCI 3**, DRAM 0/0, so the AP-firmware handshake is
+   complete and both protocol versions are now known. Every element R-KCI builds
+   must declare VII 2.
+2. **R-KCI-1 (read-only, PASS, U318):** `tools/tpu-kci --code 11` and `--code 12`
+   both return status 0 through `_IOW(0xED, 34, u32)`. Userspace can put KCI
+   codes in front of the firmware on this boot, so the transport R-KCI-3 needs
+   already exists.
+3. **R-KCI-2 (offline):** rebuild the 48-byte element from U264's field order
+   and the U262 payload; diff it against the captured element before sending.
+   A diff is free; a wrong send costs a power-up.
+4. **R-KCI-3 (phone, one attempt):** send that element through the Tachyon
+   session the gate K client already owns. Oracle: the firmware log's setup
+   line, or `T10=11` answering anything but `0xf000009`.
+5. **R-SERVICE (parked):** only after R-KCI-3 fails; needs binderfs plus an
+   answer to U285's unclaimed queue.
+6. **R-STOCK (owner):** section 7, unchanged.
 
 ## Appendix A - the HAL's function table (U286)
 

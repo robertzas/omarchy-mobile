@@ -13093,3 +13093,27 @@ different cause: it opens **no** device node at all, which means it is a client
 that expects a service (binder) rather than the driver. That retires the
 in-process route: no amount of waiting instrumentation will make `create`
 succeed in a process with no peer.
+
+
+**U317, the firmware handshake completes and names itself.** `tools/tpu-info
+--json` (read-only, no wakelock) answers from the running firmware:
+
+    {"firmware": {"major": 1, "minor": 0, "vii": 2, "kci": 3}, "dram": {"allocated": 0, "available": 0}}
+
+So the AP-firmware handshake that `edgetpu_kci_fw_info` performs at power-up has
+completed on this boot: firmware 1.0, **VII protocol 2**, **KCI protocol 3**.
+`allocated = available = 0` is expected with no client group and no DRAM
+reserved. Rev 14's R-KCI-0 passes.
+
+**U318, userspace can send a KCI command through the driver.** The raw send
+ioctl `_IOW(0xED, 34, u32)` accepts a command word and returns status 0:
+
+    {"code": 11, "name": "FIRMWARE_INFO", "variant": 0, "ioctl": "0x4004ed22", "sent": true, "status": "ok"}
+
+and the read-only `GET_USAGE_V1`:
+
+    {"code": 12, "name": "GET_USAGE_V1", "variant": 0, "ioctl": "0x4004ed22", "sent": true, "status": "ok"}
+
+So `tools/tpu-kci` is a working direct client door: a userspace process can put
+KCI codes in front of the firmware on this boot, with no binder, no chroot and
+no HAL. Rev 14's R-KCI-1 passes, and R-KCI-3 now has a transport.

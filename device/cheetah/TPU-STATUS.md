@@ -23,6 +23,21 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U317-U318: the firmware answers, and userspace can send KCI)
+
+`tools/tpu-info --json` returns **firmware 1.0, VII 2, KCI 3** (DRAM 0/0), so the
+AP-firmware handshake is complete. `tools/tpu-kci` sends `FIRMWARE_INFO` (11) and
+`GET_USAGE_V1` (12) through `_IOW(0xED, 34, u32)` and both return status 0: a
+userspace process can address the firmware directly, with no binder, chroot or
+HAL. The plan's R-KCI-0 and R-KCI-1 pass.
+
+## 2026-11-13 (rev 14: the plan moves to the kernel's own KCI interface)
+
+The plan is rev 14. R-KCI replaces the in-process HAL as the primary route: the
+kernel owns KCI (codes 0-14, 19, 21), the Tachyon session already passes gate K,
+and the only missing piece is the exact 48-byte VII element the HAL's enqueue
+writes. Track S is retired as a route, with every finding kept.
+
 ## 2026-11-13 (U316: the TPU is alive; the HAL is a client, so the route changes)
 
 The driver `edgetpu_platform` is bound to `1ce00000.janeiro`, `/dev/janeiro` is a
