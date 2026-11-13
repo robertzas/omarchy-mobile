@@ -13234,3 +13234,82 @@ of what **our** producer wrote on 2026-11-09, not a capture of the vendor HAL's
 element. So the rebuilt bytes are "authentic" only to our construction; the
 HAL's own element has never been captured. That keeps the known-negative result
 and removes the stronger claim.
+
+
+**U325, the HAL's own enqueue is in a 37 MB image, and it reads a source
+struct.** The offset `0x1529648` is not in the 3.7 MB
+`libdarwinn_dba_hal_runtime.so`; it is in
+`out/vendor-chroot-edgetpu/root/vendor/lib64/libdarwinn_hal.so` (37,089,408 B),
+which is the vendor HAL build that carries the VII producer. Its head reads four
+fields from a source object at `x2` (`+0`, `+8`, `+0x10`, `+0x18`) and writes the
+48-byte element through `x19` (`strb wzr,[x19,#8]`, `str x8,[x19]`), so the
+element is composed from a *command object*, not from the wire struct we have
+been building by hand:
+
+Disassembly of section .text:
+
+0000000000c52480 <.text>:
+1529648: d10143ff     	sub	sp, sp, #0x50
+152964c: f90013fe     	str	x30, [sp, #0x20]
+1529650: a90357f6     	stp	x22, x21, [sp, #0x30]
+1529654: a9044ff4     	stp	x20, x19, [sp, #0x40]
+1529658: f9400049     	ldr	x9, [x2]
+152965c: aa0803f3     	mov	x19, x8
+1529660: b5000429     	cbnz	x9, 0x15296e4 <.text+0x8d7264>
+1529664: b9400848     	ldr	w8, [x2, #0x8]
+1529668: 350003e8     	cbnz	w8, 0x15296e4 <.text+0x8d7264>
+152966c: f9400848     	ldr	x8, [x2, #0x10]
+1529670: b50003a8     	cbnz	x8, 0x15296e4 <.text+0x8d7264>
+1529674: b9401848     	ldr	w8, [x2, #0x18]
+1529678: 35000368     	cbnz	w8, 0x15296e4 <.text+0x8d7264>
+152967c: aa0003f4     	mov	x20, x0
+1529680: 91004000     	add	x0, x0, #0x10
+1529684: aa0103f5     	mov	x21, x1
+1529688: 9404fd5f     	bl	0x1668c04 <.text+0xa16784>
+152968c: aa1403e0     	mov	x0, x20
+1529690: 52800021     	mov	w1, #0x1                // =1
+1529694: 97ffff37     	bl	0x1529370 <.text+0x8d6ef0>
+1529698: aa0003f6     	mov	x22, x0
+152969c: 97dda5f3     	bl	0xc92e68 <.text+0x409e8>
+15296a0: f10006df     	cmp	x22, #0x1
+15296a4: 54000561     	b.ne	0x1529750 <.text+0x8d72d0>
+15296a8: 910023e8     	add	x8, sp, #0x8
+15296ac: aa1403e0     	mov	x0, x20
+15296b0: 9400005d     	bl	0x1529824 <.text+0x8d73a4>
+15296b4: f94007e8     	ldr	x8, [sp, #0x8]
+15296b8: f100051f     	cmp	x8, #0x1
+15296bc: 54000981     	b.ne	0x15297ec <.text+0x8d736c>
+15296c0: 910023e0     	add	x0, sp, #0x8
+15296c4: 97dcafa9     	bl	0xc55568 <.text+0x30e8>
+15296c8: 394043e8     	ldrb	w8, [sp, #0x10]
+15296cc: 7100051f     	cmp	w8, #0x1
+15296d0: 54000561     	b.ne	0x152977c <.text+0x8d72fc>
+15296d4: 52800028     	mov	w8, #0x1                // =1
+15296d8: 3900227f     	strb	wzr, [x19, #0x8]
+15296dc: f9000268     	str	x8, [x19]
+15296e0: 1400003a     	b	0x15297c8 <.text+0x8d7348>
+15296e4: 90ff7514     	adrp	x20, 0x3c9000
+15296e8: 910eda94     	add	x20, x20, #0x3b6
+15296ec: 90ff7c20     	adrp	x0, 0x4ad000
+15296f0: 9129ec00     	add	x0, x0, #0xa7b
+15296f4: 52800861     	mov	w1, #0x43               // =67
+15296f8: 52802082     	mov	w2, #0x104              // =260
+15296fc: aa1403e3     	mov	x3, x20
+1529700: 52802095     	mov	w21, #0x104             // =260
+1529704: 9403c14a     	bl	0x1619c2c <.text+0x9c77ac>
+1529708: f90017e0     	str	x0, [sp, #0x28]
+152970c: 9100a3e0     	add	x0, sp, #0x28
+1529710: a900d3f5     	stp	x21, x20, [sp, #0x8]
+1529714: 97dcae08     	bl	0xc54f34 <.text+0x2ab4>
+1529718: f9000fe0     	str	x0, [sp, #0x18]
+152971c: b4000080     	cbz	x0, 0x152972c <.text+0x8d72ac>
+1529720: f0ff7e68     	adrp	x8, 0x4f8000
+1529724: fd476d00     	ldr	d0, [x8, #0xed8]
+1529728: fd000400     	str	d0, [x0, #0x8]
+152972c: 910023e0     	add	x0, sp, #0x8
+1529730: 97dcae27     	bl	0xc54fcc <.text+0x2b4c>
+1529734: aa0003e1     	mov	x1, x0
+1529738: aa1303e0     	mov	x0, x19
+152973c: 97dcaf96     	bl	0xc55594 <.text+0x3114>
+1529740: 97fe4663     	bl	0x14bb0cc <.text+0x868c4c>
+1529744: f94017e0     	ldr	x0, [sp, #0x28]

@@ -1,21 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # TPU / NPU plan: the Edge TPU (Abrolhos / Janeiro) on cheetah (gs201)
 
-Status (2026-11-13, rev 14): **the TPU is alive and the kernel is talking to
-it; the in-process HAL route is retired; the plan now drives the device through
-the kernel's own KCI interface, and the firmware's VII setup is still not done,
-so no inference is claimed.** Rev 14 is a route decision, not another
-instrument. It records that `edgetpu_platform` is bound to `1ce00000.janeiro`,
-that the firmware's KCI heartbeat climbs every ~61 s, and that the DBA HAL opens
-no device node at all — it is a client of a service, so `create` can never
-return in a process with no peer (U316). Everything rev 13 established about
-the HAL stands and stays in the record; it is simply no longer the road.
-
-The definition of done is unchanged (DoD-1..5): a model runs on the TPU; its
-raw output tensor matches a CPU reference (integer tensors exact unless a
-tolerance is stated); the run repeats in one boot; a cold boot reproduces it
-with no manual steps beyond the boot unit; the product is packaged with
-`pr-check` and package tests green.
+Status (2026-11-13, rev 15): **the TPU is alive and addressable; the VII
+transport, the firmware handshake and the client group all work; the in-process
+HAL and three of our own conclusions are retired; no inference is claimed.**
+Rev 15 exists because rev 14 recorded claims that the driver's own header and
+binary then refuted. It keeps the corrections and states the ledger as three
+lists - established, refuted, unknown - so the next session does not rebuild on
+a wrong premise. The one unknown left is the vendor HAL's own VII element, and
+the image that contains it is now identified (U325).
 
 ## 0. Rules this plan runs under
 
@@ -459,6 +452,27 @@ Everything rev 11 closed, plus:
 
 ## 6. The program
 
+### 1.10 Rev 15: the corrected ledger
+
+**Established.** The driver `edgetpu_platform` is bound to `1ce00000.janeiro`
+and the firmware answers: `EDGETPU_FIRMWARE_VERSION` reports **1.0, VII 2,
+KCI 3** (U317). Gate K passes: session, both FMQs and a command round trip. The
+client API includes `CREATE_GROUP`/`JOIN_GROUP`/`FINALIZE_GROUP` and our client
+uses them (U324). The vendor HAL opens **no** device node and waits (U316), so
+it is a service client, not a driver.
+
+**Refuted or withdrawn, with the record.** H2 (options layout, U307), H6 (our
+fork, U306), H1 (no `ALooper_prepare` in the chroot's libandroid, U313), the
+ptrace sampler (U302), "userspace can send KCI" (U322: ioctl 34 is
+`SET_DEVICE_PROPERTIES`), "the property block is the setup path" (U323: no
+consumer), "our client has no group" (U324), and "the rebuilt element is the
+HAL's" (U324: it is our own producer's).
+
+**Unknown, and the only thing worth a boot.** What the vendor HAL's VII element
+actually contains. Its enqueue is in
+`out/vendor-chroot-edgetpu/root/vendor/lib64/libdarwinn_hal.so` at `0x1529648`
+and composes the element from a command object (U325).
+
 ### 6.1 Track S — the in-process HAL (retired by U316; findings stand)
 
 **S1 (R0, done): call the factory.** `tools/tpu-hal-harness.c`, built as a
@@ -653,27 +667,23 @@ gate K fails? -> stop: driver/session regression.
   -> R3 stock oracle whenever the human is at Fastboot.
 ```
 
-## 11. Immediate actions (ordered, rev 14)
+## 11. Immediate actions (ordered, rev 15)
 
-1. **R-KCI-0 (read-only, PASS, U317):** `tools/tpu-info --json` answers
-   **firmware 1.0, VII 2, KCI 3**, DRAM 0/0, so the AP-firmware handshake is
-   complete and both protocol versions are now known. Every element R-KCI builds
-   must declare VII 2.
-2. **R-KCI-1 (WITHDRAWN, U322):** ioctl 34 is `SET_DEVICE_PROPERTIES`, not a
-   KCI send; the earlier status 0 was the property call, not the firmware.
-   Userspace cannot send KCI on this kernel, and `tools/tpu-kci` is withdrawn.
-   The transport R-KCI-3 needs is the VII mailbox queue, which gate K owns.
-3. **R-KCI-2 (offline, DONE, U319):** the rebuilt element and 80-byte payload
-   are byte-identical to the 2026-11-09 replay, which gated. The element is not
-   the gap, and re-sending it is a known negative. Pass: a *difference* to test.
-4. **R-KCI-3 (offline first, U324):** derive the vendor HAL's element fields
-   from its struct fill (`0x1529648`, copy at `0x152989c`); the group context is
-   already provided by our client. Then, and only with a *different* element,
-   send once through the Tachyon session. Oracle: the firmware log's setup
-   line, or `T10=11` answering anything but `0xf000009`.
-5. **R-SERVICE (parked):** only after R-KCI-3 fails; needs binderfs plus an
-   answer to U285's unclaimed queue.
-6. **R-STOCK (owner):** section 7, unchanged.
+1. **R-KCI-4 (offline, next):** finish reading the HAL's enqueue in
+   `out/vendor-chroot-edgetpu/root/vendor/lib64/libdarwinn_hal.so` at
+   `0x1529648`-`0x1529960`. It reads a command object at `x2` (`+0`, `+8`,
+   `+0x10`, `+0x18`) and writes the 48-byte element at `x19` (U325). Recover
+   every field, then build our element from those fields.
+2. **R-KCI-5 (offline):** diff that element against ours (U319). Only a
+   difference earns a send; an identical element is the known negative.
+3. **R-KCI-6 (phone, one attempt):** send the different element through the
+   Tachyon session, which already creates and finalizes a device group
+   (`0x4014ed06`, `0xed08`, U324). Oracle: the firmware's setup line, or
+   `T10=11` answering anything but `0xf000009`.
+4. **R-SERVICE (parked):** binderfs plus servicemanager and the vendor DBA
+   service; needs an answer to U285's unclaimed queue first.
+5. **R-STOCK (owner):** section 7, the only route proven to make the firmware's
+   setup happen.
 
 ## Appendix A - the HAL's function table (U286)
 

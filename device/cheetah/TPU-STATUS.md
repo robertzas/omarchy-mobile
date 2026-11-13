@@ -23,6 +23,16 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (rev 15: the corrected ledger, and where the HAL's element lives)
+
+Established: the firmware answers 1.0/VII 2/KCI 3, gate K passes, and the client
+creates and finalizes its group. Refuted: the options layout, our fork, the
+ALooper angle, the ptrace sampler, "userspace can send KCI", the property block,
+"no group context", and "the rebuilt element is the HAL's". Unknown: the vendor
+HAL's own element, whose enqueue is in the 37 MB
+`out/vendor-chroot-edgetpu/root/vendor/lib64/libdarwinn_hal.so` at `0x1529648`
+and composes the element from a command object (U325).
+
 ## 2026-11-13 (U324: U321 retracted - the group context is already there)
 
 `EDGETPU_CREATE_GROUP` (ioctl 6, `edgetpu_mailbox_attr`), `EDGETPU_JOIN_GROUP`
