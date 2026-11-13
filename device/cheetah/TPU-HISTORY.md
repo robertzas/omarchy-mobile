@@ -12856,3 +12856,14 @@ and word `+0x7c` is 2000. So the fourth argument is a real callback/context
 pair, not optional, and the 16-byte options buffer is read somewhere. Next:
 build the callback thunk and a context object of the same shape, or name the
 option fields from the service's fill at `0x850c`-`0x8524` before the next call.
+
+**U291, the callback is not the null.** `MODE=create2` passes a real function
+pointer and a context object of the service's shape (0x80 bytes, `+0x10 = 1`,
+`+0x7c = 2000`) and the call still dies `SIGSEGV fault addr 0x0`. So the fault
+is inside the options object: the HAL dereferences a field of the 16-byte
+struct that a zeroed buffer leaves NULL. The service builds that struct at its
+`0x850c`-`0x8524` (a zeroed 16-byte slot filled by the call at `0x8518` to
+`0x11660`, with a status word at `[x29-0x48]`), and `0x11660` is therefore the
+next thing to read: it is the options builder, and its stores name the fields.
+Until it is read, every `create` attempt with zeroed options costs a SIGSEGV
+and tells us nothing new.

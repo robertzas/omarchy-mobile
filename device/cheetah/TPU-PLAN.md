@@ -109,7 +109,10 @@ The options object the service passes is **16 bytes**; its fields are not yet
 named. Args 3 and 4 are required: `x2` is a thunk (`0x8d10` -> `0x9360`) and
 `x3` a fresh 0x80-byte object (`+0x10 = 1`, `+0x7c = 2000`). A call with both
 zero dies `SIGSEGV` at `0x0` (U290), so S1 needs a callback and a context of
-that shape, and init is one-shot per process (U288). The service fills it before the call at `0x850c`-`0x8524`; reading that
+that shape, and init is one-shot per process (U288). A valid callback and
+context are still not enough: the call faults at `0x0` with the options zeroed
+(U291), so some field of the 16-byte struct is a pointer the HAL dereferences.
+`0x11660` in the service is the options builder; read its stores first (S2). The service fills it before the call at `0x850c`-`0x8524`; reading that
 fill and the library's `DarwinnHalOptions` uses is stride S2.
 
 ### 1.4 The RTTI names are next to the table, not in it

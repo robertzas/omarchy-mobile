@@ -12,7 +12,7 @@
 //   clang --target=aarch64-linux-android30 -DPROBE_AS_SO -shared -fPIC \
 //         -nostdlib -o out/tpu-client/libhalharness.so tools/tpu-hal-harness.c
 // Run:
-//   MODE=census|create|entry ENTRY=n LD_PRELOAD=/system/lib64/libhalharness.so
+//   MODE=census|create|create2|entry ENTRY=n LD_PRELOAD=/system/lib64/libhalharness.so
 //     chroot $R /vendor/bin/edgetpu-run
 #include <stddef.h>
 
@@ -101,6 +101,15 @@ static void eq(const char *k, const char *v) {
 }
 
 typedef int (*fn4)(void *, void **, void *, void *);
+
+/* The service passes a thunk (0x8d10) as arg 3 and a 0x80-byte object as arg
+   4; a zeroed pair faults at 0. A no-op callback and a context with the same
+   fields (byte +0x10 = 1, word +0x7c = 2000) keep those two arguments valid
+   while the options layout is still unknown. */
+static int harness_cb(void *ctx) {
+  (void)ctx;
+  return 0;
+}
 typedef int (*fn0)(void);
 
 static unsigned long *table(void) {
@@ -122,12 +131,19 @@ static unsigned long *table(void) {
 
 /* The factory (word 2) takes a 16-byte options object, per the service's own
    call site; 64 bytes leaves room to grow it without a rebuild. */
-static int call_create(unsigned long *t, unsigned long *out) {
+static int call_create(unsigned long *t, unsigned long *out, int with_cb) {
   unsigned char opts[64];
+  unsigned char ctx[0x80];
   int i;
 
   for (i = 0; i < (int)sizeof(opts); i++) opts[i] = 0;
+  for (i = 0; i < (int)sizeof(ctx); i++) ctx[i] = 0;
+  ctx[0x10] = 1;
+  ctx[0x7c] = (char)(2000 & 0xff);
+  ctx[0x7d] = (char)((2000 >> 8) & 0xff);
   *out = 0;
+  if (with_cb)
+    return ((fn4)t[2])(opts, (void **)out, (void *)harness_cb, ctx);
   return ((fn4)t[2])(opts, (void **)out, 0, 0);
 }
 
@@ -178,7 +194,7 @@ __attribute__((constructor)) static void start(void) {
     putdec(n);
     put(" with zeroed options\n");
     if (n == 2) {
-      rc = call_create(t, &out);
+      rc = call_create(t, &out, mode[0] == 'c' && mode[6] == '2');
     } else {
       unsigned char opts[64];
       int i;
