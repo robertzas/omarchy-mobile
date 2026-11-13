@@ -825,6 +825,12 @@ record into the type-5 payload, so it names every field the firmware will read.
 **Stop:** if it turns out to be a dispatcher over record kinds, map the kind
 first and pick the one `SetupFirmware` builds.
 
+*Progress (U344):* two windows excluded. Neither `0x14d9eac` nor `0x14de9cc`
+accesses `[x1]`; the first passes the record to the second, and the second builds
+a limits block (`1024`, `0x7fffffff`, `256`). The reader is a later callee.
+Cheap filter for the next attempt: count `[x1]` accesses in the window before
+reading the body - a window with none cannot be the field map.
+
 ### P4. The rebuilt element and a single send (one attempt per boot)
 
 Build the element from P3's map with U328's field map, diff it against U319's

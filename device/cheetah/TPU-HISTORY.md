@@ -13667,3 +13667,19 @@ and indexes a byte array with `x23`:
 This matches the helper at `0x14d9e2c`, which divides by 40, and `0x14d9df8`,
 which divides by 24 (the vector array). Two different strides, two different
 objects - the earlier reading conflated them.
+
+
+**U344, two windows excluded, the 40-byte record's reader still unfound.** Both
+`0x14d9eac` (199 instructions captured) and `0x14de9cc` (87) were read and neither
+accesses `[x1]` at all. `0x14d9eac` never moves `x1` either, so its first call
+`bl 0x14de9cc` (at `0x14d9eec`, with `x0 = sp+0x108`) hands the record straight to
+`0x14de9cc`; that function builds a constants block instead - `0x400` (1024) at
+`[sp,#0x70]`, `0x7fffffff` at `[sp,#0x78]`, `1` at `[sp,#0xc8]`, `0x100` (256) at
+`0x14dea0c`, and a 16-byte constant loaded from `0x4fb760` - which reads as a
+limits/status initialiser, not a parser.
+
+So the map P3 wants is not in either window. The next candidates are the calls
+after the constants block (`0x162ab18`, `0x14e33d4`, `0x1505d90` in the
+`0x14d9eac` body) and the callee that actually consumes the 40-byte record. Two
+more windows can be excluded cheaply by the same test: count `[x1]` accesses
+before reading the body.

@@ -23,6 +23,12 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U344: P3's first two windows excluded)
+
+`0x14d9eac` hands the 40-byte record to `0x14de9cc` without reading it, and that
+function builds a limits block instead of parsing. Neither window is the field map;
+the cheap filter for the next one is to count `[x1]` accesses first.
+
 ## 2026-11-13 (rev 17: re-evaluation - the plan's two wrong claims are out)
 
 Rev 17 withdraws "no observation channel" (the firmware's log reaches dmesg, 1.13)
