@@ -12617,4 +12617,9 @@ commands[%d], cluster_id_bitset in hex: %x.`, checks
 builder runs at `0x1613a8`-`0x1615e4` and the submit at `0x161744`; the command
 object carries union type 5 at +0x18, the same 5 the U262 payload has at byte
 27. That HAL has never been driven on this port: U274 drove
-`libdarwinn_hal.so`, a different implementation on a different path.
+`libdarwinn_hal.so`, a different implementation on a different path. The setup
+function starts at `0x1610cc` and has exactly two callers (`0x160dd8` and
+`0x162a20`), both inside the same library, so the setup sits on the HAL's own
+construction path and not only behind `prepareModel`. The library is
+self-contained: 240 dynamic imports, none for setup, VII or `DarwinnApi2_*`, so
+it builds the command and its scratch vector itself.
