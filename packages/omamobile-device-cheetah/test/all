@@ -101,6 +101,23 @@ for f in usr/bin/omamobile-bootctl usr/bin/reboot-to usr/bin/omamobile-boot-succ
          usr/bin/omamobile-wifi-start usr/lib/systemd/system/omamobile-wifi.service usr/lib/modprobe.d/omamobile-wifi.conf; do
   [[ -e $tmp/root/$f ]] || fail "install stages $f"
 done
+# The Edge TPU loads exactly once per boot from its unit: udev must not race
+# it, and a bootloader or a hand run that already loaded it must not make the
+# unit load it again (a second load oopses in edgetpu_mmu_attach).
+for f in usr/lib/modprobe.d/omamobile-tpu.conf usr/lib/systemd/system/omamobile-tpu.service usr/bin/tpu-hold; do
+  [[ -e $tmp/root/$f ]] || fail "install stages $f"
+done
+grep -qx 'blacklist janeiro' "$tmp/root/usr/lib/modprobe.d/omamobile-tpu.conf" \
+  || fail "janeiro is blacklisted so udev cannot race the TPU unit"
+grep -q 'grep -q "^janeiro " /proc/modules' "$tmp/root/usr/lib/systemd/system/omamobile-tpu.service" \
+  || fail "the TPU unit checks /proc/modules before loading janeiro"
+grep -q 'test -e /dev/janeiro' "$tmp/root/usr/lib/systemd/system/omamobile-tpu.service" \
+  || fail "the TPU unit waits for /dev/janeiro before starting the holder"
+grep -q 'ln -sfn janeiro /dev/edgetpu' "$tmp/root/usr/lib/systemd/system/omamobile-tpu.service" \
+  || fail "the TPU unit creates the /dev/edgetpu link tpu-hold opens"
+if grep -qx 'ExecStartPre=/usr/bin/modprobe janeiro' "$tmp/root/usr/lib/systemd/system/omamobile-tpu.service"; then
+  fail "the TPU unit never loads janeiro unconditionally"
+fi
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-boot-success.service") == ../omamobile-boot-success.service ]] \
   || fail "the boot-success unit is enabled by a vendor wants link"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-wifi.service") == ../omamobile-wifi.service ]] \

@@ -1,6 +1,172 @@
 <!-- SPDX-License-Identifier: MIT -->
 # TPU / NPU plan: the Edge TPU (Abrolhos / Janeiro) on cheetah (gs201)
 
+Status (2026-11-12, gate K; this line supersedes the three historical status
+paragraphs below): **the userspace protocol works end to end.**
+`tools/tpu-tachyon-client` (libbinder_ndk, built for bionic) creates a session
+on the Tachyon compute service, sets up both FMQ queues and completes a command
+round trip: `createSession: OK`, `setupCommandQueue: OK fds=11,12`,
+`setupResponseQueue: OK fds=14,15`, `sendCommand: OK`, `receiveResponse: OK`
+(88-byte response) - gate K. `janeiro` now loads at boot through
+`omamobile-tpu.service` (`omamobile-device-cheetah` 0.1.54+), and a fresh boot
+has `/dev/janeiro`, the GSA hwmgr link and a held driver wakelock. The stock
+delegate still ends at `create device status: 13` with `device: 0x0`, and **the
+firmware's one-time VII setup has no producer we can reach from Linux**: every
+VII command before it is refused as `type 0`/`0xf000009`, the A17 HAL's element
+is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
+it up (U223-U225). L1, a real model inference, is therefore still open, and no
+model output exists. The plan of record for the rest of the work follows.
+
+---
+
+## Plan of record (2026-11-12, gate K)
+
+This is the authoritative plan from gate K to a fully working TPU. It replaces
+the status lines above and the phase detail in 5.1, which stay as history.
+AGENTS.md section 1 is unchanged; the slot-B development grant (section 0)
+covers only the steps it names.
+
+### Where the work stands
+
+| Gate | Claim | Evidence | State |
+| --- | --- | --- | --- |
+| A | The Tachyon service stays registered while a client holds it | U247, `getService` rc 0, tachyon pid held | done |
+| B | `createSession` succeeds | K: `createSession: OK` from the libbinder_ndk client | done |
+| C | Both FMQ queues and a command round trip | K: fds 11,12 and 14,15; `sendCommand` OK; 88-byte response | done |
+| D | The firmware's one-time VII setup runs | every VII command before it: `type 0`, `0xf000009` | **blocked** |
+| E | One real model inference | none; the delegate gets `create device status: 13`, `device: 0x0` | blocked on D |
+
+So the userspace protocol, the service lifetime and the FMQ transport are no
+longer the problem. The one thing between this phone and its first inference is
+the firmware setup state, which our userspace cannot create (U174-U177,
+U187-U188, U222) and a running GXP core does not create (U223-U225).
+
+### The blocker, stated so it can be falsified
+
+`vii_handler_layer.cc` refuses every command with "Setup is not done yet
+received a command of type 0" until the one-time setup has run. It is not the
+element code, not a scalar field of the Command table, not the DMA payload
+shape and not KCI 6: each was swept (U8, U16-U22, U117, U175-U177, U187-U188,
+U222). The A17 HAL, the A14 HAL, the Tachyon core and the runtime all emit the
+same legacy message, which the firmware parses as type 0. A stock boot is the
+only known system where the state exists, so it is created before Linux - by
+ABL, the GXP's Tachyon firmware, or Trusty.
+
+Falsification: if a stock boot's kernel log shows the host sending a VII setup
+element after boot, the producer is userspace and this conclusion is wrong. If
+it shows the TPU working with no host setup, the state is created before Linux.
+Either way, record the stock kernel's `edgetpu`/`janeiro`/`gxp` dmesg and the
+first VII element, if any.
+
+### Routes, in order of evidence per cost
+
+| Route | What it yields | Phase | Cost |
+| --- | --- | --- | --- |
+| R1 stock slot-A capture | the real setup element, or proof that it is pre-Linux | L1a | owner's explicit go; rewrites `efs`/`persist`/`modem_userdata` |
+| R2 ABL / GXP reverse pass | the setup producer and payload, offline | L1b | days of disassembly; no phone writes |
+| R3 delegate / app service | a stock client that may send the setup | L1c | downstream of D; status 13 first |
+
+R1 and R2 resolve the same unknown and are alternatives. R3 cannot bypass D and
+is not on the critical path; do not spend more time on status 13 until D moves.
+
+### Phase L - break the firmware setup gate
+
+**L1a - the stock oracle (owner-gated, HIGH risk).** Run the runbook "The
+stock-Android slot-A oracle" with the capture additions recorded there. Pass: a
+stock boot's dmesg shows the VII setup element (record it byte for byte), or
+shows the TPU working with no host setup (then R2 is the only route). Stop: no
+`adb root` and no debugfs; never flash a stock boot image to get root. Rollback:
+`fastboot --set-active=b`, boot the saved slot-B set, take a fresh NV backup.
+
+**L1b - the reverse pass (offline, no risk).** Targets, in order:
+1. the extracted ABL's ARM32 `tpu-mgr`: continue the PC-relative xref pass of
+   U157-U159; map the setup path, the global scratches and the cluster bitset;
+2. the GXP firmware's DCI/job path: U226-U228 got the TPU mailbox map and core 0
+   running; find the job or doorbell the AP must send for the GXP firmware to
+   set the TPU up;
+3. only then, the vendor HAL's serializer (already sampled, U162/U187).
+
+A third, newer lead (2026-11-12, U236): the driver's own probe unloads a
+running image and powers the TPU down, and its power-up path resets the block
+before the firmware check. A test kernel's `adopt_running_fw` parameter skips
+the probe shutdown and the block-down wait; the next step is to skip the
+remaining power-up writes when GSA reports RUNNING, so the bootloader's setup
+survives and the driver adopts it instead of reloading. The unit's wakelock
+succeeds (0) on that build, but the firmware still reloads normally.
+
+Deliverable: a reconstructed setup element or a job sequence, testable with
+`tools/tpu-setup-payload.py` + `edgetpu-run mapped` (direct VII) or the session
+client. Pass: the firmware stops answering `0xf000009`/type 0.
+
+**L1c - replay (slot B, grant-covered).** Submit the recovered element through
+the working transport: the direct VII ring (`tools/edgetpu-run.c mapped`) or the
+Tachyon session (`tools/tpu-tachyon-client.c`, `TYPES=1,2,5,5,7`). Pass: the
+firmware acknowledges the setup and the next sync or RegisterGraph returns 0.
+Stop: two payload shapes without a change; re-read the evidence instead of
+brute-forcing schema bytes (U8, U18).
+
+### Phase M - the first real inference
+
+Preconditions: L passes, `janeiro` is up with one power-up, and the chain or the
+session client works. Steps, each a separate command and recorded reply:
+1. RegisterGraph (7) with the graph container the core accepts (the DGC0/tegu
+   variant, U170/U172), the firmware scratch imported under its own handle, and
+   the graph's dependent memories imported (U171-U173).
+2. CreateExecution (9) with the model's input/output tensor metadata.
+3. BindInputBuffersToTensors (12) and BindOutputBuffersToTensors (13) with
+   dma-bufs allocated from `/dev/dma_heap/system` and synced.
+4. Invoke (11), wait for the response, and read the output tensor.
+5. Compare with the CPU reference for the same input (`out/bench`, the same
+   model and input, a tensor hash and the top label), not just a plausible
+   label.
+
+Gate M1: an output tensor exists and its bytes are stable across two runs. M2:
+the top label and tensor hash match the CPU reference. M3: ten consecutive runs
+without a timeout, with no TPU/IOMMU error in dmesg. Stop on any firmware error:
+record the response words and the firmware ring before retrying.
+
+### Phase N - the measured baseline
+
+100 consecutive invocations with p50/p95; the 60-frame 720p benchmark against
+the U118 CPU and GPU rows; thermal and power with the TPU at load; battery drain
+under a fixed workload. Gate: the TPU row of the benchmark table is filled with
+measured numbers, and no run is lost in 100.
+
+### Phase O - packaging and power
+
+A TFLite delegate or a small runtime that owns the session, one TPU power-up per
+cold boot, thermal ceilings, `omamobile-tpu.service` enabled by default, suspend
+with a session open (attended), and no interaction with the modem's UFS
+error-handler pass. Gate: a cold boot with no manual steps gives a working
+delegate; suspend and resume leave the TPU usable; the unit survives ten boots.
+
+### Phase P - upstream and validation
+
+`tools/pr-check` and the kernel gate on every change, the plan and status pages
+updated with dated evidence, the kernel branch cleaned for contribution, and the
+runtime packaged in `[omamobile]`. Gate: the pull-request gate passes and a
+second phone can be brought up from the docs alone.
+
+### Immediate next actions, in order
+1. Boot-verify `omamobile-tpu.service` (this boot's reboot): janeiro loaded once,
+   `/dev/janeiro` present, `tpu-hold` holds the wakelock.
+2. Re-run gate K after that boot (session, queues, Ping) and record it.
+3. Keep the phone on latest stable Omarchy (4.5.0-3 pinned and verified); no
+   update is needed until the stable channel publishes a newer version.
+4. Run L1a (owner's go) or L1b; do not start a third parallel attack on D.
+5. On L1 pass, run Phase M end to end in one boot, recording every reply.
+6. Only then Phase N; only then Phase O and P.
+
+### Evidence rules
+
+Every run records the date, `uname -r`, uptime, the exact command and the raw
+replies. No inference claim without output tensor bytes or a hash compared with
+the CPU reference. Never commit a model, vendor blob, serial, IMEI or NV
+content. The plans' existing stop conditions still apply, and a reset-capable
+step (GXP client, HAL direct path) is never run twice in one boot.
+
+---
+
 Status (2026-11-06): **T2.2-T2.5d, T3's ACPM shim, T4's first firmware load
 and T5's device query passed on the phone.** The SysMMU at 1cc40000 is bound
 as `samsung-sysmmu`; the TPU platform device, the IOMMU group and the
@@ -647,10 +813,14 @@ them. The tool must be root-only initially (the device node is `0600` or
 
 ---
 
-## 5.1 Roadmap to a fully working TPU
+## 5.1 Roadmap to a fully working TPU (superseded)
 
-> **2026-11-12:** Phases J-N at the end of this plan carry the work
-> past the reply-reference blocker; read them before extending Phase A.
+> **2026-11-12, gate K:** the authoritative roadmap is the "Plan of record" at
+> the top of this file. Phases A-C are done, D is the wall and L1 is the next
+> gate; the phase text below is kept as history, not as the current order.
+>
+> Historical note: Phases J-N at the end of this plan carried the work past the
+> reply-reference blocker; gate K closed them.
 
  (2026-11-12)
 
@@ -9387,6 +9557,26 @@ Recorded as **not run** on 2026-11-12: the previous attempt found no `adb
 root` on slot A's retail build, and the runbook forbids flashing a stock boot
 image to gain it.
 
+**Capture matrix (added 2026-11-12, gate K).** The capture's job is to answer
+one question: does a stock boot's host ever send the firmware's VII setup
+element? Record, in this order:
+
+1. `adb root` result. If it is unavailable, record it and stop; a retail build
+   without debugfs cannot answer the question, and no stock image is flashed.
+2. `adb shell dmesg | grep -iE 'edgetpu|janeiro|gxp|tpu'` from cold boot through
+   the first TPU workload. Look for `vii-elem`, `vii-payload`, `Setup`, GSA
+   load/start and KCI lines. This is the pass criterion.
+3. `/sys/kernel/debug/edgetpu/*` (queue, KCI, mailbox, firmware log) if present;
+   copy the files, never just grep them.
+4. The stock runtime's own log (`adb logcat -d`, the NNAPI/Darwinn service dump)
+   and the first VII element bytes, if the kernel exposes them.
+5. The build fingerprint and `uname -r` only; no serial, no account, no IMEI.
+
+Pass: either a host-sent setup element is captured (then L1c replays it), or the
+TPU works with no host setup (then the state is pre-Linux and L1b is the only
+route). Fail: no root and no debugfs; do not infer the setup from a userspace
+log alone.
+
 2026-11-12 (later): the owner approved the boot, and
 `tools/nv-backup --check out/nv-cheetah-20261112` passed (all seven
 partitions SAME). The battery reads 50 % and `Discharging`, which is this
@@ -10128,3 +10318,45 @@ and `KCI tx code 10/21` - but ends at `create device status: 13`, `device:
 0x0`, rc 1. Next: find why device creation returns 13 while the session's
 VII path works, or send the compiled graph through the session that does
 work. No model has produced output on the TPU yet.
+
+## U236 (2026-11-12): the boot unit's first boot, and the adoption lead
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, boot at 20:22, worktree
+`wt-tpu`.
+
+**The boot unit now really works.** Its first boot had `janeiro` loaded and
+`/dev/janeiro` 505:0, but `tpu-hold` printed `fd -2` / `open failed`: it opens
+`/dev/edgetpu`, and only the manual runner ever made that symlink. The unit
+now creates `/dev/edgetpu` and `/dev/edgetpu-soc` before `tpu-hold`, waits for
+`/dev/janeiro`, and checks `/proc/modules` first; the package ships
+`vendor/modprobe.d/omamobile-tpu.conf` (`blacklist janeiro`) so udev cannot race
+the unit. On the reboot: `tpu-hold: fd 3`, `tpu-hold: wakelock -> 0`, the unit
+active, both symlinks present. `omamobile-device-cheetah` 0.1.55, `test/all`
+passes.
+
+**The adoption experiment.** Reading the driver showed two places that erase a
+setup made before Linux: `mobile_firmware_gsa_authenticate()` unloads any image
+above INACTIVE before loading its own, and the probe's `edgetpu_pm_shutdown()`
+powers the block down. A test kernel added `adopt_running_fw=1`: it skips the
+probe shutdown, skips `mobile_power_up()`'s block-down wait (which otherwise
+answers `-EAGAIN`, the wakelock ioctl's `-11`), and adopts a GSA state of
+RUNNING in `mobile_firmware_gsa_authenticate()` (skipping the image load and
+the CPU reset).
+
+On the first boot with it, the wakelock succeeded (`0`) but the firmware still
+loaded normally:
+
+    edgetpu janeiro: Powering up
+    edgetpu janeiro: loaded prod firmware (1.0 895567958)
+    edgetpu janeiro: power-up ok: ... GSA state=2
+
+No `adopting the running firmware` line. The power-up path calls
+`mobile_pwr_state_set`, `lpm_up` and `edgetpu_chip_init` before the firmware
+check, and those reset the block to INACTIVE; the adopt branch never sees
+RUNNING. The next test skips those power-up writes when GSA already reports
+RUNNING, then runs the firmware path with the adopt flag set. That is one
+change and one boot; the current build is the control.
+
+The `__setup_irq` stack trace in dmesg is a warning in IRQ setup, not fatal:
+the driver initializes and the VII/KCI paths have worked on every boot that
+showed it. It is left for the packaging pass.

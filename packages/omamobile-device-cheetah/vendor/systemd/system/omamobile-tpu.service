@@ -6,14 +6,22 @@ After=systemd-modules-load.service
 
 [Service]
 Type=simple
-# janeiro is blacklisted so only this unit loads it. It must load exactly once
-# per boot: a second load oopses in edgetpu_mmu_attach, and the probe needs the
-# Trusty GSA hwmgr, which modprobe pulls in as a dependency.
-ExecStartPre=/usr/bin/modprobe janeiro
+# janeiro is blacklisted (vendor/modprobe.d/omamobile-tpu.conf) so only this
+# unit loads it. It must load exactly once per boot: a second load oopses in
+# edgetpu_mmu_attach, and the probe needs the Trusty GSA hwmgr, which modprobe
+# pulls in as a dependency. The first check makes the unit safe even if a
+# bootloader, udev or a hand run already loaded it.
+ExecStartPre=/bin/sh -c 'if [ ! -e /dev/janeiro ] && ! grep -q "^janeiro " /proc/modules; then exec /usr/bin/modprobe janeiro; fi'
+# modprobe returns after the probe, but the devtmpfs node is what tpu-hold
+# opens; wait for it instead of racing the probe.
+ExecStartPre=/bin/sh -c 'i=0; while [ ! -e /dev/janeiro ] && [ $i -lt 40 ]; do sleep 0.5; i=$((i + 1)); done; test -e /dev/janeiro'
 # The HAL enumerates with a detachable group and no wakelock, so the driver
 # powers the TPU down at finalize; the next power-up in the same boot wedges the
 # PSM. Holding the wakelock makes the HAL's probe and every later group reuse
 # the one power-up.
+# tpu-hold opens /dev/edgetpu, the driver's first interface; the device itself
+# is /dev/janeiro and nothing else creates the link at boot.
+ExecStartPre=/bin/sh -c 'ln -sfn janeiro /dev/edgetpu; ln -sfn janeiro /dev/edgetpu-soc'
 ExecStart=/usr/bin/tpu-hold
 Restart=no
 

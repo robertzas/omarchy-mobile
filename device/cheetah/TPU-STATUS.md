@@ -5,6 +5,26 @@ As of 2026-11-11, kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
 The details and the experiment log are in [TPU-PLAN.md](TPU-PLAN.md); this
 page is the summary.
 
+## 2026-11-12 (boot unit + adoption lead)
+
+- **`janeiro` at boot is real now.** The first boot of `omamobile-tpu.service`
+  exposed a packaging bug: `tpu-hold` opens `/dev/edgetpu`, and only the manual
+  runner made that symlink, so the holder failed with `fd -2` and never took
+  the wakelock. The unit now creates `/dev/edgetpu`/`/dev/edgetpu-soc`, waits
+  for `/dev/janeiro`, checks `/proc/modules` before loading, and the package
+  ships `blacklist janeiro` in `vendor/modprobe.d/omamobile-tpu.conf`. On the
+  reboot: `tpu-hold: wakelock -> 0`, unit active, both links present.
+  `omamobile-device-cheetah` 0.1.55.
+- **Adoption lead.** The driver unloads a running image
+  (`mobile_firmware_gsa_authenticate`) and powers the block down at probe end
+  (`edgetpu_pm_shutdown`), so a setup made before Linux cannot survive. A test
+  kernel's `adopt_running_fw=1` skips the probe shutdown and the block-down
+  wait; the wakelock then succeeds, but `loaded prod firmware` shows the
+  power-up path (`mobile_pwr_state_set`/`lpm_up`/`edgetpu_chip_init`) still
+  resets the block before the firmware check. Next: skip those writes when GSA
+  reports RUNNING, then adopt.
+- No inference; gate D is unchanged.
+
 ## 2026-11-12 (K): a real session, both queues and a command round trip
 
 Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, with `janeiro` loaded.
