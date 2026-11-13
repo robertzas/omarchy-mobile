@@ -112,7 +112,10 @@ zero dies `SIGSEGV` at `0x0` (U290), so S1 needs a callback and a context of
 that shape, and init is one-shot per process (U288). A valid callback and
 context are still not enough: the call faults at `0x0` with the options zeroed
 (U291), so some field of the 16-byte struct is a pointer the HAL dereferences.
-`0x11660` in the service is the options builder; read its stores first (S2). The service fills it before the call at `0x850c`-`0x8524`; reading that
+`0x11660` in the service is the options builder: it builds two SSO strings and
+calls `android::base::GetProperty`, then copies the result into the factory's
+options slot (U292), so S2 reads the property name at `0x4b77` and the string
+layout rather than guessing a pointer table. The service fills it before the call at `0x850c`-`0x8524`; reading that
 fill and the library's `DarwinnHalOptions` uses is stride S2.
 
 ### 1.4 The RTTI names are next to the table, not in it

@@ -12867,3 +12867,13 @@ struct that a zeroed buffer leaves NULL. The service builds that struct at its
 next thing to read: it is the options builder, and its stores name the fields.
 Until it is read, every `create` attempt with zeroed options costs a SIGSEGV
 and tells us nothing new.
+
+**U292, the service's options builder is a property lookup.** The call at
+`0x8518` goes to `0x11660`, which builds two SSO strings and calls
+`android::base::GetProperty(key, default)` (`0x11740`), then hands the result
+to the factory's options slot. Its immediates spell `gs01`/`gs02`, and the
+16-byte constant it loads at `0x1170c` (`0x4000 + 0xb77`) is a property name.
+So the options object is not a table of pointers: it is built from a property
+value (a board or path string) and the fault at `0x0` (U291) means one field is
+a pointer to that value, left NULL by a zeroed buffer. S2 should read the
+constant at `0x4b77` and the string layout, then pass the same bytes.
