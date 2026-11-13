@@ -13006,3 +13006,15 @@ into a small-string buffer. So the struct is
 Our synthesized `{1, 1, "/dev/edgetpu"}` is therefore structurally legal, and
 the value 1 is one of the three the code accepts. The block happens after the
 path has been copied, so it is not the options object and not the pointer.
+
+
+**U308, create does not wait in its own body.** The implementation `0xf8df8`
+ends at `0xf9208` (its `__stack_chk_fail@plt` epilogue). Inside it: `strlen`,
+`memcpy`, a `pthread_create@plt` at `0xf9008`, and otherwise virtual calls plus
+helpers (`0x112e24`, `0xfd3d8`, `0x30dca8`, `0x30e374`, `0x330bd0`, `0x32671c`,
+`0x329cf0`, `0x12a710`). It contains **no** `open`, `epoll`, `eventfd` or
+`GetProperty`. So the wait is inside a helper, and the three threads the earlier
+fd listing showed are created here.
+
+Helper `0x12a710` shows only ordinary calls (no futex/poll/ioctl in the named window). Helper `0xfd3d8` shows only ordinary calls (no futex/poll/ioctl in the named window). Those two are the next
+read; the plan records both windows so the next session starts from them.

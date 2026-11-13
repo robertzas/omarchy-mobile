@@ -215,6 +215,17 @@ at `0xf8f50`-ish that follows the string, and the `0x112e24` call before it.
 Until that is read, H1 (a Looper the process lacks), H3 (a peer thread blocked)
 and H5 (more properties) are the open hypotheses, and H1 is the cheapest.
 
+### 1.6.3 Create's own body does not block
+
+The implementation spans `0xf8df8`-`0xf9208` (it ends with
+`__stack_chk_fail@plt`). Its only direct libc calls are `strlen`, `memcpy` and
+`pthread_create@plt` at `0xf9008`; everything else is a virtual call or one of
+the helpers `0x112e24`, `0xfd3d8`, `0x30dca8`, `0x30e374`, `0x330bd0`,
+`0x32671c`, `0x329cf0`, `0x12a710`. There is **no** `open`, `epoll`, `eventfd`
+or `GetProperty` in the body (U308). The wait is therefore inside a helper, and
+the two windows already captured are `0x12a710` and `0xfd3d8` (quote in U308):
+the next offline read starts there, not at the options.
+
 ### 1.7 What rev 13 withdraws
 
 - **The ptrace sampler** (`MODE=bt`) as evidence. Keep the code for the record,
@@ -497,9 +508,9 @@ gate K fails? -> stop: driver/session regression.
 
 ## 11. Immediate actions (ordered)
 
-1. **S4 (offline, next):** finish reading `0xf8df8` past the string copy -
-   `0x112e24`, the calls after `0xf8f50`, and every `pthread_once`/`GetProperty`
-   on the way. H2 and H6 are refuted, so the answer is in this window.
+1. **S4 (offline, next):** `0x12a710` and `0xfd3d8`, in that order: the body
+   of create has no wait, so the block is in one of its helpers (U308). Then the
+   two helper windows already quoted in the history.
 2. **S2b fix** (harness): set `watch_pid` before the self-test so the control
    is real; a `MODE=cw` run then either names the waiter or proves a raw futex.
 3. **H1** (offline build, one run): `ALooper_prepare(0)` before the call, if

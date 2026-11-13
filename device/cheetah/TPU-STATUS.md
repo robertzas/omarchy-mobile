@@ -23,6 +23,12 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U308: create's body has no wait, so a helper does)
+
+`0xf8df8`-`0xf9208` holds `strlen`, `memcpy`, a `pthread_create@plt` and virtual
+calls plus helpers, but no `open`, `epoll` or `GetProperty`: the block lives in a
+helper, and the two windows to read next are `0x12a710` and `0xfd3d8`.
+
 ## 2026-11-13 (U306-U307: H6 and H2 refuted; the options object is legal)
 
 `MODE=nofork` blocks exactly like the forked run, so the wait is not a lock
