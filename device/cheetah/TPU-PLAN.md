@@ -73,6 +73,13 @@ for an unknown code, and it would have answered `3` for every payload. This is
 a *negative* for the route, not a schema fact. The plan of record treated it as
 the strongest AP-side evidence in the book; it is withdrawn.
 
+U272 makes that concrete on the live device. Through the same hook, on the
+held power-up, code 11 (`KCI_CODE_FIRMWARE_INFO`, implemented) with a minimal
+payload answered **0**, while code 6 answered `3` - and so did code 21
+(`GET_USAGE_V2`, implemented) with a payload too short for it. The hook is
+live and a bare `3` carries no schema meaning at all; what makes 6 not a route
+is the enum gap and the driver's own comment, not the response.
+
 ### 1.2 The element code was 0 in every run
 
 The `vii-elem` dump is the 48-byte element from the VII command queue. Word 0
@@ -142,6 +149,7 @@ in the kernel creates the VII setup state.
 | --- | --- | --- |
 | Gate K passes on this boot | `logs/tpu/20261113-gatek-rev10.txt`: session, both queues, 88-byte reply | the protocol is not the blocker |
 | KCI has no setup code | `edgetpu-kci.h` enum 0-5, 7-19, 21; `edgetpu-fs.c` hook comment | D0f withdrawn; KCI-6 evidence void |
+| The KCI hook is live: code 11 answers 0, code 6 answers 3, code 21 answers 3 on a short payload | **U272** on the held power-up | a bare `3` proves no schema; U266 void for a second reason |
 | Every producer wrote VII code 0 | U248 (`00000000 00000000`), U249 (`00000001 00000000 000b0000`) | the code has never been varied |
 | The gate prints `type` before parsing | U175: 256 zeros, bad root and valid table read the same | `type 0` identifies nothing |
 | The element header is `seq@0, code@8, flags@10, dma@16, size@24` | U264 enqueue copy; `vii-elem` dumps | a code sweep is one knob per run |

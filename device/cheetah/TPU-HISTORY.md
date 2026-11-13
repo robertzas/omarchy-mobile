@@ -42,6 +42,28 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U272 (2026-11-13): the KCI hook is live, and a bare `3` proves nothing
+
+A control run on the held power-up, through the same debugfs hook U266 used.
+With an 8-byte zero payload written to `kci_payload`:
+
+```
+code 6  -> 3
+code 11 -> 0      (KCI_CODE_FIRMWARE_INFO, implemented)
+code 21 -> 3      (KCI_CODE_GET_USAGE_V2, implemented, payload too short)
+code 6  -> 3
+```
+
+So the path is live and can return success: code 11 answers 0 through it. But
+a known, implemented code (21) also answers `3` when its payload is wrong, so
+`KCI_ERROR_INVALID_ARGUMENT` is not evidence that a code has no handler. U266's
+`3` for code 6 therefore proves nothing on its own; the reason KCI is not a
+route is the enum gap (0-5, 7-19, 21) and the driver's comment that the header
+leaves code 6 out. Recorded as U272 and reflected in rev 10's section 1.1.
+
+No reboot, power change, slot, flash or NV write; the KCI 21 heartbeat and the
+held power-up continued.
+
 ## U269 (2026-11-13): the KCI command set has no setup code, so U266 is void
 
 The KCI negative that rev 8 and rev 9 treated as decisive is not a firmware
