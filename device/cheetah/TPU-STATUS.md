@@ -23,6 +23,12 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U330: dynamic debug is off, so the group line cannot be seen)
+
+`/sys/kernel/debug/dynamic_debug/control` does not exist on this kernel, so the
+debug-only `join group` line cannot be turned on and the handshake cannot be
+confirmed from dmesg. `kci_send` is write-only (a read gets EACCES).
+
 ## 2026-11-13 (U329: the real KCI door is debugfs; the group line is debug-gated)
 
 `/sys/kernel/debug/edgetpu/janeiro/{kci_payload,kci_scratch,kci_send}` is the only

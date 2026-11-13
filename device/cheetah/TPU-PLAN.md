@@ -672,11 +672,15 @@ gate K fails? -> stop: driver/session regression.
 
 Userspace reaches KCI through **debugfs**, not an ioctl:
 `/sys/kernel/debug/edgetpu/janeiro/{kci_payload,kci_scratch,kci_send}`. That is
-the path U266's code-6 sends used, and it remains the only one. The driver's own
-group log is `etdev_dbg` (`edgetpu-device-group.c:101`), so `dmesg` silence about
-groups means "debug level off", not "no group": turn it on with
-`echo 'file edgetpu-device-group.c +p' > /sys/kernel/debug/dynamic_debug/control`
-before a client run, and off with `-p` afterwards.
+the path U266's code-6 sends used, and it remains the only one. `kci_send` is
+write-only (a read gets EACCES), so a send is a write to that file, with the code
+and variant in the payload file.
+
+The driver's join-group log is `etdev_dbg`, and **dynamic debug is not compiled
+into this kernel** (`/sys/kernel/debug/dynamic_debug/control` is absent, U330),
+so that line cannot be turned on. Do not plan to confirm the group handshake
+from `dmesg`; use the firmware's own reply, or a kprobe on
+`edgetpu_kci_join_group` if function tracing is configured.
 
 ## 11. Immediate actions (ordered, rev 15)
 
@@ -691,8 +695,9 @@ before a client run, and off with `-p` afterwards.
 3. **R-KCI-6 (phone, one attempt):** send the different element through the
    Tachyon session, which already creates and finalizes a device group
    (`0x4014ed06`, `0xed08`, U324). Oracle: the firmware's setup line, or
-   `T10=11` answering anything but `0xf000009`. Enable the driver's debug lines
-   first (U329) so the join and open are visible in `dmesg`, then turn them off.
+   `T10=11` answering anything but `0xf000009`. The join/open lines cannot be
+   enabled (U330: no dynamic debug), so the firmware's reply is the only
+   evidence of the handshake.
 4. **R-SERVICE (parked):** binderfs plus servicemanager and the vendor DBA
    service; needs an answer to U285's unclaimed queue first.
 5. **R-STOCK (owner):** section 7, the only route proven to make the firmware's

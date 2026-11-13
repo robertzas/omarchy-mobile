@@ -13444,3 +13444,14 @@ but `etdev_dbg` is dynamic-debug gated, which is exactly why `dmesg` showed no
 group lines while our client had already created and finalized one (U324).
 Confirming the handshake therefore needs `dynamic_debug/control`, not a new
 instrument: `file edgetpu-device-group.c +p` turns the line on for the next run.
+
+
+**U330, correction to U329: dynamic debug is not compiled in, so the group
+line cannot be turned on.** `/sys/kernel/debug/dynamic_debug/control` does not
+exist on this kernel, so `file edgetpu-device-group.c +p` has nowhere to go and
+`etdev_dbg` stays off. The join-group handshake therefore cannot be confirmed
+from `dmesg` at all on this build; the honest alternatives are the firmware's own
+KCI response (it answers JOIN_GROUP, and a wrong group is refused) or a
+`ftrace`/kprobe on `edgetpu_kci_join_group` if function tracing is configured.
+Also: `kci_send` is not readable (`head` gets EACCES), which fits a write-only
+debugfs command file - it is written, not read.
