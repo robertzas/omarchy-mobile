@@ -53,9 +53,15 @@ struct binder_transaction_data {
 };
 
 #define BINDER_WRITE_READ	_IOWR('b', 1, struct binder_write_read)
+/* AOSP's binder command numbering: 1 is REPLY, 2 ACQUIRE_RESULT, and the
+ * refcount commands are 4-7. Using 1/2 here made the driver answer
+ * "unknown command 0x40086301" and "BC_ACQUIRE_RESULT not supported", so
+ * the handle was never acquired and died with the reply buffer. */
 #define BC_TRANSACTION		_IOW('c', 0, struct binder_transaction_data)
-#define BC_ACQUIRE		_IOW('c', 2, u32)
 #define BC_FREE_BUFFER		_IOW('c', 3, u64)
+#define BC_INCREFS		_IOW('c', 4, u32)
+#define BC_ACQUIRE		_IOW('c', 5, u32)
+#define BC_ENTER_LOOPER		_IO('c', 12)
 #define BR_REPLY		_IOR('r', 1, struct binder_transaction_data)
 #define BR_TRANSACTION_COMPLETE	0x7206
 #define BR_NOOP			0x720c	/* driver flush marker; no payload */
@@ -173,6 +179,8 @@ static int transact(int fd, u32 handle, u32 code, struct parcel *p,
 	*out_binder = 0;
 	reply->len = 0;
 	reply->noff = 0;
+	if (!bwr.read_consumed)
+		printf("  no reply: read_consumed 0\n");
 	for (i = 0; i < bwr.read_consumed; ) {
 		memcpy(&cmd, rbuf + i, 4);
 		i += 4;
@@ -221,6 +229,35 @@ static int transact(int fd, u32 handle, u32 code, struct parcel *p,
 					      j * sizeof(u64), sizeof(u64));
 				reply->off[j] = (u32)o;
 				reply->noff++;
+			}
+			/* A handle in a reply belongs to the reply's buffer: the
+			 * driver made us a weak ref, and freeing the buffer drops
+			 * it (binder_transaction_buffer_release), which leaves
+			 * BC_ACQUIRE and every transaction on that handle EINVAL.
+			 * Take the strong ref while the buffer is still ours, as
+			 * libbinder's readStrongBinder does. */
+			if (reply->noff &&
+			    (*(u32 *)(reply->buf + reply->off[0]) >> 8) ==
+				    0x73682a) {
+				u8 ab[8];
+				u32 acmd = BC_ACQUIRE;
+				u32 ah = (u32)*(u64 *)(reply->buf +
+						       reply->off[0] + 8);
+				struct binder_write_read f;
+
+				memcpy(ab, &acmd, 4);
+				memcpy(ab + 4, &ah, 4);
+				memset(&f, 0, sizeof f);
+				f.write_size = 8;
+				f.write_buffer = (uintptr_t)ab;
+				{
+					int arc;
+
+					errno = 0;
+					arc = ioctl(fd, BINDER_WRITE_READ, &f);
+					printf("  reply: acquire handle %u: rc %d errno %d\n",
+					       ah, arc, errno);
+				}
 			}
 			free_ptr = r->data.ptr.buffer;
 			{
@@ -299,7 +336,9 @@ int main(int argc, char **argv)
 			return 1;
 		}
 	}
-
+	/* No BC_ENTER_LOOPER: as a registered looper the thread parks on the
+	 * process work queue and misses the reply (getService hung 12 s), so
+	 * this client stays a plain transacting thread. */
 	{
 		/* The prologue a working client sends, read from servicemanager:
 		 * 0x80000000, workSource, VNDR, descriptor. */
@@ -333,6 +372,23 @@ int main(int argc, char **argv)
 		}
 		if (!binder)
 			goto out;
+		/* INCREFS is weak-only and ACQUIRE needs a strong ref to
+		 * exist; one of them answering tells which ref the reply
+		 * installed (0 + 0 = missing, 0 + -1 = weak, 0 + 0 + -1 = ?). */
+		{
+			u8 ab[8];
+			u32 acmd = BC_INCREFS;
+			struct binder_write_read f;
+
+			memcpy(ab, &acmd, 4);
+			memcpy(ab + 4, &binder, 4);
+			memset(&f, 0, sizeof f);
+			f.write_size = 8;
+			f.write_buffer = (uintptr_t)ab;
+			errno = 0;
+			printf("increfs(handle %u): rc %d errno %d\n", binder,
+			       ioctl(fd, BINDER_WRITE_READ, &f), errno);
+		}
 		{
 			u8 ab[8];
 			u32 acmd = BC_ACQUIRE;
@@ -343,10 +399,14 @@ int main(int argc, char **argv)
 			memset(&f, 0, sizeof f);
 			f.write_size = 8;
 			f.write_buffer = (uintptr_t)ab;
+			errno = 0;
 			rc = ioctl(fd, BINDER_WRITE_READ, &f);
-			printf("acquire(handle %u): rc %d\n", binder, rc);
+			printf("acquire(handle %u): rc %d errno %d\n", binder, rc,
+			       errno);
 		}
-		printf("== createSession ==\n");
+		u32 method = argc > 2 ? (u32)strtoul(argv[2], NULL, 0) : 1;
+
+		printf("== createSession (code %u) ==\n", method);
 		memset(&p, 0, sizeof p);
 		put32(&p, 0x80000000);
 		put32(&p, 0xffffffff);
@@ -359,10 +419,8 @@ int main(int argc, char **argv)
 			/* The reply's flat_binder_object offset has been unreliable
 			 * to read back, and this process holds no other service refs,
 			 * so probe the small handle range instead of trusting it. */
-			u32 h, first = binder ? binder : 1;
-
-			for (h = first; h <= 8; h++) {
-				rc = transact(fd, h, 1, &p, &reply, &binder);
+			u32 h, first = binder ? binder : 1;				for (h = first; h <= 8; h++) {
+				rc = transact(fd, h, method, &p, &reply, &binder);
 				printf("createSession(handle %u): rc %d\n", h, rc);
 				if (rc == 0) {
 					dump_parcel("session reply", reply.buf,

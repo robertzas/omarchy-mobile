@@ -5,6 +5,65 @@ As of 2026-11-11, kernel `7.3.0-rc6-omamobile-push1-g052da70970d6-dirty`.
 The details and the experiment log are in [TPU-PLAN.md](TPU-PLAN.md); this
 page is the summary.
 
+## 2026-11-12 (J2): the binder blocker is gone, and the TPU device is missing
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty` (the tree stays dirty,
+so `uname -r` cannot name a rebuild; uptime and `/proc/version` do).
+
+What is now proven, in order:
+
+- **Tachyon stays registered.** The chroot's `liblazysvc.so` is the persist
+  build: `/tmp/ts2.log` shows `LAZYSVC-PERSIST loaded`,
+  `forcePersist(1) on getInstance`, and `Shutdown prevented by forcePersist
+  override flag` as the client count goes 1 -> 0 -> 1. The service no longer
+  exits when its last client leaves.
+- **`BC_ACQUIRE` had never been sent.** The client used `_IOW('c', 2)`, which
+  AOSP assigns to `BC_ACQUIRE_RESULT`; the driver logged `BC_ACQUIRE_RESULT
+  not supported` and `unknown command 1074029313` (its `BC_INCREFS` probe).
+  With the AOSP numbers (`INCREFS` 4, `ACQUIRE` 5) both answer rc 0:
+  `reply: acquire handle 1: rc 0`, `increfs(handle 1): rc 0`.
+- **A reply's handle dies with the reply buffer.** The driver installs the
+  ref for the reply, and `binder_transaction_buffer_release()` drops it on
+  `BC_FREE_BUFFER`, so `createSession` on handle 1 was `invalid handle, 1`.
+  The client now acquires before freeing, as libbinder's `readStrongBinder`
+  does. After that the handle survives and transactions reach tachyon.
+- **`createSession` is delivered** (`binder: 14020 RLIMIT_NICE not set`) and
+  is **never answered**. The service's log shows no rejection; the client's
+  read blocks. `BC_ENTER_LOOPER` made even `getService` hang (the thread
+  parks on the process work queue and misses the reply), so it is not used.
+
+Why tachyon cannot answer: **the TPU driver is not loaded.** The DT is fine:
+`/proc/device-tree/soc@0` carries both `janeiro@1ce00000` and
+`gxp@25c00000` (the descriptor's `DTB_OVERLAYS` already includes
+`tpu-enable`), and `janeiro.ko` is in the running module tree. But `lsmod`
+shows no `janeiro`, gsa or trusty, `/dev/janeiro` and `/sys/class/edgetpu`
+do not exist, and dmesg has zero tpu/edgetpu/janeiro lines: the device
+package blacklists it, so it never probes. `CONFIG_GXP` is unset, which is
+fine for this path (janeiro is the Edge TPU driver; gxp is the DSP host).
+
+The DT was right all along: both nodes are in `/proc/device-tree/soc@0`
+(`status = "okay"`), and the descriptor already ships `tpu-enable`. After
+one `modprobe janeiro` (one load per boot; a second oopses in
+`edgetpu_mmu_attach`):
+
+    edgetpu_platform 1ce00000.janeiro: janeiro edgetpu initialized. Build: a78d26f63-dirty
+    google-gsa 17c90000.gsa: TZ: com.android.trusty.gsa.hwmgr.tpu connected
+    crw------- 1 root root 501, 0 /dev/janeiro
+    tpu-hold: wakelock -> 0
+
+Open: with the device up, `createSession` is delivered to tachyon
+(`RLIMIT_NICE` lines from its pid) and still never answered; the client's
+read takes the driver's proc-work path (`Thread waiting for process work
+... state 10`), so the calling thread's `transaction_stack` is empty when it
+reads. Next: print `t->flags` and which branch `binder_transaction()` takes,
+or use the J3 libbinder_ndk client, which owns that bookkeeping.
+
+Omarchy, checked the same day: stable's newest packages are
+`omarchy-4.5.0-3` and `omarchy-settings-4.5.0-3` (`4.5.0-4`, `4.5.1-1` and
+`4.6.0-1` are 404), and both pinned files match their SHA-256
+(`d367067c…`, `2a81decb…`). The pin already carries the latest stable, so
+nothing needed moving. No session, no model and no inference have run.
+
 ## 2026-11-12 later: core 0 boot, what is verified and what is ruled out
 
 On `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty` the stock 6.1 port's

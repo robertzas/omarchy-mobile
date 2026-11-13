@@ -10046,3 +10046,52 @@ Source process 5312 (the service side), source descriptor 3, strong, **target pi
 Two facts for the runbook: after a `push` the phone came up with `/dev/binderfs` **not** mounted (`mount: special device /dev/binderfs does not exist`), and the chain only worked once it was mounted by hand (`mkdir -p /dev/binderfs; mount -t binder binder /dev/binderfs`) — the mount must be part of the TPU bring-up script, not an assumption. And the J1 print is rate-limited per call site, so read it immediately after the run.
 
 **Next gate: J2.** With the ref proven, `BC_ACQUIRE` on handle 1 must return 0, and `createSession` must stop answering `BR_FAILED_REPLY`.
+
+### J2 result 2026-11-12: the binder blocker is gone and the TPU was never loaded
+
+`uname -r` 7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty (the tree stays
+dirty, so the release name cannot prove a rebuild). Three separate faults
+were cleared, each with its own evidence:
+
+1. **The service exited because its last client left.** The chroot's
+   `liblazysvc.so` is the persist build: `/tmp/ts2.log` shows
+   `LAZYSVC-PERSIST loaded`, `forcePersist(1) on getInstance`, and
+   `Shutdown prevented by forcePersist override flag` as the client count
+   goes 1 -> 0 -> 1. `tools/tpu-service-hold.sh` keeps a raw client on it.
+2. **`BC_ACQUIRE` had never been sent.** The client used `_IOW('c', 2)`,
+   which AOSP assigns to `BC_ACQUIRE_RESULT`; the driver logged
+   `BC_ACQUIRE_RESULT not supported` and `unknown command 1074029313` for
+   our `INCREFS` probe. The AOSP numbers are INCREFS 4 and ACQUIRE 5; with
+   them `increfs(handle 1): rc 0` and `acquire(handle 1): rc 0`.
+3. **A reply's ref dies with the reply buffer.**
+   `binder_transaction_buffer_release()` dec-refs handles on
+   `BC_FREE_BUFFER`, so `createSession` on the returned handle was
+   `invalid handle, 1`. The client now acquires before freeing, as
+   libbinder's `readStrongBinder` does; the handle then survives.
+
+Then the real blocker surfaced: tachyon accepted the transaction
+(`binder: 21970 RLIMIT_NICE not set` four times) and never answered, because
+**`janeiro` had never been loaded**. `/etc/modprobe.d/omamobile-tpu.conf`
+blacklists it, so there was no `/dev/janeiro`, no `/sys/class/edgetpu`, and
+zero tpu lines in dmesg. The DT was always right: `janeiro@1ce00000` and
+`gxp@25c00000` are both in `/proc/device-tree/soc@0` with `status =
+"okay"`, and the descriptor already ships `tpu-enable`. After one
+`modprobe janeiro` (never twice in a boot: the second oopses in
+`edgetpu_mmu_attach`):
+
+    edgetpu_platform 1ce00000.janeiro: janeiro edgetpu initialized. Build: a78d26f63-dirty
+    google-gsa 17c90000.gsa: TZ: com.android.trusty.gsa.hwmgr.tpu connected
+    google-gsa 17c90000.gsa: TPU cmd 4 (Trusty): 0
+    crw------- 1 root root 501, 0 /dev/janeiro
+    tpu-hold: wakelock -> 0
+
+Open: with the device up, `createSession` is still delivered and
+unanswered. The client's read takes `binder_available_for_proc_work_ilocked()`'s
+proc-work path (`Thread waiting for process work before calling
+BC_REGISTER_LOOPER or BC_ENTER_LOOPER (state 10)`), i.e. the calling
+thread's `transaction_stack` is empty when it reads. `BC_ENTER_LOOPER` is
+not the fix: as a registered looper the thread parks on the process queue
+and even `getService` hangs 12 s, so the client stays a plain transacting
+thread. Next: print `t->flags` and which branch `binder_transaction()`
+takes for code 1, or move to the J3 libbinder_ndk client, which owns this
+bookkeeping. No session, model or inference has run.
