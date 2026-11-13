@@ -538,3 +538,9 @@ until L1 passes end to end.
 - `out-tpu` was discarded and rebuilt in the background from the J1 print tree: no `fixdep` errors, `Image` and the dtbs built (`/tmp/kbuild3.log`). The earlier rc=2 was a half-written tree from a killed build, not driver defects.
 - Nothing has been pushed or booted with it yet, so J1 is still unverified.
 - From here the phone builds on the latest stable Omarchy: `[omamobile]` holds the pinned 4.5.0-3 (`rootfs/packages.pinned`), which is the current stable the 4.5 patch family is verified against. TPU work does not change that pin.
+
+## 2026-11-12 (J1): the binder reference is installed; J2 is next
+
+- J1 passed on the rebuilt kernel: `binder: omamobile binder xlat 5312:5312: src desc 3 strong 1 -> pid 5427 desc 1` — target pid is the client, desc 1 a strong ref. No more parcel work: the earlier `invalid handle` lines were an older build, and the empty debugfs file only reflects `binder_debug` being off.
+- After `push`, `/dev/binderfs` was not mounted; `mkdir -p /dev/binderfs && mount -t binder binder /dev/binderfs` is required in the chain, and is now recorded in TPU-PLAN 5.10.
+- Still no session, model or inference; J2 (`BC_ACQUIRE` = 0, `createSession` not `BR_FAILED_REPLY`) is the next gate.

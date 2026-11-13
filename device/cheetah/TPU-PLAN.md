@@ -10034,3 +10034,15 @@ The first build was killed by a tool timeout while compiling modules; kbuild's `
 | N | `omamobile-tpu` package + unit, docs, no vendor blobs committed | - |
 
 **Order of work from here:** (1) background rebuild of `out-tpu`; (2) stop the modem, `push`, `reboot-to`, chain + held client, read the J1 line; (3) J2 retry or J3; (4) K then L - the first honest "works"; (5) M and N. Each step's result goes in this file with the date and `uname -r`.
+
+### J1 result 2026-11-12: the reference exists
+
+With the print in `binder_translate_handle` and the rebuilt kernel booted (`uname -r` unchanged: the dirty tree keeps the release name), the held client's `getService` produced:
+
+    binder: omamobile binder xlat 5312:5312: src desc 3 strong 1 -> pid 5427 desc 1
+
+Source process 5312 (the service side), source descriptor 3, strong, **target pid 5427 = the client**, destination descriptor 1. So the reply's handle is translated into a strong reference in the calling process, exactly as the source says. Phase B's premise ("no ref is installed") was wrong: the empty `/sys/kernel/debug/binder/proc/<pid>` only meant `binder_debug` is compiled out, and the old kernel's `invalid handle, 1` lines came from a build that lacked the translation path this one takes.
+
+Two facts for the runbook: after a `push` the phone came up with `/dev/binderfs` **not** mounted (`mount: special device /dev/binderfs does not exist`), and the chain only worked once it was mounted by hand (`mkdir -p /dev/binderfs; mount -t binder binder /dev/binderfs`) — the mount must be part of the TPU bring-up script, not an assumption. And the J1 print is rate-limited per call site, so read it immediately after the run.
+
+**Next gate: J2.** With the ref proven, `BC_ACQUIRE` on handle 1 must return 0, and `createSession` must stop answering `BR_FAILED_REPLY`.
