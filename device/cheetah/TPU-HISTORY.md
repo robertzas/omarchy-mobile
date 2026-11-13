@@ -12943,3 +12943,21 @@ unmapped x29 is the likely cause, and the library may keep x29 only in the
 prologue), or use `process_vm_readv` on the stopped child instead of PEEKDATA.
 The HAL base is available (`hal_base`, from `/proc/self/maps`), so any return
 address can be printed as an offset into the library without symbols.
+
+**U302, the ptrace sampler is not an instrument on this target.** `PC` is
+`regs[32]` (not `regs[30]`, which is `x30`); corrected, the PC lands in libc's
+futex path as expected. But the blocked thread's `x29` reads `0xffffffff`, so
+there is no frame chain and the frame-pointer walk is withdrawn. `sp` then read
+`0x3d3d3d3d3d3d3d3d` (the bytes of `=`) and `process_vm_readv` on the stack
+returned -1, while `PTRACE_ATTACH` and `PTRACE_GETREGSET` both reported success.
+A preloaded `.so` inside `edgetpu-run` therefore cannot be trusted to read its
+own child's registers. Any future sampler is a standalone aarch64 binary.
+
+**U303, the next instrument works in-process, not by unwinding.** Since the HAL
+is in our address space, interposing `pthread_cond_wait`, `pthread_cond_timedwait`,
+`sem_wait`, `pthread_join` and `futex` and printing `__builtin_return_address(0)`
+minus `hal_base` names the waiting HAL function with no ptrace, no unwinder and
+no alarm. Plan rev 13 records this as S2b, restates the wall as five hypotheses
+(H1 ALooper, H2 options field, H3 blocked peer, H4 client callback, H5 more
+properties) with a test and a cost for each, and withdraws the three failed
+instruments.

@@ -23,6 +23,17 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U302-U303: ptrace is withdrawn; the plan is rev 13)
+
+`PC` was `regs[30]` (the link register), now `regs[32]`; it lands in libc's
+futex path. The blocked thread's `x29` is `0xffffffff`, so no frame chain
+exists, and the register block itself is unreliable (`sp` read `0x3d3d...`,
+`process_vm_readv` returned -1 although attach and getregset succeeded). The
+next instrument is an interposer on the blocking primitives that prints
+`__builtin_return_address(0)` minus `hal_base`: in-process, no ptrace, no
+unwinder. TPU-PLAN.md is rev 13: five hypotheses with tests and costs, and the
+strides renumbered to what is actually done.
+
 ## 2026-11-13 (U301: the ptrace sampler reaches the futex but not the frames)
 
 `MODE=bt` attaches to the blocked child and reads its registers: the PC is in

@@ -1,12 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # TPU / NPU plan: the Edge TPU (Abrolhos / Janeiro) on cheetah (gs201)
 
-Status (2026-11-13, rev 12): **gate K passes; the vendor DBA HAL is reachable
-in-process with no binder; its function table is mapped and its factory entry
-identified; the firmware's one-time setup has still not run, so no inference is
-claimed.** Rev 12 is a re-evaluation of rev 11 after the binder route stalled
-below the HAL. It keeps every fact rev 11 established and changes the route to
-the producer, not the goal.
+Status (2026-11-13, rev 13): **gate K passes; the vendor DBA HAL runs
+in-process with no binder; the factory enters its own startup and blocks in a
+futex before it opens `/dev/edgetpu`; the firmware's one-time setup has still
+not run, so no inference is claimed.** Rev 13 is a re-evaluation after three
+instruments in a row failed to name the waiting function. It keeps every fact
+rev 12 established, withdraws the ptrace sampler as an instrument, restates the
+wall as five testable hypotheses, and renumbers the strides to match what is
+actually done. The route is unchanged: the producer, not the goal.
 
 The definition of done is unchanged (DoD-1..5): a model runs on the TPU; its
 raw output tensor matches a CPU reference (integer tensors exact unless a
@@ -146,6 +148,59 @@ fill and the library's `DarwinnHalOptions` uses is stride S2.
 slot — rev 11's note that the last slot "is" create was a window artefact. They
 still confirm that a factory with exactly this signature exists in the binary.
 
+### 1.6 Rev 13: the wait is inside the factory's own startup
+
+Four facts now bound what create does before it touches firmware:
+
+1. With the builder's exact options it **allocates**, starts an
+   eventpoll/eventfd/timerfd trio and **three threads**, then blocks.
+2. It **never opens `/dev/edgetpu`** (the fd list has no device node) and sends
+   no KCI traffic (`dmesg` is silent; the 61 s KCI 21 heartbeat is the driver's).
+3. The wait does **not depend on the callback or the context**: both, callback
+   only, context only and neither all block identically (U298).
+4. The call target is right: the service's own `x19` is the table and
+   `[x29-0x28]` carries it into `ldr x8,[x8,0x10]` (U300).
+
+So create spawns its own machinery and waits for one of its own threads or for a
+task it posted. That is a *contract* between the factory and its caller that the
+service satisfies somewhere else, and the plan's job is to name it.
+
+**Instruments that failed, so do not repeat them.** `backtrace()` in the alarm
+handler deadlocks (U296/U299). A frame-pointer walk cannot work: the blocked
+thread's `x29` is `0xffffffff`, so there is no chain (U302). Ptrace from inside
+a preloaded `.so` is **not trustworthy** here: `PTRACE_ATTACH` and
+`PTRACE_GETREGSET` report success, yet `sp` reads `0x3d3d3d3d3d3d3d3d` and
+`process_vm_readv` returns -1 (U302). Any future sampler must be a **standalone
+aarch64 binary**, not an interposer inside `edgetpu-run`.
+
+**The instrument to use next (S2b).** Interpose the blocking primitives
+(`pthread_cond_wait`, `pthread_cond_timedwait`, `sem_wait`, `pthread_join`,
+`futex`) inside the same process and print `__builtin_return_address(0)`
+subtracted from `hal_base`. No ptrace, no unwinder, and the return address is by
+construction inside the HAL function that waits.
+
+### 1.6.1 The wall as five hypotheses, each with a test and a cost
+
+| # | Hypothesis | Test | Cost |
+| --- | --- | --- | --- |
+| H1 | Create posts a task to its executor and waits for it; the executor needs an **ALooper** the process has not prepared | link a tiny bionic binary that calls `ALooper_prepare(0)` before the factory call, or call it from the harness ctor | offline + one run |
+| H2 | The 16-byte options are not `{flags, flags, path}`; one word is a **callback/vtable** we fill with `1` | S4 static read: the create implementation's first loads from `[x0]`, `[x0+8]` and what it does with them | offline only |
+| H3 | Create waits on a **peer thread that is itself blocked**: our `eventfd`/`timerfd` never fires because no one armed it | S2b names the waiter; then the peer thread's state from `/proc/<pid>/task/*/stack` | one run |
+| H4 | Create registers a **client** with a layer that only the service's binder side serves, even in-process | S2b: if the waiter is a callback the service installs at `0x8d10`, read that thunk's body | offline + one run |
+| H5 | The HAL wants more **properties** than `ro.board.platform` (e.g. a hardware name) and waits while a property lookup retries | S2: read every `GetProperty` call in the create path for its key | offline only |
+
+H1 and H2 are cheaper than another phone run, so they come first. H3/H4 need
+S2b, and S2b is the only instrument that has not failed.
+
+### 1.7 What rev 13 withdraws
+
+- **The ptrace sampler** (`MODE=bt`) as evidence. Keep the code for the record,
+  but its register block is garbage and its stack scan is meaningless (U302).
+- **The frame-pointer walk** as a route: `x29` is not a chain in this thread.
+- **"The factory needs a callback"** as a statement about the *wait*: the
+  callback is required (a zeroed pair faults), but it is not what create waits
+  on (U298). Both are true and must not be conflated again.
+
 ### 1.5 What stands from rev 11
 
 - Gate K passes (session, both FMQs, 88-byte reply), re-proven on this boot.
@@ -197,7 +252,7 @@ still confirm that a factory with exactly this signature exists in the binary.
 | D1 | the vendor DBA service publishes `IDevice/default` and stays up | **pass** (U279) | R1 only |
 | D2 | a raw-binder client gets an AIDL reply | **blocked** (U285) | R1, parked |
 | D2c | `GetDarwinnHalFunctions` returns a table with version 2 | **pass** (U286) | none |
-| D2d | the table's factory returns a HAL object | **open** | R0, stride S1 |
+| D2d | the table's factory returns a HAL object | **open**: it runs its startup and blocks before the device (U293-U302) | S2b names the waiter |
 | D2e | the HAL object's setup path builds and submits the setup command | **open** | R0, stride S3 |
 | D3b | the firmware's setup is done (gate probe answers differently) | **open** | R0 oracle |
 | D3 | `createCompilationFromFile` (or its HAL equivalent) runs `CreatePredictor` | **open** | after D2d |
@@ -225,18 +280,24 @@ Everything rev 11 closed, plus:
 
 ### 6.1 Track S — the in-process HAL, stride by stride (primary)
 
-**S1 (R0, no reboot): call the factory.** `tools/tpu-hal-harness.c`, built as a
-preloaded `.so`, calls `table[0]` (init), then `table[2]` = entry `+16` with a
-zeroed 16-byte options and `&hal`, in a child process under a 3 s alarm, and
-prints the status. Pass: a status (not a signal) and, if 0, a non-null `hal`.
-The oracle for the factory itself is its return; for setup it is `dmesg`
-(`Setup is already done`, `global scratches`, `vii-`) and the `T10=11` probe.
+**S1 (R0, done): call the factory.** `tools/tpu-hal-harness.c`, built as a
+preloaded `.so`, calls `table[0]` (init), then `table[2]` = entry `+16`, in a
+child process under a 3 s alarm. With zeroed options the call dies `SIGSEGV` at
+`0x0`; with the builder's exact output it allocates and blocks (U293-U297).
+**Pass for the next run: a status in `w0` and a non-null `hal`**, which is
+exactly what S2b has to make possible.
 
-**S2 (offline): name the options.** Disassemble the service's fill at
-`0x850c`-`0x8524` and the HAL's `DarwinnHal_Create` implementation for the
-16-byte struct: which words are the chip version, the device path pointer, the
-scratch capacity and flags. Feed the harness the exact bytes the service builds,
-then the zeroed form, and record which is accepted.
+**S2 (offline, done for the options): the builder's output.** `0x11660` reads
+`ro.board.platform` and its success path writes `{u32 1, u32 1, "/dev/edgetpu"}`
+at `0x11a00`-`0x11a14`; feeding those bytes to the factory replaced the fault
+with the wait (U292/U293). The remaining offline part is H2 and H5: every load
+from `[x0]` in create's prologue, and every `GetProperty` key on that path.
+
+**S2b (R0, next): name the waiter with an interposer.** Interpose
+`pthread_cond_wait`, `pthread_cond_timedwait`, `sem_wait`, `pthread_join` and
+`futex`, print `__builtin_return_address(0)` minus `hal_base`, and run the
+factory once. The address names the HAL function that waits. Bounded set, no
+ptrace, no unwinder, no deadlock: one run per hypothesis it settles.
 
 **S3 (R0): drive the setup.** With a HAL object in hand, call the table entries
 that take it (the service's own session path uses `+0x50`, `+0x58`, `+0x60`)
@@ -403,12 +464,13 @@ gate K fails? -> stop: driver/session regression.
 
 ## 11. Immediate actions (ordered)
 
-1. **R0 S1** (no reboot): the harness census and one factory call with zeroed
-   options; record status, handle and the firmware oracle.
-2. **S2** (offline, parallel): the service's 16-byte options fill and the
-   library's uses; then re-run S1 with those bytes.
-3. **S4** (offline): callee and argument map for all 14 entries, with `+0x50`,
-   `+0x58`, `+0x60` named from the service's session path.
+1. **S2b** (phone, no reboot): the blocking-primitive interposer, one factory
+   call, the return address minus `hal_base`. This is the only instrument that
+   has not already failed; it names the waiter.
+2. **H2 + H5** (offline, parallel): create's prologue loads from `[x0]` and its
+   `GetProperty` keys. Either can make S2b unnecessary.
+3. **H1** (offline build, one run): `ALooper_prepare(0)` before the call, only
+   if S2b names a Looper task rather than an options field.
 4. **S3** (phone): the session/setup entries in order, one per run, with the
    firmware oracle after each.
 5. **F4** (offline): the setup builder's command vector at `0x1610cc`.

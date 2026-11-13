@@ -129,24 +129,31 @@ extern void (*signal(int, void (*)(int)))(int);
 extern int kill(int, int);
 extern int usleep(unsigned int);
 extern long ptrace(int, int, void *, void *);
+struct iov {
+  void *b;
+  unsigned long l;
+};
+
+extern long process_vm_readv(int, const struct iov *, unsigned long,
+                             const struct iov *, unsigned long, unsigned long);
+extern int __errno(void);
 
 #define PT_ATTACH 16
 #define PT_DETACH 17
 #define PT_PEEKDATA 2
 #define PT_GETREGSET 0x4204
 
-struct iov {
-  void *b;
-  unsigned long l;
-};
+static unsigned long map_base(const char *needle);
 
 /* The child blocks in a futex, so its kernel stack names only the futex.
    The library keeps x29 frame pointers, so a ptrace walk of the blocked
    thread's user stack names the waiting function. backtrace() deadlocks
    here (U296); ptrace from the parent does not. */
 static void dump_child(int pid) {
-  unsigned long regs[34], fp, ra, prev;
-  struct iov io;
+  unsigned long regs[34], fp, sp, ra, prev;
+  struct iov io, rm, lm;
+  unsigned long va[2];
+  long n;
   int i;
 
   put("bt hal_base=");
@@ -161,24 +168,48 @@ static void dump_child(int pid) {
   io.l = sizeof(regs);
   if (ptrace(PT_GETREGSET, pid, (void *)1, &io) < 0) {
     put("getregset failed\n");
+    ptrace(PT_DETACH, pid, 0, 0);
     return;
   }
   put("pc=");
-  puthex(regs[30]);
+  puthex(regs[32]);
+  put(" x29=");
+  puthex(regs[29]);
+  put(" sp=");
+  puthex(sp);
   put("\n");
-  fp = regs[29];
-  for (i = 0; i < 14 && fp; i++) {
-    prev = (unsigned long)ptrace(PT_PEEKDATA, pid, (void *)fp, 0);
-    ra = (unsigned long)ptrace(PT_PEEKDATA, pid, (void *)(fp + 8), 0);
-    put(" ra ");
-    puthex(ra);
-    if (ra >= hal_base && ra < hal_base + 0x400000) {
-      put(" hal+");
-      puthex(ra - hal_base);
-    }
+  /* x29 is 0xffffffff in the blocked thread (U302), so no frame chain exists.
+     The stack itself is valid: scan it for return addresses into the HAL and
+     into libc, which names the callers without a frame pointer. */
+  {
+    unsigned long words[512];
+    unsigned long libc = map_base("/apex/com.android.runtime/lib64/bionic/libc.so");
+    unsigned long i2;
+    long got;
+    struct iov l2, r2;
+
+    l2.b = words;
+    l2.l = sizeof(words);
+    r2.b = (void *)sp;
+    r2.l = sizeof(words);
+    got = process_vm_readv(pid, &l2, 1, &r2, 1, 0);
+    put("stack got=");
+    putdec(got);
+    put(" libc_base=");
+    puthex(libc);
     put("\n");
-    if (prev <= fp) break;
-    fp = prev;
+    for (i2 = 0; i2 < sizeof(words) / 8; i2++) {
+      unsigned long w = words[i2];
+      if (w >= hal_base && w < hal_base + 0x400000) {
+        put("  stk hal+");
+        puthex(w - hal_base);
+        put("\n");
+      } else if (libc && w >= libc && w < libc + 0x200000) {
+        put("  stk libc+");
+        puthex(w - libc);
+        put("\n");
+      }
+    }
   }
   ptrace(PT_DETACH, pid, 0, 0);
 }
