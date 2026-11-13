@@ -9938,6 +9938,12 @@ J3. **Fallback: libbinder_ndk client (no kernel change).** Build a shared
    `createSession` transaction is **delivered** (any AIDL status, no
    `BR_FAILED_REPLY`).
 
+J1 note (2026-11-12): `/sys/module/binder/parameters/debug_mask` is writable,
+   but setting it to all (`0xffffffff`) and running the held client printed no
+   `BC_REPLY` and no `ref ... -> ref ...` lines. `binder_debug()` is compiled
+   out (CONFIG_ANDROID_BINDER_DEBUG off), so there is no runtime switch: J1
+   needs a `pr_info` and a kernel build.
+
 ### K. Session and command queue
 
 K1. Recover the exact `SessionConfig` field order from the stock HAL's
