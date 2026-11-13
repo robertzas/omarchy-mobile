@@ -228,17 +228,26 @@ the next offline read starts there, not at the options.
 
 ### 1.6.4 What the block is not
 
-Three instruments now agree. The factory process is alive while it waits (its
-own threads keep `mmap`-ing and interleaving output), it calls none of
+The factory process is alive while it waits: its own threads keep `mmap`-ing
+(0x40000 = 256 KiB each, the shape of repeated `pthread_create`) and
+interleaving output. No interposed symbol was called: not
 `pthread_cond_wait`, `pthread_cond_timedwait`, `sem_wait`,
-`pthread_mutex_lock` or `pthread_join` (U310 proves those interposers fire),
-and it calls none of `read`, `epoll_wait`, `poll`, `ioctl`, `socket` or
-`connect` (U311). So the wait is not a libc condition variable, not a
+`pthread_mutex_lock` or `pthread_join`, not `read`, `epoll_wait`, `poll`,
+`ioctl`, `socket` or `connect`, and not `openat`, `access` or `nanosleep`
+(U311, U315). **Caveat:** the self-test proves interposition for calls made from
+the harness's own PLT, not for calls made by `libdarwinn` (U315 correction), so
+this is "no interposed call was observed", not "the factory cannot make one". So the wait is not a libc condition variable, not a
 semaphore, not a join and not a poll on a descriptor: it is a raw futex or an
 in-kernel wait reached without a PLT symbol.
 
-The parent-side reader `/proc/<pid>/syscall` names it without ptrace and
-without a handler (U314), and that is the next measurement.
+### 1.6.6 Leading hypothesis after rev 13's strides
+
+The device node `/dev/edgetpu` exists (symlink to `janeiro`), the
+`edgetpu_platform` driver is registered, and the HAL neither opens the node nor
+polls for it nor sleeps: it creates a worker pool and waits on it. That is the
+signature of a HAL waiting for firmware that has never been loaded, which is
+Gate D. The in-process route cannot get past create before Gate D opens, so the
+next real move is firmware bootstrap, not another wait instrument.
 
 ### 1.6.5 Two environment facts for in-process experiments
 

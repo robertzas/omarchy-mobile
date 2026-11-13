@@ -311,6 +311,43 @@ int socket(int d, int t, int p) {
   return f(d, t, p);
 }
 
+/* S8: the retry loop. A HAL waiting for a device node retries openat/access
+   and sleeps; none of those was interposed before, and `open` alone misses
+   openat, which is what bionic's open() and the HAL both use. */
+typedef int (*oa_t)(int, const char *, int, ...);
+typedef int (*ac_t)(const char *, int);
+typedef int (*ns_t)(const void *, void *);
+
+int openat(int dfd, const char *path, int flags, ...) {
+  oa_t f = (oa_t)dlsym((void *)-1, "openat");
+  unsigned long ra = (unsigned long)__builtin_return_address(0);
+  if (getpid() == watch_pid && io_budget-- > 0) {
+    io_report("openat", dfd, (long)flags, ra);
+    put("IO   path=");
+    put(path);
+    put("\n");
+  }
+  if (flags & 0100) return f(dfd, path, flags, 0600);
+  return f(dfd, path, flags);
+}
+
+int access(const char *path, int mode) {
+  ac_t f = (ac_t)dlsym((void *)-1, "access");
+  if (getpid() == watch_pid && io_budget-- > 0) {
+    io_report("access", -1, (long)mode, (unsigned long)__builtin_return_address(0));
+    put("IO   path=");
+    put(path);
+    put("\n");
+  }
+  return f(path, mode);
+}
+
+int nanosleep(const void *req, void *rem) {
+  ns_t f = (ns_t)dlsym((void *)-1, "nanosleep");
+  io_report("nanosleep", -1, -999, (unsigned long)__builtin_return_address(0));
+  return f(req, rem);
+}
+
 int connect(int fd, const void *sa, unsigned int len) {
   cn_t f = (cn_t)dlsym((void *)-1, "connect");
   if (getpid() == watch_pid && io_budget-- > 0) {

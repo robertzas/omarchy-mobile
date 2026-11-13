@@ -13061,3 +13061,19 @@ NDK's `libandroid.so` or a C++ `Looper` call.
 0.5 s, 1.0 s and 1.5 s after the fork:
 
     (no SYS line this run)
+
+
+**U315, the device node exists and the HAL does no file I/O.** `/dev/edgetpu`
+and `/dev/edgetpu-soc` are symlinks to `/dev/janeiro` in both the chroot and the
+host, and `/sys/bus/platform/drivers/edgetpu_platform` is registered. With
+`openat`, `access` and `nanosleep` interposed as well, the factory still makes
+**zero** such calls, so it is not polling for the node and not sleeping in a
+retry loop. What it does do is map many 0x40000 regions, which is the shape of
+repeated `pthread_create` (a worker pool), and then wait.
+
+**Correction to U310.** The semaphore self-test proves only that a call *from
+this object's own PLT* reaches the interposer. It does **not** prove that calls
+made by `libdarwinn_dba_hal_runtime.so` do, so "the factory calls no
+cond_wait/sem_wait/mutex_lock/join" rests on the interposer being first in the
+global scope, which was assumed and not shown. The honest statement is: no
+interposed symbol was called, and the mechanism is still unnamed.
