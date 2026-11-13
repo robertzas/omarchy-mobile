@@ -502,3 +502,15 @@ setup succeeds, and no TPU number is claimed.
    benchmark above.
 3. The attended stock capture on slot A stays the gated oracle (AGENTS §1;
    it rewrites `efs`/`persist`/`modem_userdata`).
+
+## 2026-11-12 (later): the raw binder client reaches the compute service
+
+- `getService` for `com.google.edgetpu.tachyon.IComputeService/default` answers
+  rc 0 once the client maps the binder device (1 MiB) and treats 0x720c as
+  BR_NOOP and 0x80407203 as the reply; before that every call died in
+  BR_DEAD_REPLY although servicemanager had delivered it.
+- The manager's node is `$R/dev/binderfs/vndbinder`; `/mnt/tpufs` is a second
+  binderfs instance and cannot reach it.
+- `createSession` is still refused: the reply's object offset is misread (4, not
+  a valid type) and handles 1-8 answer BR_FAILED_REPLY. No TPU session or
+  inference yet.

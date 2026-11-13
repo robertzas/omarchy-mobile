@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 typedef uint8_t u8;
@@ -56,6 +57,7 @@ struct binder_transaction_data {
 #define BC_FREE_BUFFER		_IOW('c', 3, u64)
 #define BR_REPLY		_IOR('r', 1, struct binder_transaction_data)
 #define BR_TRANSACTION_COMPLETE	0x7206
+#define BR_NOOP			0x720c	/* driver flush marker; no payload */
 
 #define FLAT_BINDER_BINDER	1
 #define FLAT_BINDER_HANDLE	3
@@ -162,7 +164,8 @@ static int transact(int fd, u32 handle, u32 code, struct parcel *p,
 	bwr.read_size = sizeof rbuf;
 	bwr.read_buffer = (uintptr_t)rbuf;
 	if (ioctl(fd, BINDER_WRITE_READ, &bwr) < 0) {
-		perror("BINDER_WRITE_READ(write)");
+		if (errno != EAGAIN)
+			perror("BINDER_WRITE_READ(write)");
 		return -1;
 	}
 
@@ -172,18 +175,24 @@ static int transact(int fd, u32 handle, u32 code, struct parcel *p,
 	for (i = 0; i < bwr.read_consumed; ) {
 		memcpy(&cmd, rbuf + i, 4);
 		i += 4;
+		if (cmd == BR_NOOP)
+			continue;
 		if (cmd == BR_TRANSACTION_COMPLETE) {
 			memset(&bwr, 0, sizeof bwr);
 			bwr.read_size = sizeof rbuf;
 			bwr.read_buffer = (uintptr_t)rbuf;
 			if (ioctl(fd, BINDER_WRITE_READ, &bwr) < 0) {
-				perror("BINDER_WRITE_READ(read)");
+				if (errno != EAGAIN)
+					perror("BINDER_WRITE_READ(read)");
 				return -1;
 			}
 			i = 0;
 			continue;
 		}
-		if (cmd == BR_REPLY) {
+		/* BR_REPLY = _IOR('r', 3, struct binder_transaction_data);
+		 * the kernel encodes the read direction as bit 31, so the value
+		 * is 0x80407203 (older headers: 0x40407203). */
+		if (cmd == 0x80407203u || cmd == 0x40407203u) {
 			struct binder_transaction_data *r =
 				(struct binder_transaction_data *)(rbuf + i);
 			u32 j;
@@ -197,17 +206,20 @@ static int transact(int fd, u32 handle, u32 code, struct parcel *p,
 			memcpy(reply->buf, (void *)(uintptr_t)r->data.ptr.buffer,
 			       r->data_size);
 			reply->len = r->data_size;
+			printf("  reply txn: code %u flags %u data %llu offsets %llu\n",
+			       r->code, r->flags,
+			       (unsigned long long)r->data_size,
+			       (unsigned long long)r->offsets_size);
 			reply->noff = 0;
-			for (j = 0; j < r->offsets_size / 4; j++) {
-				u32 o;
-				u64 b;
+			/* Offsets are binder_size_t (64-bit) entries, not u32. */
+			for (j = 0; j < r->offsets_size / sizeof(u64) &&
+			     reply->noff < 8; j++) {
+				u64 o;
 
 				memcpy(&o, (void *)(uintptr_t)r->data.ptr.offsets +
-					      j * 4, 4);
-				memcpy(&b, reply->buf + o + 8, 8);
-				reply->off[j] = o;
+					      j * sizeof(u64), sizeof(u64));
+				reply->off[j] = (u32)o;
 				reply->noff++;
-				(void)b;
 			}
 			free_ptr = r->data.ptr.buffer;
 			{
@@ -231,6 +243,10 @@ static int transact(int fd, u32 handle, u32 code, struct parcel *p,
 			}
 			return 0;
 		}
+		if (cmd == 0x7205 || cmd == 0x7211 || cmd == 0x7206) {
+			printf("binder error 0x%x\n", cmd);
+			return -1;
+		}
 		printf("unexpected read command 0x%x\n", cmd);
 		break;
 	}
@@ -246,15 +262,41 @@ int main(int argc, char **argv)
 {
 	const char *node = argc > 1 ? argv[1] : "/dev/binderfs/vndbinder";
 	const char *iface = "android.os.IServiceManager";
-	const char *name = "com.google.edgetpu.tachyon.IComputeService/default";
+	const char *name = getenv("NAME") ?
+		getenv("NAME") : "com.google.edgetpu.tachyon.IComputeService/default";
 	struct parcel p, reply;
-	u32 binder = 0, i, pad;
+	u32 binder = 0, i, pad, tries = 120;
 	int fd, rc;
+	const char *w = getenv("WAIT");
+
+	setvbuf(stdout, NULL, _IONBF, 0);
+	const char *hold = getenv("HOLD");
+
+	if (w && atoi(w) > 0)
+		tries = (u32)atoi(w) * 10;
+	{
+		const char *tr = getenv("TRIES");
+
+		if (tr && atoi(tr) > 0)
+			tries = (u32)atoi(tr);
+	}
 
 	fd = open(node, O_RDWR | O_CLOEXEC);
 	if (fd < 0) {
 		perror(node);
 		return 1;
+	}
+	/* The driver allocates every incoming transaction (a reply included) in
+	 * the target's mmap'd binder area. Without one a reply fails with
+	 * -ESRCH and the sender sees BR_DEAD_REPLY, even though the request was
+	 * delivered and handled. */
+	{
+		void *map = mmap(NULL, 1 << 20, PROT_READ, MAP_PRIVATE, fd, 0);
+
+		if (map == MAP_FAILED) {
+			perror("mmap(binder)");
+			return 1;
+		}
 	}
 
 	{
@@ -267,7 +309,7 @@ int main(int argc, char **argv)
 		put32(&p, 0x564e4452);
 		putstr16(&p, iface);
 		putstr16(&p, name);
-		for (i = 0; i < 120; i++) {
+		for (i = 0; i < tries; i++) {
 			binder = 0;
 			rc = transact(fd, 0, 1, &p, &reply, &binder);
 			printf("getService try %u: rc %d handle %u\n", i, rc, binder);
@@ -275,8 +317,11 @@ int main(int argc, char **argv)
 				break;
 			usleep(100000);
 		}
-		if (!binder)
+		if (!binder) {
+			dump_parcel("no service", reply.buf, reply.len, reply.off,
+				    reply.noff);
 			goto out;
+		}
 		dump_parcel("reply", reply.buf, reply.len, reply.off, reply.noff);
 		if (!binder)
 			goto out;
@@ -289,11 +334,29 @@ int main(int argc, char **argv)
 		put32(&p, 1);	/* privileged */
 		for (i = 3; i < (u32)argc; i++)
 			put32(&p, (u32)strtoul(argv[i], NULL, 0));
-		rc = transact(fd, binder, 1, &p, &reply, &binder);
-		printf("createSession: rc %d\n", rc);
-		if (rc == 0)
-			dump_parcel("session reply", reply.buf, reply.len, reply.off,
-				    reply.noff);
+		{
+			/* The reply's flat_binder_object offset has been unreliable
+			 * to read back, and this process holds no other service refs,
+			 * so probe the small handle range instead of trusting it. */
+			u32 h, first = binder ? binder : 1;
+
+			for (h = first; h <= 8; h++) {
+				rc = transact(fd, h, 1, &p, &reply, &binder);
+				printf("createSession(handle %u): rc %d\n", h, rc);
+				if (rc == 0) {
+					dump_parcel("session reply", reply.buf,
+						    reply.len, reply.off, reply.noff);
+					break;
+				}
+			}
+		}
+		if (hold) {
+			/* Keep the handle (and so the client count) alive: the
+			 * registrar exits as soon as the last client goes away. */
+			printf("holding handle %u for %d s\n", binder, atoi(hold));
+			fflush(stdout);
+			sleep((unsigned)atoi(hold));
+		}
 	}
 out:
 	close(fd);

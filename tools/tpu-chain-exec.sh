@@ -11,7 +11,7 @@
 # power-up only: tpu-hold is left running if it already is).
 set -u
 R=/usr/lib/omamobile-vendor/edgetpu/root
-SVC="/system/lib64/libsegvshim.so /system/lib64/libnosid.so /system/lib64/liblazysvc.so /system/lib64/libpermissionshim.so /system/lib64/libabortshim.so /system/lib64/liblogstderr.so /system/lib64/libselinuxshim.so /system/lib64/libpropsshim.so"
+SVC="/system/lib64/libsegvshim.so /system/lib64/libnosid.so /system/lib64/libpersist.so /system/lib64/liblazysvc.so /system/lib64/libpermissionshim.so /system/lib64/libabortshim.so /system/lib64/liblogstderr.so /system/lib64/libselinuxshim.so /system/lib64/libpropsshim.so"
 CL="/system/lib64/libnosid.so /system/lib64/liblogstderr.so /system/lib64/libselinuxshim.so /system/lib64/libpropsshim.so"
 SM="/system/lib64/liblogstderr.so /system/lib64/libselinuxshim.so /system/lib64/libpropsshim.so"
 

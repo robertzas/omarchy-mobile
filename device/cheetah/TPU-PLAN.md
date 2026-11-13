@@ -706,6 +706,32 @@ NDK C API and a preload cannot reach it. The one client that ever held tachyon
 open was the app service (uid 1000); the remaining Phase A approach is a holder
 that keeps *that* client alive, not another shim.
 
+Result (2026-11-12, later): a held service is achieved and the raw binder client
+now reaches the compute service.
+- The client never mmap'd the binder device. The driver allocates a reply in
+  the target's binder area, so without one it answered BR_DEAD_REPLY while the
+  request itself was delivered (servicemanager logged the caller). With a 1 MiB
+  mapping the reply arrives. Two command numbers were also wrong in the client:
+  0x720c is BR_NOOP, the driver's flush marker (not a failure), and the reply is
+  0x80407203 (the read-direction encoding), not 0x40407203.
+- `/mnt/tpufs` and `/dev/binderfs` are separate binderfs mounts with separate
+  contexts. The manager runs on `$R/dev/binderfs/vndbinder`; a client on
+  another instance reaches no context manager.
+- A fresh client process per attempt avoids a second transaction that never
+  answers. Polling 53 times while the chain started, `getService` answered
+  rc 0 with a binder object, and tachyon stayed registered while the client
+  held it.
+- `createSession` is not delivered yet: handles 1-8 all answer BR_FAILED_REPLY
+  (0x7211, no such ref), and the reply's flat_binder_object offset reads back as
+  4 though word 4 is not a valid object type. Either the reply layout or the
+  offsets array is still misread; the next step is gdb at the client's reply
+  copy, or a bionic client linked against the chroot's libbinder_ndk that uses
+  the real AIDL encoding.
+- `tools/android-lazysvc-persist.c` interposes
+  `LazyServiceRegistrar::getInstance()` and calls `forcePersist(true)`, and the
+  chain preloads it, but its constructor mark never appears in tachyon's log, so
+  the preload is not being loaded there (not yet diagnosed).
+
 ### Phase B - createSession
 
 Requires A. Then `tools/tpu-binder-client` creates the service handle and calls
