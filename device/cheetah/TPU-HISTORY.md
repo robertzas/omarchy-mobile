@@ -12984,3 +12984,25 @@ classic fork-in-multithreaded-process deadlock, and it fits all four facts: no
 device open, a futex wait, the child's own three threads alive, and no
 interposed symbol ever called. The test is cheap and does not need a reboot:
 fork **before** the HAL is initialised, or call create in the original process.
+
+**U306, H6 is refuted: no fork, same wait.** `MODE=nofork` runs the factory in
+the original process (`pid = 0`, no `fork()`), the alarm still fires at 3 s, and
+the outcome is unchanged: no `/dev/edgetpu` fd, no VII line, only the driver's
+KCI 21 heartbeat in `dmesg`. The wait is intrinsic to the factory in this
+environment, not a lock inherited across `fork()`.
+
+**U307, H2 is refuted and the options layout is settled.** The wrapper at
+`0xf7764` calls its implementation at `0xf8df8` with the options still in `x0`,
+and the first thing it does is `ldp w8, w9, [x0]` (`0xf8e30`) followed by
+`ldr x26, [x20, #0x8]` (`0xf8e54`), a `strlen` on that pointer and a `memcpy`
+into a small-string buffer. So the struct is
+
+```
++0  u32   a boolean (the code sets a flag when it is 0)
++4  u32   an enum: 0 -> mode 3, 1 -> mode 4, 2 -> mode 5
++8  const char *  the device path, copied as a std::string
+```
+
+Our synthesized `{1, 1, "/dev/edgetpu"}` is therefore structurally legal, and
+the value 1 is one of the three the code accepts. The block happens after the
+path has been copied, so it is not the options object and not the pointer.

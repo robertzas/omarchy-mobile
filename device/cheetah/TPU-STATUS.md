@@ -23,6 +23,15 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U306-U307: H6 and H2 refuted; the options object is legal)
+
+`MODE=nofork` blocks exactly like the forked run, so the wait is not a lock
+inherited across `fork()`. Offline, create's implementation (`0xf8df8`) reads
+`ldp w8,w9,[x0]` then a `const char *` at `+8` and copies it with
+`strlen`/`memcpy`, so the 16-byte object is `{u32 bool, u32 enum 0..2, path}`
+and `{1,1,"/dev/edgetpu"}` is legal. The block is after the path is copied; the
+remaining window is the next offline read.
+
 ## 2026-11-13 (U304-U305: the blockers are never called; our own fork is the suspect)
 
 The harness now interposes `pthread_cond_wait`, `pthread_cond_timedwait`,

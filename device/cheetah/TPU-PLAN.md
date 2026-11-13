@@ -184,15 +184,36 @@ construction inside the HAL function that waits.
 | # | Hypothesis | Test | Cost |
 | --- | --- | --- | --- |
 | H1 | Create posts a task to its executor and waits for it; the executor needs an **ALooper** the process has not prepared | link a tiny bionic binary that calls `ALooper_prepare(0)` before the factory call, or call it from the harness ctor | offline + one run |
-| H2 | The 16-byte options are not `{flags, flags, path}`; one word is a **callback/vtable** we fill with `1` | S4 static read: the create implementation's first loads from `[x0]`, `[x0+8]` and what it does with them | offline only |
+| H2 | ~~The 16-byte options are not `{flags, flags, path}`~~ **refuted (U307)**: `ldp w8,w9,[x0]` then `[x0+8]` is a `const char *` copied with `strlen`/`memcpy`, so it is `{u32 bool, u32 enum 0..2, const char *}` and our bytes are legal | done | - |
 | H3 | Create waits on a **peer thread that is itself blocked**: our `eventfd`/`timerfd` never fires because no one armed it | S2b names the waiter; then the peer thread's state from `/proc/<pid>/task/*/stack` | one run |
 | H4 | Create registers a **client** with a layer that only the service's binder side serves, even in-process | S2b: if the waiter is a callback the service installs at `0x8d10`, read that thunk's body | offline + one run |
 | H5 | The HAL wants more **properties** than `ro.board.platform` (e.g. a hardware name) and waits while a property lookup retries | S2: read every `GetProperty` call in the create path for its key | offline only |
-| H6 | The wait is an artefact of our own **`fork()`**: the child inherits a lock held at fork time by a thread that does not exist in it | run the factory in the original process, or fork before loading the HAL | one run |
+| H6 | ~~The wait is an artefact of our own `fork()`~~ **refuted (U306)**: `MODE=nofork` blocks identically, with no device fd and no VII line | done | - |
 
 
 H1 and H2 are cheaper than another phone run, so they come first. H3/H4 need
 S2b, and S2b is the only instrument that has not failed.
+
+### 1.6.2 Create's prologue, now decoded
+
+`0xf7764` wraps `0xf8df8`; the options stay in `x0`. The implementation reads:
+
+```
+0xf8e30  ldp  w8, w9, [x0]     two 32-bit words: a bool and an enum
+0xf8e3c  cmp  w9, #1 ...       enum 0 -> mode 3, 1 -> mode 4, 2 -> mode 5
+0xf8e54  ldr  x26, [x20, #8]   the device path
+0xf8e74  bl   strlen@plt
+0xf8ecc  bl   memcpy@plt       into a std::string at sp+0x30
+```
+
+So the 16-byte object is `{u32 bool, u32 enum 0|1|2, const char *path}` and the
+harness's `{1, 1, "/dev/edgetpu"}` is legal (U307). **The block is after the
+path is copied**, so neither the options layout nor the pointer is the wall.
+
+What remains between the copy and the wait is what S4 must read next: the call
+at `0xf8f50`-ish that follows the string, and the `0x112e24` call before it.
+Until that is read, H1 (a Looper the process lacks), H3 (a peer thread blocked)
+and H5 (more properties) are the open hypotheses, and H1 is the cheapest.
 
 ### 1.7 What rev 13 withdraws
 
@@ -476,16 +497,14 @@ gate K fails? -> stop: driver/session regression.
 
 ## 11. Immediate actions (ordered)
 
-1. **S2c** (phone, no reboot): the factory with no `fork()`, alarm on, the
-   chroot process as the container. H6 is now the leading hypothesis and this
-   is the cheapest test of it.
+1. **S4 (offline, next):** finish reading `0xf8df8` past the string copy -
+   `0x112e24`, the calls after `0xf8f50`, and every `pthread_once`/`GetProperty`
+   on the way. H2 and H6 are refuted, so the answer is in this window.
 2. **S2b fix** (harness): set `watch_pid` before the self-test so the control
-   is real; then one `MODE=cw` run either names the waiter or proves the wait is
-   a raw futex.
-3. **H2 + H5** (offline, parallel): create's prologue loads from `[x0]` and its
-   `GetProperty` keys. Either can make the phone runs unnecessary.
-4. **H1** (offline build, one run): `ALooper_prepare(0)` before the call, only
-   if S2b names a Looper task rather than an options field.
+   is real; a `MODE=cw` run then either names the waiter or proves a raw futex.
+3. **H1** (offline build, one run): `ALooper_prepare(0)` before the call, if
+   the window shows a Looper task rather than an options field.
+4. **H5** (offline): every `GetProperty` key on the create path.
 4. **S3** (phone): the session/setup entries in order, one per run, with the
    firmware oracle after each.
 5. **F4** (offline): the setup builder's command vector at `0x1610cc`.

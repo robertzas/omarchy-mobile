@@ -432,7 +432,7 @@ __attribute__((constructor)) static void start(void) {
     _exit(0);
   }
 
-  if (mode[0] == 'b' || mode[0] == 'c') {
+  if (mode[0] == 'b' || mode[0] == 'c' || mode[0] == 'n') {
     n = -1;
     if (mode[0] == 'c') {
       sem_init(selftest_sem, 0, 1);
@@ -452,7 +452,7 @@ __attribute__((constructor)) static void start(void) {
     while (*es && (*es >= '0' && *es <= '9')) n = n * 10 + (*es++ - '0');
   }
 
-  pid = fork();
+  pid = (mode && mode[0] == 'n') ? 0 : fork();
   if (pid == 0) {
     signal(14, on_alarm);
     if (mode[0] != 'b') {
