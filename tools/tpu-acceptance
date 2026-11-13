@@ -1,0 +1,298 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Compare a TPU output tensor with a CPU reference and write a report.
+
+This is the acceptance gate for device/cheetah/TPU-PLAN.md.  It deliberately
+uses only the Python standard library, so the same command works on the laptop
+and in the phone's Arch root without numpy.
+
+The files are raw little-endian tensors.  Shape and dtype are explicit: a
+comparison that guesses either is not evidence.
+
+Examples:
+  tools/tpu-acceptance compare --tpu out.raw --cpu ref.raw \
+      --dtype int8 --shape 1,1001 --top-k 5 --report report.json
+  tools/tpu-acceptance --self-test
+"""
+import argparse
+import hashlib
+import json
+import math
+import os
+import struct
+import sys
+import tempfile
+from datetime import datetime, timezone
+
+DTYPES = {
+    "int8": ("b", 1),
+    "uint8": ("B", 1),
+    "int16": ("h", 2),
+    "float32": ("f", 4),
+    "float64": ("d", 8),
+}
+FLOAT_DTYPES = {"float32", "float64"}
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def parse_shape(text):
+    try:
+        shape = [int(x) for x in text.split(",") if x != ""]
+    except ValueError as exc:
+        raise ValueError("--shape must be comma-separated positive integers") from exc
+    if not shape or any(x <= 0 for x in shape):
+        raise ValueError("--shape must contain positive integers")
+    n = 1
+    for x in shape:
+        n *= x
+    return shape, n
+
+
+def read_tensor(path, dtype, shape):
+    code, size = DTYPES[dtype]
+    n = 1
+    for x in shape:
+        n *= x
+    with open(path, "rb") as f:
+        data = f.read()
+    expected = n * size
+    if len(data) != expected:
+        raise ValueError(
+            f"{path}: {len(data)} bytes, expected {expected} "
+            f"({dtype} {shape})"
+        )
+    if not data:
+        raise ValueError(f"{path}: empty tensor")
+    values = [v[0] for v in struct.iter_unpack("<" + code, data)]
+    if len(values) != n:
+        raise ValueError(f"{path}: decoded {len(values)} values, expected {n}")
+    return data, values
+
+
+def top_k(values, k):
+    if k <= 0:
+        return []
+    order = sorted(range(len(values)), key=lambda i: (-values[i], i))[:k]
+    return [{"index": i, "value": values[i]} for i in order]
+
+
+def compare(cpu, tpu, atol, rtol):
+    mismatches = 0
+    exact = 0
+    max_abs = 0.0
+    sum_abs = 0.0
+    max_rel = 0.0
+    rel_undefined = False
+    non_finite = 0
+    first_mismatch = None
+
+    for i, (c, t) in enumerate(zip(cpu, tpu)):
+        if isinstance(c, float) and not math.isfinite(c):
+            non_finite += 1
+        if isinstance(t, float) and not math.isfinite(t):
+            non_finite += 1
+        if c == t:
+            exact += 1
+        diff = abs(t - c)
+        sum_abs += diff
+        if diff > max_abs:
+            max_abs = diff
+        if c == 0:
+            if diff != 0:
+                rel_undefined = True
+        else:
+            rel = diff / abs(c)
+            if rel > max_rel:
+                max_rel = rel
+        limit = atol + rtol * abs(c)
+        if not math.isfinite(diff) or diff > limit:
+            mismatches += 1
+            if first_mismatch is None:
+                first_mismatch = {"index": i, "cpu": c, "tpu": t,
+                                  "abs_error": diff, "limit": limit}
+
+    n = len(cpu)
+    return {
+        "elements": n,
+        "exact_matches": exact,
+        "mismatch_count": mismatches,
+        "max_absolute_error": max_abs,
+        "mean_absolute_error": (sum_abs / n) if n else 0.0,
+        "max_relative_error": None if rel_undefined else max_rel,
+        "relative_error_undefined": rel_undefined,
+        "non_finite_count": non_finite,
+        "first_mismatch": first_mismatch,
+        "pass": mismatches == 0 and non_finite == 0,
+    }
+
+
+def report(args, cpu_data, tpu_data, cpu_values, tpu_values, metrics):
+    def file_info(path):
+        return {
+            "path": os.path.abspath(path),
+            "size": os.path.getsize(path),
+            "sha256": sha256_file(path),
+        }
+
+    out = {
+        "tool": "tpu-acceptance",
+        "version": 1,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "pass": metrics["pass"],
+        "dtype": args.dtype,
+        "shape": args.shape_list,
+        "elements": metrics["elements"],
+        "tolerances": {"atol": args.atol, "rtol": args.rtol},
+        "files": {
+            "cpu": file_info(args.cpu),
+            "tpu": file_info(args.tpu),
+        },
+        "model": file_info(args.model) if args.model else None,
+        "input": file_info(args.input) if args.input else None,
+        "kernel_release": args.kernel or None,
+        "label": args.label or None,
+        "metrics": metrics,
+        "top": {
+            "cpu": top_k(cpu_values, args.top_k),
+            "tpu": top_k(tpu_values, args.top_k),
+        },
+        "raw_bytes": {
+            "cpu_sha256": hashlib.sha256(cpu_data).hexdigest(),
+            "tpu_sha256": hashlib.sha256(tpu_data).hexdigest(),
+        },
+    }
+    return out
+
+
+def write_report(path, data):
+    text = json.dumps(data, indent=2, sort_keys=True) + "\n"
+    if path == "-":
+        sys.stdout.write(text)
+        return
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    print(f"report: {path}")
+
+
+def cmd_compare(args):
+    code, _ = DTYPES[args.dtype]
+    if args.dtype in FLOAT_DTYPES and args.atol is None and args.rtol is None:
+        raise ValueError(
+            "float tensors need an explicit --atol and/or --rtol; "
+            "an exact float comparison is not meaningful"
+        )
+    if args.atol is None:
+        args.atol = 0.0
+    if args.rtol is None:
+        args.rtol = 0.0
+    if args.atol < 0 or args.rtol < 0:
+        raise ValueError("--atol and --rtol must be non-negative")
+
+    args.shape_list, n = parse_shape(args.shape)
+    cpu_data, cpu_values = read_tensor(args.cpu, args.dtype, args.shape_list)
+    tpu_data, tpu_values = read_tensor(args.tpu, args.dtype, args.shape_list)
+    metrics = compare(cpu_values, tpu_values, args.atol, args.rtol)
+    data = report(args, cpu_data, tpu_data, cpu_values, tpu_values, metrics)
+
+    if args.report:
+        write_report(args.report, data)
+    if not args.quiet:
+        print(
+            f"{'PASS' if metrics['pass'] else 'FAIL'}: "
+            f"{n} {args.dtype} elements, "
+            f"{metrics['mismatch_count']} outside "
+            f"atol={args.atol} rtol={args.rtol}, "
+            f"max_abs={metrics['max_absolute_error']:.9g}"
+        )
+        print(f"cpu sha256 {data['files']['cpu']['sha256']}")
+        print(f"tpu sha256 {data['files']['tpu']['sha256']}")
+        if metrics["first_mismatch"]:
+            print(f"first mismatch: {metrics['first_mismatch']}")
+    return 0 if metrics["pass"] else 1
+
+
+def cmd_self_test(_args):
+    with tempfile.TemporaryDirectory(prefix="tpu-acceptance-") as tmp:
+        a = os.path.join(tmp, "a.raw")
+        b = os.path.join(tmp, "b.raw")
+        c = os.path.join(tmp, "c.raw")
+        with open(a, "wb") as f:
+            f.write(struct.pack("<" + "b" * 4, 1, 2, 3, 4))
+        with open(b, "wb") as f:
+            f.write(struct.pack("<" + "b" * 4, 1, 2, 3, 4))
+        with open(c, "wb") as f:
+            f.write(struct.pack("<" + "b" * 4, 1, 2, 3, 5))
+
+        _, av = read_tensor(a, "int8", [1, 4])
+        _, bv = read_tensor(b, "int8", [1, 4])
+        _, cv = read_tensor(c, "int8", [1, 4])
+        good = compare(av, bv, 0.0, 0.0)
+        bad = compare(av, cv, 0.0, 0.0)
+        assert good["pass"] and good["mismatch_count"] == 0
+        assert not bad["pass"] and bad["mismatch_count"] == 1
+        assert bad["first_mismatch"]["index"] == 3
+
+        # A NaN must never pass, even with a huge tolerance.
+        with open(c, "wb") as f:
+            f.write(struct.pack("<" + "f" * 2, 0.0, float("nan")))
+        _, nv = read_tensor(c, "float32", [1, 2])
+        nan = compare([0.0, 0.0], nv, 1e9, 1e9)
+        assert not nan["pass"] and nan["non_finite_count"] == 1
+
+        # Shape/size mismatch is an error, not a pass.
+        try:
+            read_tensor(a, "int8", [1, 3])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("size mismatch was accepted")
+
+    print("self-test: ok")
+    return 0
+
+
+def main(argv):
+    if "--self-test" in argv:
+        return cmd_self_test(None)
+
+    ap = argparse.ArgumentParser(
+        description="Compare a raw TPU tensor with a raw CPU reference.")
+    ap.add_argument("--version", action="version", version="tpu-acceptance 1")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    c = sub.add_parser("compare", help="compare two raw tensors")
+    c.add_argument("--tpu", required=True)
+    c.add_argument("--cpu", required=True)
+    c.add_argument("--dtype", required=True, choices=sorted(DTYPES))
+    c.add_argument("--shape", required=True, help="comma-separated dimensions")
+    c.add_argument("--atol", type=float)
+    c.add_argument("--rtol", type=float)
+    c.add_argument("--top-k", type=int, default=5)
+    c.add_argument("--report", help="JSON report path, or - for stdout")
+    c.add_argument("--model")
+    c.add_argument("--input")
+    c.add_argument("--kernel", help="uname -r value")
+    c.add_argument("--label", help="model or run label")
+    c.add_argument("--quiet", action="store_true")
+    c.set_defaults(func=cmd_compare)
+
+    s = sub.add_parser("self-test", help="run the built-in checks")
+    s.set_defaults(func=cmd_self_test)
+
+    args = ap.parse_args(argv)
+    try:
+        return args.func(args)
+    except (OSError, ValueError) as exc:
+        print(f"tpu-acceptance: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

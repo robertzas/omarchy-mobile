@@ -28,6 +28,7 @@ extern char *dlerror(void);
 extern void _exit(int) __attribute__((noreturn));
 extern int open(const char *, int, ...);
 extern int close(int);
+extern int unlink(const char *);
 extern long read(int, void *, size_t);
 extern long write(int, const void *, size_t);
 extern long lseek(int, long, int);
@@ -150,6 +151,80 @@ static int spill(const char *path, const char *buf, unsigned long size) {
   return done == size ? 0 : -1;
 }
 
+// The compiler writes the real graph to its uid cache, not to the
+// library's out_data pointer. The cache entry is:
+//   u32 header_len (little endian), header[header_len], graph[graph_len]
+// The protobuf header carries graph_len in field 5, but the entry's remaining
+// bytes are exactly the graph, so the graph starts at 4 + header_len.
+static int spill_cache_graph(const char *out_path) {
+  static const char cache[] = "/data/vendor/edgetpu/cache/_1000";
+  unsigned char head[4];
+  unsigned long size, start, done = 0;
+  char *buf;
+  int fd;
+
+  fd = open(cache, 0);
+  if (fd < 0) return -1;
+  size = (unsigned long)lseek(fd, 0, 2);
+  if (size < 8 || size > (64UL << 20)) {
+    close(fd);
+    return -1;
+  }
+  if (lseek(fd, 0, 0) != 0) {
+    close(fd);
+    return -1;
+  }
+  buf = (char *)malloc(size);
+  if (!buf) {
+    close(fd);
+    return -1;
+  }
+  while (done < size) {
+    long n = read(fd, buf + done, size - done);
+
+    if (n <= 0) break;
+    done += n;
+  }
+  close(fd);
+  if (done != size) {
+    free(buf);
+    return -1;
+  }
+
+  head[0] = (unsigned char)buf[0];
+  head[1] = (unsigned char)buf[1];
+  head[2] = (unsigned char)buf[2];
+  head[3] = (unsigned char)buf[3];
+  // The cache header is 4-byte length-prefixed. Keep the addition outside
+  // the byte assembly so the precedence is explicit.
+  start = 4UL + ((unsigned long)head[0] | ((unsigned long)head[1] << 8) |
+                 ((unsigned long)head[2] << 16) | ((unsigned long)head[3] << 24));
+  if (start + 8 > size) {
+    free(buf);
+    return -1;
+  }
+  if (!((buf[start + 4] == 'D' && buf[start + 5] == 'G' &&
+         buf[start + 6] == 'C' && buf[start + 7] == '0') ||
+        (buf[start + 4] == 'D' && buf[start + 5] == 'W' &&
+         buf[start + 6] == 'S' && buf[start + 7] == '0') ||
+        (buf[start + 4] == 'D' && buf[start + 5] == 'W' &&
+         buf[start + 6] == 'N' && buf[start + 7] == '1'))) {
+    free(buf);
+    return -1;
+  }
+  if (spill(out_path, buf + start, size - start) != 0) {
+    free(buf);
+    return -1;
+  }
+  put("cache graph ");
+  putdec((long)(size - start));
+  put(" bytes at cache+");
+  putdec((long)start);
+  put("\n");
+  free(buf);
+  return 0;
+}
+
 // The compiler asks the property service which SoC it runs on; a chroot has
 // none. The vendor runtime expects the Pixel 7 generation's ID.
 int __system_property_get(const char *name, char *value) {
@@ -245,6 +320,8 @@ __attribute__((naked)) void _exit(int status) {
       "b exit_report\n");
 }
 
+static char **g_errp;
+
 void exit_report(int status) {
   Dl_info di;
 
@@ -263,7 +340,11 @@ void exit_report(int status) {
     puthex(g_exit_caller - (unsigned long)di.dli_fbase);
   }
   put("\n");
-  backtrace_here();
+  if (g_errp && *g_errp) {
+    put("compiler error: ");
+    put(*g_errp);
+    put("\n");
+  }
   die_now(status);
 }
 
@@ -363,6 +444,8 @@ int main(int argc, char **argv) {
   char *err = 0;
   char *msg = 0;
   void *h;
+
+  g_errp = &err;
   compile_fn compile;
   free_fn release;
   int rc;
@@ -403,7 +486,16 @@ int main(int argc, char **argv) {
     opt_size = 0;
   }
 
-  h = dlopen("/vendor/lib64/libedgetpu_tflite_compiler.so", RTLD_NOW);
+  {
+    const char *compiler_path = getenv("COMPILER");
+
+    if (!compiler_path || !compiler_path[0])
+      compiler_path = "/vendor/lib64/libedgetpu_tflite_compiler.so";
+    put("compiler ");
+    put(compiler_path);
+    put("\n");
+    h = dlopen(compiler_path, RTLD_NOW);
+  }
   if (!h) {
     put("dlopen: ");
     put(dlerror() ? dlerror() : "?");
@@ -425,11 +517,20 @@ int main(int argc, char **argv) {
   // plain TFLite model carries no version, so both ask for v1 and miss; this
   // build ships only v5 (the janeiro config at 0x3f41050, selected by version
   // 14). Force both loads to 14 for this run.
-  {
+  if (getenv("COMPILER") && getenv("COMPILER")[0]) {
+    put("compiler override: tegu-only version patches skipped\n");
+  } else {
     unsigned char *base = (unsigned char *)compile - 0xc0871c;
     patch_insn(base, 0xc08f98, 0xb9405014, 0x528001d4, "cache version");
     patch_insn(base, 0xc14cc0, 0xb9400aa0, 0x528001c0, "config version");
   }
+
+  // The vendor compiler caches by uid, not by model. A stale _1000 entry
+  // returns a 66-byte cache artifact at an unmapped address (TPU-PLAN U251),
+  // which looks like success to the raw API. Drop the entry first.
+  if (unlink("/data/vendor/edgetpu/cache/_1000") == 0)
+    put("dropped stale cache _1000\n");
+  unlink("/data/vendor/edgetpu/cache/_1000_checksum");
 
   put("compiling (uid 1000, ");
   putdec((long)opt_size);
@@ -450,26 +551,22 @@ int main(int argc, char **argv) {
     put(err);
     put("\n");
   }
-  if (rc == 0 && out && out_size) {
-    if (out_size >= 8) {
-      unsigned char *p = (unsigned char *)out;
-      int i;
-
-      put("head:");
-      for (i = 0; i < 16; i++) {
-        put(" ");
-        puthex(p[i]);
-      }
-      put("\n");
-    }
-    if (spill(out_path, (const char *)out, out_size) == 0) {
+  // A compiled graph is much larger than this. A 66-byte value is the
+  // cache artifact, not a model, and its pointer is not safe to dereference.
+  // The API's out_data is not the graph: a cold compile returns a small
+  // result (55 bytes in U253) whose pointer is not mapped. The real graph is
+  // in the uid cache entry, so never dereference out.
+  if (rc == 0) {
+    if (out_size < 1024)
+      put("API returned a small result; reading the cache entry\n");
+    if (spill_cache_graph(out_path) == 0) {
       put("wrote ");
       put(out_path);
       put("\n");
     } else {
-      put("write failed\n");
+      put("no DGC0/DWS0/DWN1 graph in the cache entry\n");
+      return 1;
     }
-    if (release) release(out);
   }
   free(err);
   close(model_fd);

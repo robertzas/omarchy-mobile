@@ -1,0 +1,203 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tpu-stock-capture: read-only checks and private capture for the stock
+# slot-A TPU oracle in device/cheetah/TPU-PLAN.md.
+#
+# This tool never writes a slot, flashes an image, installs a package or roots
+# the phone.  The slot change is a separate, owner-approved command printed by
+# `plan`; `capture` only runs adb read commands once stock is already booted.
+#
+#   tools/tpu-stock-capture check
+#   tools/tpu-stock-capture plan
+#   tools/tpu-stock-capture capture /private/path/outside/the/repo
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'tpu-stock-capture: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+fastboot_count() {
+  timeout 15 fastboot devices 2>/dev/null |
+    awk 'NF { n++ } END { print n + 0 }' || true
+}
+
+adb_count() {
+  timeout 15 adb devices 2>/dev/null |
+    awk 'NR > 1 && NF { n++ } END { print n + 0 }' || true
+}
+
+fastboot_value() {
+  local var=$1 out
+  out=$(timeout 20 fastboot getvar "$var" 2>&1 || true)
+  printf '%s\n' "$out" | sed -n 's/^[^:]*: //p' | head -1
+}
+
+check_tools() {
+  local missing=0
+  for t in adb fastboot; do
+    if ! command -v "$t" >/dev/null 2>&1; then
+      say "$t: not installed"
+      missing=1
+    fi
+  done
+  return "$missing"
+}
+
+cmd_check() {
+  check_tools || true
+  say 'mode: read-only (no slot write, no flash, no install)'
+
+  local fb adb
+  if command -v fastboot >/dev/null 2>&1; then
+    fb=$(fastboot_count)
+    say "fastboot: $fb device(s)"
+    if [ "$fb" -eq 1 ]; then
+      local v val
+      for v in current-slot slot-successful:a slot-successful:b; do
+        val=$(fastboot_value "$v")
+        say "  $v: ${val:-<unavailable>}"
+      done
+    elif [ "$fb" -gt 1 ]; then
+      die "more than one fastboot device; disconnect the others"
+    fi
+  fi
+
+  if command -v adb >/dev/null 2>&1; then
+    adb=$(adb_count)
+    say "adb: $adb device(s)"
+    if [ "$adb" -eq 1 ]; then
+      say "  state: $(timeout 10 adb get-state 2>/dev/null || echo unknown)"
+      say "  build: $(timeout 10 adb shell getprop ro.build.fingerprint 2>/dev/null | tr -d '\r' || true)"
+      say "  slot:  $(timeout 10 adb shell getprop ro.boot.slot_suffix 2>/dev/null | tr -d '\r' || true)"
+    elif [ "$adb" -gt 1 ]; then
+      die "more than one adb device; disconnect the others"
+    fi
+  fi
+
+  if [ "${fb:-0}" -eq 0 ] && [ "${adb:-0}" -eq 0 ]; then
+    say 'not ready: no fastboot or adb device'
+    say 'from off: hold Volume Down, add Power, hold about 20 s'
+    return 1
+  fi
+  return 0
+}
+
+cmd_plan() {
+  cat <<'EOF'
+Owner-gated stock-oracle sequence (TPU-PLAN.md section F).
+Nothing here is executed by this tool.
+
+  # 1. Read-only preflight
+  tools/tpu-stock-capture check
+
+  # 2. In Fastboot Mode, read before any write
+  fastboot getvar current-slot          # expect b
+  fastboot getvar slot-successful:a
+  fastboot getvar slot-successful:b     # expect yes
+  # stop if either flag is unexpected
+
+  # 3. Separate explicit owner go: stock slot A
+  fastboot --set-active=a
+  fastboot reboot
+
+  # 4. On stock Android, capture into a private directory outside the repo
+  tools/tpu-stock-capture capture /path/outside/the/repo/stock-YYYYMMDD
+
+  # 5. Roll back to slot B, then verify SSH and the boot marker
+  fastboot --set-active=b
+  fastboot reboot
+
+  # 6. Fresh read-only NV backup after stock
+  tools/nv-backup DIR
+  tools/nv-backup --check DIR
+
+Stock rewrites efs, persist and modem_userdata.  The slot change and the
+stock boot need the owner's explicit go, per AGENTS.md section 1.  Never
+flash an unsuffixed image, vbmeta, bootloader, radio or userdata.
+EOF
+}
+
+adb_capture() {
+  local name=$1
+  shift
+  local out="$dir/$name"
+  {
+    printf '$ adb'
+    printf ' %q' "$@"
+    printf '\n'
+    timeout 45 adb "$@" 2>&1 || printf '\n[exit %s]\n' "$?"
+  } >"$out"
+  if [ ! -s "$out" ]; then
+    printf 'empty output\n' >"$out"
+  fi
+}
+
+cmd_capture() {
+  local dir=${1:-}
+  [ -n "$dir" ] || die 'capture needs a directory outside the repository'
+  local real
+  real=$(realpath -m -- "$dir")
+  case "$real/" in
+    "$root/"*) die "refusing $real: it is inside the repository ($root)" ;;
+  esac
+  if [ -e "$real" ] && [ ! -d "$real" ]; then
+    die "$real exists and is not a directory"
+  fi
+  if [ -d "$real" ] && [ -n "$(find "$real" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+    die "$real is not empty; choose a new directory"
+  fi
+
+  check_tools || die 'adb and fastboot are required'
+  local n
+  n=$(adb_count)
+  [ "$n" -eq 1 ] || die "need exactly one adb device, found $n"
+  [ "$(timeout 10 adb get-state 2>/dev/null || true)" = device ] ||
+    die 'adb device is not in the device state'
+
+  mkdir -p "$real"
+  dir=$real
+  say "capturing read-only stock data into $dir"
+
+  {
+    printf 'captured_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'warning=private: may contain identifying data; never commit or share\n'
+    printf 'build=%s\n' "$(timeout 10 adb shell getprop ro.build.fingerprint 2>/dev/null | tr -d '\r' || true)"
+    printf 'slot=%s\n' "$(timeout 10 adb shell getprop ro.boot.slot_suffix 2>/dev/null | tr -d '\r' || true)"
+    printf 'kernel=%s\n' "$(timeout 10 adb shell uname -a 2>/dev/null | tr -d '\r' || true)"
+  } >"$dir/README.txt"
+
+  {
+    printf '$ adb root\n'
+    timeout 20 adb root 2>&1 || printf '\n[exit %s]\n' "$?"
+    sleep 2
+    timeout 20 adb wait-for-device 2>&1 || true
+  } >"$dir/adb-root.txt"
+
+  adb_capture getprop.txt shell getprop
+  adb_capture cmdline.txt shell cat /proc/cmdline
+  adb_capture version.txt shell cat /proc/version
+  adb_capture uname.txt shell uname -a
+  adb_capture ps.txt shell ps -A
+  adb_capture dev-edgetpu.txt shell 'ls -l /dev/edgetpu* 2>&1'
+  adb_capture edgetpu-cache.txt shell 'ls -l /data/vendor/edgetpu /data/vendor/edgetpu/cache 2>&1'
+  adb_capture dmesg.txt shell dmesg
+  adb_capture dmesg-tpu.txt shell "dmesg | grep -iE 'edgetpu|janeiro|gxp|tpu|vii'"
+  adb_capture logcat.txt logcat -d
+  adb_capture services.txt shell 'service list 2>&1'
+
+  say 'capture complete; inspect for identifiers before sharing anything'
+  say "files: $(find "$dir" -maxdepth 1 -type f | wc -l)"
+}
+
+case ${1:-} in
+  check) shift; cmd_check "$@" ;;
+  plan) shift; cmd_plan "$@" ;;
+  capture) shift; cmd_capture "$@" ;;
+  --help|-h|'') usage ;;
+  *) die "unknown command '$1' (see --help)" ;;
+esac

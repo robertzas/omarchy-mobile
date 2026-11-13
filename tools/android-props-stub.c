@@ -113,6 +113,10 @@ static const char empty_value[] = "";
  * logs the core's command dispatch and firmware-setup path; level 3 adds the
  * per-mailbox detail (TPU-PLAN U59/U64). */
 static const char tachyon_log_value[] = "3";
+/* The DBA service asks for this one (the Tachyon service asks for the
+ * property above). Level 3 makes the DBA HAL log its session and setup path,
+ * which is what tells a blocked createSession from a refused one (U284). */
+static const char darwinn_log_value[] = "3";
 
 static struct {
 	char name[32];
@@ -144,6 +148,8 @@ int __system_property_get(const char *name, char *value)
 		v = get_platform_value();
 	else if (name && is_name(name, "vendor.tachyon.log_level"))
 		v = tachyon_log_value;
+	else if (name && is_name(name, "vendor.darwinn.log_level"))
+		v = darwinn_log_value;
 	copy(value, v, 92);
 	return (int)str_len(v);
 }
@@ -167,6 +173,8 @@ int __system_property_read_callback(const void *pi, void (*cb)(void *, const cha
 		value = get_platform_value();
 	else if (is_name(last_name, "vendor.tachyon.log_level"))
 		value = tachyon_log_value;
+	else if (is_name(last_name, "vendor.darwinn.log_level"))
+		value = darwinn_log_value;
 	if (cb)
 		cb(cookie, last_name, value, 0);
 	return 0;

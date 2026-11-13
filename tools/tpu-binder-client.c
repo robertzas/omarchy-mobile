@@ -340,6 +340,55 @@ int main(int argc, char **argv)
 	 * process work queue and misses the reply (getService hung 12 s), so
 	 * this client stays a plain transacting thread. */
 	{
+		/* LIST=1 dumps every name the manager holds. The DBA service's
+		 * instance name is the one thing the client cannot guess, and a
+		 * manager restarted under running services answers null for names
+		 * that were registered with its predecessor (TPU-PLAN U282). */
+		const char *lst = getenv("LIST");
+
+		if (lst && atoi(lst) > 0) {
+			u32 o = 0;
+
+			printf("== listServices ==\n");
+			memset(&p, 0, sizeof p);
+			put32(&p, 0x80000000);
+			put32(&p, 0xffffffff);
+			put32(&p, 0x564e4452);
+			putstr16(&p, "android.os.IServiceManager");
+			/* IServiceManager: 1 getService, 2 checkService, 3 addService,
+			 * 4 listServices. Code 4 takes an out vector, sent as a
+			 * zero count; using code 2 sent no name and the manager
+			 * answered -4 (EX_NULL_POINTER), which read as a broken
+			 * manager instead of a wrong code (U282). */
+			put32(&p, 0);
+			rc = transact(fd, 0, 4, &p, &reply, &binder);
+			printf("listServices: rc %d bytes %u\n", rc, reply.len);
+			if (rc == 0 && reply.len >= 4) {
+				u32 n, i;
+
+				memcpy(&n, reply.buf, 4);
+				printf("  count %u\n", n);
+				o = 4;
+				for (i = 0; i < n && o + 4 <= reply.len; i++) {
+					u32 sl, j;
+					char name[256];
+
+					memcpy(&sl, reply.buf + o, 4);
+					o += 4;
+					if (sl >= sizeof name / 2)
+						break;
+					for (j = 0; j < sl && o + 2 <= reply.len; j++) {
+						name[j] = (char)reply.buf[o];
+						o += 2;
+					}
+					name[j] = 0;
+					printf("  %u: %s\n", i, name);
+					o += 2;	/* terminator */
+					o = (o + 3) & ~3u;
+				}
+			}
+			goto out;
+		}
 		/* The prologue a working client sends, read from servicemanager:
 		 * 0x80000000, workSource, VNDR, descriptor. */
 		printf("== getService ==\n");
@@ -405,14 +454,25 @@ int main(int argc, char **argv)
 			       errno);
 		}
 		u32 method = argc > 2 ? (u32)strtoul(argv[2], NULL, 0) : 1;
+		/* IFACE switches the target interface: the DBA device service is
+		 * com.google.edgetpu.dba.IDevice (createSession, getCapabilities,
+		 * ...) and its SessionConfig is not the Tachyon privileged flag, so
+		 * CFGWORDS writes that many zero words instead. TPU-PLAN U280. */
+		const char *dba_iface = getenv("IFACE");
+		const char *cfg_words = getenv("CFGWORDS");
 
 		printf("== createSession (code %u) ==\n", method);
 		memset(&p, 0, sizeof p);
 		put32(&p, 0x80000000);
 		put32(&p, 0xffffffff);
 		put32(&p, 0x564e4452);
-		putstr16(&p, "com.google.edgetpu.tachyon.IComputeService");
-		put32(&p, 1);	/* privileged */
+		putstr16(&p, dba_iface ? dba_iface
+				       : "com.google.edgetpu.tachyon.IComputeService");
+		if (!dba_iface)
+			put32(&p, 1);	/* Tachyon's privileged flag */
+		if (cfg_words)
+			for (i = 0; i < (u32)strtoul(cfg_words, NULL, 0); i++)
+				put32(&p, 0);
 		for (i = 3; i < (u32)argc; i++)
 			put32(&p, (u32)strtoul(argv[i], NULL, 0));
 		{

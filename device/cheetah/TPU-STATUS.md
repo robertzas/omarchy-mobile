@@ -23,6 +23,21 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U280-U284: the DBA service registers; a queued call has no thread)
+
+The vendor DBA service was aborting at registration, not at its HAL: Android
+14's servicemanager refuses `registerLazyService` for an instance the VINTF
+manifest does not declare. With a `com.google.edgetpu.dba` / `IDevice/default`
+fragment (now written by `tools/tpu-tachyon-run`) it registers and
+`com.google.edgetpu.dba.IDevice/default` resolves to a real handle. Its
+interface is `createSession` -> `IDeviceSession.createCompilationFromFile` ->
+`ICompilation` (no NNAPI `prepareModel`). The client's `createSession` is
+delivered but never served: the kernel shows `tr 1` pending on the service's
+node while its threads sit in epoll, and the service's own
+`Thread Pool max thread count is 0` line explains it. That thread pool is the
+next thing to fix; the in-process `GetDarwinnHalFunctions` harness is the
+alternative.
+
 ## Where it stands
 
 - **Gate K passes.** A Tachyon session, both FMQ queues and a command round

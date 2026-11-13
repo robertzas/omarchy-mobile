@@ -12710,3 +12710,66 @@ commands with the global scratches), not at service start, so it needs a
 client that calls `prepareModel` on `com.google.edgetpu.dba.IDevice/default`.
 The service is up and that client is now the only missing piece of the AP-side
 setup path.
+
+## U280-U284 (2026-11-13): the DBA service registers, answers, and then does not serve
+
+**U280, the interface is a session API.** `com.google.edgetpu.dba-V1-ndk.so` and
+the service binary name `IDevice` (`createSession`, `getCapabilities`),
+`IDeviceSession` (`createCompilationFromFile`, `ImportHardwareBuffer`,
+`ReleaseBuffer`), `ICompilation` (`CreateExecutionResult`,
+`CreateRepeatedExecution`, `DispatchFencedExecution`) and the config types
+`SessionConfig`, `CompilationConfig`, `BufferConfig`, `Request`,
+`MemoryRegion`, `TensorShape`. There is no `prepareModel`: the path to the
+HAL's setup is a session plus a compilation from a **file path**, which is why
+no NNAPI `Model` parcel is needed.
+
+**U281, `chip_model` is live.** The driver now exposes
+`/sys/class/edgetpu/janeiro/chip_model` = `janeiro_a0` (module built and
+installed with `janeiro.ko.orig-chipmodel` beside it, boot clean, PSM
+`0x4b37890`). It did not clear the DBA abort on its own; the property did.
+
+**U282, two client bugs found by their own replies.** `IServiceManager` is
+1 getService, 2 checkService, 3 addService, 4 listServices; the list probe
+used code 2 and read the manager's `-4` (`EX_NULL_POINTER`) as a broken
+manager. The client also gained `IFACE` (target interface) and `CFGWORDS`
+(zero config words), because the DBA's `SessionConfig` is not the Tachyon
+privileged flag.
+
+**U283, the registration failure was a missing VINTF fragment.** The DBA
+service aborted right after loading its HAL:
+
+```
+Caller(pid=13091,uid=1000) Could not find com.google.edgetpu.dba.IDevice/default in the VINTF manifest.
+registerLazySer 00000000fffffffd
+ABORT-MSG Check failed: status == STATUS_OK
+```
+
+The extracted chroot carries the vendor, app and NNAPI manifests but not the
+DBA one, and Android 14's servicemanager refuses `registerLazyService` for an
+undeclared instance. Adding
+`vendor/etc/vintf/manifest/com.google.edgetpu.dba-service.xml`
+(`com.google.edgetpu.dba`, version 1, `IDevice/default`) makes the service
+register: `getService` returns **handle 1** for
+`com.google.edgetpu.dba.IDevice/default`, reproducibly, with the chain's
+`DBA=1`. The fragment is written by `tools/tpu-tachyon-run` when absent.
+
+**U284, `createSession` is delivered but never served.** The client reaches
+`== createSession (code 1) ==` and blocks; the service never answers and
+`dmesg` shows no device activity at all (only the KCI 21 heartbeat). The
+kernel's view is decisive: the DBA process holds `node 485 ... tr 1` - one
+pending transaction on its node - while its threads sit in
+`binder_ioctl_write_read`/epoll/futex. Its own log line,
+`Thread Pool max thread count is 0. Cannot cache binder as linkToDeath cannot
+be implemented`, says why: the process never grew a serving thread pool, so
+the queued transaction has no consumer. The service is reachable, the
+interface token and the reply plumbing are correct, and the missing piece is a
+thread to run `onTransact`.
+
+Next, in cost order: start the service under a shim that forces a thread pool
+(`ABinderProcess_setThreadPoolMaxThreadCount`/`joinThreadPool`), or drive
+`libdarwinn_dba_hal_runtime.so`'s `GetDarwinnHalFunctions` in process from a
+harness (`tools/tpu-darwinn-probe.c` is the model), which removes binder from
+the path entirely.
+
+The props shim now also answers `vendor.darwinn.log_level` = `3`, the property
+the DBA service reads.

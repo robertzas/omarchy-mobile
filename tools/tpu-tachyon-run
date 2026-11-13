@@ -201,6 +201,27 @@ cp /root/libsegvshim.so "$R/system/lib64/libsegvshim.so" 2>/dev/null
 cp /root/libvlogshim.so "$R/system/lib64/libvlogshim.so" 2>/dev/null
 cp /root/libpermissionshim.so "$R/system/lib64/libpermissionshim.so" 2>/dev/null
 
+# The DBA service registers lazily, and Android 14's servicemanager refuses
+# registerLazyService for an instance the VINTF manifest does not declare
+# ("Could not find com.google.edgetpu.dba.IDevice/default in the VINTF
+# manifest", then `Check failed: status == STATUS_OK` and exit, U283). The
+# stock device carries this fragment; the extracted chroot did not, which is
+# why the service loaded its HAL and then died before publishing anything.
+dba_vintf="$R/vendor/etc/vintf/manifest/com.google.edgetpu.dba-service.xml"
+if [ ! -f "$dba_vintf" ]; then
+	mkdir -p "$R/vendor/etc/vintf/manifest"
+	cat >"$dba_vintf" <<'DBAMANIFEST'
+<manifest version="9.0" type="device">
+    <hal format="aidl">
+        <name>com.google.edgetpu.dba</name>
+        <version>1</version>
+        <fqname>IDevice/default</fqname>
+    </hal>
+</manifest>
+DBAMANIFEST
+	echo "dba vintf fragment written" >>"$LOG"
+fi
+
 # Vendor first: that is what makes libbinder pick /dev/vndbinder, the domain
 # the Edge TPU services and the delegate register and look up on. The services
 # get the same list from the launcher at the top of this script; this copy is
