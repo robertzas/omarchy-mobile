@@ -12636,3 +12636,20 @@ blocker: the service's own startup is. Those A14 copies may not match the A17
 service, so the next pass takes both from the cheetah `cp3a` image the chroot's
 `libdarwinn_hal.so` came from. The setup gate is unchanged after the attempt
 (`0xf000009` on a T10=11 probe).
+
+**Why it exits, and it is not the chain.** With the libraries present the DBA
+service reaches the device and aborts on its own check:
+
+```
+[EdgeTpuDbaHalService] Check failed: options_or_status.status().ok()
+[Darwinn] Attempting to fetch value instead of handling error Invalid
+          argument: Unknown chip_version found from device.
+SIG 4 ... com.google.edgetpu.dba-service+12408
+```
+
+So the DBA HAL opens `/dev/edgetpu`, asks the device for its chip version, and
+rejects the answer. That is a value our side supplies, not a missing service:
+the next step is to read what the HAL expects (its `chip_version` strings and
+the query it makes) and what our driver answers, then report the chip version
+stock does. This is the first failure in the whole campaign that names a
+*value* rather than a state.
