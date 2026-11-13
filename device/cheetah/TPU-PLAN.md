@@ -668,6 +668,16 @@ gate K fails? -> stop: driver/session regression.
   -> R3 stock oracle whenever the human is at Fastboot.
 ```
 
+### 1.11 The KCI door, corrected (U329)
+
+Userspace reaches KCI through **debugfs**, not an ioctl:
+`/sys/kernel/debug/edgetpu/janeiro/{kci_payload,kci_scratch,kci_send}`. That is
+the path U266's code-6 sends used, and it remains the only one. The driver's own
+group log is `etdev_dbg` (`edgetpu-device-group.c:101`), so `dmesg` silence about
+groups means "debug level off", not "no group": turn it on with
+`echo 'file edgetpu-device-group.c +p' > /sys/kernel/debug/dynamic_debug/control`
+before a client run, and off with `-p` afterwards.
+
 ## 11. Immediate actions (ordered, rev 15)
 
 1. **R-KCI-4 (offline, DONE, U326-U328):** the enqueue is `0x152977c`
@@ -681,7 +691,8 @@ gate K fails? -> stop: driver/session regression.
 3. **R-KCI-6 (phone, one attempt):** send the different element through the
    Tachyon session, which already creates and finalizes a device group
    (`0x4014ed06`, `0xed08`, U324). Oracle: the firmware's setup line, or
-   `T10=11` answering anything but `0xf000009`.
+   `T10=11` answering anything but `0xf000009`. Enable the driver's debug lines
+   first (U329) so the join and open are visible in `dmesg`, then turn them off.
 4. **R-SERVICE (parked):** binderfs plus servicemanager and the vendor DBA
    service; needs an answer to U285's unclaimed queue first.
 5. **R-STOCK (owner):** section 7, the only route proven to make the firmware's

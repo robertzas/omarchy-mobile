@@ -23,6 +23,13 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U329: the real KCI door is debugfs; the group line is debug-gated)
+
+`/sys/kernel/debug/edgetpu/janeiro/{kci_payload,kci_scratch,kci_send}` is the only
+userspace KCI path (ioctl 34 was not one). The driver's join-group line is
+`etdev_dbg`, so dmesg silence about groups means dynamic debug is off rather than
+no group - turn it on with `file edgetpu-device-group.c +p` before a client run.
+
 ## 2026-11-13 (U328: the element field map is complete; only the values are unknown)
 
 `0x152989c` copies exactly eleven fields from the command object into the 48-byte

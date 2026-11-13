@@ -13430,3 +13430,17 @@ That is consistent with the captured element (address at `+0x10`, size at
 shape for good. What the map does not carry is the *values*: those come from the
 HAL's `SetupFirmware` builder, so building a different element still needs that
 builder's command object, not a new guess at the wire format.
+
+
+**U329, the real KCI door is debugfs, and the group line is debug-gated.** The
+driver exposes three files under `/sys/kernel/debug/edgetpu/janeiro/`:
+`kci_payload`, `kci_scratch` and `kci_send`. That - not ioctl 34 (U322) - is
+where U266's code-6 sends went, and it is the only userspace path to KCI on this
+kernel. Separately, `edgetpu-device-group.c:101` does log the join:
+
+    etdev_dbg(etdev, "%s: join group %u %u/%u", ...)
+
+but `etdev_dbg` is dynamic-debug gated, which is exactly why `dmesg` showed no
+group lines while our client had already created and finalized one (U324).
+Confirming the handshake therefore needs `dynamic_debug/control`, not a new
+instrument: `file edgetpu-device-group.c +p` turns the line on for the next run.
