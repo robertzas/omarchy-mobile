@@ -511,6 +511,9 @@ setup succeeds, and no TPU number is claimed.
   BR_DEAD_REPLY although servicemanager had delivered it.
 - The manager's node is `$R/dev/binderfs/vndbinder`; `/mnt/tpufs` is a second
   binderfs instance and cannot reach it.
-- `createSession` is still refused: the reply's object offset is misread (4, not
-  a valid type) and handles 1-8 answer BR_FAILED_REPLY. No TPU session or
+- `createSession` is still refused. The reply names BINDER_TYPE_HANDLE
+  (0x73682a85) with handle 1, but the driver answers `got transaction to
+  invalid handle, 1`: the process holds no ref for it. No TPU session or
   inference yet.
+- The proc entry of a held client shows no refs at all, so the reply object is
+  copied untranslated; tapping libbinder_ndk is the next route.

@@ -323,6 +323,13 @@ int main(int argc, char **argv)
 			goto out;
 		}
 		dump_parcel("reply", reply.buf, reply.len, reply.off, reply.noff);
+		printf("pid %d\n", getpid());
+		{
+			const char *pz = getenv("PAUSE");
+
+			if (pz && atoi(pz) > 0)
+				sleep((unsigned)atoi(pz));
+		}
 		if (!binder)
 			goto out;
 		printf("== createSession ==\n");

@@ -721,12 +721,21 @@ now reaches the compute service.
   answers. Polling 53 times while the chain started, `getService` answered
   rc 0 with a binder object, and tachyon stayed registered while the client
   held it.
-- `createSession` is not delivered yet: handles 1-8 all answer BR_FAILED_REPLY
-  (0x7211, no such ref), and the reply's flat_binder_object offset reads back as
-  4 though word 4 is not a valid object type. Either the reply layout or the
-  offsets array is still misread; the next step is gdb at the client's reply
-  copy, or a bionic client linked against the chroot's libbinder_ndk that uses
-  the real AIDL encoding.
+- `createSession` is not delivered yet. The reply parse is correct: word 4 is
+  0x73682a85, which is BINDER_TYPE_HANDLE (B_PACK_CHARS('s','h','*',
+  B_TYPE_LARGE)) with handle 1. The driver then logs `got transaction to
+  invalid handle, 1`: this process holds no ref for the object the reply named.
+  Next: inspect `/sys/kernel/debug/binder/proc/<pid>` refs on a held client to
+  see whether the ref exists under another number, and if not, use a bionic
+  client linked against the chroot's libbinder_ndk so the real AIDL encoding and
+  ref handling do the work.
+- Checked (2026-11-12): a client that holds after `getService` and sleeps has an
+  empty `/sys/kernel/debug/binder/proc/<pid>` (context vndbinder, one thread,
+  `tr 0`), and the driver logs `got transaction to invalid handle, 1`. The reply
+  object is therefore copied to us untranslated: no reference is installed in
+  our process, which parcel decoding cannot fix. The next step is a client that
+  lets libbinder_ndk own the transaction and ref handling, or a kernel-side
+  trace of `binder_translate_binder` for that reply.
 - `tools/android-lazysvc-persist.c` interposes
   `LazyServiceRegistrar::getInstance()` and calls `forcePersist(true)`, and the
   chain preloads it, but its constructor mark never appears in tachyon's log, so
