@@ -468,12 +468,11 @@ ptrace sampler (U302), "userspace can send KCI" (U322: ioctl 34 is
 consumer), "our client has no group" (U324), and "the rebuilt element is the
 HAL's" (U324: it is our own producer's).
 
-**Unknown, and the only thing worth a boot.** What the vendor HAL's VII element
-actually contains. Its enqueue is `0x152977c` in
-`out/vendor-chroot-edgetpu/root/vendor/lib64/libdarwinn_hal.so`: slot =
-`base + (tail & 0x3ff) * 0x30`, filled by the helper at `0x152989c`, then
-`dmb ish` and the tail publish (U326/U327). The field map in that helper is the
-last offline artifact.
+**Unknown, and the only thing worth a boot.** The **values** the vendor HAL
+puts in that element, not its shape: the shape is now known exactly (U328:
+eleven copied fields, `+0x20..+0x27` and `+0x2f` never written). The values come
+from `SetupFirmware`'s command object, so the next offline step is that builder,
+not another wire-format guess.
 
 ### 6.1 Track S — the in-process HAL (retired by U316; findings stand)
 
@@ -671,11 +670,12 @@ gate K fails? -> stop: driver/session regression.
 
 ## 11. Immediate actions (ordered, rev 15)
 
-1. **R-KCI-4 (offline, in progress, U326/U327):** the enqueue is `0x152977c`
-   (slot = base + (tail & 0x3ff) * 0x30, fill at `0x152989c`, `dmb ish`, then
-   the tail publish). `0x1529648` is a validation function, not the enqueue.
-   Read the fill helper `0x152989c` and map each source field to its element
-   offset; that map is the last offline artifact R-KCI needs.
+1. **R-KCI-4 (offline, DONE, U326-U328):** the enqueue is `0x152977c`
+   (`base + (tail & 0x3ff) * 0x30`), the fill is `0x152989c`, and the field map
+   is complete: `+0x00`(8), `+0x08`(2), `+0x0a`(1), `+0x0b`(5), `+0x10`(8),
+   `+0x18`(4), `+0x1c`(4), `+0x28`(4), `+0x2c`(1), `+0x2d`(1), `+0x2e`(1) are
+   copied from the command object; `+0x20..+0x27` and `+0x2f` are never
+   written. The wire format is settled.
 2. **R-KCI-5 (offline):** diff that element against ours (U319). Only a
    difference earns a send; an identical element is the known negative.
 3. **R-KCI-6 (phone, one attempt):** send the different element through the

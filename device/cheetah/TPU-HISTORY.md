@@ -13404,3 +13404,29 @@ Disassembly of section .text:
 1529990: 52800d01     	mov	w1, #0x68               // =104
 1529994: a8c14ffe     	ldp	x30, x19, [sp], #0x10
 1529998: 14045345     	b	0x163e6ac <.text+0x9ec22c>
+
+
+**U328, the HAL's element field map is complete.** The fill at `0x152989c`
+copies from a command object (`x1`) into the 48-byte slot (`x0`) with exactly
+these fields:
+
+| element | width | source |
+| --- | --- | --- |
+| `+0x00` | 8 | `+0x00` |
+| `+0x08` | 2 | `+0x08` |
+| `+0x0a` | 1 | `+0x0a` |
+| `+0x0b` | 5 | `+0x0b` (byte loop) |
+| `+0x10` | 8 | `+0x10` |
+| `+0x18` | 4 | `+0x18` |
+| `+0x1c` | 4 | `+0x1c` |
+| `+0x28` | 4 | `+0x28` |
+| `+0x2c` | 1 | `+0x2c` |
+| `+0x2d` | 1 | `+0x2d` |
+| `+0x2e` | 1 | `+0x2e` |
+
+Two offsets are **never written** by the fill: `+0x20`..`+0x27` and `+0x2f`.
+That is consistent with the captured element (address at `+0x10`, size at
+`+0x18`, flags at `+0x1c`, zeroes at `+0x20`), and it settles the element's
+shape for good. What the map does not carry is the *values*: those come from the
+HAL's `SetupFirmware` builder, so building a different element still needs that
+builder's command object, not a new guess at the wire format.

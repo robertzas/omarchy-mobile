@@ -23,6 +23,13 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U328: the element field map is complete; only the values are unknown)
+
+`0x152989c` copies exactly eleven fields from the command object into the 48-byte
+slot (`+0x00`, `+0x08`, `+0x0a`, `+0x0b`, `+0x10`, `+0x18`, `+0x1c`, `+0x28`,
+`+0x2c`, `+0x2d`, `+0x2e`) and never writes `+0x20..+0x27` or `+0x2f`. The wire
+format is settled; what remains is the value set from `SetupFirmware`'s builder.
+
 ## 2026-11-13 (U326-U327: the enqueue is 0x152977c and the fill is 0x152989c)
 
 The enqueue computes `base + (tail & 0x3ff) * 0x30`, fills the slot at
