@@ -1,0 +1,42 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# tpu-oracle: send KCI codes through the driver's debugfs door and print the
+# firmware's own answer.
+#
+# Runs ON THE PHONE (the debugfs files are root-writable there):
+#     CODES="11 12 21" tools/phone-ssh 'bash -s' < tools/tpu-oracle
+#
+# For each code it writes the payload (if PAYLOAD names a file on the phone) to
+# kci_payload, then the code to kci_send, and prints every dmesg line the write
+# added. The driver logs "kci_send code N ... -> R" where R is the firmware's
+# KCI error (0 OK, 3 INVALID_ARGUMENT, ...); the firmware's own log lines arrive
+# as "ERR <file>.cc:<line> - <text>" from the telemetry ring.
+#
+# Read-only in intent: the codes it uses by default are queries (11 fw-info,
+# 12 usage-v1, 21 usage-v2, 8 debug-dump). Do not add 9/10 (open/close device),
+# 7 (shutdown) or 4 (leave group) to a default run: those change device state.
+set -u
+D=${TPU_DEBUGFS:-/sys/kernel/debug/edgetpu/janeiro}
+CODES=${CODES:-11 12 21 8}
+
+if [ ! -w "$D/kci_send" ]; then
+	echo "no writable kci_send under $D" >&2
+	exit 1
+fi
+
+for c in $CODES; do
+	n=$(dmesg | wc -l)
+	if [ -n "${PAYLOAD:-}" ]; then
+		if [ ! -r "$PAYLOAD" ]; then
+			echo "payload $PAYLOAD is not readable" >&2
+			exit 1
+		fi
+		cat "$PAYLOAD" > "$D/kci_payload"
+	fi
+	printf '%s\n' "$c" > "$D/kci_send" 2>/dev/null
+	sleep 1
+	echo "== code $c"
+	dmesg | tail -n +$((n + 1)) |
+		grep -E 'kci_send|\.cc:' |
+		sed 's/^[[:space:]]*/   /'
+done

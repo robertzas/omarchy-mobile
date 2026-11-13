@@ -13532,3 +13532,60 @@ Standing lesson for this plan: three of the last four "the source is X"
 statements were refuted by the next disassembly window. Every address claim in
 rev 16 should be read as a *pointer to check*, not as an established fact, until
 the window has actually been read end to end.
+
+
+**U335, the firmware's own log is the oracle.** The kernel cannot trace (U332),
+but the driver decodes the firmware's telemetry ring (`edgetpu_fw_log()`,
+`edgetpu-telemetry.c:126`) into kernel lines, dropping only verbose and debug
+entries. That makes every command's verdict visible, in the firmware's own words.
+The probe that proved it (`/tmp/probe2`, verbatim):
+
+kci_send perms: --w------- 1 root root 0 Nov 13 16:24 /sys/kernel/debug/edgetpu/janeiro/kci_send
+--- code 11: write_rc=0 new_lines=2
+    [ 9707.323209] edgetpu janeiro: irq 152 idx 0 mailbox ffff00080a3a7c40 status 1
+    [ 9707.323273] edgetpu janeiro: kci_send code 11 tpu_addr 0xffffe000 len 0 -> 0
+--- code 12: write_rc=0 new_lines=3
+    [ 9708.577125] edgetpu janeiro: irq 152 idx 0 mailbox ffff00080a3a7c40 status 1
+    [ 9708.577204] edgetpu janeiro: kci_send code 12 tpu_addr 0xffff9000 len 0 -> 3
+    [ 9708.577228] edgetpu janeiro: ERR tpu_kci_handler_thread.cc:101 - DMA descriptor is invalid
+--- code 21: write_rc=0 new_lines=3
+    [ 9709.826707] edgetpu janeiro: irq 152 idx 0 mailbox ffff00080a3a7c40 status 1
+    [ 9709.826778] edgetpu janeiro: ERR tpu_kci_handler_thread.cc:101 - DMA descriptor is invalid
+    [ 9709.826785] edgetpu janeiro: kci_send code 21 tpu_addr 0xffff9000 len 0 -> 3
+--- code 8: write_rc=0 new_lines=1
+    [ 9711.067802] edgetpu janeiro: kci_send code 8 tpu_addr 0xffff8000 len 0 -> 12
+--- code 11: write_rc=0 new_lines=3
+    [ 9712.326778] edgetpu janeiro: KCI tx code 11 seq 178 tail 178 head 178
+    [ 9712.326978] edgetpu janeiro: irq 152 idx 0 mailbox ffff00080a3a7c40 status 1
+    [ 9712.327067] edgetpu janeiro: kci_send code 11 tpu_addr 0xffff8000 len 0 -> 0
+
+`-> 3` is `KCI_ERROR_INVALID_ARGUMENT` (`edgetpu-kci.h:150`); `-> 0` is OK;
+`-> 12` is `KCI_ERROR_UNIMPLEMENTED`. The `ERR tpu_kci_handler_thread.cc:101`
+line is the firmware's own file and line, so a refusal now explains itself. This
+corrects §1.12/U332's "no observation channel": that held for kernel tracing
+only. `tools/tpu-oracle` is the door.
+
+**U336, the KCI code enum has no setup code.** `edgetpu-kci.h:103`: 0 ACK,
+1 UNMAP_BUFFER, 2 MAP_LOG_BUFFER, 3 JOIN_GROUP, 4 LEAVE_GROUP,
+5 MAP_TRACE_BUFFER, 7 SHUTDOWN, 8 GET_DEBUG_DUMP, 9 OPEN_DEVICE,
+10 CLOSE_DEVICE, 11 FIRMWARE_INFO, 12 GET_USAGE_V1, 13 NOTIFY_THROTTLING,
+14 BLOCK_BUS_SPEED_CONTROL, 19 FIRMWARE_TRACING_LEVEL, 21 GET_USAGE_V2,
+plus 256 RKCI_ACK and the 0x8000 generic range. Setup is therefore a Tachyon-queue
+command, not KCI - matching U326's element format, and explaining why no amount of
+KCI searching was going to find it.
+
+**U337, `fw_tracing/request` is a live KCI 19 round trip.** Requesting a level
+with bit 8 (`EDGETPU_FW_TRACING_DEFAULT_VOTE`, `edgetpu-firmware.c:35`) set makes
+the driver mask the answer to 256; with bit 8 clear, `active` reports what the
+firmware returned: request 255 -> active 1, request 0 -> active 0, then back to
+256. Writing the same value 256 emitted `KCI tx code 19` within a second instead
+of waiting for the 61 s code 21 heartbeat, so the request path reaches the
+firmware and its answer is readable.
+
+**U338, `kci_send` is deterministic, and the usage queries want a bigger
+descriptor.** Repeated sends give the same verdicts (11 -> 0 twice, 12 -> 3, 21 ->
+3, 8 -> 12), and `GET_USAGE_V1`/`V2` both reject a 16-byte DMA with the firmware's
+"DMA descriptor is invalid". The handler sets `cmd.dma.size = len ? len : 16`
+(`edgetpu-fs.c:1152`), so writing a larger payload is the way to give those
+queries the buffer they expect. `GET_DEBUG_DUMP` is unimplemented on this
+firmware.

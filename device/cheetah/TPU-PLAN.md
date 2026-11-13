@@ -680,6 +680,31 @@ has no tracer options. So every step must be judged by the firmware's own reply
 or by `dmesg` lines the driver prints at normal level, and no step may promise
 "we will see it in the trace".
 
+### 1.13 The firmware log is the oracle (U335)
+
+The kernel cannot trace (U332), but the firmware can talk. The driver decodes the
+firmware's telemetry ring (`edgetpu_fw_log()`, `edgetpu-telemetry.c:126`) into
+kernel lines, dropping only verbose and debug entries, so every KCI command now
+returns a verdict and a refusal explains itself in the firmware's own words:
+
+    kci_send code 12 tpu_addr 0xffff9000 len 0 -> 3
+    ERR tpu_kci_handler_thread.cc:101 - DMA descriptor is invalid
+
+`-> 3` is `KCI_ERROR_INVALID_ARGUMENT`, `-> 0` is OK, `-> 12` is UNIMPLEMENTED.
+The door is `tools/tpu-oracle`:
+
+    CODES="11 12 21 8" tools/phone-ssh 'bash -s' < tools/tpu-oracle
+
+`fw_tracing/request` is a second, independent round trip: a level without bit 8
+(`EDGETPU_FW_TRACING_DEFAULT_VOTE`) makes `active` report the firmware's own answer
+(255 -> 1, 0 -> 0), while any level with bit 8 reads back masked as 256.
+
+What this does not give us: KCI has no setup code. The enum (`edgetpu-kci.h:103`)
+has ACK, the two buffer maps, join/leave group, shutdown, debug dump,
+open/close device, firmware info, usage v1/v2, throttling, bus-speed control and
+tracing level - nothing that carries firmware setup. The setup element is a
+Tachyon-queue command, so it goes through the cmdq, which is the path U326 mapped.
+
 ### 1.11 The KCI door, corrected (U329)
 
 Userspace reaches KCI through **debugfs**, not an ioctl:

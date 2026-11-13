@@ -23,6 +23,15 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U335-U338: the firmware's own log is the oracle)
+
+The driver decodes the firmware telemetry ring into dmesg, so every KCI command
+returns a verdict in the firmware's own words. `kci_send` answers deterministically
+(11 -> 0, 12 -> 3 "DMA descriptor is invalid", 21 -> 3, 8 -> 12 UNIMPLEMENTED), and
+`fw_tracing/request` is a second round trip (255 -> active 1, 0 -> 0). KCI has no
+setup code at all: the setup element is a Tachyon command. `tools/tpu-oracle` is
+the door.
+
 ## 2026-11-13 (U334: U333 withdrawn - 0x14d9df8 is only a vector reserve helper)
 
 It computes a count over 24-byte entries and calls a reserve/insert pair; it
