@@ -61,6 +61,22 @@ where the static route continues (F1/A5'). The stock oracle remains the only
   cheetah core, which is a stub (U258); the A14 compiler cannot produce a
   DWN1 graph (U257, reproduced off-phone in U259).
 
+## 2026-11-13 (U275: the stock A17 driver carries no setup sender)
+
+`out/stock-a17/janeiro.ko` (434,224 B, 500 function symbols): the usual KCI
+surface (`KCI cmd %u response status %u`, `Unrecognized KCI request`,
+`edgetpu_kci_fw_info`, `firmware handshake failed`) and
+`mobile_firmware_setup_buffer` (a DMA buffer, not the VII setup), but no setup
+command, no global-scratch string and no KCI setup code. The stock driver has
+the same shape as our copy, so the producer is above it.
+
+## 2026-11-13 (U274: the HAL alone sends no setup - A9 negative)
+
+Fresh boot (PSM `0x4b27091`, GSA state 2), `NO_HOLD=1 HAL_ONLY=1`: the HAL was
+the boot's first client power-up, created a detachable group and finalized it
+at 34.959 s (`detachable 1 wakelock 0`, `mailbox_attached 0`) with no
+`vii-elem` and no setup line. The phone did not reset. A9 is closed.
+
 ## 2026-11-13 (U271: gate K re-proven; the firmware has a second address domain)
 
 Gate K was re-run on this boot with the chain up (`NO_DELEGATE=1`) and the

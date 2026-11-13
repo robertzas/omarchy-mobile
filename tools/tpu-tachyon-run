@@ -275,7 +275,12 @@ echo "vendor pid: $(pgrep -f vendor.google.edgetpu_vendor | head -1)" >>"$LOG"
 # second power-up of the boot, which wedges the PSM (U54:
 # PSM0_STATUS=0x5644c13, LPM_CONTROL=0x1240). Take the driver wakelock first:
 # the HAL's probe and every later group then reuse the one power-up.
-if ! pgrep -x tpu-hold >/dev/null; then
+# NO_HOLD=1 skips the hold, so the *service that opens the device next* takes
+# the boot's one power-up (TPU-PLAN A9). Use it only when nothing else has
+# powered the TPU since boot: a second power-up wedges the PSM (U54).
+if [ "${NO_HOLD:-0}" = "1" ]; then
+	log "tpu hold skipped (NO_HOLD=1): the next opener is the first power-up"
+elif ! pgrep -x tpu-hold >/dev/null; then
 	log "tpu hold (first power-up, keeps it on)"
 	setsid /root/tpu-hold >>"$LOG" 2>&1 </dev/null &
 	sleep 2

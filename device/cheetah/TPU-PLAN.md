@@ -87,9 +87,18 @@ and 1 are the u64 sequence; word 2 packs `code` (low u16) and `flags` (byte 2).
 Every recorded dump has code 0: U248's core element, U249/U250/U265's HAL
 element. The stock runtime's "type: 1" string is a different enum. If the
 firmware routes setup by element code, every experiment asked for code 0, which
-is a command class, not a setup. That is a new, cheap, falsifiable line: sweep
-the **code** (one value per run, not a field sweep) with a payload that is
-otherwise known-good, and watch for a firmware log line other than the gate.
+is a command class, not a setup.That is a new, cheap, falsifiable line: sweep
+   the **code** (one value per run, not a field sweep) with a payload that is
+   otherwise known-good, and watch for a firmware log line other than the gate.
+
+   **Measured, and negative (U273).** Codes 1, 2 and 3 with the U262 payload
+   reached the element intact (`vii-elem: ... 000b0001/000b0002/000b0003`) and
+   each logged the identical `Setup is not done yet ... type 0`. So the `%d`
+   is not the element code (it is the pre-parse default, as U175 said) and the
+   setup command is **not a VII command code**. The blanket gate runs before
+   the code dispatch, so a setup that arrived as a VII element could never
+   pass it either. Setup must reach the firmware from outside `vii_handler_layer`:
+   KCI, the mailbox layer, or the GSA. That is the space A9 and A10 probe.
 
 ### 1.3 The island is reachable; the setup strings are the exception
 
@@ -153,6 +162,7 @@ in the kernel creates the VII setup state.
 | Every producer wrote VII code 0 | U248 (`00000000 00000000`), U249 (`00000001 00000000 000b0000`) | the code has never been varied |
 | The gate prints `type` before parsing | U175: 256 zeros, bad root and valid table read the same | `type 0` identifies nothing |
 | The element header is `seq@0, code@8, flags@10, dma@16, size@24` | U264 enqueue copy; `vii-elem` dumps | a code sweep is one knob per run |
+| VII codes 1, 2, 3 all gate identically | **U273**: element carries the code, log still says `type 0` | setup is not a VII code; the gate precedes dispatch |
 | The body loads 977 island addresses, none of them the 4 setup strings | `tools/tpu-fw.py reach`: 402,918 insns, 10,426 movw/movt (U270) | the log-index model holds; A5 may proceed |
 | `0xdd000` holds 8-byte records with `0x7ffdxxxx` pointers | `tpu-fw.py info`/`reach` raw dump | a second address domain exists |
 | The HAL setup payload is type 5, one 512 KiB allocation | U262; `tools/tpu-setup.py` rebuilds it byte-exact | payload schema is known, transport is not |
@@ -173,7 +183,7 @@ in the kernel creates the VII setup state.
 | N2 | that element + the U262 payload is accepted | **closed negative** (U265) | none |
 | F1 | the log-site index that resolves the 4 un-loaded format strings is found | **open** | F1, section 6.1 |
 | D0a | stock Android produces the setup | **owner-gated** (proven) | A3, section 7 |
-| D0g | the stock HAL is the boot's *first* power-up in our kernel | **open, cheapest** | A9, one reboot |
+| D0g | the stock HAL is the boot's *first* power-up in our kernel | **negative** (U274) | none; the HAL sends no setup |
 | D0h | the A14 firmware + A14 HAL/core as a matched set | **open** | A8/A10, one reboot |
 | D0d | the firmware's setup handler is recovered statically | **open** | A5', after F1's index |
 | D0e | the A14 HAL's element + payload are captured together | **open** | A6' |
@@ -202,8 +212,10 @@ each and an explicit go; A3 needs the owner at Fastboot.
   *first* power-up, with nothing else holding the device.
 - **Element-field sweeps (`+4`, `+8`, `+10`, `+12`, `+32..+47`, the 32-slot
   command table).** U175/U250: `+11`/`+12` are reserved; the gate runs before
-  the parse. Sweeping the u16 **code** @8 is a different, untried knob and is
-  in the program (A9b), one value per run.
+  the parse.
+- **The VII element code (`u16 @8`).** U273: codes 1, 2 and 3 all gate
+  identically; the code is not the setup selector and the gate precedes the
+  dispatch. Do not sweep it again.
 - **A direct reference to the four setup strings.** The body loads 977 island
   addresses and none of them is these four (U270); the index is the route.
   Repeating the address search, or reading the `0xe3790` table again (U267),
@@ -214,6 +226,12 @@ each and an explicit go; A3 needs the owner at Fastboot.
   (U228/U229), **adopting a bootloader-started image** (GSA reads INACTIVE at
   power-up, U-2026-11-12).
 - **A second power-up in one boot.** Hardware: the PSM wedges (U54).
+- **The HAL alone as the setup producer.** U274: the HAL creates and finalizes
+  a group with no VII command at all, as its own first power-up. Do not re-run
+  `HAL_ONLY=1` expecting setup; it is a dead end on this firmware.
+- **The stock A17 `janeiro.ko` as a setup sender.** U275: 500 functions, the
+  usual KCI strings, no setup command or scratch string, no KCI setup code.
+  The stock driver is the same shape as ours; the producer is above it.
 
 ## 6. The program to a working TPU
 
@@ -275,6 +293,14 @@ Method:
    record it, and do not retry in the same boot).
 Risk: one reboot; a TPU-side reset can take the phone down. No flash, slot or
 NV write. The phone is a development unit; the modem is stopped first.
+
+**Measured, and negative (U274).** On a fresh boot (PSM `0x4b27091`, GSA
+state 2) with `NO_HOLD=1 HAL_ONLY=1`, the HAL opened the device first, created
+a detachable group and finalized it at 34.959 s (`detachable 1 wakelock 0`,
+`mailbox_attached 0`) with no `vii-elem` and no setup line. The phone did not
+reset, so U154/U174's resets were not reproduced either. The HAL alone is not
+a producer; the remaining offline lead is the stock A17 `janeiro.ko`, the only
+driver build that might carry a setup sender.
 
 **A9b. The VII code sweep, one code per boot (only if A9 shows a live HAL
 path).** The code is the only element field never varied. Codes to try, one per

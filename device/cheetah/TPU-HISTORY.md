@@ -42,6 +42,51 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U274 (2026-11-13): the HAL alone sends no setup (A9 negative)
+
+A fresh boot (PSM0 `0x4b27091`, GSA state 2, firmware 1.0 539775951). Ran
+`NO_HOLD=1 HAL_ONLY=1 /root/tpu-tachyon-run`: servicemanager, the power HAL,
+the vendor service, the app service and the Darwinn HAL came up, with no
+`tpu-hold`, so the HAL's device open was the first client power-up of the boot.
+The driver logged its probe warning in `__setup_irq` as on every boot, then
+`power-up ok`, and at 34.959 s:
+
+```
+finalize: detachable 1 wakelock 0 context 1073741824
+finalize: mailbox_attached 0 context 1073741824
+```
+
+No `vii-elem`, no `vii-payload`, no `Setup is not done yet`: the HAL created a
+detachable group and finalized it without sending any VII command. It is not a
+setup producer on this path. The phone stayed up and did not reset, so U154 and
+U174's resets were not reproduced by the first-power-up order either.
+
+A9 is closed. The next lead is offline: the stock A17 `janeiro.ko` is the only
+driver build that might contain a setup sender (the mainline copy's KCI set has
+no setup code). Disassemble its KCI/queue paths for a setup payload.
+
+## U273 (2026-11-13): VII codes 1-3 gate identically, so setup is not a code
+
+The one element field never varied was the u16 `code` at offset 8. Three runs,
+one code each, with the U262 128-byte payload through `tpu-fwsetup.sh mapped`:
+
+```
+code 1 -> vii-elem ... 000b0001 ...  Setup is not done yet ... type 0
+code 2 -> vii-elem ... 000b0002 ...  Setup is not done yet ... type 0
+code 3 -> vii-elem ... 000b0003 ...  Setup is not done yet ... type 0
+```
+
+The element carried each code (word 2 low half), so the driver and queue are
+not the problem; the firmware logged the same `type 0` for all three. With
+U175 (the gate is before the parse) this closes the element code as a setup
+selector: the gate is unconditional for VII commands, so a setup command that
+arrived as a VII element could not pass it even if the code were right.
+
+Setup therefore reaches the firmware from outside `vii_handler_layer`: KCI,
+the mailbox layer, or a GSA/Trusty call. That is what A9 (HAL-first boot) and
+A10 (A14 set) probe. No reboot was needed; each run made its own group and the
+held power-up stayed up.
+
 ## U272 (2026-11-13): the KCI hook is live, and a bare `3` proves nothing
 
 A control run on the held power-up, through the same debugfs hook U266 used.
