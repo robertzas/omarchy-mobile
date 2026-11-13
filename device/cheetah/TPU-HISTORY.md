@@ -13518,3 +13518,17 @@ Disassembly of section .text:
 14d9e54: 9b082421     	madd	x1, x1, x8, x9
 14d9e58: 140016da     	b	0x14df9c0 <.text+0x88d540>
 14d9e5c: d65f03c0     	ret
+
+
+**U334, correction to U333: `0x14d9df8` is a vector size/reserve helper.**
+It computes `(end - start) / 24` and, depending on the requested size, branches
+to `0x14df4f8` or `0xc935bc` (a reserve/insert pair) - it does not store any
+command values. So the three words of a 24-byte entry are **not** set there; they
+are already in the vector when this runs, which means the value source is
+whatever fills it earlier (the `0x14d9c74` loop calls `0x14d9eac` per entry, and
+that path reads `[x19,#0x230]` and `[x19,#560]`). U333 is withdrawn.
+
+Standing lesson for this plan: three of the last four "the source is X"
+statements were refuted by the next disassembly window. Every address claim in
+rev 16 should be read as a *pointer to check*, not as an established fact, until
+the window has actually been read end to end.

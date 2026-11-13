@@ -23,10 +23,11 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
-## 2026-11-13 (U333: the command vector's filler is 0x14d9df8)
+## 2026-11-13 (U334: U333 withdrawn - 0x14d9df8 is only a vector reserve helper)
 
-It runs before the builder's loop and stores the three words of each 24-byte
-entry, so those words are the setup values the element's type-5 payload carries.
+It computes a count over 24-byte entries and calls a reserve/insert pair; it
+stores no command values. The three words come from wherever the vector is filled
+earlier (`0x14d9c74` / `0x14d9eac`), which remains the open read.
 
 ## 2026-11-13 (U331-U332: type 5 confirmed on the builder side; no tracing at all)
 
