@@ -361,12 +361,15 @@ The U262 128-byte artifact is a different object. So the element is not the
 missing piece, and R-KCI-3 must not spend a power-up repeating a known negative.
 
 **What the capture does not contain, and is therefore the next target:** the
-firmware's *client context*. The driver's own `edgetpu_kci_open_device` sends
-`{client_priv, vcid, flags = (mailbox_map << 1) | first_open}` before any VII
-command, and the HAL's entries all carry a HAL object plus a 16-byte parameter
-and a callback pair (U320). A setup command that arrives in the wrong client
-context can be gated before its payload is parsed, which is exactly the
-symptom. R-KCI-3 becomes: make the client context match, then send.
+firmware's *client context*. The driver opens a device through
+`edgetpu_kci_open_device(kci, mailbox_map, client_priv, vcid, first_open)` from
+`edgetpu-mailbox.c:1227`, and joins a **device group** through
+`edgetpu_kci_join_group(kci, n_clients, vid)` from
+`edgetpu-device-group.c:103`. Our Tachyon client creates no group and sends no
+join (U321), so every setup element so far arrived with no client context at
+all. A firmware that gates before parsing the payload is exactly what that
+produces. R-KCI-3 is therefore: **create a device group first**, then send the
+element unchanged.
 
 ### 1.7 What rev 13 withdraws
 
@@ -663,10 +666,11 @@ gate K fails? -> stop: driver/session regression.
 3. **R-KCI-2 (offline, DONE, U319):** the rebuilt element and 80-byte payload
    are byte-identical to the 2026-11-09 replay, which gated. The element is not
    the gap, and re-sending it is a known negative. Pass: a *difference* to test.
-4. **R-KCI-3 (phone, one attempt, after a difference exists):** match the
-   firmware's client context (the driver's `OPEN_DEVICE` detail
-   `{client_priv, vcid, flags}`) and then send. Oracle: the firmware log's
-   setup line, or `T10=11` answering anything but `0xf000009`.
+4. **R-KCI-3 (phone, one attempt):** create a device group through the
+   driver's group ioctls (U321: `JOIN_GROUP` carries `{n_clients, vid}` and is
+   sent per group), then send the element unchanged through the Tachyon
+   session. Oracle: the firmware log's setup line, or `T10=11` answering
+   anything but `0xf000009`. This is the first send that is not a repeat.
 5. **R-SERVICE (parked):** only after R-KCI-3 fails; needs binderfs plus an
    answer to U285's unclaimed queue.
 6. **R-STOCK (owner):** section 7, unchanged.

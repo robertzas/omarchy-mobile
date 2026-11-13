@@ -23,6 +23,15 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U321: the missing context is a device group, and we never joined one)
+
+`edgetpu_kci_open_device` comes from `edgetpu-mailbox.c:1227` and
+`edgetpu_kci_join_group(kci, n_clients, vid)` is sent per device group
+(`edgetpu-device-group.c:103`). Our Tachyon client creates no group, so every
+setup element so far was sent with no client context - the mechanism behind the
+gate. The next send creates a group first, and is the first one that is not a
+repeat of a known negative.
+
 ## 2026-11-13 (U319-U320: the element rebuild is a known negative; the context is the gap)
 
 The authentic 48-byte VII element and its 80-byte payload rebuild byte-exactly

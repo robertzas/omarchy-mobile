@@ -13144,3 +13144,15 @@ follows), with `x2`/`x3` carried as the callback pair on entries 4, 5, 8, 12 and
 use). So the session and execution calls share create's shape - object, 16-byte
 parameter, callback pair - which is what R-KCI needs to reproduce without
 binder.
+
+
+**U321, the client context is a device group, and ours has none.** In the driver,
+`edgetpu_kci_open_device(kci, mailbox_map, client_priv, vcid, first_open)` is
+called from `edgetpu-mailbox.c:1227`, and `edgetpu_kci_join_group(kci, u8 n_dies,
+u8 vid)` is sent per device group from `edgetpu-device-group.c:103` (worker at
+`:290`). Our Tachyon client (`tools/tpu-tachyon-client.c`) contains no group
+ioctl at all: it opens a session and both FMQs, then submits an element. So the
+setup command has only ever been sent with no joined group and no opened client
+context - which is exactly the condition a firmware would gate before parsing a
+payload. This replaces "the element is wrong" with a mechanism, and it is
+testable without a boot: create a group, then send.
