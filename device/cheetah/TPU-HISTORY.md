@@ -13589,3 +13589,34 @@ descriptor.** Repeated sends give the same verdicts (11 -> 0 twice, 12 -> 3, 21 
 (`edgetpu-fs.c:1152`), so writing a larger payload is the way to give those
 queries the buffer they expect. `GET_DEBUG_DUMP` is unimplemented on this
 firmware.
+
+
+**U339, suggestion 1 answered: the setup values cannot be recovered statically.**
+`SetupFirmware`'s loop builds each 24-byte entry at run time. `0x14d9b1c` loads an
+object from a 16-byte-stride vector at `[x19,#0x68]`, makes a virtual call through
+`[vtable+0x98]`, keeps the result word at `[sp,#0xa0]` as x22, then
+`0x14d9b54` computes the entry address as `data + i*24`, and `0x14d9b64` fills the
+entry from `{x22, w0}` (x0 = entry, x1 = `&{x22, w0, 0}`). So the three words are
+HAL object state at run time, not constants in `.text`; reading more disassembly
+cannot produce them. They can only be captured from a live run, which is why this
+route stalled: the producer had never succeeded, and the producer's inputs are
+built from objects we do not construct.
+
+**U340, the address checklist (suggestion 2).** Every address the plan leans on,
+with the basis for trusting it:
+
+| Address | Claim | Basis |
+| --- | --- | --- |
+| `0x152977c` | enqueue = base + (tail & 0x3ff) * 0x30 | instructions read |
+| `0x152989c` | fill copies exactly 11 fields | instructions read |
+| `0x1529648` | a validator, not a filler (U326) | instructions read |
+| `0x14d9e60` | converter stamps union type 5 + 24-byte payload | instructions read |
+| `0x14d9df8` | vector reserve/insert, stores nothing (U334) | instructions read |
+| `0x14d9b54` | entry address = data + i * 24 | instructions read |
+| `0x14d9b64` | entry filled from `{x22, w0}` (runtime) | instructions read |
+| `0x14d9c74`, `0x14d9eac` | per-entry fill path | **not read end to end** |
+| `0xcc7c24` | entry constructor from a 3-word tuple | **not read** |
+
+Rule that follows: a row marked "instructions read" may be cited as fact; a row
+marked "not read" may only be cited as a hypothesis. Any future claim must add its
+row before it is used in a runbook.

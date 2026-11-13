@@ -705,6 +705,36 @@ open/close device, firmware info, usage v1/v2, throttling, bus-speed control and
 tracing level - nothing that carries firmware setup. The setup element is a
 Tachyon-queue command, so it goes through the cmdq, which is the path U326 mapped.
 
+### 1.14 The address checklist (U340)
+
+Every address this plan leans on, and what makes it trustworthy:
+
+| Address | Claim | Basis |
+| --- | --- | --- |
+| `0x152977c` | enqueue = base + (tail & 0x3ff) * 0x30 | instructions read |
+| `0x152989c` | fill copies exactly 11 fields | instructions read |
+| `0x1529648` | a validator, not a filler (U326) | instructions read |
+| `0x14d9e60` | converter stamps union type 5 + 24-byte payload | instructions read |
+| `0x14d9df8` | vector reserve/insert, stores nothing (U334) | instructions read |
+| `0x14d9b54` | entry address = data + i * 24 | instructions read |
+| `0x14d9b64` | entry filled from `{x22, w0}` at run time | instructions read |
+| `0x14d9c74`, `0x14d9eac` | the per-entry fill path | **not read end to end** |
+| `0xcc7c24` | entry constructor from a 3-word tuple | **not read** |
+
+A row marked "instructions read" may be cited as fact; a row marked "not read" may
+only be cited as a hypothesis, and any claim used in a runbook has to add its row
+first. Three of the plan's last four "the source is X" statements were refuted by
+the next window (U333, U334 and the vector filler), which is what the rule is for.
+
+Two conclusions close out the builder route:
+
+1. **The values cannot be recovered statically** (U339). The entries are built at
+   run time from HAL object state (`0x14d9b1c` virtual call -> x22 ->
+   `0x14d9b64`), so no further disassembly yields them.
+2. **They are not needed for a send.** The cmdq path (U326/U328) accepts the element
+   we build; the open question is the firmware's verdict, and that is now readable
+   (U335). The element route and the oracle route meet here.
+
 ### 1.11 The KCI door, corrected (U329)
 
 Userspace reaches KCI through **debugfs**, not an ioctl:

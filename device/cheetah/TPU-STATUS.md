@@ -23,6 +23,13 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U339-U340: the builder route is closed, the addresses audited)
+
+The setup values are built at run time from HAL objects, so no more disassembly can
+recover them (U339); the cmdq element and the firmware-log oracle now meet, and
+every load-bearing address has a checklist row saying whether its window was read
+end to end (U340).
+
 ## 2026-11-13 (U335-U338: the firmware's own log is the oracle)
 
 The driver decodes the firmware telemetry ring into dmesg, so every KCI command
