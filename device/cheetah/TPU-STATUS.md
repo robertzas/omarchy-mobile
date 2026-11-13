@@ -16,8 +16,12 @@ images tried, so KCI 6 is still not the producer, but the payload is no longer
 suspect. It also records that every producer so far wrote **VII code 0**
 into the 48-byte element (U248, U249). The decoded body loads 977 island
 addresses but none of the four setup messages (U270), so the log-ring index is
-where the static route continues (F1/A5'). The stock oracle remains the only
-*proven* producer; the HAL-first boot (A9) is the cheapest untried one.
+where the static route continues (F1/A5'). U277 sampled the last element field: the u8 at +10 is the command class, 0-11
+reaches the setup gate and 12-255 a different class, so no class sets the
+firmware up. The stock oracle remains the only *proven* producer; the image's
+only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
+`Hal::CreatePredictor`, whose submit takes the global scratches the firmware
+asks for), which this port has never driven.
 
 ## Where it stands
 

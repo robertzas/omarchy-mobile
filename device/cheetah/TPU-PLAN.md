@@ -170,6 +170,8 @@ in the kernel creates the VII setup state.
 | Every producer wrote VII code 0 | U248 (`00000000 00000000`), U249 (`00000001 00000000 000b0000`) | the code has never been varied |
 | The gate prints `type` before parsing | U175: 256 zeros, bad root and valid table read the same | `type 0` identifies nothing |
 | The element header is `seq@0, code@8, flags@10, dma@16, size@24` | U264 enqueue copy; `vii-elem` dumps | a code sweep is one knob per run |
+| Element +10 is the command class: 0-11 reach the setup gate, 12-255 answer `0x37000003` | **U277**: `T10` sweep over 19 classes, one group each | the last unsampled element field is sampled; no class bypasses the gate |
+| The image's only firmware-setup code is the NNAPI DBA HAL | `libdarwinn_dba_hal_runtime.so`: `Hal::CreatePredictor`, `commands[%d]`, `scratch_capacity >= min_capacity`, `firmware_setup_done_`; its submit takes `vector<u64>` scratches | the untried producer is that HAL's CreatePredictor path |
 | VII codes 1, 2, 3 all gate identically | **U273**: element carries the code, log still says `type 0` | setup is not a VII code; the gate precedes dispatch |
 | The body loads 977 island addresses, none of them the 4 setup strings | `tools/tpu-fw.py reach`: 402,918 insns, 10,426 movw/movt (U270) | the log-index model holds; A5 may proceed |
 | `0xdd000` holds 8-byte records with `0x7ffdxxxx` pointers | `tpu-fw.py info`/`reach` raw dump | a second address domain exists |
@@ -224,6 +226,14 @@ each and an explicit go; A3 needs the owner at Fastboot.
 - **The VII element code (`u16 @8`).** U273: codes 1, 2 and 3 all gate
   identically; the code is not the setup selector and the gate precedes the
   dispatch. Do not sweep it again.
+- **The element's +10 command class.** U277: 0-11 answer the setup gate and
+  12-255 a different class, with no value in 0..255 setting the firmware up.
+  This was the one element field every harness had pinned at 11; it is sampled
+  now, so do not sweep it again.
+- **U274's negative does not cover the NNAPI HAL.** That boot drove
+  `libdarwinn_hal.so`'s device entry. `libdarwinn_dba_hal_runtime.so` is the
+  NNAPI implementation and the only component in the image with
+  `firmware_setup_done_`; driving its `CreatePredictor` is open.
 - **A direct reference to the four setup strings.** The body loads 977 island
   addresses and none of them is these four (U270); the index is the route.
   Repeating the address search, or reading the `0xe3790` table again (U267),

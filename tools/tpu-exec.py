@@ -26,13 +26,18 @@ def base_env():
            "ANDROID_DATA": "/data"}
     if "PRELOAD" in os.environ:
         env["LD_PRELOAD"] = os.environ["PRELOAD"]
+    # A compiler override may need its own vendor directory ahead of the
+    # chroot's default library path (for example /vendor/a14).
+    if "TPU_LP" in os.environ:
+        env["LD_LIBRARY_PATH"] = os.environ["TPU_LP"]
     # test knobs pass through into the chroot target
     for k, v in os.environ.items():
         if k in ("HANDLE", "FDH", "TYPE", "TYPES", "GFILE", "SFILE", "SSIZE",
                  "ORDER", "ORDER2", "UORDER", "LOC", "TAG", "BTYPE", "BIDX",
                  "BSIZE", "CH", "SH", "IH", "RH", "SAME", "SETUP", "SETUP_N",
                  "SETUP_ADDR", "STYPE", "CVER_MAJOR", "CVER_MINOR", "RUN_UID",
-                 "TPU_VLOG", "DELEGATE_UID", "H2", "FDH2", "IVH", "CH", "H3", "FDH3", "J2"):
+                 "TPU_VLOG", "DELEGATE_UID", "COMPILER", "H2", "FDH2", "IVH", "CH", "H3", "FDH3", "J2",
+                 "E12", "E28", "E36", "E44", "T10"):
             env[k] = v
     return env
 

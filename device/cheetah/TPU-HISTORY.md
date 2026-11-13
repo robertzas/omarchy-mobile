@@ -12569,3 +12569,52 @@ ACPM guard now skips the block-down wait only when the block is already
 powered (the adopt case); a normal boot does not need it. The setup gate
 remains the wall, and the next steps are the stock oracle capture (L1a, needs
 the owner and a slot-A boot) and the GXP/DCI inspection (L1b targets 1-2).
+
+## U277 (2026-11-13): element +10 is the command class, and it was pinned at 11
+
+Kernel `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B, on the boot
+that restored the A17 image; the TPU was powered once and `tpu-hold` held it,
+so the sweep ran in one boot with no reboot.
+
+**The field.** The firmware reads a u8 at +10 of the 48-byte element, and every
+mode in `tools/edgetpu-run.c` wrote `0x0b` there: `probe`, `payload`, `mapped`,
+`elsweep`, `typesweep` and the scratch mode all pin it. The sweeps on record
+varied +8 (code), +11 and +12 (U175), never +10. The A17 HAL's own element
+(U186) writes `0x0b` too, so 11 was assumed rather than measured.
+
+**The sweep.** `mapped 0 0 setup-hal-128.bin` with a new `T10` knob, one group
+per value:
+
+| +10 | response (`seq code status retval`) |
+| --- | --- |
+| 0-11 | `1 0 0xf000009 0x100164f5` (the setup gate) |
+| 12-255 | `1 0 0x37000003 0x62613938` (a different class) |
+
+Twelve is the boundary, and no value in 0..255 bypasses the gate. So +10 is a
+command class the firmware dispatches on, 0-11 is the range that reaches the
+setup check, and 11 is not special: the class set the gate covers is uniform,
+which is what "the gate runs before the payload" (U175) looks like from the
+element side.
+
+**Operational confound, recorded so it is not re-learned.** The chroot's
+`/dev/janeiro` was still the 502:0 node from the previous boot while the live
+device was 505:0; every `create_group` answered `-1` until the node was
+recreated from `stat -c '%t %T' /dev/janeiro` (then 0). A `-1` from
+`create_group` means "wrong device node", not "no permission": the check is
+`file->f_mode & FMODE_WRITE` and the stale node opens as a different device.
+
+**Tooling kept.** `tools/edgetpu-run.c` honors `T10` in `mapped` and `payload`
+(default `0x0b`), and `tools/tpu-exec.py` passes it into the chroot.
+
+**Not the producer, and what is.** With +10 sampled and the gate unmoved, no
+AP-side element field is unsampled. The image's only firmware-setup code is
+`libdarwinn_dba_hal_runtime.so` (vendor/lib64, 3.7 MB, exporting the same
+`GetDarwinnHalFunctions` AIDL entry): it logs `Firmware setup failed for
+commands[%d], cluster_id_bitset in hex: %x.`, checks
+`scratch_capacity >= min_capacity`, calls `Hal::CreatePredictor`, and sets
+`firmware_setup_done_ = true` after a per-cluster loop whose submit takes
+`const vector<u64>&` - the global scratches the firmware names. Its setup
+builder runs at `0x1613a8`-`0x1615e4` and the submit at `0x161744`; the command
+object carries union type 5 at +0x18, the same 5 the U262 payload has at byte
+27. That HAL has never been driven on this port: U274 drove
+`libdarwinn_hal.so`, a different implementation on a different path.

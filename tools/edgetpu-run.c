@@ -30,6 +30,8 @@ extern void *dlsym(void *, const char *);
 extern void *dlopen(const char *, int);
 extern long syscall(long, ...);
 extern int ioctl(int, unsigned long, ...);
+extern char *getenv(const char *);
+extern unsigned long strtoul(const char *, char **, int);
 
 // libdarwinn_hal.so is the stock NNAPI HAL runtime (self-contained: libc, libm,
 // libdl, liblog). Its only exported entry point returns a table of function
@@ -802,6 +804,16 @@ static void payload_mode(unsigned code, unsigned p0) {
   put("\n");
 }
 
+static unsigned envu(const char *name, unsigned dflt) {
+  const char *s = getenv(name);
+  char *end;
+  unsigned long v;
+
+  if (!s || !*s) return dflt;
+  v = strtoul(s, &end, 0);
+  return end == s ? dflt : (unsigned)v;
+}
+
 // "mapped": the firmware only accepts a DMA descriptor whose address it can
 // reach, and the command queue is not in that set ("Buffer cannot be reached by
 // firmware"). EDGETPU_MAP_BUFFER pins a user page and returns the device
@@ -888,10 +900,16 @@ static void mapped_mode(unsigned code, unsigned p0, const char *file,
     e[i] = 0;
   *(unsigned long *)(e + 0) = 1;
   *(unsigned short *)(e + 8) = (unsigned short)code;
-  e[10] = 0x0b;
+  /* T10 sweeps the u8 the firmware reads as the command type. Every mode
+   * used to pin it to 11 (the HAL's value); the DBA HAL's own setup command
+   * carries union type 5, and this field was never varied. */
+  e[10] = (unsigned char)envu("T10", 0x0b);
   *(unsigned *)(e + 12) = type12;
   *(unsigned long *)(e + 16) = map[2];
   *(unsigned long *)(e + 24) = plen;
+  *(unsigned *)(e + 28) = envu("E28", 0);
+  *(unsigned *)(e + 36) = envu("E36", 0);
+  *(unsigned *)(e + 44) = envu("E44", 0);
   put("mapped: element");
   for (i = 0; i < 48; i += 4) {
     put(" ");
@@ -915,7 +933,7 @@ static void mapped_mode(unsigned code, unsigned p0, const char *file,
       e2[i] = 0;
     *(unsigned long *)(e2 + 0) = 2;
     *(unsigned short *)(e2 + 8) = (unsigned short)code;
-    e2[10] = 0x0b;
+    e2[10] = (unsigned char)envu("T10", 0x0b);
     *(unsigned long *)(e2 + 16) = map[2];
     *(unsigned long *)(e2 + 24) = plen;
     *(volatile unsigned *)(csr + 12) = 2;
@@ -996,7 +1014,7 @@ static void scratch_mode(unsigned code, unsigned flags) {
     e[i] = 0;
   *(unsigned long *)(e + 0) = 1;
   *(unsigned short *)(e + 8) = (unsigned short)code;
-  e[10] = 0x0b;
+  e[10] = (unsigned char)envu("T10", 0x0b);
   *(unsigned long *)(e + 16) = map[2];
   *(unsigned long *)(e + 24) = 16;
   *(unsigned long *)(e + 28) = flags;
