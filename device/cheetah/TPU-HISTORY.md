@@ -12623,3 +12623,16 @@ function starts at `0x1610cc` and has exactly two callers (`0x160dd8` and
 construction path and not only behind `prepareModel`. The library is
 self-contained: 240 dynamic imports, none for setup, VII or `DarwinnApi2_*`, so
 it builds the command and its scratch vector itself.
+
+**The DBA service starts, and exits.** `vendor/bin/hw/com.google.edgetpu.dba-service`
+publishes `com.google.edgetpu.dba.IDevice/default` and links
+`libdarwinn_dba_hal_runtime.so`; the chain never started it, and
+`tools/tpu-tachyon-run` now does (`DBA=1`, on by default). The first run failed
+in the linker for a missing `com.google.edgetpu.dba-V1-ndk.so` (its other need,
+`com.google.edgetpu_app_service-V2-ndk.so`, was missing too; the chroot had
+V3). With both pulled from the A14 `vendor.img` and pushed, the service still
+exits within 4 s (`dba service pid:` empty), so the chain is no longer the
+blocker: the service's own startup is. Those A14 copies may not match the A17
+service, so the next pass takes both from the cheetah `cp3a` image the chroot's
+`libdarwinn_hal.so` came from. The setup gate is unchanged after the attempt
+(`0xf000009` on a T10=11 probe).

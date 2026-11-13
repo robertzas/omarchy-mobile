@@ -309,6 +309,20 @@ tpud 1000 "$SVC_PRELOAD" /system_ext/bin/hw/vendor.google.edgetpu_app_service@1.
 sleep 3
 echo "app service pid: $(pgrep -f vendor.google.edgetpu_app_service | head -1)" >>"$LOG"
 
+log "edgetpu dba service"
+# The DBA service publishes com.google.edgetpu.dba.IDevice/default and links
+# libdarwinn_dba_hal_runtime.so, the only component in the vendor image that
+# performs the firmware's one-time setup (Hal::CreatePredictor -> per-cluster
+# commands -> firmware_setup_done_). The chain never started it before, so
+# every earlier run measured a different HAL. DBA=0 skips it.
+if [ "${DBA:-1}" = "1" ]; then
+	pkill -f 'com.google.edgetpu.dba-service' 2>/dev/null
+	sleep 0.5
+	tpud 1000 "$SVC_PRELOAD" /vendor/bin/hw/com.google.edgetpu.dba-service
+	sleep 4
+	echo "dba service pid: $(pgrep -f com.google.edgetpu.dba-service | head -1)" >>"$LOG"
+fi
+
 log "darwinn nnapi hal"
 # The HAL is needed only by the delegate path (it publishes the NNAPI driver the
 # delegate uses). For a client-only run it is worse than useless: it builds a
