@@ -23,6 +23,17 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U319-U320: the element rebuild is a known negative; the context is the gap)
+
+The authentic 48-byte VII element and its 80-byte payload rebuild byte-exactly
+from the driver's own dump (`86ce5ad9…`, `028a71ca…`), and they are the ones
+already replayed on 2026-11-09 that gated: the element is not the missing piece,
+so re-sending it would only spend a power-up. The U262 128-byte artifact is a
+different object. Entries 3-14 of the HAL table read `x0` as the HAL object and
+copy a 16-byte parameter from `x1`, with `x2`/`x3` as the callback pair on five
+of them; the next target is the firmware's client context (`OPEN_DEVICE`'s
+`{client_priv, vcid, flags}`).
+
 ## 2026-11-13 (U317-U318: the firmware answers, and userspace can send KCI)
 
 `tools/tpu-info --json` returns **firmware 1.0, VII 2, KCI 3** (DRAM 0/0), so the

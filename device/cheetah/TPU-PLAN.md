@@ -352,9 +352,21 @@ tail. Fields 0..7 are the header (the first eight bytes are the sequence),
 `40..43`/`44` are the extension the U265 replay set to `2` and `0x100`.
 
 Every producer that failed wrote a *VII code 0* element (U248/U249/U273), so
-changing only the class byte was never going to be the producer. R-KCI-1 is
-therefore: build the element field by field from the HAL's own struct copy,
-diff it byte-for-byte against the captured one, and only then send it.
+changing only the class byte was never going to be the producer. Rev 14's
+R-KCI-2 did the rebuild (U319) and got a negative that saves a boot: the
+48-byte element (`seq=0 code=0 class=0 addr=0xfff80000 size=0x50 flags=0
++32=0 +36=2 +40=0 +44=0x100`) and its 80-byte payload are **byte-identical to
+the element already replayed on 2026-11-09**, which the firmware gated (U265).
+The U262 128-byte artifact is a different object. So the element is not the
+missing piece, and R-KCI-3 must not spend a power-up repeating a known negative.
+
+**What the capture does not contain, and is therefore the next target:** the
+firmware's *client context*. The driver's own `edgetpu_kci_open_device` sends
+`{client_priv, vcid, flags = (mailbox_map << 1) | first_open}` before any VII
+command, and the HAL's entries all carry a HAL object plus a 16-byte parameter
+and a callback pair (U320). A setup command that arrives in the wrong client
+context can be gated before its payload is parsed, which is exactly the
+symptom. R-KCI-3 becomes: make the client context match, then send.
 
 ### 1.7 What rev 13 withdraws
 
@@ -648,12 +660,13 @@ gate K fails? -> stop: driver/session regression.
    both return status 0 through `_IOW(0xED, 34, u32)`. Userspace can put KCI
    codes in front of the firmware on this boot, so the transport R-KCI-3 needs
    already exists.
-3. **R-KCI-2 (offline):** rebuild the 48-byte element from U264's field order
-   and the U262 payload; diff it against the captured element before sending.
-   A diff is free; a wrong send costs a power-up.
-4. **R-KCI-3 (phone, one attempt):** send that element through the Tachyon
-   session the gate K client already owns. Oracle: the firmware log's setup
-   line, or `T10=11` answering anything but `0xf000009`.
+3. **R-KCI-2 (offline, DONE, U319):** the rebuilt element and 80-byte payload
+   are byte-identical to the 2026-11-09 replay, which gated. The element is not
+   the gap, and re-sending it is a known negative. Pass: a *difference* to test.
+4. **R-KCI-3 (phone, one attempt, after a difference exists):** match the
+   firmware's client context (the driver's `OPEN_DEVICE` detail
+   `{client_priv, vcid, flags}`) and then send. Oracle: the firmware log's
+   setup line, or `T10=11` answering anything but `0xf000009`.
 5. **R-SERVICE (parked):** only after R-KCI-3 fails; needs binderfs plus an
    answer to U285's unclaimed queue.
 6. **R-STOCK (owner):** section 7, unchanged.

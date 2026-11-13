@@ -13117,3 +13117,30 @@ and the read-only `GET_USAGE_V1`:
 So `tools/tpu-kci` is a working direct client door: a userspace process can put
 KCI codes in front of the firmware on this boot, with no binder, no chroot and
 no HAL. Rev 14's R-KCI-1 passes, and R-KCI-3 now has a transport.
+
+
+**U319, the authentic VII setup element and payload, rebuilt byte-exactly.**
+`out/bench/chain-dwn1.log` carries the driver's own dump of the element and the
+payload it points at. Rebuilding both from those words:
+
+    48-byte element  seq=0 code=0 class=0 addr=0xfff80000 size=0x50
+                     flags=0 +32=0 +36=2 +40=0 +44=0x100
+                     sha256 86ce5ad99cf3a4cf...
+    80-byte payload  sha256 028a71cafe39da3d...
+    out/tpu/setup-hal-128.bin (128 B, sha256 c60188e5...) != the 80-byte payload
+
+So the U262 128-byte artifact and the authentic 80-byte command are **different
+objects**, and the 80-byte one is the form the firmware was shown when it
+answered the gate. **That element is a known negative** (U265): sending it again
+buys one power-up and the same `Setup is not done yet ... type 0`. R-KCI-2 is
+therefore closed as "the element we can build is the one that already failed",
+and the delta must be something the capture does not contain.
+
+**U320, the HAL's other entries take a HAL object and a 16-byte parameter.**
+Entries 3-14 read `x0` as the HAL object and copy 16 bytes from `x1` with
+`ldr q0, [x1]` into a stack slot before the call (`ldr x8, [x1, #0x10]`
+follows), with `x2`/`x3` carried as the callback pair on entries 4, 5, 8, 12 and
+13. Entry 3 takes only `x0`; entry 14 is the getter (`0xfd9bc`, no `x1`
+use). So the session and execution calls share create's shape - object, 16-byte
+parameter, callback pair - which is what R-KCI needs to reproduce without
+binder.
