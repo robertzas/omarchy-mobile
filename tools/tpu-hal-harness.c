@@ -165,6 +165,165 @@ typedef int (*cwt_t)(void *, void *, const void *);
 typedef int (*sw_t)(void *);
 typedef int (*jw_t)(unsigned long, void **);
 
+/* S7: /proc/<pid>/syscall names the syscall a blocked thread is inside, with
+   its arguments and pc. Read from the parent: no threads, no ptrace, no
+   signal handler, and it works while the child sits in a raw futex. */
+static char *u2s(unsigned int v, char *p);
+extern int open(const char *, int, ...);
+extern int close(int);
+extern int usleep(unsigned int);
+
+static void sample_peer(int pid) {
+  int k;
+  for (k = 0; k < 3; k++) {
+    char path[40];
+    char buf[256];
+    char *q = path;
+    int fd, n;
+    usleep(500000);
+    *q++ = '/'; *q++ = 'p'; *q++ = 'r'; *q++ = 'o'; *q++ = 'c'; *q++ = '/';
+    q = u2s((unsigned int)pid, q);
+    *q++ = '/'; *q++ = 's'; *q++ = 'y'; *q++ = 's'; *q++ = 'c'; *q++ = 'a';
+    *q++ = 'l'; *q++ = 'l'; *q = 0;
+    fd = open(path, 0);
+    n = fd >= 0 ? (int)read(fd, buf, sizeof(buf) - 1) : -1;
+    if (fd >= 0) close(fd);
+    if (n <= 0) {
+      put("SYS read fail\n");
+      continue;
+    }
+    buf[n] = 0;
+    put("SYS ");
+    put(buf);
+    put("\n");
+  }
+}
+
+/* S6: is the block a sleep or a spin? /proc/self/stat's state char and its
+   utime/stime fields grow only if the thread is running. Sampling from a
+   monitor thread needs no signal, no unwinder and no second process. */
+extern int open(const char *, int, ...);
+extern int close(int);
+extern unsigned int sleep(unsigned int);
+extern int pthread_create(unsigned long *, const void *, void *(*)(void *), void *);
+extern int pthread_detach(unsigned long);
+
+static char *u2s(unsigned int v, char *p) {
+  char t[12];
+  int i = 0;
+  do {
+    t[i++] = (char)('0' + v % 10);
+    v /= 10;
+  } while (v);
+  while (i) *p++ = t[--i];
+  *p = 0;
+  return p;
+}
+
+static void stat_self(const char *tag) {
+  char buf[400];
+  int fd = open("/proc/self/stat", 0);
+  int n = fd >= 0 ? (int)read(fd, buf, sizeof(buf) - 1) : -1;
+  if (fd >= 0) close(fd);
+  if (n <= 0) {
+    put("STAT ");
+    put(tag);
+    put(" fail\n");
+    return;
+  }
+  buf[n] = 0;
+  put("STAT ");
+  put(tag);
+  put(" ");
+  put(buf);
+  put("\n");
+}
+
+static void *monitor(void *a) {
+  (void)a;
+  usleep(650000);
+  stat_self("t0.65");
+  usleep(650000);
+  stat_self("t1.30");
+  usleep(650000);
+  stat_self("t1.95");
+  return 0;
+}
+
+/* S5: name the fd and the call site of the block. These cannot be waited on
+   through a PLT symbol (binder/io_uring/mailbox waits live in the kernel), so
+   print before delegating: the last IO line is the blocking call. */
+typedef long (*rd_t)(int, void *, unsigned long);
+typedef int (*ew_t)(int, void *, int, int);
+typedef int (*pw_t)(void *, unsigned long, int);
+typedef long (*io_t)(int, unsigned long, void *);
+typedef int (*sk_t)(int, int, int);
+typedef int (*cn_t)(int, const void *, unsigned int);
+
+static int io_budget = 200;
+
+static void io_report(const char *w, int fd, long n, unsigned long ra) {
+  if (getpid() != watch_pid || io_budget-- <= 0) return;
+  put("IO ");
+  put(w);
+  put(" fd=");
+  putdec(fd);
+  if (n != -999) {
+    put(" n=");
+    putdec(n);
+  }
+  put(" ra=");
+  puthex(ra);
+  if (ra >= hal_base && ra < hal_base + 0x400000) {
+    put(" hal+");
+    puthex(ra - hal_base);
+  }
+  put("\n");
+}
+
+long read(int fd, void *b, unsigned long n) {
+  rd_t f = (rd_t)dlsym((void *)-1, "read");
+  io_report("read", fd, (long)n, (unsigned long)__builtin_return_address(0));
+  return f(fd, b, n);
+}
+
+int epoll_wait(int ep, void *e, int mx, int to) {
+  ew_t f = (ew_t)dlsym((void *)-1, "epoll_wait");
+  io_report("epoll_wait", ep, (long)to, (unsigned long)__builtin_return_address(0));
+  return f(ep, e, mx, to);
+}
+
+int poll(void *fds, unsigned long nf, int to) {
+  pw_t f = (pw_t)dlsym((void *)-1, "poll");
+  io_report("poll", -1, (long)to, (unsigned long)__builtin_return_address(0));
+  return f(fds, nf, to);
+}
+
+long ioctl(int fd, unsigned long req, void *arg) {
+  io_t f = (io_t)dlsym((void *)-1, "ioctl");
+  io_report("ioctl", fd, (long)req, (unsigned long)__builtin_return_address(0));
+  return f(fd, req, arg);
+}
+
+int socket(int d, int t, int p) {
+  sk_t f = (sk_t)dlsym((void *)-1, "socket");
+  io_report("socket", d, (long)t, (unsigned long)__builtin_return_address(0));
+  return f(d, t, p);
+}
+
+int connect(int fd, const void *sa, unsigned int len) {
+  cn_t f = (cn_t)dlsym((void *)-1, "connect");
+  if (getpid() == watch_pid && io_budget-- > 0) {
+    const unsigned char *b = (const unsigned char *)sa;
+    unsigned int i;
+    io_report("connect", fd, (long)len, (unsigned long)__builtin_return_address(0));
+    put("IO   addr=");
+    for (i = 0; i < 16 && i < len; i++) putb(b[i]);
+    put("\n");
+  }
+  return f(fd, sa, len);
+}
+
 int pthread_cond_wait(void *c, void *m) {
   cw_t f = (cw_t)dlsym((void *)-1, "pthread_cond_wait");
 
@@ -239,6 +398,7 @@ static void dump_child(int pid) {
     put("attach failed\n");
     return;
   }
+  sample_peer(pid);
   waitpid(pid, 0, 0);
   io.b = regs;
   io.l = sizeof(regs);
@@ -435,10 +595,14 @@ __attribute__((constructor)) static void start(void) {
   if (mode[0] == 'b' || mode[0] == 'c' || mode[0] == 'n') {
     n = -1;
     if (mode[0] == 'c') {
+      watch_pid = getpid();     /* the self-test gates on this: set it FIRST */
       sem_init(selftest_sem, 0, 1);
       sem_wait(selftest_sem);   /* must print BLK sem_wait: proof of interposition */
       put("selftest done\n");
+      watch_pid = 0;            /* the parent is not the subject */
     }
+  } else if (mode[0] == 'l') {
+    n = -1;                     /* 'loop': create, but after a Looper exists */
   } else if (mode[0] == 'o' && mode[1] == 'p') {
     n = -1;
   } else if (mode[0] == 'o') {
@@ -452,12 +616,42 @@ __attribute__((constructor)) static void start(void) {
     while (*es && (*es >= '0' && *es <= '9')) n = n * 10 + (*es++ - '0');
   }
 
-  pid = (mode && mode[0] == 'n') ? 0 : fork();
+  pid = (mode && mode[0] == 'n') ? 0 : (getenv("NOFORK") ? 0 : fork());
   if (pid == 0) {
     signal(14, on_alarm);
     if (mode[0] != 'b') {
       watch_pid = getpid();
       if (!fileget("/tmp/tpu-noalarm")) alarm(3);
+    }
+    if (mode[0] == 'l') {
+      /* H1: does a prepared ALooper (and an initialised binder ProcessState)
+         change where the factory waits? Both are what Android would have. */
+      extern void *dlopen(const char *, int);
+      put("loop: begin\n");
+      (void)dlopen("liblog.so", 1);
+      put("loop: liblog done\n");
+      void *la = dlopen("libandroid.so", 1);
+      put("loop: libandroid done\n");
+      void *(*prep)(int) = la ? (void *(*)(int))dlsym(la, "ALooper_prepare") : 0;
+      put("ALooper_prepare=");
+      if (prep) { puthex((unsigned long)prep(0)); } else { put("missing"); }
+      put("\n");
+      if (getenv("PS")) {
+        void *lb = dlopen("libbinder.so", 1);
+        void *(*ps)(void) = lb ? (void *(*)(void))dlsym(lb, "_ZN7android12ProcessState4selfEv") : 0;
+        put("ProcessState::self=");
+        if (ps) { puthex((unsigned long)ps()); } else { put("missing"); }
+        put("\n");
+      }
+    }
+    {
+      unsigned long mt = 0;
+      int mrc = pthread_create(&mt, 0, monitor, 0);
+
+      put("monitor rc=");
+      putdec(mrc);
+      put("\n");
+      if (mrc == 0) (void)pthread_detach(mt);
     }
     put("calling entry ");
     putdec(n);

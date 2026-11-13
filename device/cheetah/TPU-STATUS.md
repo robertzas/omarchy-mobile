@@ -23,6 +23,15 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U310-U314: the block is not a libc wait and not an I/O syscall)
+
+The interposer is proven (`BLK sem_wait ra=0x...`), so the factory's silence on
+cond_wait/sem_wait/mutex_lock/join and on read/epoll/poll/ioctl/socket/connect is
+evidence: the wait is a raw futex or an in-kernel wait. `dlopen` after `fork()`
+blocks and needs `NOFORK=1`; the chroot's `libandroid.so` has no
+`ALooper_prepare`, so H1 stays untested. `0x12a710` registers into containers
+rather than waiting (U309).
+
 ## 2026-11-13 (U308: create's body has no wait, so a helper does)
 
 `0xf8df8`-`0xf9208` holds `strlen`, `memcpy`, a `pthread_create@plt` and virtual

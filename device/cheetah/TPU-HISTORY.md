@@ -13018,3 +13018,46 @@ fd listing showed are created here.
 
 Helper `0x12a710` shows only ordinary calls (no futex/poll/ioctl in the named window). Helper `0xfd3d8` shows only ordinary calls (no futex/poll/ioctl in the named window). Those two are the next
 read; the plan records both windows so the next session starts from them.
+
+
+**U309, helper `0x12a710` registers, it does not wait.** The "mutex/condvar
+trio" guess is wrong. `0x21b69c` allocates a 0x148-byte node, stores the key and
+value, links it and rebalances: it is a `std::map`/`std::set` insert (`0x21b690`
+is the same with a null node, `0x21b71c` walks the tree). `0x12ca2c` is a binary
+search over a sorted vector. So `0x12a710` *registers* something (a handler or a
+callback) into two containers. It is not the waiter either, and create's body
+holding `pthread_create` plus virtual calls (U308) leaves the direct `bl
+0xf8aa8` in `0xfd3d8` and the `blr` dispatches as the only places a wait can
+live.
+
+
+**U310, the interposition instrument is proven.** `MODE=cw` now prints
+`BLK sem_wait ra=0x...` from the harness's own semaphore self-test, so the
+absence of a `BLK` line in the factory run is evidence, not silence. The
+previous "the wait is not a PLT-level wait" note stands.
+
+**U311, the block makes no selectable libc wait and no I/O syscall.** With
+`pthread_cond_wait`, `pthread_cond_timedwait`, `sem_wait`,
+`pthread_mutex_lock` and `pthread_join` interposed (and the self-test proving
+they fire), the factory run calls none of them; and with `read`, `epoll_wait`,
+`poll`, `ioctl`, `socket` and `connect` interposed, it calls none of those
+either. The process is alive while it waits: its own threads keep calling
+`mmap` and interleave their writes. A monitor thread was created inside the
+child with `pthread_create` returning 0, and it printed nothing in 3 s, so
+that instrument is withdrawn as inconclusive.
+
+**U312, `dlopen` blocks after `fork()` in this chroot.** With a fork,
+`dlopen("liblog.so")` never returns; with `NOFORK=1` (which runs the create
+call in the preloaded process itself) it returns at once and `libandroid.so`
+and `liblog.so` both load. Any in-process `dlopen` experiment must run
+`NOFORK=1`.
+
+**U313, `libandroid.so` here has no `ALooper_prepare`.** `dlsym` on the
+chroot's `libandroid.so` returns null for it, so H1 (a prepared `ALooper`
+before the factory) cannot be tested through that library; it would need the
+NDK's `libandroid.so` or a C++ `Looper` call.
+
+**U314, the blocked syscall, read from the parent.** `/proc/<pid>/syscall` at
+0.5 s, 1.0 s and 1.5 s after the fork:
+
+    (no SYS line this run)

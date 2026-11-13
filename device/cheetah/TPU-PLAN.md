@@ -226,6 +226,28 @@ or `GetProperty` in the body (U308). The wait is therefore inside a helper, and
 the two windows already captured are `0x12a710` and `0xfd3d8` (quote in U308):
 the next offline read starts there, not at the options.
 
+### 1.6.4 What the block is not
+
+Three instruments now agree. The factory process is alive while it waits (its
+own threads keep `mmap`-ing and interleaving output), it calls none of
+`pthread_cond_wait`, `pthread_cond_timedwait`, `sem_wait`,
+`pthread_mutex_lock` or `pthread_join` (U310 proves those interposers fire),
+and it calls none of `read`, `epoll_wait`, `poll`, `ioctl`, `socket` or
+`connect` (U311). So the wait is not a libc condition variable, not a
+semaphore, not a join and not a poll on a descriptor: it is a raw futex or an
+in-kernel wait reached without a PLT symbol.
+
+The parent-side reader `/proc/<pid>/syscall` names it without ptrace and
+without a handler (U314), and that is the next measurement.
+
+### 1.6.5 Two environment facts for in-process experiments
+
+- **`dlopen` blocks after `fork()` in this chroot** and completes with
+  `NOFORK=1` (U312). Any preload test that needs a library loaded at runtime
+  must run `NOFORK=1`.
+- **The chroot's `libandroid.so` exports no `ALooper_prepare`** (U313), so H1
+  is not testable through it as written.
+
 ### 1.7 What rev 13 withdraws
 
 - **The ptrace sampler** (`MODE=bt`) as evidence. Keep the code for the record,
@@ -508,9 +530,12 @@ gate K fails? -> stop: driver/session regression.
 
 ## 11. Immediate actions (ordered)
 
-1. **S4 (offline, next):** `0x12a710` and `0xfd3d8`, in that order: the body
-   of create has no wait, so the block is in one of its helpers (U308). Then the
-   two helper windows already quoted in the history.
+1. **S4 (done):** `0x12a710` registers into containers, it does not wait
+   (U309); the trio is a map insert, not a lock. The remaining candidate is the
+   direct `bl 0xf8aa8` inside `0xfd3d8` and the `blr` dispatches.
+2. **S5 (next, on the phone):** read `/proc/<pid>/syscall` from the parent while
+   the child is blocked (harness `sample_peer`) and name the syscall and pc,
+   then map the pc to a function. No ptrace, no handler, no threads.
 2. **S2b fix** (harness): set `watch_pid` before the self-test so the control
    is real; a `MODE=cw` run then either names the waiter or proves a raw futex.
 3. **H1** (offline build, one run): `ALooper_prepare(0)` before the call, if
