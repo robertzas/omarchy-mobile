@@ -532,3 +532,9 @@ kernel print in binder_translate_handle (or a libbinder_ndk client), the
 session and queue, a real inference with recorded hashes, userspace packaging,
 and hardening. **No inference has run yet**, and the plan forbids claiming one
 until L1 passes end to end.
+
+## 2026-11-12 (build): the J1 kernel builds again, and Omarchy stays on latest stable
+
+- `out-tpu` was discarded and rebuilt in the background from the J1 print tree: no `fixdep` errors, `Image` and the dtbs built (`/tmp/kbuild3.log`). The earlier rc=2 was a half-written tree from a killed build, not driver defects.
+- Nothing has been pushed or booted with it yet, so J1 is still unverified.
+- From here the phone builds on the latest stable Omarchy: `[omamobile]` holds the pinned 4.5.0-3 (`rootfs/packages.pinned`), which is the current stable the 4.5 patch family is verified against. TPU work does not change that pin.

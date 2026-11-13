@@ -10010,3 +10010,27 @@ N4. Release only after L1 and the two-run repeatability in L2 pass on the
 | G | power/thermal | not started |
 | H | packaging | not started |
 | I | release | not started |
+
+## 5.10 Re-evaluation 2026-11-12: the build was the blocker, and the gates to a working TPU
+
+**What this pass found.** The J1 print is in `wt-tpu/drivers/android/binder.c` (`binder_translate_handle`, after `binder_inc_ref_for_node`). Its build failed with rc=2, and the log's real line is not a driver error:
+
+    fixdep: error opening file: drivers/media/platform/qcom/camss/.camss-tpg.o.d: No such file or directory
+
+The first build was killed by a tool timeout while compiling modules; kbuild's `.d` files never landed, so the next run aborts in `fixdep`. The camss/tsens/ipa/nouveau `Error 2` lines are the four places it noticed, not four broken drivers. So: **discard `out-tpu` and build once, to completion, in the background** (the defconfig build here takes longer than the 600 s a foreground call allows). Never diagnose a half-written output tree, and never run this build under a wall clock shorter than it needs.
+
+**Re-evaluated status:** A proven; B blocked on a missing binder ref; C-I not started. The plan's rule stands: nothing is called working before a model produces output.
+
+**The gates that now define "works"**, each with a stop condition:
+
+| Gate | What must be true | Stop / fallback |
+| --- | --- | --- |
+| J1 | dmesg shows `omamobile binder xlat <client pid>:... -> pid <client pid> desc <n>` for the `getService` reply | no line -> print inside `binder_transaction()`'s offset loop; still none -> J3 |
+| J2 | the held handle answers `BC_ACQUIRE` with 0, and `createSession` returns a reply that is not `BR_FAILED_REPLY` | ref present but createSession fails -> print the reply's status word and compare with tachyon's error enum |
+| J3 | a bionic/libbinder_ndk client (built in the vendor chroot) reaches the same service and creates a session | this is the fallback for J1/J2, not a parallel path |
+| K | SessionConfig/setupCommandQueue/sendCommand match the vendor ABI: sizes and field order taken from the stock library, not guessed | any guessed field -> stop and read the header |
+| L | one real model executes and its output matches a host-side reference (recorded hashes) | no model -> no claim |
+| M | ten consecutive runs, clean teardown, no leaked handles | a leaked ref -> fix before packaging |
+| N | `omamobile-tpu` package + unit, docs, no vendor blobs committed | - |
+
+**Order of work from here:** (1) background rebuild of `out-tpu`; (2) stop the modem, `push`, `reboot-to`, chain + held client, read the J1 line; (3) J2 retry or J3; (4) K then L - the first honest "works"; (5) M and N. Each step's result goes in this file with the date and `uname -r`.
