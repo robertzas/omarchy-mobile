@@ -647,7 +647,12 @@ them. The tool must be root-only initially (the device node is `0600` or
 
 ---
 
-## 5.1 Roadmap to a fully working TPU (2026-11-12)
+## 5.1 Roadmap to a fully working TPU
+
+> **2026-11-12:** Phases J-N at the end of this plan carry the work
+> past the reply-reference blocker; read them before extending Phase A.
+
+ (2026-11-12)
 
 This is the plan of record from T6 on. The U-entries below are the evidence log;
 this section says what is left, in order, each with a gate, a stop condition and
@@ -9884,3 +9889,118 @@ instant it registers, so there is no window in which a lookup can find it. The p
 the name are right (U246); what the chain lacks is a tachyon process that stays
 registered. That needs the registrar kept always-on, or a client holding it before the
 startup check, and the shipped binary exposes no switch for either. No inference has run.
+
+
+## 5.9 Phases J-N: comprehensive route to a working TPU (2026-11-12)
+
+Re-evaluated against the 2026-11-12 evidence. Phase A is **proven**: a raw
+binder client reaches `com.google.edgetpu.tachyon.IComputeService/default`
+through servicemanager on `$R/dev/binderfs/vndbinder`, `getService` returns
+rc 0, the reply is a real `BINDER_TYPE_HANDLE` (0x73682a85), and tachyon stays
+registered while a client holds the service. Phases B-I (session, queues,
+model, userspace) are **not started in practice**: the first transaction to
+the returned handle is refused by the driver, and the client holds no binder
+reference at all.
+
+The rule for the rest of this plan: **no inference is claimed until Phase L1
+passes end to end on the phone**, with the input, output and hashes recorded.
+
+### J. Clear the reply-reference blocker (current)
+
+J1. **Kernel print (first choice; needs a slot-B kernel build + boot).**
+   Add one `binder_debug(BINDER_DEBUG_TRANSACTION, ...)` and a `pr_info_ratelimited`
+   line in `binder_translate_handle()` printing the sender pid, the source
+   `fp->handle`, `src_rdata.desc`/`src_rdata.strong`, `target_proc->pid`, the
+   destination `dest_rdata.desc`, and the branch taken (`node->proc ==
+   target_proc` or the ref branch). Build with
+   `KERNEL_DIR=~/omamobile-kernel/wt-tpu KERNEL_OUT=~/omamobile-kernel/out-tpu
+   bin/omamobile kernel`, then `push` + `reboot-to` (slot B, stop the modem
+   first). Run the held client and read dmesg.
+   Pass: the line for the getService reply names our pid as `target_proc` and a
+   destination descriptor, and `BC_ACQUIRE` on that descriptor then succeeds.
+   If the line never appears, the reply's offsets are not being translated at
+   all: add the same print in `binder_transaction()`'s offset loop and in the
+   reply target selection.
+J2. **If a ref is created but unseen.** Compare the binder device identity of
+   the client and servicemanager (`stat -c '%d:%i'` on
+   `/proc/<pid>/root/dev/binderfs/vndbinder`), and print `proc->pid` in
+   `binder_get_ref_for_node_olocked`. A separate binderfs mount is a separate
+   device with its own ref table; the fix is one device for both.
+J3. **Fallback: libbinder_ndk client (no kernel change).** Build a shared
+   object that uses `dlsym(RTLD_DEFAULT, ...)` for
+   `AServiceManager_getService`, `AIBinder_prepareTransaction`,
+   `AParcel_writeInt32`, `AIBinder_transact` and `AParcel_readStatusHeader`,
+   preload it into a long-lived bionic process that links libbinder_ndk (a
+   vendor HAL), and log with `write(2)`. libbinder owns the transaction and
+   reference handling; the SessionConfig parcel still has to be written
+   field by field, which Phase K supplies.
+   Pass for J: `BC_ACQUIRE` succeeds on the service handle and a
+   `createSession` transaction is **delivered** (any AIDL status, no
+   `BR_FAILED_REPLY`).
+
+### K. Session and command queue
+
+K1. Recover the exact `SessionConfig` field order from the stock HAL's
+   successful calls (the plan's U63/2026-11-08 evidence has the working
+   argument vector and the service's own log). Write the same words from the
+   raw client; a wrong field order is an AIDL reject, not a driver failure.
+K2. `createSession` returns the session handle and the reply words; record
+   them verbatim in this plan.
+K3. `setupCommandQueue`: create the two eventfds and pass them in the parcel
+   (the stock log shows `setupCommandQueue: OK fds=11,12`); verify both fds
+   are accepted and the queue id comes back.
+K4. `sendCommand` for setup and execute, using the queue id and the compiled
+   model; record every reply word and the tachyon log line.
+
+### L. A real inference
+
+L1. Compile a tiny model with the stock `edgetpu_compiler` (never commit
+   `detect_edgetpu.tflite` or any vendor blob; the model is the user's own
+   file, kept outside the repository). Send it through the queue, feed one
+   known input, read the output, and compare against the same model on the
+   laptop's CPU reference.
+   Pass: on-phone output matches the reference within the model's tolerance,
+   with the input/output sha256 and the kernel release recorded in this plan
+   and TPU-STATUS.md. **Only then** may the plan say the TPU works.
+L2. Run the same model twice in one boot and across a reboot; record the
+   first failure mode (queue teardown, tachyon exit, thermal).
+
+### M. Userspace
+
+M1. `omamobile-tpu` package: one CLI (`omamobile-tpu run MODEL INPUT`) over the
+   working client, with `--json` for tests; the binder client stays a tool,
+   not a shipped GUI.
+M2. Decide the supported surface: CLI first, a TFLite delegate only if the
+   queue path is stable; no dependency on the stock app service for models.
+M3. Power and thermal: never touch PMU registers from userspace; measure idle
+   and load power with the TPU rail up, and stop the service when unused.
+M4. Permissions: root-only until the vendor chroot is optional; document that
+   tachyon comes from the vendor chroot and needs servicemanager on the same
+   binder device.
+M5. Docs: `docs/DEVICES.md`, the package README, and a release note that
+   separates "service reachable" from "inference works".
+
+### N. Hardening and release
+
+N1. Restart policy for tachyon that never restarts in place (same boot) after
+   a crash; reboot instead, as with the modem rule.
+N2. `tools/tpu-test`: PASS/FAIL for J, K, L, usable by `tools/pr-check`'s
+   package tests without a phone (skip with a clear message).
+N3. Identifier and blob checks: no model, firmware or `efs` data in the
+   repository; `tools/pr-check` stays green.
+N4. Release only after L1 and the two-run repeatability in L2 pass on the
+   reference phone; version the package and record the kernel release.
+
+### Audit of the earlier phases
+
+| Phase | Claim | State 2026-11-12 |
+| --- | --- | --- |
+| A | service reachable, handle held | **proven**: rc 0, BINDER_TYPE_HANDLE, tachyon held |
+| B | createSession | blocked: no binder ref for the reply handle |
+| C | setupCommandQueue | not started |
+| D | sendCommand / execute | not started |
+| E | model compile | not started |
+| F | userspace runner | not started |
+| G | power/thermal | not started |
+| H | packaging | not started |
+| I | release | not started |

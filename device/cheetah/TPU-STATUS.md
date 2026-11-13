@@ -520,3 +520,15 @@ setup succeeds, and no TPU number is claimed.
 - `BC_ACQUIRE` is refused too. The kernel source says the reply should create a
   strong ref, and tracefs is not built, so the next check is a kernel print or
   a libbinder_ndk client.
+
+
+## 2026-11-12 (final): the plan now runs to a working model
+
+Phase A is proven (getService rc 0, real BINDER_TYPE_HANDLE, tachyon held while
+a client holds it). The first transaction to that handle is refused by the
+driver because the client holds no reference for it; `BC_ACQUIRE` is refused
+too, and this kernel has no tracefs. `TPU-PLAN.md` 5.9 adds Phases J-N: a
+kernel print in binder_translate_handle (or a libbinder_ndk client), the
+session and queue, a real inference with recorded hashes, userspace packaging,
+and hardening. **No inference has run yet**, and the plan forbids claiming one
+until L1 passes end to end.
