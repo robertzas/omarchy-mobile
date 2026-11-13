@@ -517,3 +517,6 @@ setup succeeds, and no TPU number is claimed.
   inference yet.
 - The proc entry of a held client shows no refs at all, so the reply object is
   copied untranslated; tapping libbinder_ndk is the next route.
+- `BC_ACQUIRE` is refused too. The kernel source says the reply should create a
+  strong ref, and tracefs is not built, so the next check is a kernel print or
+  a libbinder_ndk client.

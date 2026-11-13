@@ -54,6 +54,7 @@ struct binder_transaction_data {
 
 #define BINDER_WRITE_READ	_IOWR('b', 1, struct binder_write_read)
 #define BC_TRANSACTION		_IOW('c', 0, struct binder_transaction_data)
+#define BC_ACQUIRE		_IOW('c', 2, u32)
 #define BC_FREE_BUFFER		_IOW('c', 3, u64)
 #define BR_REPLY		_IOR('r', 1, struct binder_transaction_data)
 #define BR_TRANSACTION_COMPLETE	0x7206
@@ -332,6 +333,19 @@ int main(int argc, char **argv)
 		}
 		if (!binder)
 			goto out;
+		{
+			u8 ab[8];
+			u32 acmd = BC_ACQUIRE;
+			struct binder_write_read f;
+
+			memcpy(ab, &acmd, 4);
+			memcpy(ab + 4, &binder, 4);
+			memset(&f, 0, sizeof f);
+			f.write_size = 8;
+			f.write_buffer = (uintptr_t)ab;
+			rc = ioctl(fd, BINDER_WRITE_READ, &f);
+			printf("acquire(handle %u): rc %d\n", binder, rc);
+		}
 		printf("== createSession ==\n");
 		memset(&p, 0, sizeof p);
 		put32(&p, 0x80000000);

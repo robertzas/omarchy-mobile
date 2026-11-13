@@ -736,6 +736,13 @@ now reaches the compute service.
   our process, which parcel decoding cannot fix. The next step is a client that
   lets libbinder_ndk own the transaction and ref handling, or a kernel-side
   trace of `binder_translate_binder` for that reply.
+- Follow-up: `BC_ACQUIRE` on the reply's handle is refused too (ioctl -1), so
+  the process holds no ref of any strength. The tree's `binder_transaction`
+  takes `target_proc` from the calling thread for a reply, and
+  `binder_translate_handle` then creates a strong ref for it, so a delivered
+  reply should leave one. tracefs is not built (`mount -t tracefs`: unknown
+  filesystem type), so the next diagnostic is a print in
+  `binder_translate_handle`, or the libbinder_ndk client.
 - `tools/android-lazysvc-persist.c` interposes
   `LazyServiceRegistrar::getInstance()` and calls `forcePersist(true)`, and the
   chain preloads it, but its constructor mark never appears in tachyon's log, so
