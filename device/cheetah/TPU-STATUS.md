@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Edge TPU bring-up: status and benchmark
 
-As of 2026-11-13 (rev 10), kernel
+As of 2026-11-13 (rev 11), kernel
 `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B. The plan of record is
 [TPU-PLAN.md](TPU-PLAN.md); the full experiment log and every prior revision
 are in [TPU-HISTORY.md](TPU-HISTORY.md). **No model has run on the TPU and no
@@ -22,6 +22,25 @@ firmware up. The stock oracle remains the only *proven* producer; the image's
 only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
+
+## 2026-11-13 (U346-U348: the KCI DMA window, and the firmware answers)
+
+The debugfs KCI door allocated its descriptor at `0xfffxxxxx`, outside the only
+window the firmware accepts; KCI's own buffers come from the iremap pool
+(`0x101xxxxx`). With the hook on `edgetpu_iremap_alloc(..., EDGETPU_CONTEXT_KCI)`
+the firmware answers for real: `GET_USAGE_V1` (12) and `V2` (21) return **0** with
+a 4096-byte descriptor, code 6 returns **14 UNAVAILABLE** instead of
+`INVALID_ARGUMENT`, and codes 15/16 are implemented and check the descriptor's
+address, then its size. No inference yet. The driver change runs on the phone
+(`janeiro.ko`, backup `janeiro.ko.before-kci-dma`), two clean reboots with the
+modem down.
+
+## 2026-11-13 (U345: P1's premise corrected)
+
+`tpu-hold` must not be stopped for an element send: it holds the boot's one
+power-up, and stopping it releases the wakelock, so the next open is the second
+power-up that wedges the PSM (U54). Every element send on record ran with it
+alive (U273), and P1 now says so.
 
 ## 2026-11-13 (U344: P3's first two windows excluded)
 

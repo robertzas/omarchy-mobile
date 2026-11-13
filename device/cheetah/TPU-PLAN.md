@@ -1,12 +1,17 @@
 <!-- SPDX-License-Identifier: MIT -->
 # TPU / NPU plan: the Edge TPU (Abrolhos / Janeiro) on cheetah (gs201)
 
-Status (2026-11-13, rev 17): **the TPU is alive and now answers questions. The
-firmware's own log is an oracle (1.13), KCI has no setup code (1.12), the debugfs
-door works (1.11), and the setup builder is a 40-byte-record pipeline rather than
-the 24-byte command vector rev 16 described (1.15). No inference is claimed.**
-Rev 17 re-evaluates rev 16 against the hardware, withdraws two of its claims, and
-replaces the action list with a program whose every step has an oracle.
+Status (2026-11-13, rev 18): **the TPU is alive and its firmware now answers
+real KCI questions. Every buffer-touching command was refused because of the
+descriptor's **address**, not its command: the debugfs door allocated at
+`0xfffxxxxx`, outside the one window this firmware accepts, while KCI's own
+buffers come from the iremap pool at `0x101xxxxx` (1.16). With that fixed,
+`GET_USAGE_V1/V2` answer **0** with a 4096-byte descriptor, code 6 answers
+`UNAVAILABLE` instead of `INVALID_ARGUMENT`, and codes 15/16 turn out to be
+implemented and to check the descriptor's address and size. The firmware setup
+itself is still not done and no inference is claimed.**
+Rev 18 withdraws rev 17's `dma.flags` suspect (1.11) and P1's instruction to
+stop `tpu-hold`, which would force the second power-up that wedges the PSM.
 
 ## 0. Rules this plan runs under
 
@@ -424,6 +429,8 @@ re-send ours.
 | D2c | `GetDarwinnHalFunctions` returns a table with version 2 | **pass** (U286) | none |
 | D2d | the table's factory returns a HAL object | **retired** (U316): the HAL is a service client and opens nothing | R-KCI |
 | D0g | userspace sends a KCI command | **withdrawn** (U322): KCI is kernel-internal; ioctl 34 is `SET_DEVICE_PROPERTIES` | none |
+| D0i | the KCI door's DMA buffer is one the firmware accepts | **pass** (U346): iremap pool; 12/21 answer 0 at 4096 B | none |
+| D0j | the firmware dispatches the enum's missing code 6 | **partial** (U347): answers 14 UNAVAILABLE, not unknown-code 3 | P2b |
 | D0h | the firmware reports its own version and protocol numbers | **pass** (U317): 1.0, VII 2, KCI 3 | none |
 | D2e | the HAL object's setup path builds and submits the setup command | **open** | R0, stride S3 |
 | D3b | the firmware's setup is done (gate probe answers differently) | **open** | R0 oracle |
@@ -730,6 +737,11 @@ only be cited as a hypothesis, and any claim used in a runbook has to add its ro
 first. Three of the plan's last four "the source is X" statements were refuted by
 the next window (U333, U334 and the vector filler), which is what the rule is for.
 
+A third conclusion belongs to rev 18: the DMA **address** was the wall, not the
+command. `edgetpu_iremap_alloc(..., EDGETPU_CONTEXT_KCI)` is the only allocator
+on record whose addresses the firmware accepts for a descriptor (1.16); a
+`0xfffxxxxx` page is refused before any handler runs.
+
 Two conclusions close out the builder route:
 
 1. **The values cannot be recovered statically** (U339). The entries are built at
@@ -766,6 +778,48 @@ What this changes for the plan: the remaining unknown is not "the three words of
 record**, which `0x14d9eac` converts. That is the next offline read, and it is the
 only one that can produce a setup element with a chance of passing the gate.
 
+### 1.16 The DMA window: why every buffer-touching command failed (U346)
+
+The debugfs hook allocated its page with
+`edgetpu_alloc_coherent(..., EDGETPU_CONTEXT_DOMAIN_TOKEN)`, which lands in the
+driver's context domain at `0xfffxxxxx`. KCI's own buffers - the queues, the
+usage buffer, the firmware-info buffer - go through
+`edgetpu_iremap_alloc(..., EDGETPU_CONTEXT_KCI)` and land at `0x101xxxxx`
+(`mappings` reads `cmdq 0x10150000`, `rspq 0x10158000`). Only the second is
+inside the firmware's address window, so every command that actually touched
+the descriptor was refused before its handler ran:
+
+| code | before (`0xfffxxxxx`) | after (`0x101xxxxx`) |
+| --- | --- | --- |
+| 11 FIRMWARE_INFO | 0 | 0 |
+| 12 GET_USAGE_V1, 16 B | 3 "DMA descriptor is invalid" | 3 "buffer too small: got 128, want 4092" |
+| 12 GET_USAGE_V1, 4096 B | 3 | **0** |
+| 21 GET_USAGE_V2, 4096 B | 3 | **0** |
+| 1 UNMAP_BUFFER | 0 | 0 |
+| 15 (unnamed) | 3 "Invalid ... descriptor address" | 3 "Invalid ... descriptor size N" |
+| 16 (unnamed) | 3 "Invalid ... descriptor address" | 3 "Invalid ... descriptor size N" |
+| 6 (the enum's gap) | 3 (12 on the A14 image, U276) | **14 UNAVAILABLE** |
+
+Three consequences:
+
+1. **U341's flags hypothesis is withdrawn.** The descriptor was never
+   malformed; it was outside the window. The usage queries work, and the
+   oracle now has a real DMA channel: `GET_USAGE` at 4096 bytes answers 0.
+2. **The window is a rule for every future hook.** A buffer the firmware reads
+   or writes must come from the iremap pool. `kci_scratch` now does, and
+   `kci_dma` sends with the whole scratch as the descriptor for the commands
+   that validate its size.
+3. **Codes 15/16 are implemented on this firmware.** They check the address
+   first and then the size; the address is now accepted, and 16, 128, 512,
+   1024, 2048, 4096 and 524288 are all refused as sizes. The iremap pool caps a
+   scratch at 512 KiB, so a larger exact size cannot be tested through the
+   door, and code 15/16's name is still unknown (U347).
+
+Code 6's `UNAVAILABLE` is constant across a page and the scratch, 128- and
+4096-byte payloads, and with a client open (`tpu-hold`), so it is firmware
+state, not a payload shape. It is dispatched - it is no longer an unknown code
+- which is the first state-dependent answer the oracle has produced.
+
 ### 1.11 The KCI door, corrected (U329)
 
 Userspace reaches KCI through **debugfs**, not an ioctl:
@@ -780,8 +834,11 @@ read from the handler (`edgetpu-fs.c:1116` and `1142`):
    sends, and logs `kci_send code N tpu_addr A len L -> R`.
 
 `R` is the firmware's KCI error and, when it refuses, the firmware's own `ERR`
-line follows it in dmesg (1.13). The handler never sets `dma.flags`, which is the
-open suspect for the usage queries (U341).
+line follows it in dmesg (1.13). The handler's `dma.flags` was the suspect for
+the usage queries (U341); it was not the problem. The descriptor's **address**
+was, and it is fixed (1.16). The hook now allocates from the iremap pool, logs
+the descriptor's size, and `kci_dma` (write 1) makes it send with the whole
+`kci_scratch` allocation instead of its page.
 
 The driver's join-group log is `etdev_dbg`, and **dynamic debug is not compiled
 into this kernel** (`/sys/kernel/debug/dynamic_debug/control` is absent, U330),
@@ -796,26 +853,40 @@ not by importance; nothing below needs a reboot except A3 and the stock route.
 
 ### P0. Oracle regression (no phone change, 1 min, every session)
 
-`CODES="11 12 21 8" tools/phone-ssh 'bash -s' < tools/tpu-oracle`.
-**Pass:** `code 11 ... -> 0`. **Stop:** anything else means the firmware or the
-driver regressed, and no other row is meaningful until it is explained.
+`CODES="11 12 21 8" tools/phone-ssh 'bash -s' < tools/tpu-oracle`, then
+`PAYLOAD=/root/z4096.bin CODES="12 21"` (a 4096-byte zero file).
+**Pass:** `11 -> 0` and `12`/`21 -> 0` with the 4096-byte payload (U346).
+**Stop:** any other answer means the kernel or the firmware regressed, and no
+other row is meaningful until it is explained.
 
 ### P1. The element send, with the verdict attached (one attempt, no reboot)
 
-The oracle is new, so the known negative earns exactly one run: the third-party
-element can now come back with the firmware naming the field it rejects. Stop
-`tpu-hold` (it holds the boot's single power-up), run `edgetpu-run`'s
-create-group/finalize/submit mode against `/dev/janeiro`, and read dmesg.
+**Correction (U345): do not stop `tpu-hold`.** It exists to hold the boot's one
+power-up; stopping it releases the wakelock, the device powers down, and the
+next open is the second power-up that wedges the PSM (U54). Every element send
+on record ran with `tpu-hold` alive and its own group on the same powered
+device (U273), and that is how this row runs: submit `edgetpu-run`'s
+create-group/finalize/submit element while `tpu-hold` keeps the device up, and
+read dmesg.
 **Pass:** any firmware line that names an element field or a value.
 **Stop:** a line identical to the 2026-11-09 gate means the element never reaches
 the parser; do not repeat without a new field.
 
 ### P2. The usage descriptor's `flags` (no boot, 5 min)
 
-`GET_USAGE_V1/V2` reject 16-byte and 4096-byte descriptors alike (U341), so the
-variable is the descriptor's `flags` (`{u64 address; u32 size; u32 flags}`,
-`edgetpu-kci.h:56`), which the debugfs handler leaves zero. Test by setting the
-flag bits the driver's own usage path uses. **Pass:** `code 12 -> 0`.
+The usage queries did not need `flags`: they needed an address the firmware can
+reach. The hook now allocates from the iremap pool, and `12`/`21` answer **0**
+with a 4096-byte descriptor. **Closed (U346).**
+
+### P2b. Codes 15/16, the unnamed pair (open)
+
+The firmware implements both (`tpu_kci_handler_thread.cc:293`/`298` and
+`333`/`338`) and validates the descriptor's address, then its size. The address
+is now accepted; the size is not: 16, 128, 512, 1024, 2048, 4096 and 524288 all
+answer `Invalid KCI DMA descriptor size N`. The next useful artifact is their
+**name**: neither Google's published driver trees nor the vendor HAL's KCI
+client has named them, and the firmware's strings do not. Do not sweep more
+sizes without a name or a firmware-side record that implies one.
 
 ### P3. The 40-byte record (offline, one window)
 

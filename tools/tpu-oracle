@@ -24,6 +24,14 @@ if [ ! -w "$D/kci_send" ]; then
 	exit 1
 fi
 
+if [ "${SCRATCH:-0}" = 1 ]; then
+	if [ ! -w "$D/kci_dma" ]; then
+		echo "no kci_dma under $D (kernel without the scratch descriptor hook)" >&2
+		exit 1
+	fi
+	printf '1\n' > "$D/kci_dma"
+fi
+
 for c in $CODES; do
 	n=$(dmesg | wc -l)
 	if [ -n "${PAYLOAD:-}" ]; then

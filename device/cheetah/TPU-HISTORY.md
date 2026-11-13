@@ -13683,3 +13683,81 @@ after the constants block (`0x162ab18`, `0x14e33d4`, `0x1505d90` in the
 `0x14d9eac` body) and the callee that actually consumes the 40-byte record. Two
 more windows can be excluded cheaply by the same test: count `[x1]` accesses
 before reading the body.
+
+**U345, correction: P1 must not stop `tpu-hold`.** The rev 17 program said to stop
+`tpu-hold` before an element send. That is backwards: `tpu-hold` exists to take
+the boot's single power-up and keep it (its own header says so), and stopping it
+releases the wakelock, powers the device down, and makes the next open the
+second power-up that wedges the PSM (U54). Every element send on record ran
+*with* it alive, each in its own group on the same powered device (U273), and
+the oracle makes that safe. P1 is rewritten; no phone change was made by this
+entry.
+
+**U346, the KCI DMA window: the wall was the address, not the command.** All the
+buffer-touching commands failed for the same reason, and it was under the
+driver, not in the firmware. `edgetpu_kci_debugfs_send()` allocated its page with
+`edgetpu_alloc_coherent(etdev, PAGE_SIZE, &mem, EDGETPU_CONTEXT_DOMAIN_TOKEN)`,
+which the driver's context domain places at `0xfffxxxxx`. KCI's own buffers -
+the queues, the usage buffer, the firmware-info buffer - use
+`edgetpu_iremap_alloc(etdev, size, &mem, EDGETPU_CONTEXT_KCI)`, which places them
+at `0x101xxxxx` (`mappings`: `cmdq 0x10150000`, `rspq 0x10158000`, telemetry
+`0x10100000`). Only the second is inside the firmware's address window. The hook
+now allocates from the iremap pool, and the same commands give real answers:
+
+```
+before: kci_send code 12 tpu_addr 0xffffe000 len 4096 -> 3
+        ERR tpu_kci_handler_thread.cc:101 - DMA descriptor is invalid
+after:  kci_send code 12 tpu_addr 0x101dc000 len 128 -> 3
+        ERR usage_tracker_impl.cc:190 - Provided metric data buffer is too
+            small for flushing: got 128, want 4092.
+        kci_send code 12 tpu_addr 0x1015c000 size 4096 len 4096 -> 0
+        kci_send code 21 tpu_addr 0x1015c000 size 4096 len 4096 -> 0
+```
+
+So `GET_USAGE_V1`/`V2` work, and U341's `flags` hypothesis is withdrawn: the
+descriptor was never malformed. Code 1 (`UNMAP_BUFFER`) answers 0 in both
+worlds, which is what made the address look innocent for so long.
+
+The driver patch (one file, `drivers/edgetpu/edgetpu-fs.c`) also adds `kci_dma`:
+writing 1 makes `kci_send` use the whole `kci_scratch` allocation as the
+descriptor, address and size, for commands that validate the buffer's size.
+`kci_send`'s log line now carries `size` as well as `len`. `tools/tpu-oracle`
+gained `SCRATCH=1` for it.
+
+**U347, codes 15/16 are implemented, and code 6 is dispatched.** The driver's
+enum says "15..18 not implemented in this branch", but the firmware disagrees.
+With a descriptor in the window:
+
+| code | answer | firmware line |
+| --- | --- | --- |
+| 15 | 3 | `tpu_kci_handler_thread.cc:298 - Invalid KCI DMA descriptor size 128` |
+| 16 | 3 | `tpu_kci_handler_thread.cc:338 - Invalid KCI DMA descriptor size 128` |
+| 17 | 12 UNIMPLEMENTED | - |
+| 18 | 12 UNIMPLEMENTED | - |
+| 6 | **14 UNAVAILABLE** | - |
+
+Codes 15/16 check the address first (`:293`/`:333` "Invalid ... descriptor
+address") and then the size (`:298`/`:338`). With the iremap address the address
+check passes; the size check refuses 16, 128, 512, 1024, 2048, 4096 and 524288.
+The iremap pool caps a scratch allocation at 512 KiB (1 MiB failed), so a larger
+exact size cannot be expressed through the door. Neither the vendor HAL's KCI
+client nor Google's published raviole tree names 15/16, so the size rule stays
+open (P2b) rather than becoming a size sweep.
+
+Code 6 is the one the header leaves out. On the A14 image it answered 12
+(UNIMPLEMENTED, U276); with a valid descriptor on the A17 image it answers **14
+UNAVAILABLE**, across a page and the scratch, 128- and 4096-byte payloads, and
+with `tpu-hold` holding an open client. That is a firmware state talking, not a
+payload shape, and it is the first such answer the oracle has produced.
+
+**U348, deployment and state.** The patched `janeiro.ko` (vermagic identical to
+the running `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`) was copied over the
+installed
+`/lib/modules/<release>/kernel/drivers/edgetpu/janeiro.ko`, with the old file
+kept as `janeiro.ko.before-kci-dma`; `depmod`, then `systemctl reboot` (modem
+inactive, no unclean end). Two reboots today, both clean; `tpu-hold` (pid 842)
+opened the device at 45 s, `kci_scratch` allocated 512 KiB at `0x1015c000`, and
+the oracle ran from 45 s. The kernel worktree `wt-tpu` carries one uncommitted
+file, `drivers/edgetpu/edgetpu-fs.c`; the phone runs the module built from it
+and the tree's base commit, so the release string is unchanged. Undo on the
+phone: `mv janeiro.ko.before-kci-dma janeiro.ko`, `depmod`, reboot.
