@@ -12653,3 +12653,26 @@ the next step is to read what the HAL expects (its `chip_version` strings and
 the query it makes) and what our driver answers, then report the chip version
 stock does. This is the first failure in the whole campaign that names a
 *value* rather than a state.
+
+## U278 (2026-11-13): the DBA abort is a missing `chip_model` attribute
+
+The DBA service's abort (`Unknown chip_version found from device.`) resolves to a
+path, not a protocol. `libdarwinn_hal.so` and `libdarwinn_dba_hal_runtime.so` both
+carry the literal `/chip_model`, and the HAL builds it under the device path that
+`EnumeratePhysicalResources` returns for the `edgetpu` class. On the phone:
+
+    /sys/class/edgetpu/janeiro/       dev device power subsystem uevent
+    /sys/class/edgetpu/edgetpu-soc/   dev device power subsystem uevent
+    find /sys -name chip_model        (nothing)
+
+So our driver publishes the class but never the attribute the HAL reads. Neither our
+driver nor the stock `janeiro.ko` contains the string `chip_model`, which is expected:
+the attribute is the kernel's side of the HAL's chip-version probe, not something
+either driver names in a log. The HAL's known models are `janeiro_a0` and
+`abrolhos_b0` (its fallback for an unknown value is AbrolhosB1).
+
+**Next change (kernel-side, one rebuild):** a read-only
+`DEVICE_ATTR_RO(chip_model)` on the `edgetpu` class device, returning the model the
+HAL recognises, built into `janeiro.ko`, pushed and tried on one boot. It is the
+last value between the DBA HAL and its own firmware setup, which is the only
+firmware-setup producer in the image.
