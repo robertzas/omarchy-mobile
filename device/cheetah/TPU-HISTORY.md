@@ -12822,3 +12822,13 @@ Next: name the 14 entries by their per-function strings and argument shapes
 (the probe printed only the shared file path, so walk each body separately),
 then call the create entry with `/dev/edgetpu` and watch `dmesg` for
 `Setup is already done`/`global scratches`, the same oracle gate D3 uses.
+
+**U287, the create entry has a name.** The table's last slot (`+112`,
+`0xf87a4`) carries the RTTI/pretty names
+`_ZN12_GLOBAL__N_117DarwinnHal_CreateEPK17DarwinnHalOptionsPP10DarwinHal`
+and `..._CreateRepeatedExecutionEP10Darwinn...`, i.e.
+`DarwinnHal_Create(const DarwinnHalOptions*, DarwinnHal**)` and
+`DarwinnHal_CreateRepeatedExecution(...)` in an anonymous namespace. That is
+the vendor's own factory: `create(options, &hal)`, then the session/predictor
+calls on the returned object. The options struct is the only unknown left, and
+its size can be read off `DarwinnHal_Create`'s `ldr` offsets.
