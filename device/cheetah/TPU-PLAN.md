@@ -77,8 +77,15 @@ U272 makes that concrete on the live device. Through the same hook, on the
 held power-up, code 11 (`KCI_CODE_FIRMWARE_INFO`, implemented) with a minimal
 payload answered **0**, while code 6 answered `3` - and so did code 21
 (`GET_USAGE_V2`, implemented) with a payload too short for it. The hook is
-live and a bare `3` carries no schema meaning at all; what makes 6 not a route
-is the enum gap and the driver's own comment, not the response.
+live and a bare `3` carries no schema meaning at all.
+
+U276 then corrects this section's own conclusion. With `kci_scratch` holding
+a **mapped** 512 KiB range (`tpu_addr 0xfff80000`), the U262 command rebuilt
+with that address answered **12** (`KCI_ERROR_UNIMPLEMENTED`) instead of `3`.
+So the firmware dispatches code 6 and parses the payload; the enum gap is a
+*driver* fact. On the loaded image (A14) the handler reports unimplemented, so
+setup is not KCI 6 there either, but the payload shape is structurally
+acceptable - which is exactly the fact the next producer attempt needs.
 
 ### 1.2 The element code was 0 in every run
 
@@ -159,6 +166,7 @@ in the kernel creates the VII setup state.
 | Gate K passes on this boot | `logs/tpu/20261113-gatek-rev10.txt`: session, both queues, 88-byte reply | the protocol is not the blocker |
 | KCI has no setup code | `edgetpu-kci.h` enum 0-5, 7-19, 21; `edgetpu-fs.c` hook comment | D0f withdrawn; KCI-6 evidence void |
 | The KCI hook is live: code 11 answers 0, code 6 answers 3, code 21 answers 3 on a short payload | **U272** on the held power-up | a bare `3` proves no schema; U266 void for a second reason |
+| Code 6 + the U262 command + a **mapped** 512 KiB scratch answers `12` (UNIMPLEMENTED) | **U276**: `kci_send code 6 ... -> 12` | the firmware has a code-6 dispatch and accepts the payload shape |
 | Every producer wrote VII code 0 | U248 (`00000000 00000000`), U249 (`00000001 00000000 000b0000`) | the code has never been varied |
 | The gate prints `type` before parsing | U175: 256 zeros, bad root and valid table read the same | `type 0` identifies nothing |
 | The element header is `seq@0, code@8, flags@10, dma@16, size@24` | U264 enqueue copy; `vii-elem` dumps | a code sweep is one knob per run |

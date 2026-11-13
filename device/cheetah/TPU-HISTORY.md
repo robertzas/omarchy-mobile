@@ -42,6 +42,32 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U276 (2026-11-13): KCI 6 answers 12 (UNIMPLEMENTED) with a mapped scratch
+
+The first response other than `3` in the whole KCI-6 history. `kci_scratch`
+allocated 512 KiB at `tpu_addr 0xfff80000`, and the U262 128-byte type-5
+command was rebuilt with that address (`out/tpu/setup-scratch.bin`, sha256
+`5d082a1e06fc48f0eb252023f92bfd4dd028d26e46eb16c5d17247785052abf9`) and sent
+as code 6:
+
+```
+kci_send code 6 tpu_addr 0xfff7f000 len 128 -> 12
+```
+
+`12` is `KCI_ERROR_UNIMPLEMENTED`, not `KCI_ERROR_INVALID_ARGUMENT`. The
+firmware dispatched the code and parsed the payload far enough to execute the
+operation; the difference from every earlier attempt is that the allocation
+was actually mapped. So the driver's enum gap is a driver fact, not evidence
+that the firmware lacks the code, and the payload shape is structurally
+acceptable. On this image the handler reports unimplemented, so setup is not
+KCI 6 here either - but the previous "KCI is not a route" conclusion was too
+strong and is corrected.
+
+Confound recorded: the active firmware was already the A14 image (985,344 B,
+sha256 `145993a4...`) for the U273/U274 runs and for this one. The A17 file
+(52c1ccc..., 1,038,272 B) was intact at `/root/edgetpu-janeiro-a17.fw` and has
+been restored to `/usr/lib/firmware/edgetpu-janeiro.fw`.
+
 ## U274 (2026-11-13): the HAL alone sends no setup (A9 negative)
 
 A fresh boot (PSM0 `0x4b27091`, GSA state 2, firmware 1.0 539775951). Ran

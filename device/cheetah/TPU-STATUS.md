@@ -8,10 +8,12 @@ are in [TPU-HISTORY.md](TPU-HISTORY.md). **No model has run on the TPU and no
 inference is claimed.** Gate K was re-proven on this boot
 (`logs/tpu/20261113-gatek-rev10.txt`).
 
-Rev 10 withdraws the KCI-6 route: the driver's KCI set has no code 6
-(0-5, 7-19, 21 in `edgetpu-kci.h`, and `edgetpu-fs.c` says so in the hook's
-comment), so U176/U177/U188/U266 tested an unknown command code, not a setup
-schema (U269). It also records that every producer so far wrote **VII code 0**
+Rev 10 first withdrew the KCI-6 route (the driver's enum has no code 6, U269),
+then U276 corrected the reason: with a **mapped** 512 KiB scratch, code 6 with
+the U262 command answers `12` (`UNIMPLEMENTED`), not `3`. The firmware does
+dispatch code 6 and accepts the payload shape; the handler is a stub on both
+images tried, so KCI 6 is still not the producer, but the payload is no longer
+suspect. It also records that every producer so far wrote **VII code 0**
 into the 48-byte element (U248, U249). The decoded body loads 977 island
 addresses but none of the four setup messages (U270), so the log-ring index is
 where the static route continues (F1/A5'). The stock oracle remains the only
@@ -23,10 +25,10 @@ where the static route continues (F1/A5'). The stock oracle remains the only
   trip work; the reply is an 88-byte FlatBuffer, not a setup ack.
 - **Gate D (the firmware's one-time setup) is blocked.** Every VII command is
   refused with `Setup is not done yet ... type 0` (`0xf000009`) before its
-  payload is parsed. KCI is not a route: its command set has no setup code
-  (U269). Every producer tried so far used element **code 0**; the u16 code at
-  element offset 8 has never been varied, and that is the next cheap knob
-  (A9b). The Tachyon core sends a legacy 80-byte setup. The A17 HAL's device
+  payload is parsed, and VII codes 1-3 gate identically (U273), so setup is not
+  a VII code. KCI code 6 *is* dispatched but answers `UNIMPLEMENTED` on both
+  images with a mapped allocation (U276). The HAL alone sends nothing (U274),
+  and the stock driver carries no sender (U275). The Tachyon core sends a legacy 80-byte setup. The A17 HAL's device
   path resets the phone, except that A9 re-tests it as the boot's first
   power-up instead of the second.
 - **A2 is closed negative (U265).** The captured 48-byte envelope, including
