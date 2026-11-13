@@ -188,6 +188,8 @@ construction inside the HAL function that waits.
 | H3 | Create waits on a **peer thread that is itself blocked**: our `eventfd`/`timerfd` never fires because no one armed it | S2b names the waiter; then the peer thread's state from `/proc/<pid>/task/*/stack` | one run |
 | H4 | Create registers a **client** with a layer that only the service's binder side serves, even in-process | S2b: if the waiter is a callback the service installs at `0x8d10`, read that thunk's body | offline + one run |
 | H5 | The HAL wants more **properties** than `ro.board.platform` (e.g. a hardware name) and waits while a property lookup retries | S2: read every `GetProperty` call in the create path for its key | offline only |
+| H6 | The wait is an artefact of our own **`fork()`**: the child inherits a lock held at fork time by a thread that does not exist in it | run the factory in the original process, or fork before loading the HAL | one run |
+
 
 H1 and H2 are cheaper than another phone run, so they come first. H3/H4 need
 S2b, and S2b is the only instrument that has not failed.
@@ -293,11 +295,21 @@ at `0x11a00`-`0x11a14`; feeding those bytes to the factory replaced the fault
 with the wait (U292/U293). The remaining offline part is H2 and H5: every load
 from `[x0]` in create's prologue, and every `GetProperty` key on that path.
 
-**S2b (R0, next): name the waiter with an interposer.** Interpose
-`pthread_cond_wait`, `pthread_cond_timedwait`, `sem_wait`, `pthread_join` and
-`futex`, print `__builtin_return_address(0)` minus `hal_base`, and run the
-factory once. The address names the HAL function that waits. Bounded set, no
-ptrace, no unwinder, no deadlock: one run per hypothesis it settles.
+**S2b (R0, done): the interposer runs, and the HAL never calls it.**
+`pthread_cond_wait`, `pthread_cond_timedwait`, `sem_wait`, `pthread_mutex_lock`
+and `pthread_join` are defined in the harness and exported (`llvm-objdump -T`);
+the mutex one prints only on real contention (trylock first). A factory run
+(`MODE=cw`) produces no `BLK` line (U304). So the wait is not reached through
+those PLT symbols. Before using a silent run as evidence again, set `watch_pid`
+**before** the semaphore self-test: today it is set later, so the control is
+inconclusive.
+
+**S2c (R0, next): remove our own `fork()` from the experiment.** Every factory
+run so far forks first, and a child inherits locks held at fork time by threads
+that do not exist in it, the classic fork-in-a-threaded-process deadlock. H6
+fits every fact. Run the factory in the original process (alarm still on, the
+call contained by the chroot process) or fork before the HAL is initialised. If
+the factory then opens `/dev/edgetpu`, the wall was ours, not the HAL's.
 
 **S3 (R0): drive the setup.** With a HAL object in hand, call the table entries
 that take it (the service's own session path uses `+0x50`, `+0x58`, `+0x60`)
@@ -464,12 +476,15 @@ gate K fails? -> stop: driver/session regression.
 
 ## 11. Immediate actions (ordered)
 
-1. **S2b** (phone, no reboot): the blocking-primitive interposer, one factory
-   call, the return address minus `hal_base`. This is the only instrument that
-   has not already failed; it names the waiter.
-2. **H2 + H5** (offline, parallel): create's prologue loads from `[x0]` and its
-   `GetProperty` keys. Either can make S2b unnecessary.
-3. **H1** (offline build, one run): `ALooper_prepare(0)` before the call, only
+1. **S2c** (phone, no reboot): the factory with no `fork()`, alarm on, the
+   chroot process as the container. H6 is now the leading hypothesis and this
+   is the cheapest test of it.
+2. **S2b fix** (harness): set `watch_pid` before the self-test so the control
+   is real; then one `MODE=cw` run either names the waiter or proves the wait is
+   a raw futex.
+3. **H2 + H5** (offline, parallel): create's prologue loads from `[x0]` and its
+   `GetProperty` keys. Either can make the phone runs unnecessary.
+4. **H1** (offline build, one run): `ALooper_prepare(0)` before the call, only
    if S2b names a Looper task rather than an options field.
 4. **S3** (phone): the session/setup entries in order, one per run, with the
    firmware oracle after each.

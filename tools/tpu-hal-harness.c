@@ -122,6 +122,9 @@ static int harness_cb(void *ctx) {
 typedef int (*fn0)(void);
 
 static const char devpath[] = "/dev/edgetpu";
+extern int sem_init(void *, int, unsigned int);
+extern int sem_wait(void *);
+static unsigned long selftest_sem[8];
 static unsigned long hal_base;
 
 extern int backtrace(void **, int);
@@ -137,6 +140,79 @@ struct iov {
 extern long process_vm_readv(int, const struct iov *, unsigned long,
                              const struct iov *, unsigned long, unsigned long);
 extern int __errno(void);
+extern int getpid(void);
+
+/* S2b: the blockers. The HAL is in this address space, so an interposed
+   pthread_cond_wait/sem_wait/pthread_join returns to the HAL call site and
+   __builtin_return_address(0) names the waiting function directly: no ptrace,
+   no unwinder, no deadlock. Print only in the child that calls the factory. */
+static int watch_pid;
+
+static void report(const char *what, unsigned long ra) {
+  put("BLK ");
+  put(what);
+  put(" ra=");
+  puthex(ra);
+  if (ra >= hal_base && ra < hal_base + 0x400000) {
+    put(" hal+");
+    puthex(ra - hal_base);
+  }
+  put("\n");
+}
+
+typedef int (*cw_t)(void *, void *);
+typedef int (*cwt_t)(void *, void *, const void *);
+typedef int (*sw_t)(void *);
+typedef int (*jw_t)(unsigned long, void **);
+
+int pthread_cond_wait(void *c, void *m) {
+  cw_t f = (cw_t)dlsym((void *)-1, "pthread_cond_wait");
+
+  if (getpid() == watch_pid) report("cond_wait", (unsigned long)__builtin_return_address(0));
+  if (!f) _exit(9);
+  return f(c, m);
+}
+
+int pthread_cond_timedwait(void *c, void *m, const void *a) {
+  cwt_t f = (cwt_t)dlsym((void *)-1, "pthread_cond_timedwait");
+
+  if (getpid() == watch_pid) report("cond_timedwait", (unsigned long)__builtin_return_address(0));
+  if (!f) _exit(9);
+  return f(c, m, a);
+}
+
+int sem_wait(void *s) {
+  sw_t f = (sw_t)dlsym((void *)-1, "sem_wait");
+
+  if (getpid() == watch_pid) report("sem_wait", (unsigned long)__builtin_return_address(0));
+  if (!f) _exit(9);
+  return f(s);
+}
+
+int pthread_mutex_lock(void *m) {
+  static int (*tl)(void *);
+  static int (*rl)(void *);
+  int rc;
+
+  if (!tl) {
+    tl = (int (*)(void *))dlsym((void *)-1, "pthread_mutex_trylock");
+    rl = (int (*)(void *))dlsym((void *)-1, "pthread_mutex_lock");
+  }
+  if (!tl || !rl) _exit(9);
+  rc = tl(m);
+  if (rc == 0) return 0;                 /* we hold it: the lock is done */
+  if (getpid() == watch_pid)
+    report("mutex_lock", (unsigned long)__builtin_return_address(0));
+  return rl(m);
+}
+
+int pthread_join(unsigned long t, void **r) {
+  jw_t f = (jw_t)dlsym((void *)-1, "pthread_join");
+
+  if (getpid() == watch_pid) report("pthread_join", (unsigned long)__builtin_return_address(0));
+  if (!f) _exit(9);
+  return f(t, r);
+}
 
 #define PT_ATTACH 16
 #define PT_DETACH 17
@@ -356,8 +432,13 @@ __attribute__((constructor)) static void start(void) {
     _exit(0);
   }
 
-  if (mode[0] == 'b') {
+  if (mode[0] == 'b' || mode[0] == 'c') {
     n = -1;
+    if (mode[0] == 'c') {
+      sem_init(selftest_sem, 0, 1);
+      sem_wait(selftest_sem);   /* must print BLK sem_wait: proof of interposition */
+      put("selftest done\n");
+    }
   } else if (mode[0] == 'o' && mode[1] == 'p') {
     n = -1;
   } else if (mode[0] == 'o') {
@@ -374,7 +455,10 @@ __attribute__((constructor)) static void start(void) {
   pid = fork();
   if (pid == 0) {
     signal(14, on_alarm);
-    if (mode[0] != 'b' && !fileget("/tmp/tpu-noalarm")) alarm(3);
+    if (mode[0] != 'b') {
+      watch_pid = getpid();
+      if (!fileget("/tmp/tpu-noalarm")) alarm(3);
+    }
     put("calling entry ");
     putdec(n);
     put(" with zeroed options\n");

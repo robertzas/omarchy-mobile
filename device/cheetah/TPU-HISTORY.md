@@ -12961,3 +12961,26 @@ no alarm. Plan rev 13 records this as S2b, restates the wall as five hypotheses
 (H1 ALooper, H2 options field, H3 blocked peer, H4 client callback, H5 more
 properties) with a test and a cost for each, and withdraws the three failed
 instruments.
+
+**U304, the blockers are interposed and never called.** `tools/tpu-hal-harness.c`
+now defines `pthread_cond_wait`, `pthread_cond_timedwait`, `sem_wait`,
+`pthread_mutex_lock` and `pthread_join`; `llvm-objdump -T` shows all five as
+global functions in the preloaded library, and a `pthread_mutex_lock`
+interposer uses trylock-first so it prints only on real contention. A factory
+run (`MODE=cw`) produces no `BLK` line, so the wait is not reached through those
+PLT symbols: it is either a raw futex inside libc or a lock whose owner does not
+exist in this process.
+
+**Caveat recorded rather than hidden.** The semaphore self-test printed
+`selftest done` without its expected `BLK sem_wait`, because `watch_pid` is
+assigned later in the child (with the alarm) than the self-test runs. The
+control therefore proves nothing yet; set `watch_pid` before the self-test
+before treating a silent run as evidence.
+
+**U305, H6: the fork may be the cause.** Every factory run so far forks first,
+and the child inherits the parent's libc and malloc state, including any lock
+held at fork time by a thread that does not exist in the child. That is the
+classic fork-in-multithreaded-process deadlock, and it fits all four facts: no
+device open, a futex wait, the child's own three threads alive, and no
+interposed symbol ever called. The test is cheap and does not need a reboot:
+fork **before** the HAL is initialised, or call create in the original process.

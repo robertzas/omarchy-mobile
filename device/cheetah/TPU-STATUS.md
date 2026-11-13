@@ -23,6 +23,17 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U304-U305: the blockers are never called; our own fork is the suspect)
+
+The harness now interposes `pthread_cond_wait`, `pthread_cond_timedwait`,
+`sem_wait`, `pthread_mutex_lock` and `pthread_join`, all exported
+(`llvm-objdump -T`), and a factory run produces no `BLK` line: the wait is not
+reached through those symbols. The semaphore control is inconclusive
+(`watch_pid` is set after it runs), and that is recorded rather than counted.
+Leading hypothesis H6: every run forks first, and the child inherits a lock
+held at fork time by a thread it does not have. Next: run the factory with no
+fork.
+
 ## 2026-11-13 (U302-U303: ptrace is withdrawn; the plan is rev 13)
 
 `PC` was `regs[30]` (the link register), now `regs[32]`; it lands in libc's
