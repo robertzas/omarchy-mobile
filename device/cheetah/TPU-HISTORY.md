@@ -13156,3 +13156,24 @@ setup command has only ever been sent with no joined group and no opened client
 context - which is exactly the condition a firmware would gate before parsing a
 payload. This replaces "the element is wrong" with a mechanism, and it is
 testable without a boot: create a group, then send.
+
+
+**U322, RETRACTION of U318: ioctl 34 is not a KCI send.** Reading the driver's
+own UAPI header settles it:
+
+    struct edgetpu_set_device_properties_ioctl { __u8 opaque[EDGETPU_DEV_PROP_SIZE]; };
+    #define EDGETPU_SET_DEVICE_PROPERTIES  _IOW(EDGETPU_IOCTL_BASE, 34, struct ...)
+
+So `_IOW(0xED, 34, u32)` is `SET_DEVICE_PROPERTIES`: it registers a device
+property that the driver passes to the firmware **on boot**, and it is not a
+channel for commands. The header contains no KCI ioctl at all (its only mention
+of KCI is the `kci_version` field that `EDGETPU_FIRMWARE_VERSION` returns). The
+status 0 that U318 read was the property call accepting a word, not the
+firmware acknowledging `FIRMWARE_INFO`.
+
+Consequences, stated plainly: **userspace cannot send KCI commands on this
+kernel.** KCI is kernel-internal (`edgetpu_kci_send_cmd` and friends).
+`tools/tpu-kci` is withdrawn because its premise was wrong. What remains true
+from U317 is the read-only half: the firmware is alive, and
+`EDGETPU_FIRMWARE_VERSION` still answers **1.0, VII 2, KCI 3**. Userspace
+reaches the firmware only through the mailbox/VII queues, which is gate K.

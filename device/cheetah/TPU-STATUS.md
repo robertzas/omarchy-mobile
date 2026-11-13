@@ -43,13 +43,13 @@ copy a 16-byte parameter from `x1`, with `x2`/`x3` as the callback pair on five
 of them; the next target is the firmware's client context (`OPEN_DEVICE`'s
 `{client_priv, vcid, flags}`).
 
-## 2026-11-13 (U317-U318: the firmware answers, and userspace can send KCI)
+## 2026-11-13 (U317 real, U318 retracted: KCI is kernel-internal)
 
 `tools/tpu-info --json` returns **firmware 1.0, VII 2, KCI 3** (DRAM 0/0), so the
-AP-firmware handshake is complete. `tools/tpu-kci` sends `FIRMWARE_INFO` (11) and
-`GET_USAGE_V1` (12) through `_IOW(0xED, 34, u32)` and both return status 0: a
-userspace process can address the firmware directly, with no binder, chroot or
-HAL. The plan's R-KCI-0 and R-KCI-1 pass.
+AP-firmware handshake is complete. U318's "userspace can send KCI" is retracted
+by U322: ioctl 34 is `EDGETPU_SET_DEVICE_PROPERTIES`, the header has no KCI
+ioctl, and `tools/tpu-kci` is withdrawn. Userspace meets the firmware through
+the VII mailbox path (gate K) only.
 
 ## 2026-11-13 (rev 14: the plan moves to the kernel's own KCI interface)
 

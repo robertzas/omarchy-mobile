@@ -320,8 +320,9 @@ remains the VII type-5 command whose only proven producer is the DBA HAL's
 **Three routes, ordered by cost.**
 
 - **R-KCI (primary).** Drive the device from userspace through the kernel's own
-  interface: `/dev/janeiro` for the handshake, and the Tachyon session (gate K,
-  already passing) for VII. The gap is not transport; it is the exact VII
+  interface. Note (U322): KCI is kernel-internal, so the usable userspace
+  surface is the VII mailbox path (gate K) plus the read-only queries; there is
+  no KCI send ioctl. The gap is not transport; it is the exact VII
   element the HAL's enqueue writes (`base + (tail & 0x3ff) * 0x30`, 48 bytes,
   fields `0..7`, `8..9`, `10`, `11..15`, `16..23`, `24..27`, `28..31`,
   `40..43`, `44`; U264). Every producer so far wrote the wrong combination of
@@ -432,7 +433,7 @@ element unchanged.
 | D2 | a raw-binder client gets an AIDL reply | **blocked** (U285) | R1, parked |
 | D2c | `GetDarwinnHalFunctions` returns a table with version 2 | **pass** (U286) | none |
 | D2d | the table's factory returns a HAL object | **retired** (U316): the HAL is a service client and opens nothing | R-KCI |
-| D0g | userspace sends a KCI command and the driver returns status 0 | **pass** (U318) | none |
+| D0g | userspace sends a KCI command | **withdrawn** (U322): KCI is kernel-internal; ioctl 34 is `SET_DEVICE_PROPERTIES` | none |
 | D0h | the firmware reports its own version and protocol numbers | **pass** (U317): 1.0, VII 2, KCI 3 | none |
 | D2e | the HAL object's setup path builds and submits the setup command | **open** | R0, stride S3 |
 | D3b | the firmware's setup is done (gate probe answers differently) | **open** | R0 oracle |
@@ -659,10 +660,10 @@ gate K fails? -> stop: driver/session regression.
    **firmware 1.0, VII 2, KCI 3**, DRAM 0/0, so the AP-firmware handshake is
    complete and both protocol versions are now known. Every element R-KCI builds
    must declare VII 2.
-2. **R-KCI-1 (read-only, PASS, U318):** `tools/tpu-kci --code 11` and `--code 12`
-   both return status 0 through `_IOW(0xED, 34, u32)`. Userspace can put KCI
-   codes in front of the firmware on this boot, so the transport R-KCI-3 needs
-   already exists.
+2. **R-KCI-1 (WITHDRAWN, U322):** ioctl 34 is `SET_DEVICE_PROPERTIES`, not a
+   KCI send; the earlier status 0 was the property call, not the firmware.
+   Userspace cannot send KCI on this kernel, and `tools/tpu-kci` is withdrawn.
+   The transport R-KCI-3 needs is the VII mailbox queue, which gate K owns.
 3. **R-KCI-2 (offline, DONE, U319):** the rebuilt element and 80-byte payload
    are byte-identical to the 2026-11-09 replay, which gated. The element is not
    the gap, and re-sending it is a known negative. Pass: a *difference* to test.
