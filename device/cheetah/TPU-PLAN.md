@@ -1,12 +1,12 @@
 <!-- SPDX-License-Identifier: MIT -->
 # TPU / NPU plan: the Edge TPU (Abrolhos / Janeiro) on cheetah (gs201)
 
-Status (2026-11-13, rev 16): **the TPU is alive; the VII element format and the
-setup builder's type-5 conversion are both known; the value set and the
-observation channel are what remain; no inference is claimed.** Rev 16 folds in
-the last offline strides (U324-U332), including two more retractions of our own
-claims, and states plainly that this kernel offers no tracing at all, so the
-firmware's reply is the only oracle.
+Status (2026-11-13, rev 17): **the TPU is alive and now answers questions. The
+firmware's own log is an oracle (1.13), KCI has no setup code (1.12), the debugfs
+door works (1.11), and the setup builder is a 40-byte-record pipeline rather than
+the 24-byte command vector rev 16 described (1.15). No inference is claimed.**
+Rev 17 re-evaluates rev 16 against the hardware, withdraws two of its claims, and
+replaces the action list with a program whose every step has an oracle.
 
 ## 0. Rules this plan runs under
 
@@ -680,6 +680,10 @@ has no tracer options. So every step must be judged by the firmware's own reply
 or by `dmesg` lines the driver prints at normal level, and no step may promise
 "we will see it in the trace".
 
+**Correction (rev 17, U335):** that holds for *kernel* tracing only. The
+firmware's own log reaches dmesg through the driver's telemetry decode, which is
+a real observation channel; see 1.13.
+
 ### 1.13 The firmware log is the oracle (U335)
 
 The kernel cannot trace (U332), but the firmware can talk. The driver decodes the
@@ -735,13 +739,49 @@ Two conclusions close out the builder route:
    we build; the open question is the firmware's verdict, and that is now readable
    (U335). The element route and the oracle route meet here.
 
+### 1.15 The builder's real shape: 40-byte records, 16-byte values (U342/U343)
+
+Rev 16 read `SetupFirmware`'s loop as a vector of 24-byte commands. It is not.
+Two helpers disambiguate it, and both were already captured:
+
+| Function | Divides by | Object |
+| --- | --- | --- |
+| `0x14d9df8` | 24 | an array of `std::vector` (begin, end, cap) |
+| `0x14d9e2c` | 40 | the builder's own record |
+
+`0xcc7c24`, called in the middle of the loop, is `std::vector::push_back` for a
+**16-byte** element: `ldp x8,x9,[x0,#8]`, and `ldr q0,[x1]; str q0,[x8],#0x10`,
+with a grow path that computes `(end-begin)/16 + 1` (U342). The fill loop walks
+the records with `x26 += 0x28` and indexes a parallel byte array
+(`ldrb w3,[x8,x23]`), calling `0x14d9eac` per record (U343).
+
+So the pipeline is: **a 40-byte record per compiled command, converted to a
+type-5 payload, and pushed as a 16-byte value into a per-index vector**. That is
+why the payload in the element (`+0x0a` type 5, `+0x0b` five bytes) never matched
+a "command": the command is the 40-byte record, and the 16-byte pushes are the
+per-command lists.
+
+What this changes for the plan: the remaining unknown is not "the three words of a
+24-byte command" (that object does not exist) but **the fields of a 40-byte
+record**, which `0x14d9eac` converts. That is the next offline read, and it is the
+only one that can produce a setup element with a chance of passing the gate.
+
 ### 1.11 The KCI door, corrected (U329)
 
 Userspace reaches KCI through **debugfs**, not an ioctl:
-`/sys/kernel/debug/edgetpu/janeiro/{kci_payload,kci_scratch,kci_send}`. That is
-the path U266's code-6 sends used, and it remains the only one. `kci_send` is
-write-only (a read gets EACCES), so a send is a write to that file, with the code
-and variant in the payload file.
+`/sys/kernel/debug/edgetpu/janeiro/{kci_payload,kci_scratch,kci_send}`. It is the
+path U266's code-6 sends used and, since U335, the working oracle. The protocol,
+read from the handler (`edgetpu-fs.c:1116` and `1142`):
+
+1. write the DMA payload bytes (up to one page) to `kci_payload` - this only
+   stores them and the length;
+2. write the **decimal command code** to `kci_send`; the driver allocates a page,
+   copies the payload in, sets `dma.size = len` (16 when the payload is empty),
+   sends, and logs `kci_send code N tpu_addr A len L -> R`.
+
+`R` is the firmware's KCI error and, when it refuses, the firmware's own `ERR`
+line follows it in dmesg (1.13). The handler never sets `dma.flags`, which is the
+open suspect for the usage queries (U341).
 
 The driver's join-group log is `etdev_dbg`, and **dynamic debug is not compiled
 into this kernel** (`/sys/kernel/debug/dynamic_debug/control` is absent, U330),
@@ -749,29 +789,75 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. Immediate actions (ordered, rev 15)
+## 11. The program towards a working TPU (rev 17, ordered)
 
-1. **R-KCI-4 (offline, DONE, U326-U328, U331):** the enqueue is `0x152977c`
-   (`base + (tail & 0x3ff) * 0x30`), the fill is `0x152989c`, the field map is
-   complete (`+0x00`(8), `+0x08`(2), `+0x0a`(1), `+0x0b`(5), `+0x10`(8),
-   `+0x18`(4), `+0x1c`(4), `+0x28`(4), `+0x2c`(1), `+0x2d`(1), `+0x2e`(1);
-   `+0x20..+0x27` and `+0x2f` never written), and the builder stamps type 5 with
-   a 24-byte payload. The remaining values are that payload's three words.
-2. **R-KCI-5 (offline):** the 24-byte entries are already in the vector before
-   `0x14d9df8` (which is only a reserve/insert helper, U334). Read the
-   `0x14d9c74` loop and `0x14d9eac` to find where those entries are filled, then
-   recover their three words, build the element from U328's map, and diff it
-   against ours (U319). Only a difference earns a send.
-3. **R-KCI-6 (phone, one attempt):** send the different element through the
-   Tachyon session, which already creates and finalizes a device group
-   (`0x4014ed06`, `0xed08`, U324). Oracle: the firmware's setup line, or
-   `T10=11` answering anything but `0xf000009`. The join/open lines cannot be
-   enabled (U330: no dynamic debug), so the firmware's reply is the only
-   evidence of the handshake.
-4. **R-SERVICE (parked):** binderfs plus servicemanager and the vendor DBA
-   service; needs an answer to U285's unclaimed queue first.
-5. **R-STOCK (owner):** section 7, the only route proven to make the firmware's
-   setup happen.
+Every row has an oracle, a cost and a stop condition. Rows are ordered by cost,
+not by importance; nothing below needs a reboot except A3 and the stock route.
+
+### P0. Oracle regression (no phone change, 1 min, every session)
+
+`CODES="11 12 21 8" tools/phone-ssh 'bash -s' < tools/tpu-oracle`.
+**Pass:** `code 11 ... -> 0`. **Stop:** anything else means the firmware or the
+driver regressed, and no other row is meaningful until it is explained.
+
+### P1. The element send, with the verdict attached (one attempt, no reboot)
+
+The oracle is new, so the known negative earns exactly one run: the third-party
+element can now come back with the firmware naming the field it rejects. Stop
+`tpu-hold` (it holds the boot's single power-up), run `edgetpu-run`'s
+create-group/finalize/submit mode against `/dev/janeiro`, and read dmesg.
+**Pass:** any firmware line that names an element field or a value.
+**Stop:** a line identical to the 2026-11-09 gate means the element never reaches
+the parser; do not repeat without a new field.
+
+### P2. The usage descriptor's `flags` (no boot, 5 min)
+
+`GET_USAGE_V1/V2` reject 16-byte and 4096-byte descriptors alike (U341), so the
+variable is the descriptor's `flags` (`{u64 address; u32 size; u32 flags}`,
+`edgetpu-kci.h:56`), which the debugfs handler leaves zero. Test by setting the
+flag bits the driver's own usage path uses. **Pass:** `code 12 -> 0`.
+
+### P3. The 40-byte record (offline, one window)
+
+Read `0x14d9eac` end to end, one field per instruction. It converts one 40-byte
+record into the type-5 payload, so it names every field the firmware will read.
+**Pass:** a field map with an offset and a width for all 40 bytes.
+**Stop:** if it turns out to be a dispatcher over record kinds, map the kind
+first and pick the one `SetupFirmware` builds.
+
+### P4. The rebuilt element and a single send (one attempt per boot)
+
+Build the element from P3's map with U328's field map, diff it against U319's
+known negative, and send only if it differs. **Pass:** the firmware's setup line,
+or `T10=11` answering anything but `0xf000009`.
+
+### G1-G3. Graph (after P4)
+
+**G1** register the verified 12,288-byte DGC0 on the live core; **G2** a repeatable
+producer (vendor compiler in the chroot, or the laptop); **G3** verify the
+container's checksums before it reaches the TPU, because a graph is code.
+
+### E1-E5. Execution (after G1)
+
+Create the execution, bind input/output from `/dev/dma_heap/system`, Invoke, dump
+the raw output. A status 0 with an empty tensor is not E3. Then E4 CPU parity on
+integer tensors (exact), E5 twice in one boot plus a cold slot-B boot (owner-gated).
+
+### A1-A3. Acceptance (after E5)
+
+`tools/tpu-acceptance compare` against the CPU reference; ten runs watching for a
+second power-up, a leaked handle or an IOMMU fault; then the product package.
+
+### K1-K3. Kernel work the product needs
+
+One power-up per boot enforced and loud; an IOMMU fault kills the client and not
+the phone; teardown and recovery that leave the KCI heartbeat alive.
+
+### Parked
+
+**R-SERVICE** (binderfs plus servicemanager) stays parked until a command exists
+that only the service implements; KCI's enum (1.12) says none does.
+**R-STOCK** stays the owner-gated oracle of last resort (section 7).
 
 ## Appendix A - the HAL's function table (U286)
 

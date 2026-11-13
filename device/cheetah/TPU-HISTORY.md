@@ -13620,3 +13620,50 @@ with the basis for trusting it:
 Rule that follows: a row marked "instructions read" may be cited as fact; a row
 marked "not read" may only be cited as a hypothesis. Any future claim must add its
 row before it is used in a runbook.
+
+
+**U341, the usage queries are not a buffer-size problem.** `GET_USAGE_V1` (12) and
+`V2` (21) return `3` with the firmware's "DMA descriptor is invalid" for a 16-byte
+*and* for a full-page descriptor, while `FIRMWARE_INFO` (11) returns `0` with the
+same page-sized one:
+
+    kci_send code 12 tpu_addr 0xffffe000 len 4096 -> 3
+    ERR tpu_kci_handler_thread.cc:101 - DMA descriptor is invalid
+    kci_send code 21 tpu_addr 0xffffe000 len 4096 -> 3
+    kci_send code 11 tpu_addr 0xfffff000 len 4096 -> 0
+
+So size is not the variable. The descriptor the driver uses is
+`struct edgetpu_dma_descriptor { u64 address; u32 size; u32 flags; }`
+(`edgetpu-kci.h:56`), and the debugfs handler zeroes `flags` (it builds
+`struct edgetpu_command_element cmd = {0}` and sets only `address` and `size`,
+`edgetpu-fs.c:1147`). `flags` is the next variable to test, not the length.
+
+**U342, `0xcc7c24` is `std::vector::push_back`, so "24-byte commands" is
+withdrawn.** It reads begin/end from `[x0+8]` and `[x0+0x10]`, and if there is
+room stores a **16-byte** value from `[x1]` (`ldr q0,[x1]; str q0,[x8],#0x10`);
+otherwise it calls `0xcc7c60`, which computes `(end-begin)/16 + 1` and reallocs:
+
+    cc7c28: ldp x8, x9, [x0, #0x8]
+    cc7c34: b.hs 0xcc7c44            // no room -> grow
+    cc7c38: ldr q0, [x1]
+    cc7c3c: str q0, [x8], #0x10      // 16-byte element
+    cc7c7c: asr x8, x8, #4           // count = bytes / 16
+
+`0x14d9b54`'s `data + i*24` therefore indexes an array of **`std::vector`
+objects** (begin, end, cap = 24 bytes), not an array of 24-byte commands. Rev 16's
+"24-byte command vector" described the container, not its contents.
+
+**U343, the builder's records are 40 bytes.** The fill loop walks `x26` by `0x28`
+and indexes a byte array with `x23`:
+
+    14d9c74: ldr  x8, [x19, #0x230]   // record array
+    14d9c88: ldrb w3, [x8, x23]       // one byte per index step
+    14d9c90: add  x1, x9, x26         // the 40-byte record
+    14d9c94: bl   0x14d9eac           // per-record converter
+    14d9c98: bl   0x14e3388           // status check
+    14d9cb4: add  x23, x23, #1        // index
+    14d9cb8: add  x26, x26, #0x28     // 40-byte stride
+
+This matches the helper at `0x14d9e2c`, which divides by 40, and `0x14d9df8`,
+which divides by 24 (the vector array). Two different strides, two different
+objects - the earlier reading conflated them.

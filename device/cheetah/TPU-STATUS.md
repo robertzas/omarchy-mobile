@@ -23,6 +23,13 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (rev 17: re-evaluation - the plan's two wrong claims are out)
+
+Rev 17 withdraws "no observation channel" (the firmware's log reaches dmesg, 1.13)
+and "24-byte commands" (`0xcc7c24` is `vector::push_back`; the records are 40 bytes,
+1.15). The usage queries fail on the descriptor's `flags`, not its size (U341), and
+the action list is replaced by a program with an oracle at each step.
+
 ## 2026-11-13 (U339-U340: the builder route is closed, the addresses audited)
 
 The setup values are built at run time from HAL objects, so no more disassembly can
