@@ -702,8 +702,11 @@ from `dmesg`; use the firmware's own reply, or a kprobe on
    `+0x18`(4), `+0x1c`(4), `+0x28`(4), `+0x2c`(1), `+0x2d`(1), `+0x2e`(1);
    `+0x20..+0x27` and `+0x2f` never written), and the builder stamps type 5 with
    a 24-byte payload. The remaining values are that payload's three words.
-2. **R-KCI-5 (offline):** diff that element against ours (U319). Only a
-   difference earns a send; an identical element is the known negative.
+2. **R-KCI-5 (offline, in progress, U333):** the vector filler `0x14d9df8`
+   runs before the loop and stores the three words per 24-byte entry. Recover
+   those words, build the element from them (U328's map), and diff it against
+   ours (U319). Only a difference earns a send; an identical element is the
+   known negative.
 3. **R-KCI-6 (phone, one attempt):** send the different element through the
    Tachyon session, which already creates and finalizes a device group
    (`0x4014ed06`, `0xed08`, U324). Oracle: the firmware's setup line, or

@@ -13481,3 +13481,40 @@ exist, `available_filter_functions` has zero `edgetpu` entries, and
 handshake cannot be observed by dynamic debug (U330) **or** by ftrace/kprobes:
 the firmware's own reply is the only oracle on this kernel, and that closes
 suggestion 3 for good.
+
+
+**U333, the command vector's filler.** `SetupFirmware` calls `0x14d9df8` to fill
+the 24-byte command vector *before* the loop at `0x14d9b04`, so this is the last
+place the setup values can come from. The listing is quoted in full; the three
+words it stores per entry are the payload U331 allocates and the element points
+at:
+
+Disassembly of section .text:
+
+0000000000c52480 <.text>:
+14d9df8: a9402809     	ldp	x9, x10, [x0]
+14d9dfc: 52800308     	mov	w8, #0x18               // =24
+14d9e00: cb09014a     	sub	x10, x10, x9
+14d9e04: 9ac80d48     	sdiv	x8, x10, x8
+14d9e08: eb080028     	subs	x8, x1, x8
+14d9e0c: 54000069     	b.ls	0x14d9e18 <.text+0x887998>
+14d9e10: aa0803e1     	mov	x1, x8
+14d9e14: 140015b9     	b	0x14df4f8 <.text+0x88d078>
+14d9e18: 54000082     	b.hs	0x14d9e28 <.text+0x8879a8>
+14d9e1c: 52800308     	mov	w8, #0x18               // =24
+14d9e20: 9b082421     	madd	x1, x1, x8, x9
+14d9e24: 17dee5e6     	b	0xc935bc <.text+0x4113c>
+14d9e28: d65f03c0     	ret
+14d9e2c: a9402809     	ldp	x9, x10, [x0]
+14d9e30: 52800508     	mov	w8, #0x28               // =40
+14d9e34: cb09014a     	sub	x10, x10, x9
+14d9e38: 9ac80d48     	sdiv	x8, x10, x8
+14d9e3c: eb080028     	subs	x8, x1, x8
+14d9e40: 54000069     	b.ls	0x14d9e4c <.text+0x8879cc>
+14d9e44: aa0803e1     	mov	x1, x8
+14d9e48: 140015dc     	b	0x14df5b8 <.text+0x88d138>
+14d9e4c: 54000082     	b.hs	0x14d9e5c <.text+0x8879dc>
+14d9e50: 52800508     	mov	w8, #0x28               // =40
+14d9e54: 9b082421     	madd	x1, x1, x8, x9
+14d9e58: 140016da     	b	0x14df9c0 <.text+0x88d540>
+14d9e5c: d65f03c0     	ret
