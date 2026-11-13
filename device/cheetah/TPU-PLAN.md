@@ -131,7 +131,10 @@ The wait is independent of the callback and context (U298: all three
 combinations block identically), and `+0x10` is confirmed as the factory from
 the caller's own register use (U300). S2's next instrument is a ptrace sampler
 that reads the blocked thread's user stack and subtracts the HAL's mapping base
-from `/proc/<pid>/maps`; `backtrace()` cannot be used. The service fills it before the call at `0x850c`-`0x8524`; reading that
+from `/proc/<pid>/maps`; `backtrace()` cannot be used. A first sampler is in the harness (`MODE=bt`):
+attach and `PTRACE_GETREGSET` work and the PC lands in libc's futex path, but
+`PTRACE_PEEKDATA` returns -1 for the frames (U301), so print `x29`/`errno` or
+switch to `process_vm_readv` before drawing conclusions from it. The service fills it before the call at `0x850c`-`0x8524`; reading that
 fill and the library's `DarwinnHalOptions` uses is stride S2.
 
 ### 1.4 The RTTI names are next to the table, not in it

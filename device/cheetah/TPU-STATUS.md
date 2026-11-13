@@ -23,6 +23,12 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-13 (U301: the ptrace sampler reaches the futex but not the frames)
+
+`MODE=bt` attaches to the blocked child and reads its registers: the PC is in
+libc's futex path, as the kernel wchan said. The frame walk is not usable yet
+(`PTRACE_PEEKDATA` returns -1), so the waiting HAL function is still unnamed.
+
 ## 2026-11-13 (U298-U300: the wait is inside the factory, and the callback is irrelevant)
 
 All three callback/context combinations (both, callback only, context only)

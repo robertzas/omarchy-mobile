@@ -12932,3 +12932,14 @@ the call. So `+0x10` (word 2) is the factory, and the wait is inside it: it
 spawns an eventpoll/eventfd/timerfd trio and three threads, opens no device
 node, and blocks on a futex. The next question is what task that event loop is
 waiting for; a ptrace sampler (not `backtrace()`) is the way to name it.
+
+**U301, a ptrace sampler works up to the memory read.** `MODE=bt` forks the
+factory call, lets the child block, then attaches from the parent. Attach and
+`PTRACE_GETREGSET` (NT_PRSTATUS) succeed and the PC reads `0xffff7fb4ff90`,
+inside libc's futex path, matching the kernel wchan. The frame walk then fails:
+`PTRACE_PEEKDATA` returns -1 for `[x29]` and `[x29+8]`, so no return address is
+printed. Next: print `x29` and `errno` in the same run (an invalid or
+unmapped x29 is the likely cause, and the library may keep x29 only in the
+prologue), or use `process_vm_readv` on the stopped child instead of PEEKDATA.
+The HAL base is available (`hal_base`, from `/proc/self/maps`), so any return
+address can be printed as an offset into the library without symbols.
