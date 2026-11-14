@@ -68,6 +68,17 @@ flushing: got 16, want 4092`. With a 4092-byte payload it answers `0` and return
 full page of descriptor, and a bare `3` from 12/21 is a size complaint, not a
 refusal of the command.
 
+## 2026-11-14 (U398: the stable rebuild is P0a, and it is a real merge)
+
+The owner's rule is now in §14.0, and measuring it found work the plan had
+understated: `wt-tpu` is not based on `kernel-2026.11.13` (the tag is not an
+ancestor; the trees differ in 114 files) and carries 90 modified or added files
+(the edgetpu import plus binder, gxp, iommu, gs, charger and the gs201 dtsi).
+A stable-based kernel and rootfs are therefore P0a, before any G0 wipe: a new
+worktree at the tag, the series applied and resolved, `out-tpu-stable` built,
+and a boot verified. Until then `out-tpu` and the `-tpu3` rootfs stay
+development builds and are not flashed under the rule.
+
 ## 2026-11-14 (U397: rev 49's comprehensive program, the stable-build rule, and the suite)
 
 TPU-PLAN rev 49 adds §14, the forward program with its phases, commands, exits

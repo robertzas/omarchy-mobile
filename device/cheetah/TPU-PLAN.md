@@ -1649,10 +1649,17 @@ It adds no route and weakens no falsifier in §13.
 - A kernel or image build is a clean checkout of that tag with the named TPU
   bring-up series applied on top, in its own worktree and output directory
   (`wt-tpu-stable`, `out-tpu-stable`), and `uname -r` names the release base.
-  The series is consolidated from `device/cheetah/tpu-k1.patch` plus the
-  debugfs-door work; the door stays a bring-up instrument and is removed before
-  release. No build from an older or unknown base, and no unrecorded `-dirty`
-  tree.
+  The door stays a bring-up instrument and is removed before release. No build
+  from an older or unknown base, and no unrecorded `-dirty` tree.
+- **The series is not consolidated yet, so P0a comes first.** The dev worktree
+  `wt-tpu` is not based on `kernel-2026.11.13` (the tag is not an ancestor; the
+  trees differ in 114 files), and it carries 90 modified or added files: the
+  edgetpu import plus its binder, gxp, iommu, gs, charger and gs201-dtsi
+  dependencies. P0a is therefore a laptop session before any flash: a new
+  worktree at the tag, the series applied and its conflicts resolved,
+  `out-tpu-stable` built, and a boot verified with `tools/phone-smoke`.
+  Until P0a exists, `out-tpu` and the `-tpu3` rootfs are development builds and
+  are not flashed under this rule.
 - A rootfs or recovery image comes from the same pins with
   `tools/build-rootfs`; `out/cheetah/omamobile-rootfs-cheetah-2026.11.13-tpu3-aarch64.img.zst`
   is the 2026.11.13 example (verified read-only, U396).
@@ -1707,6 +1714,7 @@ self-test and the no-`rmmod` rule stand.
 
 | Phase | Work | Exit | Effort |
 | --- | --- | --- | --- |
+| **P0a stable base** | worktree at `kernel-2026.11.13`, the TPU series applied, `out-tpu-stable` built and boot-verified | `uname -r` names the tag; `tools/phone-smoke` passes | one laptop session |
 | **P0 G0** | buttons, accepted userdata reset, stock boot, capture, reinstall | capture with the VII elements and replies; Arch back on slot B | one owner session |
 | **P1 producer** | decode the capture, build the setup replay, prove the gate clears | D1 | one or two sessions |
 | **P2 G1-G5** | register, execution, bind, invoke, parity | D2-D5 | one or two sessions |
@@ -1720,7 +1728,7 @@ program.
 
 ### 14.4 P0: G0, the only owner-gated step (risk high)
 
-**Preconditions.** Latest stable base chosen (§14.0); NV backup taken and
+**Preconditions.** P0a complete (§14.0) and boot-verified; NV backup taken and
 `--check` clean; the rootfs image and `out-tpu-stable/images` verified with
 `tools/install-phone --verify-only`; slot flags read `b`/`yes`; the modem is not
 running (development phone), and the owner knows the screen changes and that
@@ -1843,12 +1851,13 @@ NV rewrites are followed by a fresh backup and check.
 
 | Session | Work | Exit |
 | --- | --- | --- |
+| 0 | §14.0: P0a, the stable-based kernel and image set | `out-tpu-stable` boot-verified |
 | 1 | §14.4: buttons, reset, capture, reinstall | D1's raw material; Arch back |
 | 2 | §14.5: decode and replay | D1 |
 | 3 | §14.6: G1-G5 | D2-D5 |
 | 4 | §14.7 and §14.8: K2, K4, product | D7, D8 |
 | 5 | §14.9: acceptance and release | D6, D9 |
 
-The branch is `cheetah-tpu-accel` at `d447a2af`; each session records its base
+The branch is `cheetah-tpu-accel` at `b3d2d832`; each session records its base
 (§14.0), its results and any plan change as a new revision.
 

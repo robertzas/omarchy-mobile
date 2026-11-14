@@ -42,6 +42,19 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U398 (2026-11-14): the stable rebuild is P0a
+
+    git -C ~/omamobile-kernel/wt-tpu merge-base --is-ancestor kernel-2026.11.13 HEAD
+    -> rc 1 (not an ancestor)
+    git diff --stat kernel-2026.11.13            -> 114 files, +7154 -7710
+    git status --short                           -> 90 files (edgetpu + binder,
+                                                    gxp, iommu, gs, charger, dtsi)
+
+    kernel tags fetched: kernel-2026.11.01, -11.08, -11.13 (36d61a337)
+
+So P0a is a new worktree at the tag, the series applied and resolved,
+out-tpu-stable built, and a boot verified before the G0 wipe uses it.
+
 ## U397 (2026-11-14): rev 49, the stable rule, and the suite
 
     tests/all  -> not ok: tools/phone-usb:63, :95 pipe into grep -q under pipefail
