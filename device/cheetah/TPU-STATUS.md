@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Edge TPU bring-up: status and benchmark
 
-As of 2026-11-14 (rev 16), kernel
+As of 2026-11-14 (rev 18), kernel
 `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B. The plan of record is
 [TPU-PLAN.md](TPU-PLAN.md); the full experiment log and every prior revision
 are in [TPU-HISTORY.md](TPU-HISTORY.md). **No model has run on the TPU and no
@@ -22,6 +22,48 @@ firmware up. The stock oracle remains the only *proven* producer; the image's
 only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
+
+## 2026-11-14 (U388: A4 is answered, and the answer is nothing)
+
+The whole firmware-info reply is 52 bytes, not the 16 the reporter printed:
+`f149d469 00000000` (build time), `03000000` (flavor), `56486135` (changelist,
+ASCII `VHa5`), then **ten spare words, all zero**. So `fw_info.spare[]` is not a
+state word on this build and A4 is closed as a negative: what setup waits for
+cannot be read from the firmware's own info. The plan's rev 44 records the three
+results that leave exactly one open route (G0 via the stock oracle) and one owner
+action (the buttons into fastboot).
+
+## 2026-11-14 (U387: the boot gate, and K1 as a reviewable patch)
+
+`omamobile-tpu` 0.1.6 adds `--gate`: exit 3 with a named line when the boot's
+power-up is spent or the firmware will not answer, exit 0 with the build id when
+it can do TPU work. `omamobile-tpu-gate.service` runs it, so `systemctl --failed`
+names a boot that cannot do TPU work instead of a product run discovering it
+halfway. The package test proves both verdicts against a fake door, with no
+phone; it caught a real bug first (the `gate` flag was overwritten by the log
+count, so the gate always passed).
+
+The K1 change now has a reviewable artifact, `device/cheetah/tpu-k1.patch`
+(K1, the widened door and `kci_last`), which reverse-applies cleanly to the
+worktree with `patch -R --dry-run -p1`. It is a patch rather than a kernel
+commit because the kernel tree tracks only three files under `drivers/edgetpu/`,
+and its door is itself uncommitted; committing either would misattribute a
+whole bring-up import to K1. The installed module records its provenance in
+`/var/lib/omamobile/tpu-module.sha256` (sha256 `11430d20…`).
+
+## 2026-11-14 (U386: the KCI door reaches 16 KiB, and code 16 refuses at every size)
+
+The door's one-page cap is gone: `kci_payload` holds 16 pages and the iremap
+allocation rounds up to the payload (`PAGE_SIZE * DIV_ROUND_UP(len, PAGE_SIZE)`),
+so a descriptor may name up to 16 KiB. A new `kci_last` (0444) returns the last
+send's code, so a sweep reads 4 bytes instead of tailing dmesg.
+
+Built `W=1` (no new warnings), module sha256 `11430d20…`, 4,013,512 B; booted and
+the gate read `fw_info f149d469…`, `spent:false`, power-up at 4.87 s. Then code 16
+with a zero payload at **4097..8192 dense, plus 12288 and 16384**: every answer
+`3`, no assertion, no crash, `spent:false` after. So code 16's refusal is not a
+buffer-size check, and the 64-byte `vii_scheduler.cc:864` assertion of code 15 is
+a later validator, not a size gate. The size hypothesis for KCI 15/16 is closed.
 
 ## 2026-11-14 (U381: K1 landed and proven - the TPU cannot power up twice in a boot)
 

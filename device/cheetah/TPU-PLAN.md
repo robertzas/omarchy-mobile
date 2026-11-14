@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 43)
+## 11. The program to a working TPU (rev 44)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1061,8 +1061,8 @@ the history; this section is the live program.
 ### 11.1 The wall, in one sentence
 
 The firmware's one-time VII setup has no producer reachable from Linux, and the
-KCI command family that might carry it has just given up its descriptor size:
-**64 bytes for code 15**.
+KCI command family that might carry it has given up its descriptor size:
+**64 bytes for code 15**, and code 16's refusal is not about size at all (U386).
 
 ### 11.2 What is proven, and what it rules out
 
@@ -1087,8 +1087,8 @@ KCI command family that might carry it has just given up its descriptor size:
 | R3 DBA HAL shim | a peer that posts events | closed (U362: no wake at all) | - |
 | R4 37 MB HAL direct | a device path that does not reset | parked (U154/U174; payload already captured) | only with a new field |
 | R5 public-source port | a public producer | closed (U367) | - |
-| R6 stock oracle | owner, physical fastboot, **and acceptance that stock may format the Arch userdata** | owner-gated | §7, §11.5, runbook `TPU-STOCK-ORACLE.md` |
-| R7 firmware static: code 15's handler | the per-code table and the 64-byte struct | **open, primary offline** | A2 |
+| R6 stock oracle | owner, physical fastboot, **and acceptance that stock may format the Arch userdata** | owner-gated; decision recorded, NV backup verified | §7, §11.5, runbook `TPU-STOCK-ORACLE.md`: S1 waits on the buttons |
+| R7 firmware static: code 15's handler | a vendor debug artifact for the log site id | **blocked** (U383) | none; A2 is closed |
 | R8 firmware self-description | logging/state queries | tracing closed (U369); `fw_info.spare[]` still unread | A4 |
 | R9 kernel/product work | independent of setup | open | §6.8 stays |
 
@@ -1101,7 +1101,7 @@ KCI command family that might carry it has just given up its descriptor size:
 and the sequence must be re-established before anything else. **Never** send 64
 in the same boot twice: the handler faults.
 
-**A2 (laptop, no phone). Find code 15's handler and the 64-byte struct.**
+**A2 (closed as blocked, U383; kept for the record). Find code 15's handler and the 64-byte struct.**
 The firmware checks `desc.size` against a per-code constant at
 `tpu_kci_handler_thread.cc:298`, so a per-code record exists that carries `64`
 for code 15. Search the image (`out/tpu/edgetpu-janeiro.fw`, island
@@ -1356,6 +1356,41 @@ into slot B rather than falling back to slot A (U385). The stock runbook now
 opens with Volume Down + Power for 20 s and records the slot state before
 `--set-active=a`. Everything else in S1-S3 stands.
 
+**Rev 44: the size route is closed, the gate ships, and A4 is answered.**
+
+Three results since rev 43, all of them removing work rather than adding it.
+
+1. **Code 16 does not refuse for lack of buffer.** The door now takes 16 KiB
+   (`kci_payload` holds 16 pages; the iremap allocation rounds up to the payload)
+   and `kci_last` reports the last code. Code 16 with a zero payload answers `3`
+   at every size from 4097 to 8192 and at 12288 and 16384, with no assertion and
+   no crash (U386). Code 15's 64-byte gate was already satisfied before it
+   asserted in `vii_scheduler`, so neither command is size-gated: the wall is the
+   element validator, exactly as §11.1 says.
+2. **The boot gate is in the product.** `omamobile-tpu --gate` exits 3 on a spent
+   or dark boot and 0 with the build id when the TPU can work;
+   `omamobile-tpu-gate.service` runs it at boot, and the package test proves both
+   verdicts against a fake door (U387). The gate above G0 is shipped, not written.
+3. **A4 is answered, negatively.** The whole `fw_info` reply is
+   `f149d469 00000000 03000000 56486135` followed by ten zero words (U388), so
+   this build carries no state word in `spare[]`; nothing about setup is
+   discoverable there.
+
+The ladder is therefore unanimous: one owner action stands between the program
+and G0, and nothing else does.
+
+| Left | Blocked by | Next action |
+| --- | --- | --- |
+| G0 firmware setup | no producer outside stock (U367, U380) | the owner puts the phone in fastboot with the buttons (U385), then S1-S3 of the stock runbook |
+| G1-G5 | G0 alone | none; written |
+| K2 IOMMU fault, K3 teardown, K4 power | not G0 | one test build and one boot each |
+| A2 static decode | a vendor debug artifact (U383) | closed; do not schedule |
+
+What does not change: the boot gate stays above G0, `rmmod` stays forbidden, no
+payload guessing returns (eight tried, one CHECK, U380), and the stock runbook's
+decision record is signed with its NV backup verified. The next event in this
+program is the owner's hands on the buttons.
+
 ### 11.5 After setup (unchanged, ordered)
 
 G1 register the verified 12,288-byte DGC0 -> E1 create execution -> E2 bind
@@ -1402,6 +1437,10 @@ Unchanged from rev 19, and each item still needs its artifact:
 - **The gate is firmware-side only.** Falsified if stock's capture shows the
   gate line on a boot where stock never ran the HAL (then setup is a kernel or
   bootloader act).
+- **Code 16 refuses because its buffer is small.** Falsified at U386: 4097..16384
+  all answer `3`, with no assertion.
+- **`fw_info.spare[]` names what setup waits for.** Falsified at U388: all ten
+  spare words are zero.
 - **This firmware can be set up at all.** Falsified if every 64-byte payload
   either faults or returns 3, and stock's own capture shows the same firmware
   build with the same gate, i.e. the setup needs a signed artifact we lack.

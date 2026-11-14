@@ -42,6 +42,51 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U388 (2026-11-14): A4, the whole fw_info reply, is ten zero spares
+
+    printf '11\n' > kci_send; sleep 1; od -An -tx1 -N64 kci_result
+    f1 49 d4 69 00 00 00 00 03 00 00 00 56 48 61 35
+    00 00 00 00 ... (all zero to 64)
+
+Layout from `edgetpu-firmware.h:49`: `uint64_t fw_build_time`, `uint32_t
+fw_flavor`, `uint32_t fw_changelist`, `uint32_t spare[10]`. The reply is 52
+bytes; every spare word is zero. A4 is closed as a negative, and no further
+query of this structure can name the setup state.
+
+## U387 (2026-11-14): the gate ships, and K1 gets a patch artifact
+
+`omamobile-tpu --gate`, against a fake door:
+
+    zeros:  gate: this boot cannot do TPU work (fw_info=0000..., spent=true)   rc 3
+    live:   gate: ok (fw_info=f149d469000000000300000056486135)              rc 0
+
+`omamobile-tpu-gate.service` runs it at boot. The package test drives both
+states, and its first run failed for a real reason: the `gate` flag was
+reassigned by `gate=$(dmesg | grep -c ...)` before it was read, so the gate fell
+through to the report and always exited 0. The flag is now `gate_only`.
+
+    make -C wt-tpu O=out-tpu ... M=drivers/edgetpu modules   rc 0
+    janeiro.ko 4,013,512 B  sha256 11430d202a7f7d0a...
+    patch -R --dry-run -p1 -i device/cheetah/tpu-k1.patch    rc 0 (both files)
+
+## U386 (2026-11-14): the door past 4 KiB, and code 16 at every size above it
+
+    EDGETPU_KCI_PAYLOAD_MAX (16 * PAGE_SIZE); iremap alloc rounds up to len
+    kci_last: 0444, returns edgetpu_kci_last_result
+
+Rebooted with the new module (`sha256 11430d20...`), then:
+
+    first send (4097 bytes) -> 3
+    swept 4098 sizes (4097..8192 dense, 12288, 16384)
+    non-3 count: 0
+    dmesg: kci_send code 16 tpu_addr 0x1015c000 size 16384 len 16384 -> 3
+    assertions 0, crashes 0, spent false
+
+The first sweep attempt failed on Python's buffered writer (`OSError: raw write()
+returned invalid length 3`): debugfs returns the firmware's code as the write
+count, so the door must be written with `os.write`, not `f.write`. Recorded so
+the next sweep does not rediscover it.
+
 ## U381 (2026-11-14): K1 built, installed, proven; one power-up per boot
 
 Kernel worktree `wt-tpu`, `drivers/edgetpu/edgetpu-pm.c` (included by
