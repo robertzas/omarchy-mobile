@@ -42,6 +42,28 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U377 (2026-11-14): the 8 KiB failure is the door's PAGE_SIZE cap
+
+`edgetpu-fs.c`: `static u8 edgetpu_kci_payload[PAGE_SIZE];` and the write handler
+returns `-E2BIG` when `len > sizeof(edgetpu_kci_payload)`. Code 16 above 4096 is
+therefore reachable only with a kernel change (buffer size), which is queued.
+
+## U376 (2026-11-14): one nonzero word anywhere -> the same assertion
+
+Payload = 64 zeros with a single self-pointer at +0x00, then +0x04, then +0x08
+(one boot each, modem stopped, code 11 -> 0 after each):
+
+    +0x00  vii_scheduler.cc:864 ASSERTION FAILED, frames 0x100D3B66 ... 0x1001B922
+    +0x04  identical
+    +0x08  identical
+
+With U375 (class byte 0x01/0x02/0x0b identical too), no field-level value changes
+the verdict: the scheduler's check is "is this buffer a valid VII element", and
+any non-element content fails it. This closes the idea that code 15 is an
+independent route: it is the kernel-facing entry to the same VII wall, and the
+payload it wants is a VII element. Next: construct one with the driver's own
+command layout rather than guessing.
+
 ## U375 (2026-11-14): class byte 0x01/0x02/0x0b -> identical assertion
 
 Three boots (modem stopped, SSH back in 15 s), payload `struct.pack('<I',addr)*16`

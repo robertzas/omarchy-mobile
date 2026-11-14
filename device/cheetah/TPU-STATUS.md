@@ -23,6 +23,27 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-14 (U377: the door's cap is a kernel constant, not the firmware)
+
+`edgetpu-fs.c:1077` declares the payload buffer as `static u8
+edgetpu_kci_payload[PAGE_SIZE]` and `:1128` refuses `len > sizeof(...)` with
+`-E2BIG`, which is exactly the 8 KiB failure. So code 16 above 4096 bytes is a
+two-line kernel change plus a build and push, not a firmware question; it stays
+queued behind higher-value work.
+
+## 2026-11-14 (U376: the assertion is structural, and code 15 eats VII elements)
+
+Three fresh boots, payload = 64 zero bytes with a **single** self-pointer at
+`+0x00`, `+0x04` and `+0x08`: all three give the same `vii_scheduler.cc:864
+ASSERTION FAILED` and the same frames, and code 11 answers 0 after each. Together
+with U375 (class byte irrelevant) this rules out every field-level reading of the
+payload: the check fires on *whether the buffer is a valid VII element at all*,
+not on a particular value. All-zero bytes crash (`null` element); any non-element
+bytes fail the validator. So code 15 is not a side door around the VII wall - it
+is the wall's kernel face, and a legal payload is a legal VII element. The next
+step is therefore to build the element with the driver's own VII command format
+(`edgetpu-fs.c` submits map-buffer elements) instead of guessing bytes.
+
 ## 2026-11-14 (U375: the class byte is not the selector)
 
 Three fresh boots, one code 15 send each, payload = sixteen self-pointers with

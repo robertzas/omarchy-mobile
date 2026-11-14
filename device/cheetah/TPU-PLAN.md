@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 24)
+## 11. The program to a working TPU (rev 25)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1082,7 +1082,7 @@ KCI command family that might carry it has just given up its descriptor size:
 
 | Route | What it needs | Verdict | Next |
 | --- | --- | --- | --- |
-| R1 KCI gap codes | a name and a payload | **open, primary**: code 15 takes 64 B | A1-A3 |
+| R1 KCI gap codes | **a valid VII element** (U376: any other content CHECKs) | **converged with R2/R7**: the wall's kernel face, not a bypass | A3d |
 | R2 VII element | a producer's exact values | closed (U249/U273/U277) | do not resend |
 | R3 DBA HAL shim | a peer that posts events | closed (U362: no wake at all) | - |
 | R4 37 MB HAL direct | a device path that does not reset | parked (U154/U174; payload already captured) | only with a new field |
@@ -1145,6 +1145,29 @@ assertion at `0x100D3B66`/`vii_scheduler.cc:864` for the condition it checks
 (element class, type or count), then set that byte, not the pointer, one value
 per boot. A3's older payload ladder stays as the fallback. Code 8 is
 UNIMPLEMENTED (U373), so there is no dump oracle.
+
+### 11.4a Rev 25: what four boots taught, and the corrected program
+
+U375 (class byte) and U376 (pointer at three different offsets) are one result:
+**no field-level value changes code 15's verdict.** All-zero bytes crash,
+anything else trips `vii_scheduler.cc:864`. The check is therefore about whether
+the buffer is a well-formed VII element, and code 15 is the kernel-facing entry
+to the same wall the userspace door meets - not a way around it.
+
+That changes the program rather than ending it:
+
+- **A3d (next, phone).** Build the 64-byte payload as a VII element using the
+  layout the kernel itself submits (`edgetpu-fs.c` builds map-buffer elements):
+  set the element's class/type to the map-buffer command with a valid self
+  address and a length, one element per boot.
+- **A3e (laptop).** Recover the element layout from the driver's own encoder
+  rather than from guesses; that is the only in-tree definition of a VII element
+  we can cite.
+- **A5 (owner).** The stock oracle climbs from "useful" to "the only proven
+  producer", but keeps its new risk: stock may format the Arch `userdata`.
+- **A2 (laptop, unfinished).** The per-code table hunt did not land (unaligned
+  sweep noise, capstone stopping at undecodable bytes); a real disassembler over
+  the extracted code region is owed before it is called closed.
 
 ### 11.5 After setup (unchanged, ordered)
 
