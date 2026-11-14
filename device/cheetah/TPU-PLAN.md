@@ -1461,8 +1461,11 @@ and `setup_proven`, so no later pass can read a green report as a working TPU.
    `fastboot getvar slot-successful:b` (expect `yes`); record both before any
    write.
 3. `fastboot --set-active=a`, `fastboot reboot`.
-4. Stock boots. `adb devices` must show `device`; an `unauthorized` line means
-   the RSA prompt has to be accepted on the phone. If USB does not come back,
+4. Stock boots. `adb devices` must show `device`. An `unauthorized` line means
+   the RSA prompt has to be accepted on the phone; **no line at all** means
+   stock's USB debugging is off, and the owner must enable it (Settings >
+   About > tap Build number seven times > Developer options > USB debugging),
+   because the capture rides on adb. If USB does not come back after the boot,
    the buttons return to slot B (the MAX77759 switch, USB-C-PLAN).
 5. `tools/tpu-stock-capture capture <private dir>`: dmesg-setup, logcat-setup,
    the firmware sha256, and NNAPI before/after.
