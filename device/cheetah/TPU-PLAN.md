@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 36)
+## 11. The program to a working TPU (rev 37)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1297,6 +1297,8 @@ referenced from data rather than from code. So the log macro passes a site id
 (or a packed file/line), and the next method is to resolve the site id to that
 string through the metadata table, then find the code that passes the id - not to
 grep for 864. That is a bounded, offline job; A2 stays open until it is done.
+
+**Rev 37: the logger's file table.** The `vii_scheduler.cc` path sits at file `0xeff78`, and searching for its address under every plausible base encoding gives no hits at all. So the firmware does not store a pointer to the path under either absolute or island-relative encoding; the logger's id table uses a different scheme (index, hash or a per-site struct), which is the next offline job. A2 remains open with its tooling solved.
 
 ### 11.5 After setup (unchanged, ordered)
 
