@@ -42,6 +42,21 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U395 (2026-11-14): the G0 recovery artifact
+
+    out/cheetah/omamobile-rootfs-cheetah-2026.11.13-tpu3-aarch64.img.zst  3,017,687,274 B
+    sha256 4b0542e1...  (read clean)
+    out/repo: 0 packages (no signed bundle yet)
+
+## U394 (2026-11-14): tpu-g0, and the self-test at boot
+
+    tools/tpu-g0 status                     -> fastboot: none, adb: none, ssh: up
+    tools/tpu-g0 run --capture X            -> die: needs --confirm (rc 1)
+    tools/tpu-g0 run --capture X --confirm  -> die: no fastboot device (rc 1)
+
+    systemctl enable --now omamobile-tpu-selftest.service
+    journal: {"transport":"ok","kci11":0,"kci12":3,"kci21":3,"setup":"unproven","rc":3}
+
 ## U393 (2026-11-14): the self-test's JSON, and the report's two new facts
 
     omamobile-tpu selftest --json

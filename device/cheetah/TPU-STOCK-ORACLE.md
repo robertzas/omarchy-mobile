@@ -32,7 +32,7 @@ Record the choice, with its date, in this file. An agent may not make it.
    `modem_a/b`, then `--check` against it. Store it off-repo; it holds the IMEI.
 3. A recovery artifact for the Arch root. Checked 2026-11-14: the local rootfs
    image exists and is intact - `out/cheetah/omamobile-rootfs-cheetah-2026.11.13-tpu3-aarch64.img.zst`
-   (2.9 GB, sha256 starts `see TPU-STATUS U395`), built from the current pins with the current
+   (2.9 GB; sha256 `4b0542e1…` checked, U395), built from the current pins with the current
    `out-tpu` modules. No signed bundle is built yet (`out/repo` is empty), so a
    release reinstall needs `tools/release` first; the image is the recovery
    artifact this runbook relies on.

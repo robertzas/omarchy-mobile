@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Edge TPU bring-up: status and benchmark
 
-As of 2026-11-14 (rev 19), kernel
+As of 2026-11-14 (rev 20), kernel
 `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B. The plan of record is
 [TPU-PLAN.md](TPU-PLAN.md); the full experiment log and every prior revision
 are in [TPU-HISTORY.md](TPU-HISTORY.md). **No model has run on the TPU and no
@@ -67,6 +67,28 @@ flushing: got 16, want 4092`. With a 4092-byte payload it answers `0` and return
 `0c 00 03 00 0c 00 00 00 18 00 00 00 02 00 00 00`. So every usage query needs a
 full page of descriptor, and a bare `3` from 12/21 is a size complaint, not a
 refusal of the command.
+
+## 2026-11-14 (U395: the G0 recovery artifact, checked)
+
+The stock runbook's third prerequisite is the Arch root's recovery artifact.
+Checked read-only: `out/cheetah/omamobile-rootfs-cheetah-2026.11.13-tpu3-aarch64.img.zst`
+exists at 3,017,687,274 bytes and its sha256 starts `4b0542e1`; it was built from
+the current pins with the current `out-tpu` modules. No signed bundle is built
+(`out/repo` holds no packages), so a *release* reinstall would need
+`tools/release` first; the image is what this run's recovery would use.
+Recorded because the runbook says stop when there is nothing to recover with.
+
+## 2026-11-14 (U394: the guided capture, and the self-test at boot)
+
+`tools/tpu-g0` wraps S1-S3 with the runbook's guards: no fastboot device means no
+write (this ABL has no buttonless path), the slot flags are recorded and must
+read `b`/`yes` before `--set-active=a`, stock's adb gets ten minutes with the USB
+debugging instruction if it never appears, and the return goes through
+`fastboot --set-active=b`, Arch, a fresh `tools/nv-backup` and `--check`. Its
+`status`, `plan` and refusal paths were tested here; the write path waits for the
+buttons. `omamobile-tpu-selftest.service` (0.1.12) runs the JSON self-test at
+boot with `SuccessExitStatus=3` and `RemainAfterExit=yes`, so the journal carries
+`{"transport":"ok",...,"setup":"unproven","rc":3}` every boot.
 
 ## 2026-11-14 (U388: A4 is answered, and the answer is nothing)
 
