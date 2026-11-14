@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 44)
+## 11. The program to a working TPU (rev 45)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1391,6 +1391,42 @@ payload guessing returns (eight tried, one CHECK, U380), and the stock runbook's
 decision record is signed with its NV backup verified. The next event in this
 program is the owner's hands on the buttons.
 
+**Rev 45: K3 is proven, K2 is blocked by the firmware, and the self-test is honest.**
+
+The pre-G0 kernel work is now as far as it can go without a compute path.
+
+- **K3 (teardown): proven in the form available.** A second client acquired the
+  wakelock, a submit answered 0 during it, `SIGKILL` left the holder count at 1,
+  and KCI 11 still answered 0 afterwards, with no oops or fault (U391). Scope:
+  the submit was the door's kernel-side one; a userspace command group waits for
+  G0.
+- **K2 (IOMMU fault): not provable through the door.** Its `kci_addr` names a
+  fixed descriptor address, and every address tried (`0x3e8`, `0x1000`,
+  `0x10000000`, `0x1ffff000`) is refused by the firmware's own
+  `tpu_kci_handler_thread.cc:101 - DMA descriptor is invalid` before any DMA
+  (U392). The firmware validates descriptors against its known buffers, so a bad
+  address cannot reach the SMMU from Linux. K2 moves from "not G0" to **blocked
+  on G0**: it needs a client mapping that is unmapped under a live command.
+- **The self-test is shipped and honest.** `omamobile-tpu selftest` proves the
+  transport with KCI 11, reports 12 and 21, and exits 3 until a real inference
+  writes `/var/lib/omamobile/tpu-setup-proven` (U390). Two wrong verdicts were
+  caught and are recorded: requiring 21 to answer 0, and treating the absence of
+  the wall line as success.
+- **KCI 21 needs 4092 bytes** and says so (`got 16, want 4092`); with a full page
+  it answers 0 with the usage struct (U389). So a bare `3` from a usage query is
+  a buffer complaint, not a refusal.
+
+| Left | Blocked by | Next action |
+| --- | --- | --- |
+| G0 firmware setup | no producer outside stock (U367, U380) | the owner puts the phone in fastboot with the buttons (U385), then S1-S3 of the stock runbook |
+| G1-G5 | G0 alone | none; written |
+| K2 IOMMU fault | G0 (the firmware validates every descriptor) | after G0: unmap a live client's buffer under a command |
+| K3 teardown | nothing further | proven pre-G0 (U391) |
+| K4 power and thermal | not G0 | an idle-TPU measurement with `tools/power-ab` while the gate holds |
+
+The single owner action is unchanged, and it is now the only thing between the
+program and every remaining gate.
+
 ### 11.5 After setup (unchanged, ordered)
 
 G1 register the verified 12,288-byte DGC0 -> E1 create execution -> E2 bind
@@ -1437,6 +1473,8 @@ Unchanged from rev 19, and each item still needs its artifact:
 - **The gate is firmware-side only.** Falsified if stock's capture shows the
   gate line on a boot where stock never ran the HAL (then setup is a kernel or
   bootloader act).
+- **The door can fault the TPU's IOMMU.** Falsified at U392: the firmware refuses
+every unregistered descriptor before DMA.
 - **Code 16 refuses because its buffer is small.** Falsified at U386: 4097..16384
   all answer `3`, with no assertion.
 - **`fw_info.spare[]` names what setup waits for.** Falsified at U388: all ten

@@ -42,6 +42,36 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U392 (2026-11-14): K2's door injection is refused by the firmware
+
+    echo 0x1000 > kci_addr; head -c 4092 /dev/zero > kci_payload; echo 21 > kci_send
+    ERR tpu_kci_handler_thread.cc:101 - DMA descriptor is invalid
+    kci_send code 21 ... -> 3        (0x3e8, 0x1000, 0x10000000, 0x1ffff000 all 3)
+    after reset (kci_addr=0): 21 -> 0
+
+The phone stayed up and the door kept answering. The firmware checks the
+descriptor against its own buffers before any DMA, so a bad address cannot reach
+the SMMU from this door. K2 is blocked on G0's compute path.
+
+## U391 (2026-11-14): K3, a client killed after a submit
+
+    tpu-hold & p=$!; printf '11\n' > kci_send   -> 0   (during the client)
+    kill -9 $p
+    selftest: KCI 11 -> 0                            (after teardown)
+    holders 1, K1 refusals 0, no oops/fault
+
+## U390 (2026-11-14): the self-test
+
+    omamobile-tpu selftest
+    selftest transport: KCI 11 -> 0, 12 -> 3, 21 -> 3
+    selftest: transport ok; setup is not proven (no inference on record)
+    rc=3
+
+## U389 (2026-11-14): KCI 21 wants 4092 bytes
+
+    16-byte default:  21 -> 3, ERR usage_tracker_impl.cc:190 ... got 16, want 4092
+    4092-byte buffer: 21 -> 0, result 0c 00 03 00 0c 00 00 00 18 00 00 00 02 00 00 00
+
 ## U388 (2026-11-14): A4, the whole fw_info reply, is ten zero spares
 
     printf '11\n' > kci_send; sleep 1; od -An -tx1 -N64 kci_result

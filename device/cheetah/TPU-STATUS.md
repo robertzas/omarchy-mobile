@@ -23,6 +23,48 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-14 (U392: K2 cannot be injected through the door; the firmware checks first)
+
+The door's `kci_addr` names a fixed descriptor address, and four addresses
+(`0x3e8`, `0x1000`, `0x10000000`, `0x1ffff000`) were sent with code 21 and a
+4092-byte buffer. Every one answered `3` with the firmware's own line
+`ERR tpu_kci_handler_thread.cc:101 - DMA descriptor is invalid`; the phone stayed
+up, the door kept working after the reset, and no fault or oops appeared. So the
+firmware validates the descriptor against its known buffers **before** it DMAs,
+and the debugfs door cannot reach the SMMU by naming a bad address. K2 stays
+unproven and is now marked blocked on G0's compute path, where a client's own
+mapping can be unmapped under a live command. `kci_addr` stays as an instrument,
+documented as unable to fault, and it takes decimal (`0x...` is accepted).
+
+## 2026-11-14 (U391: K3 in the form available before G0)
+
+A second `tpu-hold` client was started while the service's holder kept the
+wakelock: a door submit (KCI 11) answered `0` during it, `SIGKILL` of the client
+(no orderly release) left the holder count at 1, the phone up, KCI 11 still `0`,
+`K1` refusals at 0, and no oops or fault. That proves a client's teardown after a
+submit leaves the transport alive, with the honest scope that the submit was the
+door's kernel-side one, not a userspace command group.
+
+## 2026-11-14 (U390: the self-test, and two wrong verdicts it caught)
+
+`omamobile-tpu selftest` ships in 0.1.9. It proves the transport (KCI 11 answers
+0 with the build id), reports 12 and 21, and exits **3** with "setup is not
+proven" until `/var/lib/omamobile/tpu-setup-proven` exists, which only a real
+inference writes. Two earlier versions were wrong and are recorded so they are
+not repeated: 0.1.7 required KCI 21 to answer 0 (it answers 3 without the buffer
+it needs), and 0.1.8 treated the *absence* of the firmware's wall line as proof
+that setup was done, which it is not - the line appears only when a VII command
+is attempted, and the self-test sends none.
+
+## 2026-11-14 (U389: KCI 21 needs 4092 bytes, and says so)
+
+GET_USAGE_V2 through the door with its 16-byte default answers `3`; the firmware
+logs `usage_tracker_impl.cc:190 - Provided metric data buffer is too small for
+flushing: got 16, want 4092`. With a 4092-byte payload it answers `0` and returns
+`0c 00 03 00 0c 00 00 00 18 00 00 00 02 00 00 00`. So every usage query needs a
+full page of descriptor, and a bare `3` from 12/21 is a size complaint, not a
+refusal of the command.
+
 ## 2026-11-14 (U388: A4 is answered, and the answer is nothing)
 
 The whole firmware-info reply is 52 bytes, not the 16 the reporter printed:
