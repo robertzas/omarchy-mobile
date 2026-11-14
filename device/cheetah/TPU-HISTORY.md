@@ -42,6 +42,40 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U399 (2026-11-14): P0a complete
+
+    worktree ~/omamobile-kernel/wt-tpu-stable at kernel-2026.11.13 (36d61a337)
+      + the TPU series -> omamobile-tpu-stable at 7e980b090
+    bin/omamobile kernel -> 7.3.0-rc6-omamobile-push1-g7e980b090d87
+    Image 42,994,176 B; modules tarball 17,307,249 B
+      (sha256 8f2d60d7af6e9ae45a07a200a6e0c6abd073a9d83710432070acfec018e8c06b)
+    release initramfs 6,900,755 B; images rc 0 (boot 64 MiB, init_boot 8 MiB,
+      vendor_boot 8 KiB, vendor_kernel_boot 6.8 MiB, dtbo 4 KiB, dtb 201,670 B)
+    JANEIRO=m EDGETPU_FRAMEWORK=m SAMSUNG_IOMMU=m
+
+    bin/omamobile push -> boot_b/init_boot_b/vendor_boot_b/
+      vendor_kernel_boot_b/dtbo_b written and verified; reboot
+    uname -r -> 7.3.0-rc6-omamobile-push1-g7e980b090d87
+    omamobile-tpu selftest -> transport: KCI 11 -> 0, 12 -> 3, 21 -> 3;
+      transport ok; setup is not proven (exit 3)
+    /dev/janeiro present; tools/phone-smoke --json -> rc 0
+
+    rootfs 2026.11.14-p0a (local channel, keys/cheetah, not the release key):
+      2.9G, sha256 4db756ddd244ba17b8e00ead42a147d0ed2a9a51580cf43c35f9eb9753d75bf6,
+      built in 18 min; install-phone --verify-only -> rc 0
+      MANIFEST: omamobile-device-cheetah 0.1.55, omamobile-omarchy 0.1.45,
+      omamobile-tpu 0.1.14; 28 patches applied; linux-omamobile missing (allowed)
+
+    two blockers fixed:
+    - out/repo's omamobile-omarchy 0.1.32 was the 4.0.6 family, whose 0001 does
+      not apply to Omarchy 4.5.0-3; rebuilt 0.1.45 locally.
+    - packages/omamobile-omarchy/test's QML check used /usr/bin/qmlformat 1.0
+      (Qt 5), which cannot parse Qt 6 QML; it now prefers the Qt 6 tool.
+    device/cheetah/device.conf adds omamobile-tpu to ROOTFS_PACKAGES.
+
+    logs: logs/p0a-push-20261113-2355.log, logs/p0a-verify-20261113-2356.log,
+      logs/p0a-rootfs-local2-20261113-2335.log
+
 ## U398 (2026-11-14): the stable rebuild is P0a
 
     git -C ~/omamobile-kernel/wt-tpu merge-base --is-ancestor kernel-2026.11.13 HEAD

@@ -1,15 +1,18 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Edge TPU bring-up: status and benchmark
 
-As of 2026-11-14 (rev 22), kernel
-`7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B. The plan of record is
-[TPU-PLAN.md](TPU-PLAN.md); the full experiment log and every prior revision
-are in [TPU-HISTORY.md](TPU-HISTORY.md). **No model has run on the TPU and no
-inference is claimed.** Gate K was re-proven on this boot
-(`logs/tpu/20261113-gatek-rev10.txt`). Since rev 18, K3 is proven in its pre-G0
-form, K2 is blocked by the firmware's own descriptor check, and the self-test
-ships in `omamobile-tpu` 0.1.11: it reports `transport` and `setup_proven`, and
-it exits 3 until a real inference writes `/var/lib/omamobile/tpu-setup-proven`.
+As of 2026-11-14 (rev 23), kernel
+`7.3.0-rc6-omamobile-push1-g7e980b090d87` (`kernel-2026.11.13` plus the TPU
+series), slot B. The plan of record is [TPU-PLAN.md](TPU-PLAN.md); the full
+experiment log and every prior revision are in [TPU-HISTORY.md](TPU-HISTORY.md).
+**No model has run on the TPU and no inference is claimed.** Gate K was
+re-proven on the 2026-11-13 boot (`logs/tpu/20261113-gatek-rev10.txt`); on the
+P0a stable boot the self-test proves the transport (`selftest: transport ok;
+setup is not proven`). Since rev 18, K3 is proven in its pre-G0 form and K2 is
+blocked by the firmware's own descriptor check; the self-test ships in
+`omamobile-tpu` (0.1.14 in the P0a root image): it reports `transport` and
+`setup_proven`, and exits 3 until a real inference writes
+`/var/lib/omamobile/tpu-setup-proven`.
 
 Rev 10 first withdrew the KCI-6 route (the driver's enum has no code 6, U269),
 then U276 corrected the reason: with a **mapped** 512 KiB scratch, code 6 with
@@ -67,6 +70,37 @@ flushing: got 16, want 4092`. With a 4092-byte payload it answers `0` and return
 `0c 00 03 00 0c 00 00 00 18 00 00 00 02 00 00 00`. So every usage query needs a
 full page of descriptor, and a bare `3` from 12/21 is a size complaint, not a
 refusal of the command.
+
+## 2026-11-14 (U399: P0a complete — the stable base boots, its image set verifies)
+
+The stable worktree `wt-tpu-stable` (`kernel-2026.11.13`, `36d61a337`, plus
+the TPU series at `7e980b090`) built `out-tpu-stable`: release
+`7.3.0-rc6-omamobile-push1-g7e980b090d87`, `Image` 42,994,176 B, 1830 modules
+(tarball sha256 `8f2d60d7…`), a release initramfs (6,900,755 B) and the images
+(`boot` 64 MiB, `init_boot` 8 MiB, `vendor_boot` 8 KiB, `vendor_kernel_boot`
+6.8 MiB, `dtbo` 4 KiB, dtb 201,670 B), with `JANEIRO`, `EDGETPU_FRAMEWORK`
+and `SAMSUNG_IOMMU` as modules. `bin/omamobile push` wrote and verified
+`boot_b`, `init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b` and `dtbo_b`
+and rebooted. `uname -r` names the release; the self-test reports
+`transport: KCI 11 -> 0, 12 -> 3, 21 -> 3` and `transport ok; setup is not
+proven` (exit 3, no inference claimed); `/dev/janeiro` exists; and
+`tools/phone-smoke --json` exits 0 (slot b, storage guard, kernel health and
+the session checks; `logs/p0a-verify-20261113-2356.log`,
+`logs/p0a-push-20261113-2355.log`).
+
+The stable rootfs `2026.11.14-p0a` (channel local, the contributor key
+`keys/cheetah`, 2.9G, sha256 `4db756dd…`) built in 18 minutes and
+`tools/install-phone --verify-only` exits 0. Its MANIFEST names
+`omamobile-device-cheetah` 0.1.55, `omamobile-omarchy` 0.1.45 and
+`omamobile-tpu` 0.1.14, with all 28 patches applied, and records
+`linux-omamobile` as missing (allowed: the modules come from the tarball).
+Two build blockers were fixed on the way: `out/repo`'s `omamobile-omarchy`
+0.1.32 was still the 4.0.6 family, whose 0001 does not apply to Omarchy
+4.5.0-3, so it is rebuilt at 0.1.45; and the QML check took the host's
+`qmlformat` 1.0 (Qt 5), which cannot parse Qt 6 QML, so it now prefers the
+Qt 6 tool. `device/cheetah/device.conf` puts `omamobile-tpu` in the root
+image. The boot above ran the stable images on the existing development
+rootfs; G0's reinstall (§14.4) boots `2026.11.14-p0a` itself.
 
 ## 2026-11-14 (U398: the stable rebuild is P0a, and it is a real merge)
 

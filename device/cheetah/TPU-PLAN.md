@@ -1658,11 +1658,17 @@ It adds no route and weakens no falsifier in §13.
   dependencies. P0a is therefore a laptop session before any flash: a new
   worktree at the tag, the series applied and its conflicts resolved,
   `out-tpu-stable` built, and a boot verified with `tools/phone-smoke`.
-  Until P0a exists, `out-tpu` and the `-tpu3` rootfs are development builds and
-  are not flashed under this rule.
+  P0a is done (U399): the stable images boot as
+  `7.3.0-rc6-omamobile-push1-g7e980b090d87`, the self-test proves the transport
+  and `tools/phone-smoke` exits 0; the `2026.11.14-p0a` root image verifies
+  read-only and is G0's reinstall artifact. `out-tpu` and the `-tpu3` rootfs
+  stay development builds and are still not flashed under this rule.
 - A rootfs or recovery image comes from the same pins with
-  `tools/build-rootfs`; `out/cheetah/omamobile-rootfs-cheetah-2026.11.13-tpu3-aarch64.img.zst`
-  is the 2026.11.13 example (verified read-only, U396).
+  `tools/build-rootfs`; `out/cheetah/omamobile-rootfs-cheetah-2026.11.14-p0a-aarch64.img.zst`
+  is the stable example (U399: local channel and key, 2.9G, sha256
+  `4db756dd…`; built in 18 min; `install-phone --verify-only` rc 0). A local
+  key builds a test image, not a release: the release image is signed with
+  `keys/gnupg.release`.
 - A flash is `bin/omamobile push` to slot B, or `tools/install-phone` for a
   reinstall, with images from that base. If a newer stable release lands,
   rebuild first, then flash the rebuild.
@@ -1714,7 +1720,7 @@ self-test and the no-`rmmod` rule stand.
 
 | Phase | Work | Exit | Effort |
 | --- | --- | --- | --- |
-| **P0a stable base** | worktree at `kernel-2026.11.13`, the TPU series applied, `out-tpu-stable` built and boot-verified | `uname -r` names the tag; `tools/phone-smoke` passes | one laptop session |
+| **P0a stable base** | done (U399): worktree at `kernel-2026.11.13`, the series applied, `out-tpu-stable` built, and the images booted | `uname -r` names the release; `tools/phone-smoke` passes; `2026.11.14-p0a` verifies | one laptop session |
 | **P0 G0** | buttons, accepted userdata reset, stock boot, capture, reinstall | capture with the VII elements and replies; Arch back on slot B | one owner session |
 | **P1 producer** | decode the capture, build the setup replay, prove the gate clears | D1 | one or two sessions |
 | **P2 G1-G5** | register, execution, bind, invoke, parity | D2-D5 | one or two sessions |
@@ -1728,7 +1734,7 @@ program.
 
 ### 14.4 P0: G0, the only owner-gated step (risk high)
 
-**Preconditions.** P0a complete (§14.0) and boot-verified; NV backup taken and
+**Preconditions.** P0a complete (U399) and boot-verified; NV backup taken and
 `--check` clean; the rootfs image and `out-tpu-stable/images` verified with
 `tools/install-phone --verify-only`; slot flags read `b`/`yes`; the modem is not
 running (development phone), and the owner knows the screen changes and that
@@ -1750,7 +1756,7 @@ userdata is erased.
    **Stop:** no setup lines at all on stock, or the gate line on a boot where
    the HAL never ran (§13 falsifier); then go to §14.8.
 8. **Reinstall Arch** (the stable base of §14.0): `adb reboot bootloader`, then
-   `tools/install-phone --device cheetah --images ~/omamobile-kernel/out-tpu-stable/images --rootfs out/cheetah/omamobile-rootfs-cheetah-<latest stable>-aarch64.img.zst --serial <fastboot serial>`,
+   `tools/install-phone --device cheetah --images ~/omamobile-kernel/out-tpu-stable/images --rootfs out/cheetah/omamobile-rootfs-cheetah-2026.11.14-p0a-aarch64.img.zst --serial <fastboot serial>`,
    answer its prompts, let it write slot B and `userdata`, and boot.
 9. `tools/phone-smoke`; a **fresh** `tools/nv-backup` and `--check` (stock
    rewrote `efs`, `persist`, `modem_userdata`); record the capture and every
@@ -1851,13 +1857,14 @@ NV rewrites are followed by a fresh backup and check.
 
 | Session | Work | Exit |
 | --- | --- | --- |
-| 0 | §14.0: P0a, the stable-based kernel and image set | `out-tpu-stable` boot-verified |
+| 0 | §14.0: P0a, the stable-based kernel and image set | done (U399): booted, `phone-smoke` rc 0; root image verified |
 | 1 | §14.4: buttons, reset, capture, reinstall | D1's raw material; Arch back |
 | 2 | §14.5: decode and replay | D1 |
 | 3 | §14.6: G1-G5 | D2-D5 |
 | 4 | §14.7 and §14.8: K2, K4, product | D7, D8 |
 | 5 | §14.9: acceptance and release | D6, D9 |
 
-The branch is `cheetah-tpu-accel` at `b3d2d832`; each session records its base
-(§14.0), its results and any plan change as a new revision.
+The branch is `cheetah-tpu-accel`; the P0a record (U399) is its newest commit,
+and each session records its base (§14.0), its results and any plan change as
+a new revision.
 
