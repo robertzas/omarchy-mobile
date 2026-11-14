@@ -1,30 +1,19 @@
-K1: one power-up per boot on janeiro, a wider KCI door, and its readback
+K1 and the KCI door's test hooks
 
-These hunks apply to the edgetpu driver import in a development kernel tree. The
-tree tracks only edgetpu-fs.c, edgetpu-pm.c and edgetpu.h under drivers/edgetpu/,
-so the bring-up door and this change arrive as files rather than as history; the
-patch is kept here so the change is reviewable and portable.
+Apply to the edgetpu driver import in a development kernel tree (only three files
+under drivers/edgetpu/ are tracked there, so the bring-up door arrives as files).
 
   edgetpu: janeiro: refuse a second power-up in the same boot
 
-  After a power down the GSA/AON island stays unclocked (AON_RESET, AON_CLK,
-  AON_QUIESCE and POWER_CONTROL all read 0xdeadfeed), GSA state stays 2 and the
-  next power_up times out after 400 ms. Count the power-ups the boot has made and
-  refuse the next request at once with -EBUSY, naming it in the log, instead of
-  stalling the client for a timeout that cannot succeed.
+  After a power down the GSA/AON island stays unclocked (AON_* read 0xdeadfeed),
+  GSA state stays 2 and the next power_up times out. Count the boot's power-ups
+  and refuse the next request at once with -EBUSY, naming it in the log.
 
-  edgetpu: widen the KCI send door past one page
+  edgetpu: widen the KCI send door and report its answers
 
-  KCI 16 (the firmware setup command) names a buffer larger than 4 KiB, and the
-  door's descriptor size was capped at one page. The payload buffer and the
-  iremap allocation now round up to the payload's size, so a 16 KiB command can
-  be named.
-
-  edgetpu: report the door's last return code
-
-  A size sweep of one command reads the firmware's answer thousands of times;
-  kci_last makes that a 4-byte read instead of a dmesg tail, so the sweep cannot
-  miss an answer in a busy ring buffer.
+  kci_payload holds 16 pages and the iremap allocation rounds up to the payload;
+  kci_last returns the last code; kci_addr names a fixed descriptor address
+  instead (K2 fault injection; the firmware validates it, see TPU-PLAN rev 45).
 
 --- a/drivers/edgetpu/edgetpu-pm.c
 +++ b/drivers/edgetpu/edgetpu-pm.c
@@ -62,7 +51,7 @@ patch is kept here so the change is reviewable and portable.
  	}
 --- a/drivers/edgetpu/edgetpu-fs.c
 +++ b/drivers/edgetpu/edgetpu-fs.c
-@@ -1070,17 +1070,26 @@
+@@ -1070,18 +1070,43 @@
   * DMA descriptor, optionally carrying a payload. The KCI command set has no
   * setup command (the enum skips code 6) and userspace cannot reach KCI at
   * all, so this is the only way to test the one code the header leaves out.
@@ -80,6 +69,7 @@ patch is kept here so the change is reviewable and portable.
  static u8 edgetpu_kci_result[PAGE_SIZE];
  static size_t edgetpu_kci_result_len;
  
+-
 +/* The last send's return code, so a size sweep need not read dmesg each time. */
 +static int edgetpu_kci_last_result;
 +static int edgetpu_kci_last_get(void *data, u64 *val)
@@ -88,10 +78,27 @@ patch is kept here so the change is reviewable and portable.
 +	return 0;
 +}
 +DEFINE_DEBUGFS_ATTRIBUTE(fops_kci_last, edgetpu_kci_last_get, NULL, "%lld\n");
++
++/*
++ * K2 fault injection: when set, the door names this address instead of its own
++ * allocation, so a send can fault the TPU's IOMMU on purpose. Test builds only.
++ */
++static u64 edgetpu_kci_addr_override;
++static int edgetpu_kci_addr_get(void *data, u64 *val)
++{
++	*val = edgetpu_kci_addr_override;
++	return 0;
++}
++static int edgetpu_kci_addr_set(void *data, u64 val)
++{
++	edgetpu_kci_addr_override = val;
++	return 0;
++}
++DEFINE_DEBUGFS_ATTRIBUTE(fops_kci_addr, edgetpu_kci_addr_get, edgetpu_kci_addr_set,
+ 			 "%llx\n");
  
  /* Send with the kci_scratch allocation as the command's DMA descriptor. */
- static bool edgetpu_kci_dma_scratch;
-@@ -1147,6 +1156,7 @@
+@@ -1149,6 +1174,7 @@
  	struct edgetpu_coherent_mem page = {0};
  	struct edgetpu_coherent_mem *mem = &page;
  	size_t len = edgetpu_kci_payload_len;
@@ -99,7 +106,7 @@ patch is kept here so the change is reviewable and portable.
  	bool own = true;
  	u32 size;
  	int ret;
-@@ -1170,7 +1180,10 @@
+@@ -1172,7 +1198,10 @@
  		 * (0x101xxxxx); a plain coherent allocation lands at
  		 * 0xfffxxxxx and every command that touches it is refused.
  		 */
@@ -111,7 +118,13 @@ patch is kept here so the change is reviewable and portable.
  					   EDGETPU_CONTEXT_KCI);
  		if (ret)
  			return ret;
-@@ -1184,6 +1197,7 @@
+@@ -1182,10 +1211,12 @@
+ 		memcpy(mem->vaddr, edgetpu_kci_payload,
+ 		       min_t(size_t, len, mem->size));
+ 	cmd.code = (u16)val;
+-	cmd.dma.address = mem->tpu_addr;
++	cmd.dma.address = edgetpu_kci_addr_override ?
++		edgetpu_kci_addr_override : mem->tpu_addr;
  	size = own ? (len ? len : 16) : (u32)mem->size;
  	cmd.dma.size = size;
  	ret = edgetpu_kci_send_cmd(etdev->kci, &cmd);
@@ -119,12 +132,14 @@ patch is kept here so the change is reviewable and portable.
  	/*
  	 * Bring-up: keep what the firmware wrote so kci_result can hand it back.
  	 * The buffer is coherent and the send is synchronous.
-@@ -1247,6 +1261,8 @@
+@@ -1249,6 +1280,10 @@
  			    &fops_wakelock);
  	debugfs_create_file("kci_send", 0200, etdev->d_entry, etdev,
  			    &fops_kci_send);
 +	debugfs_create_file("kci_last", 0444, etdev->d_entry, etdev,
 +			    &fops_kci_last);
++	debugfs_create_file("kci_addr", 0600, etdev->d_entry, etdev,
++			    &fops_kci_addr);
  	debugfs_create_file("kci_payload", 0200, etdev->d_entry, etdev,
  			    &kci_payload_ops);
  	debugfs_create_file("kci_scratch", 0200, etdev->d_entry, etdev,
