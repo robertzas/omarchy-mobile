@@ -89,3 +89,12 @@ is not about the HAL, and the whole route needs re-reading.
   and `modem_userdata`), then re-check it before any modem work.
 - **If USB does not come back after a replug**, `omamobile-usb-rescue` closes the
   data switch while VBUS is valid; do not assume the phone is off the bus for good.
+
+## Decision record
+
+Fill in before S1, or do not start. This is the owner's call, not an agent's.
+
+    date:
+    chosen: accept the loss of the Arch userdata | second phone | stop
+    who:
+    next read-only backup taken: yes/no

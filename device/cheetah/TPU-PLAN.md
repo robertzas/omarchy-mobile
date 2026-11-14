@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 30)
+## 11. The program to a working TPU (rev 31)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1239,6 +1239,23 @@ boot. It touches no debugfs write path beyond the read-only KCI 11 query and is
 not enabled by default, so it cannot change the phone's behaviour while setup is
 missing. R9 K1 stays a patch plan: the driver tree search for the power-up path
 did not land in this pass, so it is not claimed.
+
+**Rev 31 state of play.** Everything that can be built without firmware setup
+is now either shipped or written down: the reporter package, the stock runbook
+with its decision line, the R9 proofs, and the K1 patch plan. The plan's whole
+forward motion is therefore one of two things - the owner's G0 decision, or a
+producer we have not found. The recheck below names what is honestly left:
+
+| Left | Why it is not closed | Cost |
+| --- | --- | --- |
+| G0 firmware setup | no producer outside stock (U367, U380) | owner decision |
+| K1-K4 | proofs written, driver patch not made | one build + one boot each |
+| A2 code-15 static decode | sweep noise, capstone early stop | a real disassembler run |
+| door cap (code 16 > 4096) | PAGE_SIZE buffer in edgetpu-fs.c | kernel change + push |
+
+Nothing else in the plan is unaccounted for. A result from any row above changes
+the plan; until one arrives, no further payload guessing is planned (eight
+tried, one CHECK - U380).
 
 ### 11.5 After setup (unchanged, ordered)
 
