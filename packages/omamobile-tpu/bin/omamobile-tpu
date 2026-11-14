@@ -15,13 +15,14 @@ if [ -w "$D/kci_send" ]; then
 	[ -n "$info" ] || info=unknown
 fi
 gate=$(dmesg | grep -c 'Setup is not done yet')
+k1=$(dmesg | grep -c 'K1: power-up')
 if [ "$json" = "--json" ]; then
-	printf '{"kernel":"%s","device":%s,"fw_info":"%s","gate_lines":%s,"assertions":%s,"crashes":%s}\n' \
+	printf '{"kernel":"%s","device":%s,"fw_info":"%s","gate_lines":%s,"assertions":%s,"crashes":%s,"k1_refusals":%s}\n' \
 		"$(uname -r)" "$([ -e /dev/janeiro ] && echo true || echo false)" "$info" "$gate" \
 		"$(dmesg | grep -c 'ASSERTION FAILED')" \
-		"$(dmesg | grep -c 'firmware unrecoverable crash')"
+		"$(dmesg | grep -c 'firmware unrecoverable crash')" "$k1"
 	exit 0
 fi
-printf 'kernel    %s\ndevice    %s\nfw_info   %s\nwall      %s\n' \
+printf 'kernel    %s\ndevice    %s\nfw_info   %s\nwall      %s\nk1        %s refusal(s) this boot\n' \
 	"$(uname -r)" "$([ -e /dev/janeiro ] && echo present || echo absent)" "$info" \
-	"$([ "$gate" -gt 0 ] && echo 'setup gated' || echo 'gate not logged this boot')"
+	"$([ "$gate" -gt 0 ] && echo 'setup gated' || echo 'gate not logged this boot')" "$k1"

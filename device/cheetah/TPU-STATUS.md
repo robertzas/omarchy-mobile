@@ -43,6 +43,18 @@ cannot succeed. K1 now refuses it at once (-EBUSY) and says so, instead of
 stalling the client for the full timeout. `power_up_total` counts real power-ups
 and, unlike the refcount, is never reset.
 
+## 2026-11-14 (U383: A2 is blocked on a vendor debug artifact, not on tooling)
+
+The firmware's log site ids are not resolvable from the image. Three source
+paths pin any single-base offset table - `vii_scheduler.cc` at `0xeff78`,
+`log_embedded.cc` at `0xf4d3c`, `tpu_kci_handler_thread.cc` at `0xe7220` - and
+searching **every 32-bit value** in the image for a base that satisfies all
+three gives **zero candidates**. There is also no `0x360` immediate anywhere, and
+the vendor chroot ships stripped HALs with no `.sym`, `.dbg`, `.dwp` or `.map`.
+So the line-864 condition needs a vendor debug artifact this device does not
+carry. A2 is closed as **blocked**, not open, and the plan no longer lists it as
+work that will land.
+
 ## 2026-11-14 (U382: never rmmod/insmod janeiro)
 
 Reloading the module to test an edit left the TPU unpowerable for the rest of

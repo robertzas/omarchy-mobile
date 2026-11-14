@@ -72,6 +72,21 @@ AON_CLK=0xdeadfeed AON_QUIESCE=0xdeadfeed POWER_CONTROL=0xdeadfeed GSA state=2`
 and `pm_get failed (-110)`. Hardware fact: the AON island does not come back
 after power-down, so a boot gets exactly one power-up.
 
+## U383 (2026-11-14): no single-base table over the log paths; A2 blocked
+
+Method: find three known source paths in the image (walking each back to its NUL
+start) - `vii_scheduler.cc` `0xeff78`, `log_embedded.cc` `0xf4d3c`,
+`tpu_kci_handler_thread.cc` `0xe7220`. Build the set of every aligned 32-bit
+value in the file. For each value v <= 0x300000 take base = 0xeff78 - v and
+require (0xf4d3c - base) and (0xe7220 - base) also to be in the set. Result:
+**0 candidate bases.** Also: `grep 'movw.*0x360'` over the 334,066-instruction
+listing matches only 0x3604, i.e. line 864 is never an immediate.
+
+Vendor side: `/vendor/lib64/libedgetpu_tflite_compiler.so` and the rest are
+stripped; the chroot has no `.sym`, `.dbg`, `.dwp`, `.dwo` or `.map` files. So
+the log site id is a build-time index/hash whose table is not shipped, and A2
+needs a vendor debug artifact. Closed as blocked.
+
 ## U382 (2026-11-14): rmmod/insmod leaves the TPU unpowerable until reboot
 
 `rmmod janeiro; insmod janeiro` while tpu-hold was stopped: insmod returned 0,

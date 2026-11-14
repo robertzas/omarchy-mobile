@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 39)
+## 11. The program to a working TPU (rev 40)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1250,7 +1250,7 @@ producer we have not found. The recheck below names what is honestly left:
 | --- | --- | --- |
 | G0 firmware setup | no producer outside stock (U367, U380) | owner decision |
 | K1-K4 | proofs written, driver patch not made | one build + one boot each |
-| A2 code-15 static decode | sweep noise, capstone early stop | a real disassembler run |
+| A2 code-15 static decode | **blocked**: the log site id needs a vendor debug artifact (U383) | not scheduled |
 | door cap (code 16 > 4096) | PAGE_SIZE buffer in edgetpu-fs.c | kernel change + push |
 
 Nothing else in the plan is unaccounted for. A result from any row above changes
@@ -1329,6 +1329,12 @@ That has three consequences the plan now carries:
 - **K2's shape changes**: a client that drops the last wakelock takes the TPU
   with it for the boot, so the product's self-test must warn before releasing
   and must own the wakelock for its lifetime.
+
+**Rev 40: A2 is closed as blocked.** The disassembly works, but the firmware's
+log site ids are not encoded as an offset table over its own paths: three known
+paths and every 32-bit value in the image produce zero candidate bases, and the
+vendor chroot ships no symbols. Nothing in the plan waits on A2 any more; it
+would need a debug artifact from the vendor, not another pass.
 
 ### 11.5 After setup (unchanged, ordered)
 
