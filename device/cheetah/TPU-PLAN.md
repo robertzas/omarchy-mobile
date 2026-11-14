@@ -911,9 +911,12 @@ differs from U319's bytes.** It never stops `tpu-hold` (U345).
 They are implemented and check the descriptor's address, then its size; the
 address is accepted, the size is not (16, 128, 512, 1024, 2048, 4096 and 524288
 all refused). The iremap pool caps a scratch at 512 KiB, so a larger exact size
-cannot be expressed through the door. **Next:** their name, from Google's newer
-driver trees (the published raviole branch predates them) or the vendor HAL's
-KCI client. Do not sweep sizes without it.
+cannot be expressed through the door. **Next:** their name. Checked and empty
+(U353): the published `omamobile`/`omamobile-tpu` trees and every branch carry a
+header without the gap comment; `KCI_CODE_* = 15..18` appears nowhere; the HAL's
+and the DBA runtime's strings carry no scratch/map command name. So the name
+must come from a newer Google tree or from the vendor service's binary
+interface, not from a size sweep.
 
 ### P3. The 40-byte record (offline, one window)
 

@@ -13817,3 +13817,14 @@ installed over the phone's copy with the previous one kept as
 `janeiro.ko.before-kci-dma`), `depmod`, then `systemctl reboot`: uptime 45 s,
 `kci_result` present, code 12 -> 0, the report read back, code 6's mitigation
 line and code 15's size refusal both observed. No inference and no setup.
+
+**U353, codes 15/16 cannot be named from anything in reach.** A search for the
+name behind the 15..18 gap came back empty on four fronts: the published
+`omamobile` and `omamobile-tpu` trees carry a header whose gaps have no comment
+at all (the "not implemented in this branch" line is newer than they are); no
+branch assigns `KCI_CODE_*` 15..18; `git log --all -S "MAP_SCRATCH"` is empty;
+and neither `libdarwinn_hal.so` nor `libdarwinn_dba_hal_runtime.so` carries a
+scratch/map command name in its strings. The size check therefore stays
+unsatisfiable by design, and the next artifact for this row is a newer Google
+tree or the vendor service's interface, not another probe. The plan's P2b now
+says so.
