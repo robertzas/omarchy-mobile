@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 28)
+## 11. The program to a working TPU (rev 29)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1223,6 +1223,14 @@ and thermal, measured with `tools/power-ab` on an idle TPU. The product skeleton
 is `tools/tpu-status` today - a read-only report that names the wall - and grows
 into `omamobile-tpu run` only once G0 holds, so the product path never depends on
 a debugfs bring-up hook.
+
+**K1 patch plan (rev 29, gated).** The count belongs where the driver powers the
+TPU on, once per boot, kept in `struct edgetpu_dev`; a second attempt logs one
+`etdev_err` line naming the caller and returns `-EBUSY` instead of powering up.
+Proof, in this order: build with `W=1`; boot and read `tools/tpu-status`; run the
+existing `tpu-hold` start twice and confirm exactly one power-up line and one
+`-EBUSY`; reboot and confirm the count resets. Nothing here touches setup, which
+is why it can proceed while G0 is blocked.
 
 ### 11.5 After setup (unchanged, ordered)
 

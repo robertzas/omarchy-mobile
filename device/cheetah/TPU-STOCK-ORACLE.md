@@ -71,3 +71,21 @@ fresh backup follows) and take a new one.
 
 If the gate appears on stock too, the falsifier in TPU-PLAN §13 fires: the gate
 is not about the HAL, and the whole route needs re-reading.
+
+## AGENTS.md rules that also bind this runbook
+
+- **Stop the modem before every reboot here.** `systemctl stop omamobile-modem`
+  first (a `reboot-to` or a raw reboot skips its clean stop and spends the one
+  unclean end the guard allows). This applies to S1 and S3.
+- **Announce S1 to anyone holding the phone**: it takes the screen, then boots a
+  different OS, and the Arch session is gone until S3.
+- **Only slot flags and stock's own recovery writes happen here.** No `fastboot
+  flash`, no `devinfo`, no `vbmeta`, nothing under `/dev/sd*`; the storage guard
+  runs in Arch and does not protect anything stock does.
+- **Pixel 7 Pro AVB footers:** slot B's images must keep their footers. If stock
+  falls back to recovery, choose neither "Try again" nor "Factory data reset":
+  hold Volume Down + Power for fastboot and set slot B active.
+- **Take a fresh read-only NV backup after S1** (stock rewrites `efs`, `persist`
+  and `modem_userdata`), then re-check it before any modem work.
+- **If USB does not come back after a replug**, `omamobile-usb-rescue` closes the
+  data switch while VBUS is valid; do not assume the phone is off the bus for good.

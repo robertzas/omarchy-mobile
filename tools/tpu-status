@@ -51,6 +51,17 @@ say assert_lines "$(dmesg | grep -c 'ASSERTION FAILED')"
 say crash_lines "$(dmesg | grep -c 'firmware unrecoverable crash')"
 say service "$(systemctl is-active omamobile-tpu 2>/dev/null || echo none)"
 
+if [ "${1:-}" = "--json" ]; then
+	printf '{"kernel":"%s","device":%s,"fw_info":"%s","gate_lines":%s,"assertions":%s,"crashes":%s,"service":"%s"}\n' \
+		"$(uname -r)" \
+		"$([ -e /dev/janeiro ] && echo true || echo false)" \
+		"${info:-unknown}" "$gate" \
+		"$(dmesg | grep -c 'ASSERTION FAILED')" \
+		"$(dmesg | grep -c 'firmware unrecoverable crash')" \
+		"$(systemctl is-active omamobile-tpu 2>/dev/null || echo none)"
+	exit 0
+fi
+
 cat <<'EOF'
 next: G0 (firmware setup) blocks G1-G5; see device/cheetah/TPU-PLAN.md 11.4c
       and device/cheetah/TPU-STOCK-ORACLE.md for the owner-gated capture.
