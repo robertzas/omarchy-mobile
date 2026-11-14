@@ -31,4 +31,8 @@ grep -q 'setup is not proven' bin/omamobile-tpu || fail "the self-test names the
 grep -q 'tpu-setup-proven' bin/omamobile-tpu || fail "the self-test needs a positive setup proof"
 grep -q '"transport"' bin/omamobile-tpu || fail "the self-test has a JSON form"
 grep -q 'setup_proven' bin/omamobile-tpu || fail "the report carries the setup proof"
+grep -q '^ExecStart=/usr/bin/omamobile-tpu selftest --json$' units/omamobile-tpu-selftest.service \
+  || fail "the self-test unit runs the JSON self-test"
+grep -q '^SuccessExitStatus=3$' units/omamobile-tpu-selftest.service \
+  || fail "the self-test unit accepts the honest wall verdict"
 echo "ok - omamobile-tpu"

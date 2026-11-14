@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Omarchy Mobile Edge TPU self-test (records the verdict; the setup wall is not a failure)
+After=omamobile-tpu.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-tpu selftest --json
+# Exit 3 is the honest "setup is not proven" verdict, not a unit failure.
+SuccessExitStatus=3
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
