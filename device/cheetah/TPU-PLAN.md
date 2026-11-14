@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 45)
+## 11. The program to a working TPU (rev 46)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1426,6 +1426,97 @@ The pre-G0 kernel work is now as far as it can go without a compute path.
 
 The single owner action is unchanged, and it is now the only thing between the
 program and every remaining gate.
+
+**Rev 46: the end-to-end runbook, and the state of every gate.**
+
+Nothing about G0 changed: it waits on the owner's buttons (U385). This revision
+adds the full path, so a capture has somewhere to go, and pins every gate to a
+command and a pass condition. The self-test now records its verdict in the boot
+journal (`omamobile-tpu selftest --json`), and the report carries `transport`
+and `setup_proven`, so no later pass can read a green report as a working TPU.
+
+### 11.7 State of every gate
+
+| Gate | State | Evidence | What unblocks it |
+| --- | --- | --- | --- |
+| G0 firmware setup | **blocked** | U367, U380 | the buttons, then S1-S3 |
+| G1 register DGC0 | not run | - | G0 |
+| G2 create execution | not run | - | G1 |
+| G3 bind input/output | not run | - | G2 |
+| G4 one inference | not run | - | G3 |
+| G5 parity | not run | - | G4 |
+| K1 one power-up per boot | done | U381 | - |
+| K2 IOMMU fault | **blocked** | U392 | G0 (a live client mapping) |
+| K3 teardown | done, door scope | U391 | - |
+| K4 power and thermal | not run | - | an idle measurement |
+| boot gate | shipped | U387 | - |
+| self-test | shipped | U390 | G4 writes `tpu-setup-proven` |
+| A2 static decode | **blocked** | U383 | a vendor debug artifact |
+| A4 `fw_info.spare[]` | answered (zero) | U388 | - |
+
+### 11.8 The G0 step, in the order it runs
+
+1. **Buttons** (owner): Volume Down, then Power, about 20 s.
+2. `fastboot getvar current-slot` (expect `b`) and
+   `fastboot getvar slot-successful:b` (expect `yes`); record both before any
+   write.
+3. `fastboot --set-active=a`, `fastboot reboot`.
+4. Stock boots. `adb devices` must show `device`; an `unauthorized` line means
+   the RSA prompt has to be accepted on the phone. If USB does not come back,
+   the buttons return to slot B (the MAX77759 switch, USB-C-PLAN).
+5. `tools/tpu-stock-capture capture <private dir>`: dmesg-setup, logcat-setup,
+   the firmware sha256, and NNAPI before/after.
+6. **Pass:** the capture holds the VII elements stock submits before the gate
+   clears, in order, with their bytes and replies, plus stock's `fw_info` build.
+   **Stop:** stock's recovery or factory-reset screen; no adb in the capture
+   window; or the gate line appearing on a boot where the HAL never ran (that
+   falsifies the "setup is the HAL's act" assumption in §13).
+7. **Return:** `fastboot --set-active=b`, boot Arch, `tools/phone-smoke`, then a
+   **fresh** `tools/nv-backup` and `--check` (stock rewrites `efs`, `persist`,
+   `modem_userdata`).
+8. Record the capture as U-numbers and fold it into rev 47.
+
+### 11.9 After G0: the model path, with its commands
+
+**G1 register the graph.** The DGC0 container is the 12,288-byte one
+`tools/tpu-mini-model.py` builds, or `tools/tpu-compile MODEL OUT` produces with
+stock's compiler. Register it through the driver's group path.
+**Pass:** status 0 and the driver's register line. **Stop:** a non-zero status;
+the container's bytes are the finding, not a reason to retry.
+
+**G2 create an execution** on the registered graph. **Pass:** a non-zero
+execution id.
+
+**G3 bind input and output** from `/dev/dma_heap/system`. **Pass:** both mappings
+carry TPU iovas and the driver logs their addresses.
+
+**G4 one inference** with a non-empty input tensor. **Pass:** the output buffer
+changes and its sha256 is recorded. Only a run that also passes G5 may write
+`/var/lib/omamobile/tpu-setup-proven`.
+
+**G5 parity.** `tools/tpu-acceptance compare --tpu OUT --cpu REF --dtype …
+--shape …` matches within its tolerance; then twice in one boot (the wakelock
+must be held across both, because of K1) and once after a cold boot.
+
+**P1-P5 product.** `omamobile-tpu run MODEL INPUT` emits the JSON report, the
+service self-test covers gate K and the mini model, DEVICES.md gets its honest
+row, and `tools/pr-check` runs before the commit.
+
+### 11.10 K4, the one measurement that needs no G0
+
+With the boot gate holding the TPU powered and idle, `tools/power-ab --suspend
+systemd` compares the drain against a boot with `janeiro` not loaded.
+**Pass:** the delta and its uncertainty are recorded. **Stop:** the run is
+unattended with the cable out by design (power-ab), so USB may not return until
+the next cable-in boot; read the result then, never from the middle of the run.
+
+### 11.11 If G0 cannot be run
+
+- **A second phone** with stock Android runs the same capture with no userdata
+  risk, and its `fw_info` must match this one's build.
+- **Stop.** Nothing else in the program needs G0: K1, K3, the boot gate and the
+  self-test stand on their own, and the plan says so rather than implying a TPU
+  that works.
 
 ### 11.5 After setup (unchanged, ordered)
 

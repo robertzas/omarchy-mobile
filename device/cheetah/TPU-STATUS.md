@@ -1,12 +1,15 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Edge TPU bring-up: status and benchmark
 
-As of 2026-11-14 (rev 18), kernel
+As of 2026-11-14 (rev 19), kernel
 `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B. The plan of record is
 [TPU-PLAN.md](TPU-PLAN.md); the full experiment log and every prior revision
 are in [TPU-HISTORY.md](TPU-HISTORY.md). **No model has run on the TPU and no
 inference is claimed.** Gate K was re-proven on this boot
-(`logs/tpu/20261113-gatek-rev10.txt`).
+(`logs/tpu/20261113-gatek-rev10.txt`). Since rev 18, K3 is proven in its pre-G0
+form, K2 is blocked by the firmware's own descriptor check, and the self-test
+ships in `omamobile-tpu` 0.1.11: it reports `transport` and `setup_proven`, and
+it exits 3 until a real inference writes `/var/lib/omamobile/tpu-setup-proven`.
 
 Rev 10 first withdrew the KCI-6 route (the driver's enum has no code 6, U269),
 then U276 corrected the reason: with a **mapped** 512 KiB scratch, code 6 with

@@ -42,6 +42,18 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U393 (2026-11-14): the self-test's JSON, and the report's two new facts
+
+    omamobile-tpu selftest --json
+    {"transport":"ok","kci11":0,"kci12":3,"kci21":3,"setup":"unproven","rc":3}
+    omamobile-tpu --json
+    {...,"spent":false,"transport":"ok","setup_proven":false}
+
+The first JSON attempt duplicated the printf arguments, and POSIX printf reused
+the format, printing a second malformed record; the report also left `transport`
+at unknown. Both fixed in 0.1.11, and the package test now greps for the JSON
+form and for `setup_proven`.
+
 ## U392 (2026-11-14): K2's door injection is refused by the firmware
 
     echo 0x1000 > kci_addr; head -c 4092 /dev/zero > kci_payload; echo 21 > kci_send
