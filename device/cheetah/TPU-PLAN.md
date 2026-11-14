@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 31)
+## 11. The program to a working TPU (rev 32)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1256,6 +1256,13 @@ producer we have not found. The recheck below names what is honestly left:
 Nothing else in the plan is unaccounted for. A result from any row above changes
 the plan; until one arrives, no further payload guessing is planned (eight
 tried, one CHECK - U380).
+
+**K1 is closer than the plan said (rev 32).** `edgetpu-pm.c` already carries
+`int power_up_count` in the power-management struct and increments it on every
+power-up (`etpm->p->power_up_count++`), so the count K1 wanted exists. What is
+missing is policy: a second power-up in a boot is allowed and silent. The change
+is therefore small and local - refuse with `-EBUSY` and one `etdev_err` at the
+second increment - and its proof is the one already written in rev 29.
 
 ### 11.5 After setup (unchanged, ordered)
 

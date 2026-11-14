@@ -7,3 +7,6 @@ Type=oneshot
 ExecStart=/usr/bin/omamobile-tpu status --json
 StandardOutput=journal
 RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
