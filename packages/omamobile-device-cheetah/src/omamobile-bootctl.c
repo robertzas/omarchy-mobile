@@ -84,15 +84,11 @@
 #define DEVINFO_MIN_VERSION	0x00030003u	/* "only version 3.3+ supports A/B data" */
 
 /*
- * Layout versions this port has been checked against: 3.15 (Pixel 7 Pro,
- * cheetah, stock CP2A bootloader) and 3.19 (the same phone on the Android 17
- * beta). Google's current gs-common DevInfo.h keeps the same 128-byte struct,
- * with the slot array at 0x30, for both; AOSP's BootControl.cpp accepts any
- * version >= 3.3. Writes refuse anything outside this verified set.
+ * The only layout version this port has been checked against (Pixel 7 Pro,
+ * cheetah, stock CP2A bootloader, devinfo 3.15). Writes refuse anything else.
  */
 #define VERIFIED_VER_MAJOR	3
-#define VERIFIED_VER_MINOR_OLD	15
-#define VERIFIED_VER_MINOR_NEW	19
+#define VERIFIED_VER_MINOR	15
 
 /* devinfo is 8 KiB on cheetah; refuse anything absurdly large */
 #define MAX_REGION		(1024 * 1024)
@@ -101,12 +97,6 @@ static const char *argv0 = "omamobile-bootctl";
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 static uint16_t rd16(const uint8_t *p) { return p[0] | p[1] << 8; }
-
-static int verified_layout(uint16_t maj, uint16_t min)
-{
-	return maj == VERIFIED_VER_MAJOR &&
-	       (min == VERIFIED_VER_MINOR_OLD || min == VERIFIED_VER_MINOR_NEW);
-}
 
 static int usage(void)
 {
@@ -173,10 +163,13 @@ static int check_header(const uint8_t *d, int for_write)
 		fprintf(stderr, "%s: devinfo version %u.%u has no A/B data (need 3.3+)\n", argv0, maj, min);
 		return -1;
 	}
-	if (for_write && !verified_layout(maj, min)) {
-		fprintf(stderr, "%s: devinfo version %u.%u is not a verified %u.%u/%u.%u layout; refusing to write\n",
-			argv0, maj, min, VERIFIED_VER_MAJOR, VERIFIED_VER_MINOR_OLD,
-			VERIFIED_VER_MAJOR, VERIFIED_VER_MINOR_NEW);
+	if (for_write && (maj != VERIFIED_VER_MAJOR || min != VERIFIED_VER_MINOR)
+#ifdef OMAMOBILE_DEVINFO_EXTRA_MINOR
+	    && (maj != 3 || min != OMAMOBILE_DEVINFO_EXTRA_MINOR)
+#endif
+	    ) {
+		fprintf(stderr, "%s: devinfo version %u.%u is not the verified %u.%u layout; refusing to write\n",
+			argv0, maj, min, VERIFIED_VER_MAJOR, VERIFIED_VER_MINOR);
 		return -1;
 	}
 	return 0;
@@ -229,8 +222,8 @@ static int cmd_dump(const char *path)
 	printf("devinfo: %s (%zu bytes)\n", path, len);
 	printf("magic:   0x%08x \"DEVI\"\n", rd32(d + OFF_MAGIC));
 	printf("version: %u.%u%s\n", rd16(d + OFF_VER_MAJOR), rd16(d + OFF_VER_MINOR),
-	       verified_layout(rd16(d + OFF_VER_MAJOR), rd16(d + OFF_VER_MINOR))
-	       ? " (verified layout)" : " (NOT a verified layout: read-only)");
+	       rd16(d + OFF_VER_MAJOR) == VERIFIED_VER_MAJOR && rd16(d + OFF_VER_MINOR) == VERIFIED_VER_MINOR
+	       ? " (verified layout)" : " (NOT the verified layout: read-only)");
 	for (int i = 0; i < DEVINFO_AB_SLOT_COUNT; i++)
 		print_slot(d, i);
 	printf("active slot (HAL rule: slot b if its active bit is set, else a): %c\n",

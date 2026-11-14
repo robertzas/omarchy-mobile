@@ -120,21 +120,7 @@ profile_lists() {
       SYSTEM_FILES=(system/build.prop)
       SYSTEM_DIRS=()
       ;;
-    edgetpu)
-      # The Jainero TFLite runtime and the on-device compiler. The client is
-      # ours (built with the Android NDK); the runtime opens /dev/edgetpu and
-      # needs only libc/libm/libdl/liblog, which the closure walk resolves.
-      # No binder: the runtime is driven directly, not through the vendor
-      # service. See device/cheetah/TPU-PLAN.md T6.
-      VENDOR_BINS=()
-      VENDOR_LIBS=(lib64/libedgetpu_util.so lib64/libedgetpu_tflite_compiler.so)
-      VENDOR_FILES=(build.prop)
-      VENDOR_DIRS=()
-      SYSTEM_BINS=()
-      SYSTEM_FILES=(system/build.prop)
-      SYSTEM_DIRS=()
-      ;;
-    *) die "unknown profile '$1' (known: gnss, gnss-slsi, modem, waves, edgetpu)" ;;
+    *) die "unknown profile '$1' (known: gnss, gnss-slsi, modem, waves)" ;;
   esac
 }
 
@@ -171,13 +157,6 @@ profile_check() {
       grep -q '^\[CUSTOM_ACTION_258\]' "$1/vendor/etc/waves_config.ini" ||
         die "waves_config.ini has no custom action 258 (preset selection)"
       ;;
-    edgetpu)
-      grep -aq 'DarwinnApi2_VirtualDevice_RegisterGraphByBuffer' \
-        "$1/vendor/lib64/libedgetpu_util.so" ||
-        die "libedgetpu_util.so has no DarwinnApi2 graph registration"
-      grep -aq 'CompileTfliteFlatbuffer' "$1/vendor/lib64/libedgetpu_tflite_compiler.so" ||
-        die "libedgetpu_tflite_compiler.so has no CompileTfliteFlatbuffer"
-      ;;
   esac
 }
 
@@ -187,7 +166,7 @@ Usage: extract-vendor-chroot -p PROFILE [-d DEVICE] [-o OUTDIR] [-w WORKDIR] [-f
 
   SOURCE   Google factory zip (DEVICE-*-factory-*.zip) or the
            image-DEVICE-*.zip inside it
-  -p NAME  profile: gnss, gnss-slsi (tegu), modem, waves, edgetpu
+  -p NAME  profile: gnss, gnss-slsi (tegu), modem, waves
   -o DIR   output directory (default: ./out/vendor-chroot-PROFILE)
   -w DIR   scratch directory for vendor.img and system.img, about 2.5 GB
            (default: a temp dir in \$TMPDIR)
@@ -317,7 +296,7 @@ done
 # The vendor partition says which device it was built for.
 mkdir -p "$WORK/v"
 debugfs -R "dump /build.prop $(dq "$WORK/v/build.prop")" "$WORK/vendor.img" 2>/dev/null
-[[ -s "$WORK/v/build.prop" ]] || die "vendor.img has no build.prop"
+[[ -s "$WORK/v/build.prop" ]] || die "build.prop can't be read from vendor.img"
 dev=$(sed -n 's/^ro.product.vendor.device=//p' "$WORK/v/build.prop" | head -1)
 [[ "$dev" == "$DEVICE" || -n "$FORCE" ]] ||
   die "vendor partition is for '${dev:-unknown}', not $DEVICE; use -f to override"
