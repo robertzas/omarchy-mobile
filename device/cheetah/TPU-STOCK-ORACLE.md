@@ -41,7 +41,18 @@ Record the choice, with its date, in this file. An agent may not make it.
 
 ### S1 (owner, risk high). Boot stock on slot A
 
-`fastboot --set-active=a`, then a normal boot. Expect stock Android's lock
+**The buttons, not `bin/omamobile fastboot`:** that helper cannot reach fastboot
+on this ABL - `reboot-to bootloader` is ignored and its sysrq-c fallback only
+warm-reboots into slot B (U385). So: with the phone off or on, hold **Volume
+Down, then Power**, about 20 s, until the bootloader screen. Then:
+
+    fastboot devices
+    fastboot getvar current-slot          # expect b
+    fastboot getvar slot-successful:b     # expect yes
+    fastboot --set-active=a
+    fastboot reboot
+
+Record each output here before continuing. Expect stock Android's lock
 screen. **Pass:** stock boots and the TPU node exists (`/dev/janeiro` or the
 vendor HAL's device) under `adb shell`. **Stop:** stock offers recovery or a
 factory-reset screen; hold Volume Down + Power for fastboot, set slot B active

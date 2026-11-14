@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 42)
+## 11. The program to a working TPU (rev 43)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1349,6 +1349,12 @@ empty queues, `fw_info` zeros (U384). So every run, and the product service,
 starts by requiring `power-up ok` (equivalently `spent:false` from
 `omamobile-tpu`) and treats a dark boot as a reboot, not a result. That gate goes
 above G0 in the ladder: it says whether this boot can do TPU work at all.
+
+**Rev 43: S1 starts with the buttons.** `bin/omamobile fastboot` does not work on
+cheetah: `reboot-to bootloader` is ignored, and the sysrq-c fallback warm-reboots
+into slot B rather than falling back to slot A (U385). The stock runbook now
+opens with Volume Down + Power for 20 s and records the slot state before
+`--set-active=a`. Everything else in S1-S3 stands.
 
 ### 11.5 After setup (unchanged, ordered)
 

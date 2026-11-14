@@ -72,6 +72,19 @@ AON_CLK=0xdeadfeed AON_QUIESCE=0xdeadfeed POWER_CONTROL=0xdeadfeed GSA state=2`
 and `pm_get failed (-110)`. Hardware fact: the AON island does not come back
 after power-down, so a boot gets exactly one power-up.
 
+## U385 (2026-11-14): the buttonless fastboot path does not exist on cheetah
+
+`bin/omamobile fastboot` with the phone in Arch:
+
+    ==> Our Linux: reboot-to bootloader          (x4)
+    ==> Bootloader ignored the reason; crashing so it falls back to slot A
+    (sysrq-c panic; SSH returned at t=24 s "up 0 minute")
+
+After the panic the phone was back in slot B with SSH up, and `fastboot devices`
+and `adb devices` were empty at every poll (120 s). So ABL neither honours
+`reboot-to bootloader` nor falls back to slot A on this crash; the panic is just
+a warm reboot. Fastboot needs the buttons: Volume Down, add Power, hold ~20 s.
+
 ## U384 (2026-11-14): one boot came up with the TPU dark; the next did not
 
 Flow: after the K1 proof the last holder was killed (the boot's power-up spent),

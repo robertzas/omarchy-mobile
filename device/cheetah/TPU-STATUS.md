@@ -43,6 +43,16 @@ cannot succeed. K1 now refuses it at once (-EBUSY) and says so, instead of
 stalling the client for the full timeout. `power_up_total` counts real power-ups
 and, unlike the refcount, is never reset.
 
+## 2026-11-14 (U385: no buttonless fastboot on this ABL; the buttons are the way)
+
+`bin/omamobile fastboot` cannot get cheetah into fastboot. Its first path,
+`reboot-to bootloader`, was ignored by ABL (four attempts, phone still in Arch);
+its fallback, `echo c > /proc/sysrq-trigger`, panicked and the phone rebooted
+**into slot B again**, not slot A. `fastboot devices` and `adb devices` stayed
+empty throughout. So S1 of the stock-oracle runbook needs the buttons: Volume
+Down, then Power, held about 20 s. The panic path is recorded as a negative so no
+later pass spends a boot on it.
+
 ## 2026-11-14 (U384: a spent boot can come up dark; check `power-up ok`)
 
 After K1 refused a second power-up and the last holder was killed, the next boot
