@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Edge TPU bring-up: status and benchmark
 
-As of 2026-11-14 (rev 20), kernel
+As of 2026-11-14 (rev 21), kernel
 `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B. The plan of record is
 [TPU-PLAN.md](TPU-PLAN.md); the full experiment log and every prior revision
 are in [TPU-HISTORY.md](TPU-HISTORY.md). **No model has run on the TPU and no
@@ -67,6 +67,24 @@ flushing: got 16, want 4092`. With a 4092-byte payload it answers `0` and return
 `0c 00 03 00 0c 00 00 00 18 00 00 00 02 00 00 00`. So every usage query needs a
 full page of descriptor, and a bare `3` from 12/21 is a size complaint, not a
 refusal of the command.
+
+## 2026-11-14 (U396: G0 attempt 1 — stock wants a factory reset, not a capture)
+
+S1 ran: the flags read `b`/`yes`, `--set-active=a` and a reboot, and stock did
+not reach Android. With our Arch root on `userdata` it boots stock recovery and
+offers "Try again" / "Factory data reset" — the risk TPU-STOCK-ORACLE records,
+now measured. No capture ran. The phone returned with `--set-active=b` and
+booted Arch on slot B (the TPU self-test still `transport ok`, `setup
+unproven`).
+
+The next attempt therefore includes the wipe: choose "Factory data reset" on
+that screen, let stock boot and enable USB debugging, capture, then reinstall
+Arch from `out/cheetah/omamobile-rootfs-cheetah-2026.11.13-tpu3-aarch64.img.zst`
+with `~/omamobile-kernel/out-tpu/images` before slot B boots again. A read-only
+`tools/install-phone --verify-only` on both passed: checksum matches, kernel
+`7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty` with its modules in the image.
+`tools/tpu-g0` now stops on adb `recovery` with that instruction instead of
+waiting for a `device` stock cannot offer.
 
 ## 2026-11-14 (U395: the G0 recovery artifact, checked)
 

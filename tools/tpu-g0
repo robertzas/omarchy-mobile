@@ -75,6 +75,12 @@ say "stock is booting; waiting for adb (up to 10 min)"
 for i in $(seq 1 120); do
 	st=$(adb_state || true)
 	[ "$st" = device ] && break
+	case $st in
+	recovery)
+		die "stock is in recovery, not Android: our Arch root on userdata stops it (U396). Choose Factory data reset on the phone (the accepted risk, TPU-STOCK-ORACLE), let stock boot, enable USB debugging, then rerun; Arch returns through tools/install-phone from the -tpu3 image" ;;
+	unauthorized)
+		die "adb says unauthorized: accept the RSA prompt on stock's screen, then rerun" ;;
+	esac
 	[ $((i % 12)) -eq 0 ] && say "adb: ${st:-none}"
 	sleep 5
 done

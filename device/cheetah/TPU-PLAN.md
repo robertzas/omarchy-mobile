@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 47)
+## 11. The program to a working TPU (rev 48)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1461,12 +1461,14 @@ and `setup_proven`, so no later pass can read a green report as a working TPU.
    `fastboot getvar slot-successful:b` (expect `yes`); record both before any
    write.
 3. `fastboot --set-active=a`, `fastboot reboot`.
-4. Stock boots. `adb devices` must show `device`. An `unauthorized` line means
-   the RSA prompt has to be accepted on the phone; **no line at all** means
-   stock's USB debugging is off, and the owner must enable it (Settings >
-   About > tap Build number seven times > Developer options > USB debugging),
-   because the capture rides on adb. If USB does not come back after the boot,
-   the buttons return to slot B (the MAX77759 switch, USB-C-PLAN).
+4. Stock boots. With our Arch root on `userdata` it cannot decrypt it and
+   lands in stock recovery, not Android (U396): choose **Factory data reset**
+   (the accepted risk in TPU-STOCK-ORACLE: it erases the Arch root), let stock
+   boot, and enable USB debugging (Settings > About > tap Build number seven
+   times > Developer options > USB debugging). `adb devices` must show
+   `device`; `unauthorized` means the RSA prompt has to be accepted on the
+   phone. If USB does not come back after the boot, the buttons return to slot B
+   (the MAX77759 switch, USB-C-PLAN).
 5. `tools/tpu-stock-capture capture <private dir>`: dmesg-setup, logcat-setup,
    the firmware sha256, and NNAPI before/after.
 6. **Pass:** the capture holds the VII elements stock submits before the gate
@@ -1474,10 +1476,15 @@ and `setup_proven`, so no later pass can read a green report as a working TPU.
    **Stop:** stock's recovery or factory-reset screen; no adb in the capture
    window; or the gate line appearing on a boot where the HAL never ran (that
    falsifies the "setup is the HAL's act" assumption in §13).
-7. **Return:** `fastboot --set-active=b`, boot Arch, `tools/phone-smoke`, then a
-   **fresh** `tools/nv-backup` and `--check` (stock rewrites `efs`, `persist`,
+7. **Reinstall Arch, then return:** after the wipe there is no Arch root to
+   boot. From stock, `adb reboot bootloader`, then
+   `tools/install-phone --device cheetah --images ~/omamobile-kernel/out-tpu/images
+   --rootfs out/cheetah/omamobile-rootfs-cheetah-2026.11.13-tpu3-aarch64.img.zst`
+   (its read-only `--verify-only` passes, U396); it writes slot B and
+   `userdata`, boots Arch, then `tools/phone-smoke`, a **fresh**
+   `tools/nv-backup` and `--check` (stock rewrites `efs`, `persist`,
    `modem_userdata`).
-8. Record the capture as U-numbers and fold it into rev 47.
+8. Record the capture as U-numbers and fold it into rev 48.
 
 ### 11.9 After G0: the model path, with its commands
 
@@ -1545,6 +1552,21 @@ does not come back after kexec (AGENTS.md), and the capture rides on adb, so a
 stock kernel booted that way would most likely be a phone with no way to capture
 anything until a forced reboot - and if stock then formatted `userdata`, there
 would be no Arch to return to. S1 stays the route.
+
+**Rev 48: G0 attempt 1, and the wipe belongs to the step.**
+
+The first S1 run reached stock recovery, not Android: stock cannot decrypt our
+Arch `userdata` (U396). That is the accepted risk measured, not a surprise, and
+it makes the factory reset a part of the G0 step rather than a fallback. The
+runbook now orders it: reset on stock's screen, enable USB debugging, capture,
+then reinstall Arch from the `-tpu3` root image before slot B boots again. That
+reinstall path is verified read-only (`tools/install-phone --verify-only`: the
+checksum matches and the kernel's modules are in the image), and `tools/tpu-g0`
+stops on adb `recovery` with the same instruction.
+
+The branch was also synced with upstream and with the old remote
+`cheetah-tpu-accel` line (`d9c19d04`): main's newer tools and tests, our device
+package and TPU files, and a NOTES union of both sides' entries.
 
 ### 11.5 After setup (unchanged, ordered)
 

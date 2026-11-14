@@ -42,6 +42,27 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U396 (2026-11-14): G0 attempt 1, and the branch sync
+
+    fastboot getvar current-slot      -> b
+    fastboot getvar slot-successful:b -> yes
+    fastboot --set-active=a; reboot      -> stock
+    adb devices                       -> <serial>  recovery
+    adb shell getprop ro.boot.mode    -> recovery
+    fastboot --set-active=b; reboot   -> Arch on slot B
+
+    tools/install-phone --device cheetah \
+      --images ~/omamobile-kernel/out-tpu/images \
+      --rootfs out/cheetah/omamobile-rootfs-cheetah-2026.11.13-tpu3-aarch64.img.zst \
+      --verify-only
+    -> root image checksum matches; kernel 7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty,
+       its modules in the root image; rc 0
+
+The same day the branch was synced: `origin/main` and the old remote
+`cheetah-tpu-accel` tip merged into it (main's newer tools and tests, our
+device-cheetah 0.1.55 and TPU files, NOTES unioned) and pushed as a
+fast-forward to `d9c19d04`.
+
 ## U395 (2026-11-14): the G0 recovery artifact
 
     out/cheetah/omamobile-rootfs-cheetah-2026.11.13-tpu3-aarch64.img.zst  3,017,687,274 B

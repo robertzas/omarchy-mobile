@@ -56,11 +56,15 @@ Down, then Power**, about 20 s, until the bootloader screen. Then:
     fastboot --set-active=a
     fastboot reboot
 
-Record each output here before continuing. Expect stock Android's lock
-screen. **Pass:** stock boots and the TPU node exists (`/dev/janeiro` or the
-vendor HAL's device) under `adb shell`. **Stop:** stock offers recovery or a
-factory-reset screen; hold Volume Down + Power for fastboot, set slot B active
-again, and stop the run. **Rollback:** `fastboot --set-active=b` and boot Arch.
+Record each output here before continuing. **Expect stock recovery**, not
+Android: our Arch root on `userdata` is not an Android data partition, so stock
+offers "Try again" / "Factory data reset" (U396). **Pass:** with the accepted
+risk, choose **Factory data reset**, stock boots, and the TPU node exists
+(`/dev/janeiro` or the vendor HAL's device) under `adb shell`. **Stop:** if the
+loss is not acceptable after all, hold Volume Down + Power for fastboot, set
+slot B active again, and stop the run. **Rollback:** `fastboot --set-active=b`
+and boot Arch; after the wipe Arch is gone, so the return is
+`tools/install-phone` from `...tpu3...` (its `--verify-only` passes, U396).
 
 ### S2 (owner, risk medium). Capture the setup sequence
 
