@@ -42,6 +42,31 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U379 (2026-11-14): real A14 -> code 6 12, code 15 12 (UNIMPLEMENTED)
+
+After swapping the `updates/google/` firmware (U378) and rebooting with the modem
+stopped first:
+
+    fw_info: 5e a2 87 64 00.. 03 00 00 00 cf 53 2c 20   (build 0x6487a25e)
+    kci_send code 6  ... -> 12        (A14 signature; A17 gives 14)
+    kci_send code 15 tpu_addr 0x1015c000 size 64 len 64 -> 12
+    (no vii_scheduler assertion, no crash)
+
+So KCI 15/16 do not exist on A14 at all; they are A17 additions. On A17 they
+assert on every non-element payload, which means the A17 command expects a real
+VII element - the same producer the userspace door lacks. Hypothesis for the next
+step: code 15 is the A17 HAL's setup channel, and its 64 bytes are one or two
+32-byte VII elements.
+
+## U378 (2026-11-14): firmware swaps must target updates/google
+
+`cp` over `/usr/lib/firmware/edgetpu-janeiro.fw` + reboot produced *identical*
+behaviour to A17 (same fw_info build 0x69d449f1, code 6 -> 14, same assertion):
+the kernel loads `/usr/lib/firmware/updates/google/edgetpu-janeiro.fw`, which
+shadows the base file. Overwriting the `updates/google/` copy is what actually
+changes the running firmware. Both paths were restored to A17 (52c1ccc...) after
+the A14 test, and the phone was rebooted back onto A17.
+
 ## U377 (2026-11-14): the 8 KiB failure is the door's PAGE_SIZE cap
 
 `edgetpu-fs.c`: `static u8 edgetpu_kci_payload[PAGE_SIZE];` and the write handler

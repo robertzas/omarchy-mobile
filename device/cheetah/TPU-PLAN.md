@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 25)
+## 11. The program to a working TPU (rev 26)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1168,6 +1168,28 @@ That changes the program rather than ending it:
 - **A2 (laptop, unfinished).** The per-code table hunt did not land (unaligned
   sweep noise, capstone stopping at undecodable bytes); a real disassembler over
   the extracted code region is owed before it is called closed.
+
+### 11.4b Rev 26: the gap commands are A17-only, and the payload is an element
+
+Two results change the program's direction:
+
+1. **The firmware path matters.** `updates/google/edgetpu-janeiro.fw` shadows
+   the base copy, so the first A14 swap was a no-op (U378). Every firmware test
+   must target the `updates/` file and confirm the boot's `fw_info` matches the
+   image's expected build before trusting a result.
+2. **Code 15 exists only on A17.** On the real A14 (build `0x6487a25e`) code 6
+   answers 12 and code 15 answers 12 UNIMPLEMENTED with no assertion (U379).
+   On A17 (build `0x69d449f1`) code 15 passes the 64-byte size gate and then
+   asserts in `vii_scheduler` for every payload we can build. So the command was
+   added with A17, and its handler validates a VII element.
+
+That makes **A3f** the next live step: build the 64 bytes as one or two
+`edgetpu_command_element`-shaped records (seq, code, reserved, dma{address,size,
+flags}) with the self address, and read the assertion as the validator's answer.
+It also promotes the hypothesis in R4: the A17 vendor HAL's setup most likely
+uses exactly this command, which is why the A17 HAL knows a payload shape no
+public source contains. A5 (stock oracle) remains the externally proven route
+and keeps the userdata risk.
 
 ### 11.5 After setup (unchanged, ordered)
 

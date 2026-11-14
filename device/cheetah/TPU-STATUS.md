@@ -23,6 +23,26 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-14 (U379: code 15 exists only on A17)
+
+With the *real* A14 image loaded (U378), `fw_info` reads build `0x6487a25e`,
+flavor 3, changelist `0x202c53cf`, code 6 answers **12** (the A14 signature the
+plan recorded in U276), and **code 15 at 64 bytes answers 12 - UNIMPLEMENTED**,
+with no assertion and no crash. The same call on A17 answers `-110` and trips
+`vii_scheduler.cc:864`. So 15/16 were added in the A17 firmware, and A17's
+handler rejects every payload we can build as a non-element. That makes code 15
+the most likely channel the A17 vendor HAL's setup uses - and confirms the
+payload must be a real VII element, not a byte pattern.
+
+## 2026-11-14 (U378: `updates/` shadows the base firmware path)
+
+Replacing `/usr/lib/firmware/edgetpu-janeiro.fw` with the A14 image changed
+nothing: the boot still reported A17's `fw_info` and code 6 -> 14. The kernel
+loads `/usr/lib/firmware/updates/google/edgetpu-janeiro.fw`, which shadows it.
+Replacing *that* file produced the real A14 (build `0x6487a25e`, code 6 -> 12).
+Every future firmware swap must target the `updates/google/` copy, and any
+earlier "A14" result taken through the base path is suspect.
+
 ## 2026-11-14 (U377: the door's cap is a kernel constant, not the firmware)
 
 `edgetpu-fs.c:1077` declares the payload buffer as `static u8
