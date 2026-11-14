@@ -70,11 +70,18 @@ selftest() {
 	echo "selftest: no inference is claimed until G0 (firmware setup)"
 	return 3
 }
+# JSON must stay parseable: a KCI answer is a number, anything else is null.
+num() {
+	case "${1:-}" in
+	''|*[!0-9-]*) echo null ;;
+	*) echo "$1" ;;
+	esac
+}
 if [ "$mode" = selftest ]; then
 	if [ "$json" = --json ]; then
 		selftest >/dev/null 2>&1; rc=$?
 		printf '{"transport":"%s","kci11":%s,"kci12":%s,"kci21":%s,"setup":"%s","rc":%s}\n' \
-			"$transport" "$st11" "$st12" "$st21" \
+			"$transport" "$(num "$st11")" "$(num "$st12")" "$(num "$st21")" \
 			"$([ "$proven" = true ] && echo proven || echo unproven)" "$rc"
 	else
 		selftest; rc=$?
