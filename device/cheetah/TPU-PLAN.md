@@ -1051,9 +1051,10 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 22)
+## 11. The program to a working TPU (rev 23)
 
-Rev 22 supersedes the route table of rev 19-21. Its new fact is U366: KCI code
+Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
+is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
 15 has a **64-byte** payload, not an unguessable one. The old §11 rows stay in
 the history; this section is the live program.
 
@@ -1125,6 +1126,18 @@ have never been printed. If one is a state word, it names what setup waits for.
 added, explicit risk: stock Android on slot A sees an Arch `userdata` it cannot
 decrypt and may format it (the 9a precedent in AGENTS.md). So this route needs
 the owner's acceptance of losing the install, or a second device.
+
+**A3 result (2026-11-14, rev 23).** A3 is no longer a blind differential. The
+door publishes the payload's firmware address (`tpu_addr`, U372), so a 64-byte
+payload can point at itself. Sixteen copies of that address reach the firmware's
+**VII scheduler** and trip `vii_scheduler.cc:864 ASSERTION FAILED` with an
+eight-frame backtrace (U374), where the zero payload had only crashed. So code
+15 is the KCI face of the VII scheduler: the gate's userspace path and this
+command meet in the same component. The new program step is **A3b**: decode the
+assertion at `0x100D3B66`/`vii_scheduler.cc:864` for the condition it checks
+(element class, type or count), then set that byte, not the pointer, one value
+per boot. A3's older payload ladder stays as the fallback. Code 8 is
+UNIMPLEMENTED (U373), so there is no dump oracle.
 
 ### 11.5 After setup (unchanged, ordered)
 

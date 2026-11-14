@@ -42,6 +42,38 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U374 (2026-11-14): 16x self-pointer -> vii_scheduler.cc:864 ASSERTION FAILED
+
+Fresh boot (modem stopped, 15 s to SSH). Code 11 first to learn the boot's
+`tpu_addr` (0x1015c000). Payload: `struct.pack('<I',0x1015c000)*16` (64 B).
+One code 15 send. The firmware asserts in the VII scheduler and prints a full
+CHECK backtrace, then the gate still returns -110:
+
+    ERR vii_scheduler.cc:864 - ASSERTION FAILED
+    ERR log_embedded.cc:78 - --- Backtrace for CHECK Failure ---
+    0x100D3B66 0x100D3C26 0x100B647E 0x1001B922 0x1001C156 0x100D2020
+    0x100D20C8 0x100D1446
+    kci_send code 15 tpu_addr 0x1015c000 size 64 len 64 -> -110
+    kci_send code 11 tpu_addr 0x1015c000 size 64 len 64 -> 0
+
+Interpretation: code 15 dispatches into `vii_scheduler`, so the KCI gap command
+is the kernel-facing entry of the same VII machinery the userspace door uses.
+The zero payload crashed because its first field was a null pointer; a valid
+pointer turns the crash into an assertion. Next: the assertion's condition, and
+which of the 64 bytes is read as the VII element's class/type.
+
+## U373 (2026-11-14): code 8 is UNIMPLEMENTED, the door's buffers are write-only
+
+`kci_send code 8 tpu_addr 0x1015c000 size 4096 len 4096 -> 12` (UNIMPLEMENTED).
+`kci_dma` and `kci_scratch` read back EACCES. So neither the debug dump nor the
+door's own registers can be used as a state oracle.
+
+## U372 (2026-11-14): the door logs tpu_addr
+
+Every send logs `kci_send code N tpu_addr 0x1015c000 size S len L -> R`. The
+address is the firmware-visible mapping of the door's buffer and is constant
+across sends within a boot, which is what allows a self-referential payload.
+
 ## U371 (2026-11-14): the two crash addresses, decoded offline
 
 `out/tpu/edgetpu-janeiro.fw` is the running image (sha256 52c1ccc..., A17,

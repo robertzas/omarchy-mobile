@@ -23,6 +23,40 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-14 (U374: code 15 is a VII-scheduler command, and its payload is a pointer)
+
+The door logs the buffer's firmware address on every send (`kci_send code N
+tpu_addr 0x1015c000 size 64 len 64`) and the address is stable per boot. With
+that known, a 64-byte payload of sixteen copies of `0x1015c000` - a self-pointer
+the firmware can legally read and write - no longer faults silently. It reaches
+the firmware's **VII scheduler** and trips its own assertion:
+
+    ERR vii_scheduler.cc:864 - ASSERTION FAILED
+    ERR log_embedded.cc:78 - --- Backtrace for CHECK Failure ---
+    0x100D3B66 0x100D3C26 0x100B647E 0x1001B922 0x1001C156 0x100D2020
+    0x100D20C8 0x100D1446        (then kci_send code 15 ... -> -110)
+
+So code 15 is not a mystery family: it feeds `vii_scheduler`, i.e. it is the
+kernel-side entry to the same VII path whose userspace door is gated. The
+payload is parsed as VII input, and the assertion - not a fault - is the next
+oracle. The all-zero payload faulted because its first pointer was null; the
+self-pointer faults the assertion instead, which is strictly more information.
+Code 11 still answers 0 with len 64 afterwards.
+
+## 2026-11-14 (U373: query codes are narrower than assumed)
+
+Code 8 (debug dump, 4096-byte descriptor) answers `-> 12`, UNIMPLEMENTED. So
+the firmware's dump path is not available as a state oracle either. `kci_dma`
+and `kci_scratch` are write-only from debugfs (read gives EACCES), and `kci_result`
+holds the last reply buffer.
+
+## 2026-11-14 (U372: the driver publishes the payload's firmware address)
+
+`edgetpu-fs.c`'s door logs `tpu_addr` alongside size and length for every send;
+it is `0x1015c000` on a boot and does not change between sends, so a payload can
+name the door's own buffer. That single number is what makes an A3 payload
+testable at all: before it, every nonzero pointer in a payload was a guess.
+
 ## 2026-11-14 (U371: the crash PC is an event loop, the second address a log site)
 
 Offline decode of the two firmware addresses from U370. `0x100D20C8` is a
