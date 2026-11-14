@@ -1,16 +1,15 @@
 <!-- SPDX-License-Identifier: MIT -->
 # TPU / NPU plan: the Edge TPU (Abrolhos / Janeiro) on cheetah (gs201)
 
-Status (2026-11-13, rev 19): **the TPU is alive, its firmware answers KCI
-questions, and the door now reads back what the firmware writes. The wall under
-every "invalid descriptor" was the buffer's **address**: the debugfs hook
-allocated at `0xfffxxxxx`, outside the one window the firmware accepts, while
-KCI's own buffers come from the iremap pool at `0x101xxxxx` (1.16). With that
-fixed, `GET_USAGE_V1/V2` answer 0 at 4096 bytes and their report is readable
-(1.17), and the enum's missing code 6 turns out to be a **power-mitigation
-request**, not setup (1.18). The firmware setup itself is still not done and no
-inference is claimed.** Rev 19 adds the read channel and the definition of done
-(section 12), and closes code 6 as a setup route.
+Status (2026-11-13, rev 20): **the TPU is alive, the KCI door reads and
+writes, and the HAL's blocked `Create` is now named from outside: a standalone
+sampler shows three runtime threads on one futex and the main thread on another
+(word 0), every frame inside `libdarwinn_dba_hal_runtime.so`, with no device fd
+at the wait (1.19). That is still a userspace peer, not firmware. The firmware
+setup itself is not done and no inference is claimed.** Rev 20 adds the sampler
+and its result, explains why the `pthread_cond_wait` interposer never fired, and
+corrects P3: the 40-byte record is dead in `0x14d9eac`, which is a per-entry
+constructor, not the type-5 serializer.
 
 ## 0. Rules this plan runs under
 
@@ -605,7 +604,9 @@ workload.
    setup line (stock's driver decodes the telemetry ring too)? does the DBA
    service log `SetupFirmware` or `Firmware setup failed`? and what is the
    firmware build (`sha256sum /vendor/firmware/edgetpu-janeiro.fw`)? Do not
-   expect the VII element itself unless stock's driver logs it.
+   expect the VII element itself unless stock's driver logs it. `capture`
+   writes `dmesg-setup.txt`, `logcat-setup.txt`, `fw-sha256.txt`, `fw-ls.txt`
+   and `tpu-service.txt` for exactly those; nothing else on stock is needed.
 6. **Rollback.** `fastboot --set-active=b`, boot the saved set, verify SSH and
    `omamobile-boot-success`, then a fresh `tools/nv-backup`. On the recovery
    screen choose neither "Try again" nor "Factory data reset".
@@ -629,6 +630,20 @@ workload.
    other than `0xf000009`.
 6. Stop after three boots without a factory status; then S2/S4 must name the
    options and the entries before another attempt.
+
+### R0b (phone, no reboot): sample the blocked create
+
+1. `tools/phone-ssh 'cat > /root/tpu-sampler.c' < tools/tpu-sampler.c`, then
+   `gcc -O2 -static -o /root/tpu-sampler /root/tpu-sampler.c` on the phone.
+2. Start the factory with the builder's options and no fork:
+   `MODE=create NOFORK=1 tpu-exec.py daemon create /vendor/bin/edgetpu-run`
+   (the phone's `tpu-exec.py` passes `MODE` and `NOFORK` through).
+3. `/root/tpu-sampler PID --wait 5 --stack 16384`: every futex thread's comm,
+   uaddr, word, pc/lr/sp and each stack word that lands in a mapping.
+4. **Pass:** the blocked thread's stack resolves to module+offset, and its
+   futex word is readable. **Stop:** if no thread is in futex after 5 s, the
+   wait moved and the run needs a fresh `MODE` before another sample.
+5. Kill the target; nothing here touches the device or the power-up.
 
 ### R1 (phone, no reboot): the binder session (parked)
 
@@ -857,6 +872,44 @@ That is a power/thermal mitigation request, not firmware setup. The gap is power
 management; the branch is closed on this firmware (on the A14 image it answered
 12, U276). Do not send 6 again expecting setup.
 
+### 1.19 The wait, named from outside (U354-U356)
+
+`tools/tpu-sampler.c` is a standalone aarch64 binary (gcc 16 on the phone,
+static). It attaches to every thread of a target, reads registers with
+`PTRACE_GETREGSET`, prints `pc`/`lr`/`sp` as module+file-offset from
+`/proc/<pid>/maps`, and scans the user stack with `process_vm_readv` for words
+that point into executable mappings. The in-process hook could not do this
+(1.6); a separate process can.
+
+Against `MODE=create NOFORK=1` with the builder's options, in one boot:
+
+    tid 7258 (edgetpu-run) futex uaddr 0xffff9092c180 word 0
+      runtime+0x1202a4 +0x1253a0 +0x1254d4 +0x125aa8 +0x12292c +0x123c8c
+      +0x11d18c +0x11d1ac +0x11d32c +0x113d34 +0x11c900 +0x113c84
+      +0xf8b04 +0xff55c +0xfd4c8 +0xf908c +0xf77a4, edgetpu-run+0x2c64
+    tid 7259-7261 futex uaddr 0xffff91bdeb90 word 0x4002 (all three)
+      runtime+0x125664 +0x125578 +0x126460 +0x125518 +0x21432c +0x12afbc
+
+Three facts follow. **The wait is inside the runtime**, not bionic: every frame
+between libc's futex path and the harness is
+`libdarwinn_dba_hal_runtime.so`, and that library exports exactly one symbol
+(`GetDarwinnHalFunctions`), so the plan can only name offsets. **Three workers
+share one futex word** while the main thread waits on another whose word is 0:
+an idle pool and a caller waiting for a notification nothing sets. **No device
+fd exists at the wait** (only `/tmp/tpu-mode`), which reconfirms U293 from
+outside the process.
+
+That also explains S2b's empty log: the runtime reaches `futex` from its own
+code, so interposing `pthread_cond_wait`, `sem_wait` or `pthread_join` cannot
+see it. The next instrument is not another interposer but reading the object
+around the main thread's uaddr and the worker word (0x4002), and finding the
+runtime function that stores the value the main thread waits for.
+
+Runbook (phone, no reboot): `gcc -O2 -static -o /root/tpu-sampler
+/root/tpu-sampler.c`, start `MODE=create NOFORK=1` through `tpu-exec.py`
+(`MODE` and `NOFORK` must be in its pass-through list; the phone's copy now
+is), then `/root/tpu-sampler PID --wait 5 --stack 16384`.
+
 ### 1.11 The KCI door, corrected (U329)
 
 Userspace reaches KCI through **debugfs**, not an ioctl:
@@ -926,10 +979,16 @@ record into the type-5 payload, so it names every field the firmware will read.
 **Stop:** if it is a dispatcher over record kinds, map the kind first and pick
 the one `SetupFirmware` builds.
 
-*Progress (U344):* neither `0x14d9eac` nor `0x14de9cc` accesses `[x1]`; the first
-passes the record to the second, and the second builds a limits block (1024,
-`0x7fffffff`, 256). The reader is a later callee. Cheap filter: count `[x1]`
-accesses before reading a window; a window with none cannot be the field map.
+*Progress (U344, U357):* neither `0x14d9eac` nor `0x14de9cc` accesses `[x1]`.
+U357 read the call site end to end: the loop at `0x14d9c74` bounds-checks an
+index against a vector whose stride is 40 bytes, then passes `x1 = base + index
+* 40` (the element), `w3 = byte[x19+0x230 + index]` and an output pointer in
+`x8` to `0x14d9eac`. That callee **never saves `x1`** (its prologue keeps only
+x0, x8, w2, w3, w4) and builds a limits block through `0x14de9cc` before
+anything else. So `0x14d9eac` is a per-entry constructor and this record is
+dead there; the type-5 serializer is a different function. New target: the
+consumer of the same vector element, found from the vector at `x19+0x230` and
+the 40-byte stride in the loop header.
 
 ### P4. The rebuilt element and a single send (after P3)
 
@@ -951,11 +1010,11 @@ way to learn whether the enum gap hides a second command family.
 **R2** has no new field to send; its next artifact is P3's field map, which
 would say what the *producer* fills, not what the wire format is.
 **R3** is the only route that runs Google's own setup builder. Its blocker is
-named and bounded: `DarwinnHal_Create` allocates, starts a thread trio and waits
-in a futex it never reaches through a libc symbol (U304-U315). The next
-instrument is the interposer on `futex` itself plus the HAL's own `pthread_create`
-return address, or a standalone sampler that reads the blocked thread's stack
-with `process_vm_readv` (U302 showed the in-process ptrace is not trustworthy).
+now named: three runtime threads idle on one futex (word 0x4002) and the main
+thread waits on another (word 0), all inside
+`libdarwinn_dba_hal_runtime.so`, with no device fd (1.19). The next instruments
+are the object around both uaddrs and the runtime store that would set the main
+thread's word - not another libc interposer, which cannot see a raw futex.
 **R4** stays the oracle of last resort and the only route with a proven producer;
 it needs the owner at the phone and the section-7 runbook.
 
@@ -1063,7 +1122,8 @@ field 1 union type 5, one `{0xffe80000, 0x80000}` allocation.
 - [TPU-HISTORY.md](TPU-HISTORY.md): the U-log (U285-U287 are this revision's).
 - [TPU-STATUS.md](TPU-STATUS.md): the one-page status.
 - `logs/tpu/`, `out/tpu/`, `out/tpu-client/`: gitignored sandboxes.
-- Tools: `tools/tpu-dba-hal-probe.c`, `tools/tpu-hal-harness.c`,
+- Tools: `tools/tpu-sampler.c`, `tools/tpu-dba-hal-probe.c`,
+  `tools/tpu-hal-harness.c`,
   `tools/android-dba-serve.c`, `tools/tpu-binder-client.c`,
   `tools/tpu-tachyon-run`, `tools/tpu-fw.py`, `tools/tpu-setup.py`,
   `tools/tpu-graph.py`, `tools/tpu-acceptance`, `tools/tpu-stock-capture`.

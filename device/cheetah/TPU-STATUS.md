@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Edge TPU bring-up: status and benchmark
 
-As of 2026-11-13 (rev 12), kernel
+As of 2026-11-13 (rev 13), kernel
 `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B. The plan of record is
 [TPU-PLAN.md](TPU-PLAN.md); the full experiment log and every prior revision
 are in [TPU-HISTORY.md](TPU-HISTORY.md). **No model has run on the TPU and no
@@ -22,6 +22,18 @@ firmware up. The stock oracle remains the only *proven* producer; the image's
 only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
+
+## 2026-11-13 (U354-U357: the blocked create, named from outside)
+
+A standalone sampler (gcc 16 on the phone, static) attaches to a target's
+threads, reads registers with PTRACE_GETREGSET and scans the stack with
+process_vm_readv. Against `MODE=create NOFORK=1` it shows three runtime threads
+on one futex (word 0x4002) and the main thread on another (word 0), every frame
+inside `libdarwinn_dba_hal_runtime.so` - whose only export is
+`GetDarwinnHalFunctions` - and no device fd at all. So the wait is the
+runtime's own raw futex, which is also why the pthread_cond_wait interposer
+never fired. P3 is corrected: `0x14d9eac` never saves x1, so the 40-byte record
+is dead there and the type-5 serializer is a different function. No inference.
 
 ## 2026-11-13 (U349-U352: the read channel, and code 6 is not setup)
 

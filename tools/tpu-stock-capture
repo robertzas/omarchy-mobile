@@ -116,6 +116,16 @@ Nothing here is executed by this tool.
   tools/nv-backup DIR
   tools/nv-backup --check DIR
 
+The three questions this capture must answer:
+  - Does stock's dmesg print a firmware setup line?
+      adb shell "dmesg | grep -iE 'edgetpu|janeiro|setup|vii|scratch'"
+  - Does the DBA service log SetupFirmware, or Firmware setup failed?
+      adb shell "logcat -d | grep -iE 'SetupFirmware|Firmware setup|darwinn'"
+  - Which firmware build is installed?
+      adb shell "sha256sum /vendor/firmware/edgetpu-janeiro.fw 2>&1 ||
+                 toybox sha256sum /vendor/firmware/edgetpu-janeiro.fw"
+`capture` writes these as dmesg-setup.txt, logcat-setup.txt and fw-sha256.txt.
+
 Stock rewrites efs, persist and modem_userdata.  The slot change and the
 stock boot need the owner's explicit go, per AGENTS.md section 1.  Never
 flash an unsuffixed image, vbmeta, bootloader, radio or userdata.
@@ -189,6 +199,11 @@ cmd_capture() {
   adb_capture dmesg-tpu.txt shell "dmesg | grep -iE 'edgetpu|janeiro|gxp|tpu|vii'"
   adb_capture logcat.txt logcat -d
   adb_capture services.txt shell 'service list 2>&1'
+  adb_capture dmesg-setup.txt shell "dmesg | grep -iE 'edgetpu|janeiro|setup|vii|scratch'"
+  adb_capture logcat-setup.txt shell "logcat -d | grep -iE 'SetupFirmware|Firmware setup|darwinn|edgetpu'"
+  adb_capture fw-sha256.txt shell 'sha256sum /vendor/firmware/edgetpu-janeiro.fw 2>&1 || toybox sha256sum /vendor/firmware/edgetpu-janeiro.fw 2>&1'
+  adb_capture fw-ls.txt shell 'ls -l /vendor/firmware/edgetpu* /vendor/lib64/libdarwinn* 2>&1'
+  adb_capture tpu-service.txt shell 'ps -A | grep -iE "edgetpu|darwinn|tachyon" 2>&1'
 
   say 'capture complete; inspect for identifiers before sharing anything'
   say "files: $(find "$dir" -maxdepth 1 -type f | wc -l)"

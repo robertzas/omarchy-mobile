@@ -13828,3 +13828,54 @@ scratch/map command name in its strings. The size check therefore stays
 unsatisfiable by design, and the next artifact for this row is a newer Google
 tree or the vendor service's interface, not another probe. The plan's P2b now
 says so.
+
+**U354, a standalone sampler reads the blocked create.** `tools/tpu-sampler.c`
+is a static aarch64 binary built by the phone's own gcc 16: it enumerates
+`/proc/<pid>/task`, attaches to each thread, reads `user_pt_regs` with
+`PTRACE_GETREGSET`, resolves `pc`/`lr`/`sp` to module+file-offset from
+`/proc/<pid>/maps`, and scans the user stack with `process_vm_readv` for words
+that land in executable mappings. Against `MODE=create NOFORK=1` (the harness
+with the options builder's output) it resolves 18 stack words, all inside
+`libdarwinn_dba_hal_runtime.so`, and one in `edgetpu-run+0x2c64`:
+
+```
+tid 7258 (edgetpu-run) futex uaddr 0xffff9092c180 word 0
+  runtime+0x1202a4 +0x1253a0 +0x1254d4 +0x125aa8 +0x12292c +0x123c8c
+  +0x11d18c +0x11d1ac +0x11d32c +0x113d34 +0x11c900 +0x113c84
+  +0xf8b04 +0xff55c +0xfd4c8 +0xf908c +0xf77a4, edgetpu-run+0x2c64
+tid 7259/7260/7261 futex uaddr 0xffff91bdeb90 word 0x4002 (all three)
+  runtime+0x125664 +0x125578 +0x126460 +0x125518 +0x21432c +0x12afbc
+```
+
+The first attempt found the same pattern (three threads sharing a uaddr, main
+thread separate); the addresses differ per run because of ASLR, the structure
+does not. `tpu-exec.py` needed `MODE` and `NOFORK` in its pass-through list;
+its phone copy now has them.
+
+**U355, what the wait is: not pthread, not the device.** Three facts. Every
+frame between bionic's futex path and the harness belongs to
+`libdarwinn_dba_hal_runtime.so`, whose dynamic symbol table has exactly one
+exported function, `GetDarwinnHalFunctions` (229 entries, one symbol), so only
+file offsets can name them. The worker threads share one futex word whose value
+is 0x4002 (a contended/waiter state), while the main thread waits on a
+different uaddr whose word is 0 - an idle pool and a caller waiting for a wake
+that nothing performs. And `/proc/<pid>/fd` holds no `/dev/edgetpu`, no
+`/dev/dma_heap`: only `/tmp/tpu-mode`. That reconfirms U293 from outside the
+process: create never reaches the device.
+
+**U356, why S2b's interposer log was empty.** The runtime calls the futex
+syscall from its own code (its frames surround the raw wait), so interposing
+`pthread_cond_wait`, `pthread_cond_timedwait`, `sem_wait` or `pthread_join` in
+a preloaded object cannot observe it. S2b is not disproved, it was aimed at the
+wrong layer. The next instrument is reading the objects around both futex
+uaddrs and the runtime store that would set the main thread's word.
+
+**U357, P3's record is dead where rev 19 looked.** The loop at `0x14d9c74`
+bounds-checks an index against a vector with a 40-byte stride (`sdiv x8,x8,x27`,
+`cmp x8,x23`, `b.ls`), then calls `0x14d9eac` with `x0` = the owning object,
+`x1` = element base + index*40, `w2` = 0, `w3` = `byte[x19+0x230 + index]`,
+`w4` = 0 and `x8` = an output pointer. The callee's prologue stores x0, x8, w2,
+w3 and w4 and **never saves x1**, so the 40-byte element is not read there; the
+callee first builds a limits block through `0x14de9cc` (1024, 0x7fffffff, 256)
+and is a per-entry constructor, not the type-5 serializer. P3's target moves to
+the consumer of the same vector element.
