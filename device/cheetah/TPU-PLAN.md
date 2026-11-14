@@ -944,6 +944,23 @@ Next instrument: a **futex syscall tracer** (a standalone aarch64 binary driving
 ever wakes the main thread's uaddr and what it writes, which the sampler cannot
 see because it only reads state between calls.
 
+**The wait is bionic's condition variable (U361).** `strace` is not installed on
+the phone, but gdb 16 is, and `catch syscall futex` works. One catch on the
+blocked create:
+
+    Catchpoint 1 (syscall 'futex' [98])
+    FUT x0=0xffff94788b90 x1=0x89 x2=0x4002
+
+`x1 = 0x89 = FUTEX_PRIVATE_FLAG | FUTEX_WAIT_BITSET`, `x2 = 0x4002`: the
+runtime waits in **bionic's condition-variable implementation** with the worker
+word as its expected value, private and clock-relative. That refines U356: it
+is not a hand-rolled futex, it is a condvar whose entry point the runtime
+reaches through bionic's internal symbol rather than the public
+`pthread_cond_wait`, so a `LD_PRELOAD` interposer of the public name is bypassed
+by construction. The gdb script is the tracer for now: `catch syscall futex`,
+print `$x0..$x2`, continue. It must attach **before** the wait to capture the
+main thread's own wait.
+
 ### 1.11 The KCI door, corrected (U329)
 
 Userspace reaches KCI through **debugfs**, not an ioctl:

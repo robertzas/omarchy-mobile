@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Edge TPU bring-up: status and benchmark
 
-As of 2026-11-13 (rev 14), kernel
+As of 2026-11-13 (rev 15), kernel
 `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B. The plan of record is
 [TPU-PLAN.md](TPU-PLAN.md); the full experiment log and every prior revision
 are in [TPU-HISTORY.md](TPU-HISTORY.md). **No model has run on the TPU and no
@@ -22,6 +22,15 @@ firmware up. The stock oracle remains the only *proven* producer; the image's
 only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
+
+## 2026-11-13 (U361: the wait is a bionic condvar)
+
+`strace` is absent, gdb 16 is present; `catch syscall futex` on the blocked
+create shows `x1 = 0x89` (FUTEX_PRIVATE_FLAG | FUTEX_WAIT_BITSET) and
+`x2 = 0x4002`. So the runtime waits in bionic's condition-variable
+implementation with the worker word as its expected value, reaching it through
+bionic's internal entry rather than the public `pthread_cond_wait` - which is
+why the interposer was bypassed. No inference.
 
 ## 2026-11-13 (U358-U360: WaitForEvent, and a callback that never rings)
 

@@ -13908,3 +13908,23 @@ standalone `PTRACE_SYSCALL` tracer that logs `FUTEX_WAIT` and `FUTEX_WAKE` with
 `uaddr`, `val` and timeout, so the run says whether any thread ever posts the
 event and which one. The harness's callback logging stays in the tool as the
 permanent check that the peer contract is not the blocker.
+
+**U361, the wait is a bionic condition variable.** `strace` is not installed on
+the phone, but gdb 16 is, and `catch syscall futex` works. One catch on the
+blocked create:
+
+```
+Catchpoint 1 (syscall 'futex' [98])
+FUT 0xffff946b6ce0 x0=0xffff94788b90 x1=0x89 x2=0x4002
+```
+
+`x0` is the shared worker uaddr, `x1 = 0x89 = FUTEX_PRIVATE_FLAG |
+FUTEX_WAIT_BITSET`, `x2 = 0x4002` the expected word. So the runtime waits in
+bionic's condition-variable implementation, private and bitset-based, with the
+worker word as the value it expects to change. That refines U356: the wait is
+not a hand-rolled raw futex; it is a condvar whose entry the runtime reaches
+through bionic's internal symbol, so an `LD_PRELOAD` interposer of the public
+`pthread_cond_wait` is bypassed by construction. The gdb script (`catch syscall
+futex`, print `$x0..$x2`, continue) is the tracer until a standalone one exists;
+it must attach before the wait to catch the main thread's own wait, since the
+one catch here was a worker's.
