@@ -60,7 +60,8 @@ esac
 
 # NetworkManager owns the host side. Keep the profile manual and never-default:
 # the phone is a directly connected peer, not this laptop's Internet gateway.
-if nmcli -t -f NAME connection show | grep -Fxq -- "$profile"; then
+profiles=$(nmcli -t -f NAME connection show || true)
+if [ "$(printf '%s\n' "$profiles" | grep -Fxc -- "$profile")" -gt 0 ]; then
   nmcli connection modify "$profile" \
     connection.interface-name "$iface" \
     ipv4.method manual \
@@ -92,7 +93,8 @@ route=$(ip -4 route get 172.16.42.1)
   exit 1
 }
 
-if ! timeout 15 tools/phone-ssh --fresh 'printf "PHONE_OK\n"' | grep -qx PHONE_OK; then
+ssh_out=$(timeout 15 tools/phone-ssh --fresh 'printf "PHONE_OK\n"' 2>/dev/null || true)
+if [ "$(printf '%s\n' "$ssh_out" | grep -xc PHONE_OK)" -eq 0 ]; then
   echo "phone-usb: route is up but root SSH to 172.16.42.1 failed" >&2
   exit 1
 fi
