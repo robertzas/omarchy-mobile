@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 33)
+## 11. The program to a working TPU (rev 34)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1270,6 +1270,16 @@ without changing behaviour (the count and the put balance are untouched), so the
 proof run can distinguish "two power-ups happened" from "one" before any policy
 policy is enforced. The reporter unit, enabled on the phone, journals its JSON at
 boot; the record is the evidence G1 will compare against.
+
+**Rev 34: what this pass actually achieved.** K1's edit exists in the driver
+worktree and is now visible to `git diff` (intent-to-add), but no kernel build
+has run, so it stays unproven; the two-start proof is unchanged. The code-15
+static decode was attempted again with the string-pool approach rather than a
+sweep, and it does not yield the assertion's condition, so A2 remains open with
+its method named (`llvm-objdump` over the extracted code region) instead of
+being claimed. The stock oracle cannot be scheduled by an agent: the decision
+record is the owner's line to fill, and that is the only thing standing between
+the plan and G0.
 
 ### 11.5 After setup (unchanged, ordered)
 
