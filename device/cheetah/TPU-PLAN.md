@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 27)
+## 11. The program to a working TPU (rev 28)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1087,7 +1087,7 @@ KCI command family that might carry it has just given up its descriptor size:
 | R3 DBA HAL shim | a peer that posts events | closed (U362: no wake at all) | - |
 | R4 37 MB HAL direct | a device path that does not reset | parked (U154/U174; payload already captured) | only with a new field |
 | R5 public-source port | a public producer | closed (U367) | - |
-| R6 stock oracle | owner, physical fastboot, **and acceptance that stock may format the Arch userdata** | owner-gated | §7 + §11.5 |
+| R6 stock oracle | owner, physical fastboot, **and acceptance that stock may format the Arch userdata** | owner-gated | §7, §11.5, runbook `TPU-STOCK-ORACLE.md` |
 | R7 firmware static: code 15's handler | the per-code table and the 64-byte struct | **open, primary offline** | A2 |
 | R8 firmware self-description | logging/state queries | tracing closed (U369); `fw_info.spare[]` still unread | A4 |
 | R9 kernel/product work | independent of setup | open | §6.8 stays |
@@ -1213,6 +1213,16 @@ element; it is a stub that refuses host calls. Consequences, stated plainly:
 written and blocked on G0 alone; nothing else in the ladder is blocked. A
 failure to reproduce stock's capture on A17 is the falsifier that would close
 the firmware itself, and that is the next decision the plan asks for.
+
+**R9 task list (rev 28, no dependency on G0).** Each item is a proof, not a
+patch list: K1 one power-up per boot, enforced in the driver and loud in dmesg
+when a second is attempted; K2 an IOMMU fault tears down the client and leaves
+the phone alive (fault injection in a test build); K3 teardown after a submit
+leaves KCI 21 answering, proven by `tools/tpu-status` before and after; K4 power
+and thermal, measured with `tools/power-ab` on an idle TPU. The product skeleton
+is `tools/tpu-status` today - a read-only report that names the wall - and grows
+into `omamobile-tpu run` only once G0 holds, so the product path never depends on
+a debugfs bring-up hook.
 
 ### 11.5 After setup (unchanged, ordered)
 

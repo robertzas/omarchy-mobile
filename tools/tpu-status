@@ -1,0 +1,57 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# tpu-status: read-only report of the Edge TPU's bring-up state.
+#
+# Runs ON THE PHONE (it reads debugfs and dmesg):
+#     tools/phone-ssh 'bash -s' < tools/tpu-status
+#
+# It sends one query (KCI 11, firmware info), so it is read-only in the sense
+# that matters: nothing changes device state. It prints the wall by name rather
+# than a bare failure, so a report can be quoted in a plan without guessing.
+set -u
+D=${TPU_DEBUGFS:-/sys/kernel/debug/edgetpu/janeiro}
+say() { printf '%-14s %s\n' "$1" "$2"; }
+
+say kernel "$(uname -r)"
+say uptime "$(cut -d. -f1 /proc/uptime)s"
+
+if [ -e /dev/janeiro ]; then
+	say device "present ($(stat -c '%t:%T' /dev/janeiro 2>/dev/null))"
+else
+	say device absent
+fi
+
+if [ -e "$D/kci_send" ]; then
+	say debugfs "$D"
+else
+	say debugfs "absent under $D"
+	echo "no KCI door: nothing else to read" >&2
+	exit 1
+fi
+
+if [ -w "$D/kci_send" ]; then
+	printf '11\n' >"$D/kci_send" 2>/dev/null
+	sleep 1
+	info=$(od -An -tx1 -N16 "$D/kci_result" 2>/dev/null | tr -d '\n ')
+	say fw_info "${info:-unreadable}"
+	say last_query "$(dmesg | grep -o 'kci_send code 11.*-> .*' | tail -1)"
+else
+	say kci "kci_send not writable"
+fi
+
+gate=$(dmesg | grep -c 'Setup is not done yet')
+say gate_lines "$gate"
+if [ "$gate" -gt 0 ]; then
+	dmesg | grep 'Setup is not done yet' | tail -1 | sed 's/^ */  wall: /'
+else
+	echo "  wall: the setup gate has not been logged this boot"
+fi
+
+say assert_lines "$(dmesg | grep -c 'ASSERTION FAILED')"
+say crash_lines "$(dmesg | grep -c 'firmware unrecoverable crash')"
+say service "$(systemctl is-active omamobile-tpu 2>/dev/null || echo none)"
+
+cat <<'EOF'
+next: G0 (firmware setup) blocks G1-G5; see device/cheetah/TPU-PLAN.md 11.4c
+      and device/cheetah/TPU-STOCK-ORACLE.md for the owner-gated capture.
+EOF
