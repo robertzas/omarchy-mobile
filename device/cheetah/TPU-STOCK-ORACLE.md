@@ -1,7 +1,13 @@
 # TPU stock oracle: capturing the setup the firmware wants
 
-Status: **owner-gated, not run.** Every step below needs the owner present at the
-phone. Nothing here runs unattended, and no step is reversible by an agent.
+Status: **attempted 2026-11-14, partial (U400).** The owner approved the
+userdata loss. Stock Android 17 booted on slot A after the factory reset, and
+the capture ran, but a `user` build denies adb root, dmesg and vendor files, so
+the VII bytes are not in it. The private capture is
+`~/omamobile-backups/tpu-stock-20261114`. The Arch root was reinstalled from the
+p0a image and the TPU transport came up with the CP3A firmware (U401/U402).
+This runbook stays for a debuggable stock or a second phone; the live producer
+route is now the stock HAL in the vendor chroot (TPU-PLAN §15.4).
 
 ## Why this exists
 
@@ -116,3 +122,8 @@ is not about the HAL, and the whole route needs re-reading.
     who: the owner, through the Freebuff session's G0 question
     next read-only backup taken: ~/omamobile-backups/nv/cheetah-tpu-g0-20261114
     (tools/nv-backup; --check reports all 7 partitions SAME)
+    run result 2026-11-14: S1 ran; stock Android 17 booted after Factory data
+    reset; S2 captured /dev/edgetpu, /dev/edgetpu-soc and the Darwinn/Edgetpu
+    HAL services but no VII bytes (user build: adb root, dmesg and vendor files
+    denied); S3 returned through the p0a reinstall; fresh NV backup
+    ~/omamobile-backups/nv/cheetah-tpu-g0-return-20261114 (all 7 SAME).

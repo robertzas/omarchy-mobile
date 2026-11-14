@@ -1,18 +1,18 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Edge TPU bring-up: status and benchmark
 
-As of 2026-11-14 (rev 23), kernel
+As of 2026-11-14 (rev 24), kernel
 `7.3.0-rc6-omamobile-push1-g7e980b090d87` (`kernel-2026.11.13` plus the TPU
-series), slot B. The plan of record is [TPU-PLAN.md](TPU-PLAN.md); the full
-experiment log and every prior revision are in [TPU-HISTORY.md](TPU-HISTORY.md).
-**No model has run on the TPU and no inference is claimed.** Gate K was
-re-proven on the 2026-11-13 boot (`logs/tpu/20261113-gatek-rev10.txt`); on the
-P0a stable boot the self-test proves the transport (`selftest: transport ok;
-setup is not proven`). Since rev 18, K3 is proven in its pre-G0 form and K2 is
-blocked by the firmware's own descriptor check; the self-test ships in
-`omamobile-tpu` (0.1.14 in the P0a root image): it reports `transport` and
-`setup_proven`, and exits 3 until a real inference writes
-`/var/lib/omamobile/tpu-setup-proven`.
+series), slot B, with the user factory image's CP3A Edge TPU firmware at
+`/usr/lib/firmware/updates/google/edgetpu-janeiro.fw`. The plan of record is
+[TPU-PLAN.md](TPU-PLAN.md); the full experiment log and every prior revision
+are in [TPU-HISTORY.md](TPU-HISTORY.md). **No model has run on the TPU and no
+inference is claimed.** The p0a boot now reports `transport: ok` and
+`fw_info=5ea287640000000003000000cf532c20` (U402); the one-time firmware setup
+is still missing, so `setup_proven` stays false and the self-test exits 3. The
+second stock run (U400) booted stock Android, but a `user` build gives no root,
+dmesg or vendor files, so its capture is partial and P1a (the stock HAL in the
+vendor chroot) is the live producer route. The 50% charge limit is active.
 
 Rev 10 first withdrew the KCI-6 route (the driver's enum has no code 6, U269),
 then U276 corrected the reason: with a **mapped** 512 KiB scratch, code 6 with
@@ -28,6 +28,59 @@ firmware up. The stock oracle remains the only *proven* producer; the image's
 only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
+
+## 2026-11-14 (U402: TPU alive on the p0a rootfs after the CP3A firmware)
+
+After the factory image's CP3A `edgetpu-janeiro.fw` was pushed to
+`/usr/lib/firmware/updates/google/`, the reboot came up with
+`omamobile-tpu.service` active, `omamobile-tpu --gate` -> `ok`, and
+`omamobile-tpu --json` -> `device: true`, `transport: "ok"`, `spent: false`,
+`setup_proven: false`, `fw_info: 5ea287640000000003000000cf532c20`. The KCI 11
+timeouts and the `tpu-hold` `SIGSEGV` of the dark boot are gone. The firmware
+build now on the phone is the CP3A `5ea28764` image (985,344 bytes; the older
+plan's 1,038,272-byte A17 image was not the one this stock/factory pair uses).
+The firmware emits `Failed to fetch pasid-num-bits, defaulting to 8 PASIDs`
+(-22) and installs the interrupt handler; it is alive and the setup is still
+not done. The owner's 50% charge limit stays in effect
+(`omamobile-charge-limit.service` active, capacity 50, `inhibit-charge`).
+
+## 2026-11-14 (U401: the p0a reinstall booted dark; firmware, firstboot and battery record)
+
+`tools/install-phone` wrote the p0a image set and root image. The first boot
+was TPU-dark: `fw_info` all zeros, KCI 11 `-110`, and
+`omamobile-tpu.service` failed with a `SIGSEGV` in `tpu-hold`. The kernel said
+`Direct firmware load for google/edgetpu-janeiro.fw failed with error -2`: the
+p0a root image has no Google vendor firmware, and `phone-provision
+--first-install` did not restore it (its firmware list is the gap). The
+workaround was the user's CP3A factory image firmware pushed by hand (U402).
+The boot's `systemd-firstboot` failed with `No such device` on stdin and
+`omamobile-firstboot` (0.1.4 in the image; 0.1.5 in the tree) printed
+`C[FULL_NAME]: unbound variable`; the user `robertzas` exists and the owner
+setup still needs `omarchy-provision-user --force` after login. The 50% charge
+limit is active on this boot. The full `tests/packages` gate is blocked only by
+the host's Bun 1.4.4 `node` for `omamobile-shell` and `omamobile-owl-widgets`;
+`tools/pr-check` passes.
+
+## 2026-11-14 (U400: G0 attempt 2 — stock booted, capture partial on a user build)
+
+The owner put the phone in fastboot and approved the userdata loss. The flags
+read `b`/`yes`; `fastboot --set-active=a` and the reboot took stock Android 17
+(CP41.260831.019, `cheetah_beta`) to recovery, the owner chose Factory data
+reset, stock booted, and USB debugging came up. `tools/tpu-stock-capture`
+recorded the stock build (a `user/release-keys` build), `/dev/edgetpu ->
+/dev/janeiro` (505:0), `/dev/edgetpu-soc`, and the running services
+`vendor.google.edgetpu_app_service@1.0-service`,
+`android.hardware.neuralnetworks@service-darwinn-aidl` and
+`android.hardware.edgetpu.logging@service-edgetpu-logging`. It could not record
+the VII bytes: `adb root` is refused on a production build, `dmesg` is denied,
+the vendor firmware and `libdarwinn_hal.so` are denied to shell, `dumpsys
+neuralnetworks` has no such service, the AIDL dump returns
+`FAILED_TRANSACTION`, and `lshal debug` takes only HIDL names. Logcat has no
+`SetupFirmware`/`VII` line. The capture is partial, not passing; the bytes must
+come from P1a (the stock HAL in the vendor chroot) or P1c (a debuggable stock
+or a second phone). The private capture is
+`~/omamobile-backups/tpu-stock-20261114`; the fresh NV backup after the stock
+boot is `~/omamobile-backups/nv/cheetah-tpu-g0-return-20261114` (all 7 SAME).
 
 ## 2026-11-14 (U392: K2 cannot be injected through the door; the firmware checks first)
 

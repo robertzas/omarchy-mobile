@@ -42,6 +42,54 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U402 (2026-11-14): TPU alive on the p0a rootfs after the CP3A firmware
+
+The user's factory image (`cheetah-cp3a.261005.002.a1`) supplied
+`edgetpu-janeiro.fw`; its `out/vendor-firmware/usr/lib/firmware/updates/google/`
+copy is 985,344 bytes (sha256 `145993a4...`), and the older plan image
+(`out/tpu/edgetpu-janeiro.fw`, 1,038,272 bytes, sha256 `52c1cccd...`) is not
+the one this stock/factory pair uses. Pushed to
+`/usr/lib/firmware/updates/google/` and rebooted: `omamobile-tpu.service`
+active, gate `ok`, `fw_info=5ea287640000000003000000cf532c20`, JSON `device:
+true`, `transport: "ok"`, `spent: false`, `setup_proven: false`. The firmware
+logged `Failed to fetch pasid-num-bits, defaulting to 8 PASIDs` (-22) and
+installed its handler; no KCI timeout and no `tpu-hold` `SIGSEGV` this boot.
+The 50% charge limit is active (capacity 50, `inhibit-charge`,
+`omamobile-charge-limit.service` active).
+
+## U401 (2026-11-14): the p0a reinstall booted dark
+
+`tools/install-phone` wrote the p0a slot-B images and root image (rc 0; 34
+sparse userdata chunks; slot B active). The first boot: `fw_info` zeros, KCI
+11 `-110`, `omamobile-tpu.service` failed with `tpu-hold` `SIGSEGV`; dmesg:
+`Direct firmware load for google/edgetpu-janeiro.fw failed with error -2`. The
+p0a root image has no Google vendor firmware; `phone-provision --first-install`
+restored its 15 files (AoC, Wi-Fi, Bluetooth, haptics, sensors, gnss/modem
+chroots, fingerprint, camera) but not the TPU firmware. The boot's
+`systemd-firstboot` failed (`status=208/STDIN`, `No such device`), and
+`omamobile-firstboot` (0.1.4 in the image; 0.1.5 in the tree) printed
+`C[FULL_NAME]: unbound variable`; the user exists and needs
+`omarchy-provision-user --force` after login. The 50% charge limit is active.
+
+## U400 (2026-11-14): G0 attempt 2 — stock booted, capture partial
+
+The owner put the phone in fastboot and approved the userdata loss. The flags
+read `b`/`yes`; `fastboot --set-active=a` and the reboot took stock Android 17
+(CP41.260831.019, `cheetah_beta`) to recovery; the owner chose Factory data
+reset; stock booted and USB debugging came up. `tools/tpu-stock-capture` (23
+files, `~/omamobile-backups/tpu-stock-20261114`, private) recorded the devices
+(`/dev/edgetpu -> /dev/janeiro`, `/dev/edgetpu-soc`) and the services
+(`vendor.google.edgetpu_app_service@1.0-service`,
+`android.hardware.neuralnetworks@service-darwinn-aidl`,
+`android.hardware.edgetpu.logging@service-edgetpu-logging`), but the build is
+`user/release-keys`: `adb root` is refused, `dmesg` denied, vendor files and
+`/vendor/lib64/libdarwinn_hal.so` denied to shell, `dumpsys neuralnetworks` has
+no service, the AIDL dump is `FAILED_TRANSACTION`, and `lshal debug` takes only
+HIDL names. No `SetupFirmware`/`VII` line appears in logcat. The capture is
+partial with a named limitation; P1a/P1c are the byte routes. The fresh NV
+backup after stock is `~/omamobile-backups/nv/cheetah-tpu-g0-return-20261114`
+(all 7 SAME).
+
 ## U399 (2026-11-14): P0a complete
 
     worktree ~/omamobile-kernel/wt-tpu-stable at kernel-2026.11.13 (36d61a337)

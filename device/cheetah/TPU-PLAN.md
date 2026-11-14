@@ -1,18 +1,19 @@
 <!-- SPDX-License-Identifier: MIT -->
 # TPU / NPU plan: the Edge TPU (Abrolhos / Janeiro) on cheetah (gs201)
 
-Status (2026-11-14, rev 22): **the wall has a number. KCI code 15's DMA
-descriptor size is 64**: 63 and 65 are refused by name (`Invalid KCI DMA
-descriptor size N`), 64 is accepted and then the handler stops answering
-(`-> -110`, three times, with 63/65 as controls; U366). A zeroed 64-byte payload
-also logged `firmware unrecoverable crash` during a flood, while KCI 11 kept
-answering 0 afterwards, so the firmware survives but that handler faults. This
-is the first KCI command whose payload gate has been satisfied, and it is the
-strongest lead since gate K. In the same pass: the dense size sweep closes every
-other size (1..4096 chunked so no line is lost), Google's public gs101 vendor
-driver and the open-source Coral runtime contain **no** setup producer (U367),
-the chroot has no setup blob (U368), and this firmware exposes only error-level
-logging (U369). The setup itself is still not done and no inference is claimed.
+Status (2026-11-14, rev 50): **the transport is alive on the p0a rootfs, and
+the stock-HAL producer is the next step.** The p0a reinstall (U401) booted
+TPU-dark only because its root image carries no Google firmware; the user's
+factory image's CP3A `edgetpu-janeiro.fw` (985,344 B, installed at
+`/usr/lib/firmware/updates/google/`) fixed it: `fw_info=5ea28764...`,
+`transport ok`, `omamobile-tpu.service` active, `spent:false` (U402). G0
+attempt 2 booted stock Android 17 after the factory reset and captured what a
+`user` build exposes: `/dev/edgetpu` and the running
+`hal_neuralnetworks_darwinn` service, but no adb root, no dmesg, no vendor
+files and no VII bytes (U400). The setup is still not done and no inference
+is claimed; because the user-build capture cannot supply the producer, P1
+turns to the stock HAL in the vendor chroot with a read-only cmdq dump (§15).
+The charge limit is active at 50%.
 
 ## 0. Rules this plan runs under
 
@@ -1867,4 +1868,169 @@ NV rewrites are followed by a fresh backup and check.
 The branch is `cheetah-tpu-accel`; the P0a record (U399) is its newest commit,
 and each session records its base (§14.0), its results and any plan change as
 a new revision.
+
+## 15. Rev 50: G0 attempt 2, the p0a reinstall, and the producer route
+
+### 15.1 What the second G0 run proved
+
+The owner put the phone in fastboot on 2026-11-14. The flags read `b`/`yes`;
+`fastboot --set-active=a` and the reboot took stock Android 17
+(CP41.260831.019, `cheetah_beta`) to recovery because of our Arch `userdata`;
+the owner chose Factory data reset, stock booted, and USB debugging came up.
+
+`tools/tpu-stock-capture` then ran on slot A. The capture
+(`~/omamobile-backups/tpu-stock-20261114`, private) proves the hardware side:
+`/dev/edgetpu -> /dev/janeiro` (505:0), `/dev/edgetpu-soc`, and the stock
+services `vendor.google.edgetpu_app_service@1.0-service`,
+`android.hardware.neuralnetworks@service-darwinn-aidl` and
+`android.hardware.edgetpu.logging@service-edgetpu-logging` all running. It also
+proves why a `user` stock build cannot answer the byte question: `adb root`
+answers "adbd cannot run as root in production builds", `dmesg` is
+`Permission denied`, `/vendor/firmware/edgetpu-janeiro.fw` and
+`/vendor/lib64/libdarwinn_hal.so` are denied to shell, `dumpsys
+neuralnetworks` has no such service, the AIDL HAL's dump returns
+`FAILED_TRANSACTION`, and `lshal debug` accepts only HIDL names. Logcat has no
+`SetupFirmware`/`VII` line; the only EDGETPU references are the app service's
+binder registrations. So G0 attempt 2 has the stock boot, the slot discipline,
+the factory reset and the private capture, but **not** the VII element bytes.
+The capture is partial with a named limitation; the plan does not call it
+passing.
+
+The stock image yielded one reusable artifact: the user's factory image
+`~/omamobile-kernel/downloads/cheetah-cp3a.261005.002.a1-factory-5b5b06ad.zip`
+is the Android 17 CP3A build, and `out/vendor-firmware/usr/lib/firmware/
+updates/google/edgetpu-janeiro.fw` (985,344 bytes) is its Edge TPU firmware.
+
+### 15.2 The p0a reinstall and the firmware gap
+
+`tools/install-phone` wrote the p0a images and the p0a root image to slot B and
+`userdata` (U401). The first install boot came up **TPU-dark**: `fw_info` all
+zeros, KCI 11 timing out, and `omamobile-tpu.service` dead with `tpu-hold`
+`SIGSEGV`. `dmesg` gave the reason: `Direct firmware load for
+google/edgetpu-janeiro.fw failed with error -2`. The p0a root image carries
+`linux-firmware`, but not Google's vendor firmware; the old development rootfs
+had it from an earlier provision, and the reinstall erased it with `userdata`.
+`tools/phone-provision --first-install` restored the AoC, Wi-Fi, Bluetooth,
+haptics, sensors, gnss/modem chroots, fingerprint and camera data, but its
+firmware list does **not** include the Edge TPU firmware (a tool gap, §15.7).
+Pushing the CP3A `edgetpu-janeiro.fw` to
+`/usr/lib/firmware/updates/google/` and rebooting brought the TPU up:
+
+    fw_info=5ea287640000000003000000cf532c20
+    omamobile-tpu --gate -> ok
+    omamobile-tpu --json -> transport "ok", spent false, setup_proven false
+    omamobile-tpu.service active
+
+So the transport is live on the stable base, the firmware is CP3A
+`5ea28764`, and **setup is still not done**. The first boot's
+`systemd-firstboot` failed with `No such device` on stdin, and
+`omamobile-firstboot` (the p0a image has 0.1.4; the tree is 0.1.5, whose later
+lines already read `${C[FULL_NAME]-}`) printed `C[FULL_NAME]: unbound
+variable` and warned that the user setup needs `omarchy-provision-user
+--force` after login. The account `robertzas`, the host and the 50% charge
+limit are in place; the session setup is the remaining firstboot item.
+
+### 15.3 What changes in the program
+
+G0 is **partial**, not failed: the stock boot happened and its hardware state
+is captured, but the user build cannot yield the VII bytes. The byte question
+now has three routes, in this order:
+
+| Route | What it needs | Cost | State |
+| --- | --- | --- | --- |
+| P1a stock HAL in the vendor chroot | the stock `libdarwinn_hal.so` (37 MB) and a read-only cmdq dump in our driver | one kernel build + one attended boot | **next** |
+| P1b static builder | the 40-byte records and the runtime object state, from the HAL | offline (U339: the values are runtime; F4 is the read) | fallback |
+| P1c debuggable stock / second phone | a `userdebug`/rootable stock or another cheetah | owner, hardware | optional |
+
+§14.5's fallback is now the primary. P1a does not depend on G0's missing
+bytes: the stock HAL is the producer, and its setup element can be read from
+the same cmdq the driver owns.
+
+### 15.4 P1a: the stock HAL as the producer
+
+The stock `hal_neuralnetworks_darwinn` is the A17 37 MB `libdarwinn_hal.so`
+(the one that carries `SetupFirmware`, §1.22), not the 3.7 MB client shim. Run
+it inside the vendor chroot on our kernel with the stock's own libraries,
+under a log stream, and give it the same options the stock service uses. The
+direct path reset the phone before (A9/U154/U174), so the run is one attended
+boot with:
+
+- a `dmesg -w` stream to the laptop first, and `tools/tpu-hold` keeping the
+  boot's one power-up;
+- the boot gate checked first (`omamobile-tpu --gate` -> ok);
+- the stock HAL's options `{1,1,"/dev/edgetpu"}` from the service builder
+  (§1.3), and the callback/context the harness already carries;
+- one call, then stop. A reset is the stop condition, not a reason to retry in
+  the same boot.
+
+**Pass:** the stock HAL reaches its setup submit, the kernel's cmdq dump holds
+the 48-byte element, and the firmware's gate answers differently on a following
+VII command. **Stop:** a phone reset, a firmware crash, or no cmdq write after
+the HAL claims success; then P1b.
+
+### 15.5 The kernel read-only cmdq dump
+
+The driver writes the VII ring; the HAL writes the same ring from its mapped
+queue. Add one read-only debugfs file (`cmdq`, or `vii`) under
+`/sys/kernel/debug/edgetpu/janeiro/` that copies the 1024 entries of 48 bytes
+with their sequence/tail, exactly as U264/U326 describe. No write, no new
+power-up, no second opener: it is a read of memory the driver already owns.
+Build it in `wt-tpu-stable`/`out-tpu-stable` on the stable base of §14.0, push
+slot B, then run P1a. The dump is the artifact P1 replays.
+
+### 15.6 The P1a runbook
+
+1. **Laptop (offline).** Check the stock library and the chroot:
+   `tools/extract-vendor-chroot` from the user's factory image, or the existing
+   vendor tree; `libdarwinn_hal.so` must be the 37 MB file. Keep it private.
+2. **Kernel.** Add the cmdq dump, build `out-tpu-stable` with
+   `KERNEL_DIR=~/omamobile-kernel/wt-tpu-stable`, `KERNEL_OUT=...`; `W=1` for
+   the touched file. Push (stop the modem first if it is up; it is inactive on
+   this boot) and confirm the gate after the reboot.
+3. **Phone.** Start the dmesg stream, hold the power-up, run the stock HAL in
+   the chroot with the stock options, then read
+   `/sys/kernel/debug/edgetpu/janeiro/cmdq` and the firmware gate.
+4. **Record** the element fields and the gate's answer as U-numbers. If the
+   gate clears, P1b's replay uses the captured sequence; if it does not, the
+   element is the finding.
+
+### 15.7 The firstboot, the firmware tool and the charge limit
+
+- **p0a root image 0.1.4 firstboot.** The source is 0.1.5 and already reads
+  `${C[FULL_NAME]-}`; the image predates it. Run
+  `omarchy-provision-user --force` as the owner after login, and rebuild the
+  p0a root image with 0.1.5 before the next reinstall. `systemd-firstboot`
+  (Arch's) fails on a headless boot with `status=208/STDIN`; the project's
+  firstboot is the one that must run, so mask `systemd-firstboot` in the image.
+- **`phone-provision`'s firmware list.** It restored 15 files but not
+  `edgetpu-janeiro.fw`; the extractor already writes the file under
+  `out/vendor-firmware/usr/lib/firmware/updates/google/`, so the provisioner's
+  copy list is the gap. The next rootfs/reinstall must include it; the manual
+  push is the workaround used here.
+- **Charge limit.** `omamobile-charge-limit.service` is active and the battery
+  reads 50% with `charge_behaviour` `inhibit-charge` while the charger is
+  online; the owner's 50% limit is in effect.
+- **The full suite.** `tools/pr-check` passes. `tests/packages` reaches two
+  Bun-host failures (`omamobile-shell`, `omamobile-owl-widgets`): their tests
+  run `node`, and this host's `node` is Bun 1.4.4. The changed packages' tests
+  pass; the plan records the environmental failure rather than weakening them.
+
+### 15.8 What is next
+
+P1a is the only live producer step; G1-G5 stay written and blocked on D1.
+`omamobile-tpu --gate` is green on the p0a boot, so the boot gate no longer
+blocks a run. The ladder is:
+
+| Gate | State | Next |
+| --- | --- | --- |
+| G0 stock setup | partial: stock booted, capture limited by the user build | P1a |
+| D1 firmware setup | open | P1a's cmdq element / gate |
+| G1-G5 | written | after D1 |
+| K1/K3 | done | - |
+| K2 | blocked on D1 | after G1 |
+| K4 | not run | a cable-out window |
+| P1-P5 | written | after G1 |
+
+The phone is on slot B, the p0a kernel, the CP3A firmware, with the 50% charge
+limit; no inference is claimed.
 
