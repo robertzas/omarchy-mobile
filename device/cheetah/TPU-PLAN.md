@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 40)
+## 11. The program to a working TPU (rev 41)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1335,6 +1335,13 @@ log site ids are not encoded as an offset table over its own paths: three known
 paths and every 32-bit value in the image produce zero candidate bases, and the
 vendor chroot ships no symbols. Nothing in the plan waits on A2 any more; it
 would need a debug artifact from the vendor, not another pass.
+
+**Rev 41: the phone runs K1, and the report says so.** The installed
+`/usr/lib/modules/<release>/kernel/drivers/edgetpu/janeiro.ko` is the K1 build;
+the pre-K1 module is kept on the phone at `/root/janeiro-orig.ko` as the restore
+point, and `omamobile-tpu` 0.1.3 reports `k1_refusals` so a run records whether
+the boot's single power-up was already spent. A kernel `push` replaces the
+module; until then this is a hand-installed module and the plan says so.
 
 ### 11.5 After setup (unchanged, ordered)
 
