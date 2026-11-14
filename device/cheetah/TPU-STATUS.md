@@ -23,6 +23,20 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-14 (U380: the assertion is not a payload validator)
+
+Eight payloads now, four structural classes: all zeros, sixteen self-pointers,
+class byte 0x01/0x02/0x0b, a single self-pointer at +0x00/+0x04/+0x08, and a
+kernel-shaped `edgetpu_command_element` (seq 1, code 0, dma{self, 64, 0}) with 40
+zero bytes. Every non-zero payload produces the *identical* `vii_scheduler.cc:864
+ASSERTION FAILED` and the same five leading frames; all zeros crashes. Nothing
+we can vary inside the 64 bytes changes the verdict, and A14 does not have the
+command at all (U379). The parsimonious reading is that A17 added a stub whose
+CHECK fires unconditionally for host-originated calls, not a validator that
+inspects the buffer. So the KCI gap route is exhausted as a setup producer: it
+remains a plausible transport once an element producer exists, but it cannot
+teach us the element.
+
 ## 2026-11-14 (U379: code 15 exists only on A17)
 
 With the *real* A14 image loaded (U378), `fw_info` reads build `0x6487a25e`,

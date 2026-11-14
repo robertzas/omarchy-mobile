@@ -42,6 +42,21 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U380 (2026-11-14): a kernel-shaped command element asserts identically
+
+Payload = `struct edgetpu_command_element` (24 B: seq 1, code 0, reserved 0,
+dma{address=0x1015c000, size 64, flags 0}) + 40 zero bytes, sent as code 15 at
+64 bytes on a fresh A17 boot:
+
+    ERR vii_scheduler.cc:864 - ASSERTION FAILED
+    ERR log_embedded.cc:78 - --- Backtrace for CHECK Failure ---
+    0x100D3B66 0x100D3C26 0x100B647E 0x1001B922 ...
+
+Identical to the seven earlier payloads. Eight payloads, four structural classes,
+one assertion: the check is not payload-conditional. With A14 returning
+UNIMPLEMENTED for the same command (U379), the best reading is an A17 stub whose
+CHECK always fires for host calls. KCI 15/16 stay a transport, not a producer.
+
 ## U379 (2026-11-14): real A14 -> code 6 12, code 15 12 (UNIMPLEMENTED)
 
 After swapping the `updates/google/` firmware (U378) and rebooting with the modem

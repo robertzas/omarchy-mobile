@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 26)
+## 11. The program to a working TPU (rev 27)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1082,7 +1082,7 @@ KCI command family that might carry it has just given up its descriptor size:
 
 | Route | What it needs | Verdict | Next |
 | --- | --- | --- | --- |
-| R1 KCI gap codes | **a valid VII element** (U376: any other content CHECKs) | **converged with R2/R7**: the wall's kernel face, not a bypass | A3d |
+| R1 KCI gap codes | a payload that is not rejected | **closed as a producer** (U380: eight payloads, one CHECK; A14 lacks the command) | transport only |
 | R2 VII element | a producer's exact values | closed (U249/U273/U277) | do not resend |
 | R3 DBA HAL shim | a peer that posts events | closed (U362: no wake at all) | - |
 | R4 37 MB HAL direct | a device path that does not reset | parked (U154/U174; payload already captured) | only with a new field |
@@ -1190,6 +1190,29 @@ It also promotes the hypothesis in R4: the A17 vendor HAL's setup most likely
 uses exactly this command, which is why the A17 HAL knows a payload shape no
 public source contains. A5 (stock oracle) remains the externally proven route
 and keeps the userdata risk.
+
+### 11.4c Rev 27: the gap route is exhausted, and the plan turns outward
+
+Eight payloads across four structural classes all reach the same CHECK, and the
+command does not exist on A14. That is not a validator failing to recognise an
+element; it is a stub that refuses host calls. Consequences, stated plainly:
+
+- **R1 is closed as a producer.** Code 15 stays interesting as the A17 HAL's
+  probable transport, but it can no longer be expected to reveal the element.
+- **R6 (stock oracle) is now the only externally proven producer.** Its risk is
+  unchanged and must be accepted by the owner in writing: stock Android on slot
+  A sees an encrypted Arch `userdata` and may format it.
+- **R9 proceeds now, not after setup.** The kernel and product work does not
+  depend on the firmware being set up, and it is what makes the eventual setup
+  usable: K1 (one power-up per boot, loud), K2 (an IOMMU fault kills the client,
+  not the phone), K3 (teardown that leaves the heartbeat alive), K4 (power and
+  thermal), plus the `omamobile-tpu` skeleton speaking `/dev/janeiro` ioctls and
+  a self-test whose report names this wall honestly instead of failing silently.
+
+**G0 is the single gate.** G1-G5 (register, bind, invoke, parity, repeat) are
+written and blocked on G0 alone; nothing else in the ladder is blocked. A
+failure to reproduce stock's capture on A17 is the falsifier that would close
+the firmware itself, and that is the next decision the plan asks for.
 
 ### 11.5 After setup (unchanged, ordered)
 
