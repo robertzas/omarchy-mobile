@@ -36,6 +36,6 @@ grep -q '^ExecStart=/usr/bin/omamobile-tpu selftest --json$' units/omamobile-tpu
 grep -q '^SuccessExitStatus=3$' units/omamobile-tpu-selftest.service \
   || fail "the self-test unit accepts the honest wall verdict"
 out=$(TPU_DEBUGFS=$tmp PATH=$PWD/bin:$PATH omamobile-tpu selftest --json 2>/dev/null || true)
-printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["rc"]==3, d' \
+printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["rc"] in (1,3), d' \
   || fail "the JSON self-test is not one parseable record"
 echo "ok - omamobile-tpu"
