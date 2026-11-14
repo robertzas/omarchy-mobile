@@ -1300,7 +1300,15 @@ grep for 864. That is a bounded, offline job; A2 stays open until it is done.
 
 **Rev 37: the logger's file table.** The `vii_scheduler.cc` path sits at file `0xeff78`, and searching for its address under every plausible base encoding gives no hits at all. So the firmware does not store a pointer to the path under either absolute or island-relative encoding; the logger's id table uses a different scheme (index, hash or a per-site struct), which is the next offline job. A2 remains open with its tooling solved.
 
-**Rev 38: 16-bit offsets also miss.** A 16-bit search for the path's offset under the image and island bases gives {'0x10000000': ('-0xff10088', []), '0xe0000': ('0xff78', ['0x1b45a', '0x258ba', '0x48d0e', '0x6536e'])}. With absolute, island-relative and 16-bit encodings all empty, the logger's table is not an offset table over these paths at all; the remaining candidates are a hash or a build-time index whose table is not in this image (a separate debug artifact). A2 is therefore blocked on a mapping that the firmware does not ship, not on tooling - recorded so no future pass repeats these three searches.
+**Rev 38: the offset encodings do not resolve the logger's id.** Absolute and
+island-relative 32-bit pointers to the `vii_scheduler.cc` path (`0xeff78`) do not
+exist anywhere in the image. A 16-bit search for the island-relative value
+(`0xff78`) returns four scattered code addresses (`0x1b45a`, `0x258ba`, `0x48d0e`,
+`0x6536e`) that do not form a contiguous table, so none of them is a site table.
+With those three encodings exhausted, the id behind `vii_scheduler.cc:864` is
+resolved by a scheme this image does not ship in readable form (a hash or a
+build-time index), and A2 is blocked on that mapping rather than on tooling.
+Recorded so no future pass repeats these three searches.
 
 ### 11.5 After setup (unchanged, ordered)
 
