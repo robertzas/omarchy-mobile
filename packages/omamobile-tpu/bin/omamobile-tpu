@@ -5,7 +5,8 @@
 # device/cheetah/TPU-PLAN.md).
 set -u
 D=${TPU_DEBUGFS:-/sys/kernel/debug/edgetpu/janeiro}
-json=${1:-}
+json=
+for a in "$@"; do [ "$a" = --json ] && json=--json; done
 info=unknown
 if [ -w "$D/kci_send" ]; then
 	printf '11\n' >"$D/kci_send" 2>/dev/null

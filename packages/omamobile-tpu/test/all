@@ -10,4 +10,5 @@ grep -q '^ExecStart=/usr/bin/omamobile-tpu status --json$' units/omamobile-tpu-s
   || fail "the unit runs the reporter"
 grep -q '^\[Service\]$' units/omamobile-tpu-status.service || fail "the unit has a [Service]"
 for f in bin/omamobile-tpu install; do [ -x "$f" ] || fail "not executable: $f"; done
+grep -q 'for a in "\$@"' bin/omamobile-tpu || fail "the reporter finds --json among its arguments"
 echo "ok - omamobile-tpu"
