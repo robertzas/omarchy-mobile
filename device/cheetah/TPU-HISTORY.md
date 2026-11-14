@@ -42,6 +42,21 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U375 (2026-11-14): class byte 0x01/0x02/0x0b -> identical assertion
+
+Three boots (modem stopped, SSH back in 15 s), payload `struct.pack('<I',addr)*16`
+with byte 10 overwritten by V, one code 15 send per boot:
+
+    V=0x01  vii_scheduler.cc:864 ASSERTION FAILED ... 0x100D3B66 0x100D3C26 0x100B647E
+    V=0x02  viii_scheduler identical (same five frames)
+    V=0x0b  identical
+    code 11 -> 0 in all three boots, len 64
+
+Conclusion: +0x0a is not the selector for this assertion. The invariant that
+trips it is structural (element count / first word / a must-be-null field), so
+the next step varies the payload shape: self-pointer at one offset only, zeros
+elsewhere, one boot per shape.
+
 ## U374 (2026-11-14): 16x self-pointer -> vii_scheduler.cc:864 ASSERTION FAILED
 
 Fresh boot (modem stopped, 15 s to SSH). Code 11 first to learn the boot's

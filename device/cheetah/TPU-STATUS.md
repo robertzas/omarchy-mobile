@@ -23,6 +23,17 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-14 (U375: the class byte is not the selector)
+
+Three fresh boots, one code 15 send each, payload = sixteen self-pointers with
+byte `+0x0a` set to `0x01`, `0x02` and `0x0b`: all three produce the *same*
+`vii_scheduler.cc:864 - ASSERTION FAILED` and the same five leading frames
+(`0x100D3B66 0x100D3C26 0x100B647E ...`), and code 11 answers 0 afterwards in
+every case. So `+0x0a` does not select the failing branch; the check fires on
+something invariant in the self-pointer shape itself - the element count, the
+first word, or a field that must be null. The next differential varies the
+*shape* (pointer at one offset, zeros elsewhere), not the class byte.
+
 ## 2026-11-14 (U374: code 15 is a VII-scheduler command, and its payload is a pointer)
 
 The door logs the buffer's firmware address on every send (`kci_send code N

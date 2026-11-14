@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 23)
+## 11. The program to a working TPU (rev 24)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1126,6 +1126,13 @@ have never been printed. If one is a state word, it names what setup waits for.
 added, explicit risk: stock Android on slot A sees an Arch `userdata` it cannot
 decrypt and may format it (the 9a precedent in AGENTS.md). So this route needs
 the owner's acceptance of losing the install, or a second device.
+
+**A3b result (2026-11-14, rev 24).** Class bytes 0x01, 0x02 and 0x0b at payload
+`+0x0a` give the identical `vii_scheduler.cc:864` assertion and backtrace, so the
+byte is not the selector (U375). A3c is therefore a shape differential, not a
+value differential: self-pointer at one offset with zeros elsewhere, one shape
+per boot, three shapes queued (`+0x00`, `+0x04`, `+0x08`); a shape that stops
+asserting names the field the scheduler requires.
 
 **A3 result (2026-11-14, rev 23).** A3 is no longer a blind differential. The
 door publishes the payload's firmware address (`tpu_addr`, U372), so a 64-byte
