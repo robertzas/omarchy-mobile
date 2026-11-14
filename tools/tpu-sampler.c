@@ -63,6 +63,7 @@ struct map {
 
 static struct map maps[MAX_MAPS];
 static int nmaps;
+static int dump_bytes;
 
 static int read_file(const char *path, char *buf, size_t len)
 {
@@ -135,6 +136,40 @@ static uint64_t file_off(uint64_t addr)
 	if (!m)
 		return addr;
 	return m->off + (addr - m->start);
+}
+
+static void dump_words(pid_t pid, unsigned long a, int bytes)
+{
+	unsigned char buf[256];
+	struct iovec l, r;
+	uint64_t base = a & ~7UL;
+	int i;
+
+	if (bytes <= 0 || bytes > (int)sizeof(buf))
+		return;
+	l.iov_base = buf;
+	l.iov_len = bytes;
+	r.iov_base = (void *)base;
+	r.iov_len = bytes;
+	if (process_vm_readv(pid, &l, 1, &r, 1, 0) != bytes) {
+		printf("  mem at 0x%llx unreadable: %s\n",
+		       (unsigned long long)base, strerror(errno));
+		return;
+	}
+	for (i = 0; i + 8 <= bytes; i += 8) {
+		uint64_t w;
+		struct map *m;
+
+		memcpy(&w, buf + i, 8);
+		printf("  mem[0x%llx] = 0x%llx",
+		       (unsigned long long)(base + i),
+		       (unsigned long long)w);
+		m = find_map(w);
+		if (m && m->path[0])
+			printf("  %s+0x%llx", m->path,
+			       (unsigned long long)file_off(w));
+		printf("\n");
+	}
 }
 
 static void show_addr(const char *tag, uint64_t addr)
@@ -223,6 +258,8 @@ static int sample(pid_t tid, pid_t pid, int stack_bytes, int all)
 		uint32_t fw = 0;
 		struct iovec fl, fr;
 
+		if (nmaps == 0)
+			load_maps(pid);
 		printf(" uaddr 0x%lx", a0);
 		fl.iov_base = &fw;
 		fl.iov_len = sizeof(fw);
@@ -232,6 +269,8 @@ static int sample(pid_t tid, pid_t pid, int stack_bytes, int all)
 			printf(" word %u (0x%08x)", fw, fw);
 		else
 			printf(" word unreadable: %s", strerror(errno));
+		if (dump_bytes > 0)
+			dump_words(pid, a0 - 32, dump_bytes);
 	}
 	printf("\n");
 
@@ -337,7 +376,7 @@ int main(int argc, char **argv)
 
 	if (argc < 2) {
 		fprintf(stderr,
-			"usage: tpu-sampler PID [--stack BYTES] [--wait SEC] [--all]\n");
+			"usage: tpu-sampler PID [--stack BYTES] [--wait SEC] [--dump BYTES] [--all]\n");
 		return 2;
 	}
 	pid = atoi(argv[1]);
@@ -348,6 +387,8 @@ int main(int argc, char **argv)
 			waitsec = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--all"))
 			all = 1;
+		else if (!strcmp(argv[i], "--dump") && i + 1 < argc)
+			dump_bytes = atoi(argv[++i]);
 		else {
 			fprintf(stderr, "tpu-sampler: unknown argument %s\n", argv[i]);
 			return 2;

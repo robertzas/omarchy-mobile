@@ -1,15 +1,15 @@
 <!-- SPDX-License-Identifier: MIT -->
 # TPU / NPU plan: the Edge TPU (Abrolhos / Janeiro) on cheetah (gs201)
 
-Status (2026-11-13, rev 20): **the TPU is alive, the KCI door reads and
-writes, and the HAL's blocked `Create` is now named from outside: a standalone
-sampler shows three runtime threads on one futex and the main thread on another
-(word 0), every frame inside `libdarwinn_dba_hal_runtime.so`, with no device fd
-at the wait (1.19). That is still a userspace peer, not firmware. The firmware
-setup itself is not done and no inference is claimed.** Rev 20 adds the sampler
-and its result, explains why the `pthread_cond_wait` interposer never fired, and
-corrects P3: the 40-byte record is dead in `0x14d9eac`, which is a per-entry
-constructor, not the type-5 serializer.
+Status (2026-11-13, rev 21): **the TPU is alive, the KCI door reads and
+writes, and the HAL's blocked `Create` is named down to its waiting primitive:
+`EventManager2::WaitForEvent` (`0x333054` -> `0x332e88`) inside
+`libdarwinn_dba_hal_runtime.so`, with three idle executor threads (1.20). The
+host callback the harness passes is **never called**, so the wait is not the
+host's contract but the runtime's own event manager with no event posted. The
+firmware setup itself is not done and no inference is claimed.** Rev 21 names
+the wait and its dispatch, records the callback experiment, and makes a futex
+syscall tracer R3's next instrument.
 
 ## 0. Rules this plan runs under
 
@@ -645,6 +645,10 @@ workload.
    wait moved and the run needs a fresh `MODE` before another sample.
 5. Kill the target; nothing here touches the device or the power-up.
 
+6. `MODE=create` with the callback-logging harness prints `CB event=… arg=…`
+   for every host callback; zero lines in 3 s means the wait is not the host's
+   contract (1.20).
+
 ### R1 (phone, no reboot): the binder session (parked)
 
 Start the chain (`NO_DELEGATE=1 DBA=1`), confirm the service pid and its HAL
@@ -910,6 +914,36 @@ Runbook (phone, no reboot): `gcc -O2 -static -o /root/tpu-sampler
 (`MODE` and `NOFORK` must be in its pass-through list; the phone's copy now
 is), then `/root/tpu-sampler PID --wait 5 --stack 16384`.
 
+### 1.20 The event manager, and the callback that never rings (U358-U360)
+
+The wait's own code is now read. `0x333054` is a `WaitForEvent` wrapper: it
+converts the timeout through `0x334f88`, calls `0x332e88` with the deadline and
+returns `w0 & 1`; `0x333098` is the infinite-timeout twin (`x2 = -1`). Around
+it, the runtime's strings name the machinery: `event_waiter_->WaitForEvent()
+.status() is OK`, `WaitForEvent failed for unknown reason`, `thread/executor.cc`,
+`base/scheduling/scheduler.cc`, `eventmanager2`, `threadpool`, `default_executor`
+and `Unable to apply performance option to the DBA event_manager thread.` So
+`Create` starts Google's `thread` executor and waits in its event manager.
+
+The event loop dispatches through the event's own thunk: at `0x332f20` it loads
+`x9 = [event+0x20]`, clears `[event+0x20]`, and `blr x8`. An event therefore
+carries its callback; a posted event runs, an unposted one leaves the manager
+asleep.
+
+**The host callback is never called.** The harness's callback now logs every
+invocation (`CB event=… arg=…`, `tools/tpu-hal-harness.c`), and a 3 s
+`MODE=create` run produced **zero** `CB` lines before the alarm. So the wait is
+not the HAL asking its caller to do something - the harness's peer is never
+invoked. The runtime is waiting for an event its own machinery should post, and
+nothing does. The memory 32 bytes either side of both futex words is eight zero
+words, so the object state is not beside the word.
+
+Next instrument: a **futex syscall tracer** (a standalone aarch64 binary driving
+`PTRACE_SYSCALL` over `pidfd_getfd`/`PTRACE_SEIZE`, logging `FUTEX_WAIT` and
+`FUTEX_WAKE` with `uaddr`, `val` and the timeout). That records whether anything
+ever wakes the main thread's uaddr and what it writes, which the sampler cannot
+see because it only reads state between calls.
+
 ### 1.11 The KCI door, corrected (U329)
 
 Userspace reaches KCI through **debugfs**, not an ioctl:
@@ -1010,11 +1044,11 @@ way to learn whether the enum gap hides a second command family.
 **R2** has no new field to send; its next artifact is P3's field map, which
 would say what the *producer* fills, not what the wire format is.
 **R3** is the only route that runs Google's own setup builder. Its blocker is
-now named: three runtime threads idle on one futex (word 0x4002) and the main
-thread waits on another (word 0), all inside
-`libdarwinn_dba_hal_runtime.so`, with no device fd (1.19). The next instruments
-are the object around both uaddrs and the runtime store that would set the main
-thread's word - not another libc interposer, which cannot see a raw futex.
+now named to the primitive: `EventManager2::WaitForEvent` (`0x333054` ->
+`0x332e88`), with three idle executor threads and no device fd, and the host
+callback never invoked (1.20). The next instrument is a futex syscall tracer
+(WAIT/WAKE with uaddr and value): it says whether any thread ever posts the
+event, and which one - something a state sample cannot show.
 **R4** stays the oracle of last resort and the only route with a proven producer;
 it needs the owner at the phone and the section-7 runbook.
 

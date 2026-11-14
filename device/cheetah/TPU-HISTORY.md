@@ -13879,3 +13879,32 @@ w3 and w4 and **never saves x1**, so the 40-byte element is not read there; the
 callee first builds a limits block through `0x14de9cc` (1024, 0x7fffffff, 256)
 and is a per-entry constructor, not the type-5 serializer. P3's target moves to
 the consumer of the same vector element.
+
+**U358, the wait is EventManager2's WaitForEvent.** `0x333054` (the function
+whose return address `0x332e88` sits on the blocked stack) is a wrapper: it
+converts the timeout through `0x334f88`, calls `0x332e88` with the deadline, and
+returns `w0 & 1`; `0x333098` is the same call with `x2 = -1`, the infinite
+timeout. The runtime's strings name the machinery around it:
+`event_waiter_->WaitForEvent().status() is OK`, `WaitForEvent failed for unknown
+reason`, `thread/executor.cc`, `base/scheduling/scheduler.cc`, `eventmanager2`,
+`threadpool`, `default_executor`, and `Unable to apply performance option to
+the DBA event_manager thread.` So `Create` starts Google's thread executor, then
+waits in its event manager; the three worker threads are that executor's pool,
+idle on word 0x4002.
+
+**U359, the event dispatch carries its own callback - and the host's is never
+called.** At `0x332f20` the loop loads `x9 = [event+0x20]`, clears
+`[event+0x20]`, and `blr x8`: a posted event runs the thunk it carries. The
+harness's callback was changed to log every invocation (`CB event=… arg=…`) and
+rebuilt into `libhalharness.so`; a 3 s `MODE=create NOFORK=1` run produced zero
+`CB` lines before the alarm. The HAL is therefore not waiting on the caller's
+callback - the harness's peer is never invoked - it waits for an event its own
+machinery should post. The futex words' neighbourhood is eight zero words on
+both uaddrs, so no object state is readable beside them.
+
+**U360, the next instrument is a futex tracer.** A state sample cannot see a
+wake: it either catches the word before or after. The plan's R3 now asks for a
+standalone `PTRACE_SYSCALL` tracer that logs `FUTEX_WAIT` and `FUTEX_WAKE` with
+`uaddr`, `val` and timeout, so the run says whether any thread ever posts the
+event and which one. The harness's callback logging stays in the tool as the
+permanent check that the peer contract is not the blocker.

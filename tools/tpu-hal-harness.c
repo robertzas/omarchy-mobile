@@ -115,8 +115,14 @@ typedef int (*fn4)(void *, void **, void *, void *);
    4; a zeroed pair faults at 0. A no-op callback and a context with the same
    fields (byte +0x10 = 1, word +0x7c = 2000) keep those two arguments valid
    while the options layout is still unknown. */
-static int harness_cb(void *ctx) {
-  (void)ctx;
+static int harness_cb(void *a, int b) {
+  put("CB event=");
+  puthex((unsigned long)a);
+  put(" arg=");
+  putdec(b);
+  put("\n");
+  (void)a;
+  (void)b;
   return 0;
 }
 typedef int (*fn0)(void);

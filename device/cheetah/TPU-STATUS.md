@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Edge TPU bring-up: status and benchmark
 
-As of 2026-11-13 (rev 13), kernel
+As of 2026-11-13 (rev 14), kernel
 `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B. The plan of record is
 [TPU-PLAN.md](TPU-PLAN.md); the full experiment log and every prior revision
 are in [TPU-HISTORY.md](TPU-HISTORY.md). **No model has run on the TPU and no
@@ -22,6 +22,16 @@ firmware up. The stock oracle remains the only *proven* producer; the image's
 only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
+
+## 2026-11-13 (U358-U360: WaitForEvent, and a callback that never rings)
+
+The wait's code is read: `0x333054` is a `WaitForEvent` wrapper over `0x332e88`
+(with `0x333098` its infinite-timeout twin), inside the runtime's Google
+`thread`/EventManager2 executor. The event loop dispatches through the event's
+own thunk (`ldr x9,[x8,#0x20]; str xzr,[x8,#0x20]; blr x8`). The harness's
+callback now logs its calls, and a 3 s create produced none: the host contract
+is not what blocks. Nothing posts the event the manager waits for, so the next
+instrument is a futex syscall tracer. No inference.
 
 ## 2026-11-13 (U354-U357: the blocked create, named from outside)
 
