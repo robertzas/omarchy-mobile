@@ -92,9 +92,8 @@ is not about the HAL, and the whole route needs re-reading.
 
 ## Decision record
 
-Fill in before S1, or do not start. This is the owner's call, not an agent's.
-
-    date:
-    chosen: accept the loss of the Arch userdata | second phone | stop
-    who:
-    next read-only backup taken: yes/no
+    date: 2026-11-14
+    chosen: accept the loss of the Arch userdata
+    who: the owner, through the Freebuff session's G0 question
+    next read-only backup taken: ~/omamobile-backups/nv/cheetah-tpu-g0-20261114
+    (tools/nv-backup; --check reports all 7 partitions SAME)
