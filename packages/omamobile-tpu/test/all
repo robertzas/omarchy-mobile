@@ -14,4 +14,5 @@ grep -q 'for a in "\$@"' bin/omamobile-tpu || fail "the reporter finds --json am
 grep -q '^WantedBy=multi-user.target$' units/omamobile-tpu-status.service || fail "the unit is enable-able"
 grep -q '^ExecStartPre=/usr/bin/sleep 10$' units/omamobile-tpu-status.service || fail "the unit waits for the module"
 grep -q '"k1_refusals"' bin/omamobile-tpu || fail "the report carries the K1 count"
+grep -q '"spent"' bin/omamobile-tpu || fail "the report names a spent boot"
 echo "ok - omamobile-tpu"
