@@ -4,6 +4,8 @@ After=systemd-modules-load.service
 
 [Service]
 Type=oneshot
+# The TPU node and its firmware appear after the module loads; wait for them.
+ExecStartPre=/usr/bin/sleep 10
 ExecStart=/usr/bin/omamobile-tpu status --json
 StandardOutput=journal
 RemainAfterExit=yes

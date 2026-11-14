@@ -1268,7 +1268,7 @@ second increment - and its proof is the one already written in rev 29.
 `edgetpu-pm.c` now logs `K1: power-up N in this boot` at the second power-up,
 without changing behaviour (the count and the put balance are untouched), so the
 proof run can distinguish "two power-ups happened" from "one" before any policy
-pttt is enforced. The reporter unit, enabled on the phone, journals its JSON at
+policy is enforced. The reporter unit, enabled on the phone, journals its JSON at
 boot; the record is the evidence G1 will compare against.
 
 ### 11.5 After setup (unchanged, ordered)

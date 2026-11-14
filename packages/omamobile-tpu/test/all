@@ -12,4 +12,5 @@ grep -q '^\[Service\]$' units/omamobile-tpu-status.service || fail "the unit has
 for f in bin/omamobile-tpu install; do [ -x "$f" ] || fail "not executable: $f"; done
 grep -q 'for a in "\$@"' bin/omamobile-tpu || fail "the reporter finds --json among its arguments"
 grep -q '^WantedBy=multi-user.target$' units/omamobile-tpu-status.service || fail "the unit is enable-able"
+grep -q '^ExecStartPre=/usr/bin/sleep 10$' units/omamobile-tpu-status.service || fail "the unit waits for the module"
 echo "ok - omamobile-tpu"
