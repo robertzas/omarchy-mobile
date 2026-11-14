@@ -26,6 +26,11 @@ k1=$(dmesg | grep -c 'K1: power-up')
 spent=false
 case "$info" in 0000000000000000*) spent=true ;; esac
 dev=$([ -e /dev/janeiro ] && echo true || echo false)
+proven=false
+[ -e /var/lib/omamobile/tpu-setup-proven ] && proven=true
+transport=unknown
+[ "$info" != unknown ] && [ "$spent" != true ] && transport=ok
+st11=null; st12=null; st21=null
 # The self-test: gate, transport, and the wall by name. Exit 0 only when a model
 # can run (the setup wall is gone), 3 while the wall stands, 1 when the transport
 # is broken. It is the one check a product caller can run without knowing KCI.
@@ -39,13 +44,14 @@ selftest() {
 	0000000000000000*) echo "selftest FAIL: dark or spent boot ($info)"; return 1 ;;
 	esac
 	r11=$(kci 11); r12=$(kci 12); r21=$(kci 21)
+	st11=$r11; st12=$r12; st21=$r21
 	echo "selftest transport: KCI 11 -> $r11, 12 -> $r12, 21 -> $r21"
 	# KCI 11 is the transport proof: it answers 0 with the firmware's build id.
 	# 12 and 21 are usage queries the A17 firmware refuses through this door
 	# (3), so they are reported, not required; a send that never reached the
 	# firmware answers -EIO instead and is a transport failure.
 	case "$r11" in
-	0) ;;
+	0) transport=ok ;;
 	-EIO) echo "selftest FAIL: the door did not take KCI 11"; return 1 ;;
 	*) echo "selftest FAIL: KCI 11 answered $r11"; return 1 ;;
 	esac
@@ -56,7 +62,7 @@ selftest() {
 	# phone, and the plan's G0 writes this marker. The absence of the wall line
 	# proves nothing: the firmware logs it only when a VII command is attempted,
 	# and this self-test sends none.
-	if [ -e /var/lib/omamobile/tpu-setup-proven ]; then
+	if [ "$proven" = true ]; then
 		echo "selftest: transport ok, and a successful inference is on record"
 		return 0
 	fi
@@ -65,8 +71,13 @@ selftest() {
 	return 3
 }
 if [ "$mode" = selftest ]; then
-	selftest
-	exit $?
+	selftest; rc=$?
+	if [ "$json" = --json ]; then
+		printf '{"transport":"%s","kci11":%s,"kci12":%s,"kci21":%s,"setup":"%s","rc":%s}\n' \
+			"$transport" "$st11" "$st12" "$st21" \
+			"$([ "$proven" = true ] && echo proven || echo unproven)" "$rc"
+	fi
+	exit $rc
 fi
 # The boot gate: a boot whose power-up is spent cannot do TPU work, and every
 # caller that needs the TPU says so here instead of discovering it mid-run.
@@ -79,10 +90,10 @@ if [ "$gate_only" = 1 ]; then
 	exit 0
 fi
 if [ "$json" = --json ]; then
-	printf '{"kernel":"%s","device":%s,"fw_info":"%s","gate_lines":%s,"assertions":%s,"crashes":%s,"k1_refusals":%s,"spent":%s}\n' \
+	printf '{"kernel":"%s","device":%s,"fw_info":"%s","gate_lines":%s,"assertions":%s,"crashes":%s,"k1_refusals":%s,"spent":%s,"transport":"%s","setup_proven":%s}\n' \
 		"$(uname -r)" "$dev" "$info" "$gate" \
 		"$(dmesg | grep -c 'ASSERTION FAILED')" \
-		"$(dmesg | grep -c 'firmware unrecoverable crash')" "$k1" "$spent"
+		"$(dmesg | grep -c 'firmware unrecoverable crash')" "$k1" "$spent" "$transport" "$proven"
 	exit 0
 fi
 printf 'kernel    %s\ndevice    %s\nfw_info   %s\nwall      %s\nk1        %s refusal(s) this boot\nspent     %s\n' \

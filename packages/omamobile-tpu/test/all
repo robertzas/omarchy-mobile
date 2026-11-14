@@ -29,4 +29,6 @@ TPU_DEBUGFS=$tmp PATH=$PWD/bin:$PATH omamobile-tpu --gate >/dev/null 2>&1 \
 grep -q 'selftest' bin/omamobile-tpu || fail "the reporter has a self-test"
 grep -q 'setup is not proven' bin/omamobile-tpu || fail "the self-test names the wall"
 grep -q 'tpu-setup-proven' bin/omamobile-tpu || fail "the self-test needs a positive setup proof"
+grep -q '"transport"' bin/omamobile-tpu || fail "the self-test has a JSON form"
+grep -q 'setup_proven' bin/omamobile-tpu || fail "the report carries the setup proof"
 echo "ok - omamobile-tpu"
