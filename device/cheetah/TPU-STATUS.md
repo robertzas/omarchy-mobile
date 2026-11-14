@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Edge TPU bring-up: status and benchmark
 
-As of 2026-11-14 (rev 21), kernel
+As of 2026-11-14 (rev 22), kernel
 `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B. The plan of record is
 [TPU-PLAN.md](TPU-PLAN.md); the full experiment log and every prior revision
 are in [TPU-HISTORY.md](TPU-HISTORY.md). **No model has run on the TPU and no
@@ -67,6 +67,23 @@ flushing: got 16, want 4092`. With a 4092-byte payload it answers `0` and return
 `0c 00 03 00 0c 00 00 00 18 00 00 00 02 00 00 00`. So every usage query needs a
 full page of descriptor, and a bare `3` from 12/21 is a size complaint, not a
 refusal of the command.
+
+## 2026-11-14 (U397: rev 49's comprehensive program, the stable-build rule, and the suite)
+
+TPU-PLAN rev 49 adds §14, the forward program with its phases, commands, exits
+and rollbacks, and §14.0 makes the owner's rule explicit: every build and flash
+starts from the latest stable release (2026-11-14: kernel-2026.11.13,
+omamobile-device-cheetah 0.1.54, Omarchy 4.5), with the TPU bring-up series on
+top in its own worktree. The re-evaluation keeps the wall where it is (the VII
+setup has no Linux producer), records G0 attempt 1 and the verified reinstall,
+and orders the remaining work P0-P5.
+
+The full suite found two merge regressions, both fixed: `tools/phone-usb` piped
+into `grep -q` under pipefail, and the lynx/raven bootctl copies had lost the
+`OMAMOBILE_DEVINFO_EXTRA_MINOR` hook that cheetah's copy carries. `tests/all`
+now reaches `tests/owl`, which cannot run on this host because its `node` is
+Bun 1.4.4 (the suite is written for Node's preload); that is environmental, not
+a code failure, and the test is not weakened.
 
 ## 2026-11-14 (U396: G0 attempt 1 — stock wants a factory reset, not a capture)
 

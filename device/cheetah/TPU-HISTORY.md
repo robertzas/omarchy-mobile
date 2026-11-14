@@ -42,6 +42,18 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U397 (2026-11-14): rev 49, the stable rule, and the suite
+
+    tests/all  -> not ok: tools/phone-usb:63, :95 pipe into grep -q under pipefail
+    fix: profiles=$(nmcli ... || true); printf ... | grep -Fxc; same for phone-ssh
+    tests/all  -> not ok: src/omamobile-bootctl.c drifted from the cheetah package
+    fix: lynx/raven copies get cheetah's OMAMOBILE_DEVINFO_EXTRA_MINOR block
+    tests/all  -> 44 groups pass; tests/owl cannot run (node is Bun 1.4.4;
+                  the suite is written for Node's preload)
+
+    TPU-PLAN rev 49: section 14, the P0-P5 program; section 14.0, the owner's
+    latest-stable build and flash rule; AGENTS.md carries the same bullet.
+
 ## U396 (2026-11-14): G0 attempt 1, and the branch sync
 
     fastboot getvar current-slot      -> b

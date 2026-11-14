@@ -1051,12 +1051,16 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 48)
+## 11. The program to a working TPU (rev 49)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
 15 has a **64-byte** payload, not an unguessable one. The old §11 rows stay in
 the history; this section is the live program.
+
+**Rev 49:** the forward program is §14. This section keeps the evidence, the
+route census and the gate details it accumulated; §14 sets their order,
+commands, exits and rollbacks.
 
 ### 11.1 The wall, in one sentence
 
@@ -1439,7 +1443,7 @@ and `setup_proven`, so no later pass can read a green report as a working TPU.
 
 | Gate | State | Evidence | What unblocks it |
 | --- | --- | --- | --- |
-| G0 firmware setup | **blocked** | U367, U380 | the buttons, then S1-S3 |
+| G0 firmware setup | **attempted; stock recovery** | U396 | the buttons, the accepted userdata reset, then S1-S3 |
 | G1 register DGC0 | not run | - | G0 |
 | G2 create execution | not run | - | G1 |
 | G3 bind input/output | not run | - | G2 |
@@ -1448,7 +1452,7 @@ and `setup_proven`, so no later pass can read a green report as a working TPU.
 | K1 one power-up per boot | done | U381 | - |
 | K2 IOMMU fault | **blocked** | U392 | G0 (a live client mapping) |
 | K3 teardown | done, door scope | U391 | - |
-| K4 power and thermal | not run | - | an idle measurement |
+| K4 power and thermal | not run | - | an idle measurement with the cable out (physical) |
 | boot gate | shipped | U387 | - |
 | self-test | shipped | U390 | G4 writes `tpu-setup-proven` |
 | A2 static decode | **blocked** | U383 | a vendor debug artifact |
@@ -1623,4 +1627,228 @@ every unregistered descriptor before DMA.
 - **This firmware can be set up at all.** Falsified if every 64-byte payload
   either faults or returns 3, and stock's own capture shows the same firmware
   build with the same gate, i.e. the setup needs a signed artifact we lack.
+
+## 14. Rev 49: the comprehensive program to a working TPU
+
+Rev 49 re-evaluates the whole program after the branch sync (`d447a2af`), the
+first G0 attempt (U396) and two full suite runs. §11 keeps the evidence, the
+route census and the gate history; this section is the forward program: its
+order, commands, exits, rollbacks and the owner's rule for builds and flashes.
+It adds no route and weakens no falsifier in §13.
+
+### 14.0 Build and flash policy (owner's rule, 2026-11-14)
+
+**Every build and every flash starts from the latest stable release.**
+
+- The latest stable release is the newest `kernel-YYYY.MM.DD` tag on
+  linux-omarchy-mobile's `omamobile`, plus the versions the release notes name.
+  On 2026-11-14 that is `kernel-2026.11.13`, `omamobile-device-cheetah` 0.1.54
+  and Omarchy 4.5. Confirm it before relying on it:
+  `git -C ~/omamobile-kernel/linux fetch --tags`, then the tag and
+  `docs/RELEASES.md` §8; the rootfs pins are in `rootfs/packages.pinned`.
+- A kernel or image build is a clean checkout of that tag with the named TPU
+  bring-up series applied on top, in its own worktree and output directory
+  (`wt-tpu-stable`, `out-tpu-stable`), and `uname -r` names the release base.
+  The series is consolidated from `device/cheetah/tpu-k1.patch` plus the
+  debugfs-door work; the door stays a bring-up instrument and is removed before
+  release. No build from an older or unknown base, and no unrecorded `-dirty`
+  tree.
+- A rootfs or recovery image comes from the same pins with
+  `tools/build-rootfs`; `out/cheetah/omamobile-rootfs-cheetah-2026.11.13-tpu3-aarch64.img.zst`
+  is the 2026.11.13 example (verified read-only, U396).
+- A flash is `bin/omamobile push` to slot B, or `tools/install-phone` for a
+  reinstall, with images from that base. If a newer stable release lands,
+  rebuild first, then flash the rebuild.
+- Every result records its base: `uname -r`, the tag, and the package versions.
+
+### 14.1 Re-evaluation: what is true today
+
+| Fact | State | Evidence |
+| --- | --- | --- |
+| transport, KCI door | working; KCI 11/21 answer | U388, U389; gate K |
+| K1 one power-up per boot | done; second is `-EBUSY` and named | U381 |
+| K3 teardown | proven in door scope | U391 |
+| K2 IOMMU fault | **blocked on G0** (the firmware validates descriptors first) | U392 |
+| boot gate | shipped (`--gate`, boot unit) | U387 |
+| self-test | shipped; exit 3 until a real inference | U390 |
+| G0 stock setup | **only proven producer; attempt 1 hit stock recovery** | U396 |
+| A2 static decode | closed as blocked (vendor debug artifact) | U383 |
+| A4 `fw_info.spare[]` | zero; no state word | U388 |
+| code 15/16 | closed as producers | U380, U386 |
+| branch and suite | synced at `d447a2af`; two merge regressions fixed; OWL blocked on a Bun-only host | U397 |
+
+**What changed since rev 48.** Stock cannot boot our Arch `userdata`; the
+factory reset is now measured and part of G0. The return path is proven
+read-only (`install-phone --verify-only`, U396). The branch carries main and the
+old remote line and is pushed. The suite gate is enforced on every branch change
+now, and it caught two merge regressions. The owner's latest-stable rule is in
+§14.0 and AGENTS.md.
+
+**What did not change.** The wall is still the firmware's one-time VII setup
+with no Linux producer. R1 (KCI gap), R2 (VII element guessing) and R5 (public
+source) stay closed. K1's one power-up per boot, the boot gate, the honest
+self-test and the no-`rmmod` rule stand.
+
+### 14.2 Definition of done (measurable)
+
+| # | Done means | Proof artifact |
+| --- | --- | --- |
+| D1 | setup is done on a cold boot | the firmware log has no `Setup is not done yet` after a fresh boot; `fw_info` matches the captured build |
+| D2 | the DGC0 graph registers | status 0 and the driver's register line |
+| D3 | an execution exists | a non-zero execution id |
+| D4 | one inference runs | the output buffer changes; its sha256 is recorded |
+| D5 | parity with the CPU reference | `tools/tpu-acceptance compare` passes its tolerance |
+| D6 | repeatability | 10 runs across 2 cold boots, no second power-up, no leaked handle, no IOMMU fault, KCI 21 alive throughout (the wakelock is held across runs, U381) |
+| D7 | K2 and K4 evidence | the fault kills the client and not the phone; the power/thermal delta is recorded |
+| D8 | the product | `omamobile-tpu run MODEL INPUT` JSON; the service self-test covers gate K and the mini model; the debugfs door is gone; DEVICES.md is honest |
+| D9 | the benchmark row | filled only when D4-D6 hold, with `uname -r`, date and firmware version |
+
+### 14.3 The critical path
+
+| Phase | Work | Exit | Effort |
+| --- | --- | --- | --- |
+| **P0 G0** | buttons, accepted userdata reset, stock boot, capture, reinstall | capture with the VII elements and replies; Arch back on slot B | one owner session |
+| **P1 producer** | decode the capture, build the setup replay, prove the gate clears | D1 | one or two sessions |
+| **P2 G1-G5** | register, execution, bind, invoke, parity | D2-D5 | one or two sessions |
+| **P3 K2/K4** | fault injection on a live mapping; idle power/thermal | D7 | one boot each |
+| **P4 product** | `omamobile-tpu run`, service, docs, door removal | D8 | one session |
+| **P5 acceptance** | 10 runs, two cold boots, benchmark, release | D6, D9 | one session |
+
+P1 cannot start without P0. P2 cannot start without P1. P3's K2 and P4 depend on
+P2; K4 needs only a boot with the gate and a cable-out window. P5 closes the
+program.
+
+### 14.4 P0: G0, the only owner-gated step (risk high)
+
+**Preconditions.** Latest stable base chosen (§14.0); NV backup taken and
+`--check` clean; the rootfs image and `out-tpu-stable/images` verified with
+`tools/install-phone --verify-only`; slot flags read `b`/`yes`; the modem is not
+running (development phone), and the owner knows the screen changes and that
+userdata is erased.
+
+1. **Buttons** (owner): Volume Down, then Power, about 20 s.
+2. Read and record: `fastboot getvar current-slot` (expect `b`),
+   `fastboot getvar slot-successful:b` (expect `yes`).
+3. `fastboot --set-active=a`, `fastboot reboot`.
+4. Stock lands in **recovery** because of our Arch root (U396). The owner
+   chooses **Factory data reset** (the accepted risk: it erases the Arch root),
+   lets stock boot, and enables USB debugging (Settings > About > tap Build
+   number seven times > Developer options > USB debugging).
+5. `adb devices` must show `device`; accept the RSA prompt if `unauthorized`.
+6. `tools/tpu-stock-capture capture ~/omamobile-backups/tpu-stock-YYYYMMDD`.
+7. **Pass:** the capture holds the VII element bytes stock submits before the
+   gate clears, in order, with their replies, plus stock's `fw_info` build; the
+   NNAPI before/after pair shows whether the lazy HAL is the producer.
+   **Stop:** no setup lines at all on stock, or the gate line on a boot where
+   the HAL never ran (§13 falsifier); then go to §14.8.
+8. **Reinstall Arch** (the stable base of §14.0): `adb reboot bootloader`, then
+   `tools/install-phone --device cheetah --images ~/omamobile-kernel/out-tpu-stable/images --rootfs out/cheetah/omamobile-rootfs-cheetah-<latest stable>-aarch64.img.zst --serial <fastboot serial>`,
+   answer its prompts, let it write slot B and `userdata`, and boot.
+9. `tools/phone-smoke`; a **fresh** `tools/nv-backup` and `--check` (stock
+   rewrote `efs`, `persist`, `modem_userdata`); record the capture and every
+   output as U-numbers and fold them into the plan.
+
+**Rollback:** before the reset, `fastboot --set-active=b` boots Arch unchanged.
+After the reset, the recovery is step 8; the `-tpu3`/stable image is the
+artifact. Never run an unsuffixed `fastboot flash`, never touch slot A's
+partitions beyond the slot flag, and stop the modem first if it is up.
+
+### 14.5 P1: from the capture to a Linux producer
+
+1. **Normalize the capture.** Extract the VII element bytes, their order, their
+   replies and stock's `fw_info`; diff the build against ours (A17 `0x69d449f1`
+   in U379/U380). If the capture is log-only, the NNAPI before/after pair names
+   the call site, not the bytes: then run the stock HAL in the vendor chroot
+   (R4) under a log stream, or stop and record a negative.
+2. **Map the bytes.** Reconstruct one element as the kernel's
+   `edgetpu_command_element` (seq, code, reserved, dma{address,size,flags}) and
+   as code 15's 64-byte payload; compare with `edgetpu-fs.c`'s encoder and with
+   the 64-byte gate (U366).
+3. **Replay.** Build `tools/tpu-setup` (door first, then the driver's own ioctl
+   path) that submits the captured sequence with the kernel's addresses. One
+   element per boot if the firmware faults on a repeat; never two code-15 sends
+   in one boot (U366).
+4. **Prove D1.** Cold boot, run setup, and check: no `Setup is not done yet` on
+   a VII command, KCI 15/16 no longer assert, `omamobile-tpu --gate` still 0,
+   and the self-test's `setup_proven` stays false until D4 (it is written only
+   by a real inference).
+   **Stop:** every captured element is refused as the gate did; then the stock
+   producer needs a signed artifact or a second device (A17 HAL difference), and
+   §14.8 applies.
+
+### 14.6 P2: G1-G5, the model path
+
+- **G1** register the verified 12,288-byte DGC0 (or the compiler's container)
+  through the driver's group path; **pass** status 0 and the register line.
+- **G2** create an execution on it; **pass** a non-zero id.
+- **G3** bind input and output from `/dev/dma_heap/system`; **pass** both carry
+  TPU iovas and the driver logs them.
+- **G4** invoke with a non-empty tensor; **pass** the output changes and its
+  sha256 is recorded. Only now may `/var/lib/omamobile/tpu-setup-proven` be
+  written.
+- **G5** `tools/tpu-acceptance compare --tpu OUT --cpu REF --dtype … --shape …`
+  within tolerance; then twice under one held wakelock (K1) and once after a
+  cold boot.
+- **Stop:** any non-zero status or a parity miss; the bytes are the finding,
+  not a reason to retry blindly.
+
+### 14.7 P3: K2 and K4
+
+**K2 (IOMMU fault).** With a live client mapping, unmap a buffer under a
+submitted command. **Pass:** the client is killed, the phone stays up, the
+kernel names the IOMMU fault, and KCI 21 still answers after the teardown.
+**Stop:** a phone reset or a wedged SMMU; record it and do not repeat in the
+same boot. **Never** inject through the door's `kci_addr` (U392).
+
+**K4 (power and thermal).** `tools/power-ab --suspend systemd` with the cable
+out, phases of 10 minutes or more, A = `janeiro` not loaded, B = loaded and
+gated. **Pass:** the delta and its uncertainty are recorded with the temperature.
+**Stop:** USB may not return until the next cable-in boot; read the result then,
+never from the middle of the run.
+
+### 14.8 P4: the product
+
+`omamobile-tpu run MODEL INPUT` emits the JSON report (device, firmware, graph,
+execution, output hash); the service self-test covers gate K and the mini model;
+the debugfs door is removed from the shipped path; the package version and
+DEVICES.md are updated; `tools/pr-check` and the suite run before the commit.
+The product never depends on the bring-up door, and it holds the wakelock for
+the whole run (U381).
+
+### 14.9 P5: acceptance and release
+
+Ten runs across two cold boots with the D6 checks, D5 parity, D7 evidence, and
+the benchmark row D9 with `uname -r` and the firmware build. Then the release
+path of §5: the stable base of §14.0, the bundle and the signed repository, and
+a reinstall proven with `tools/install-phone --dry-run` before the write.
+
+### 14.10 If G0 cannot produce a setup
+
+A second phone with stock Android runs the same capture with no userdata risk;
+its `fw_info` must match. If neither capture shows the setup, the falsifier in
+§13 fires: the setup needs a signed artifact or a producer outside both
+userspaces, and the program stops with that result recorded rather than
+implying a TPU that works. K1, K3, the boot gate and the self-test stand on their
+own.
+
+### 14.11 Risks and standing rules
+
+The storage guard stays; only slot B and `userdata` through the named tools; the
+modem is stopped before a reboot when it is up; `rmmod` is forbidden; the boot
+gate runs before every TPU result; the self-test never claims setup without an
+inference; no vendor blobs or identifying data are committed; the stock boot's
+NV rewrites are followed by a fresh backup and check.
+
+### 14.12 Session plan (the next actions in order)
+
+| Session | Work | Exit |
+| --- | --- | --- |
+| 1 | §14.4: buttons, reset, capture, reinstall | D1's raw material; Arch back |
+| 2 | §14.5: decode and replay | D1 |
+| 3 | §14.6: G1-G5 | D2-D5 |
+| 4 | §14.7 and §14.8: K2, K4, product | D7, D8 |
+| 5 | §14.9: acceptance and release | D6, D9 |
+
+The branch is `cheetah-tpu-accel` at `d447a2af`; each session records its base
+(§14.0), its results and any plan change as a new revision.
 
