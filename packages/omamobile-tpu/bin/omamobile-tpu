@@ -71,11 +71,13 @@ selftest() {
 	return 3
 }
 if [ "$mode" = selftest ]; then
-	selftest; rc=$?
 	if [ "$json" = --json ]; then
+		selftest >/dev/null 2>&1; rc=$?
 		printf '{"transport":"%s","kci11":%s,"kci12":%s,"kci21":%s,"setup":"%s","rc":%s}\n' \
 			"$transport" "$st11" "$st12" "$st21" \
 			"$([ "$proven" = true ] && echo proven || echo unproven)" "$rc"
+	else
+		selftest; rc=$?
 	fi
 	exit $rc
 fi
