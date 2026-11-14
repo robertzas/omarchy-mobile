@@ -42,6 +42,23 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U371 (2026-11-14): the two crash addresses, decoded offline
+
+`out/tpu/edgetpu-janeiro.fw` is the running image (sha256 52c1ccc..., A17,
+1,038,272 B). Thumb-2 decode at the addresses U370's crash report printed:
+
+    100d20c8  push.w {r4,r5,r6,r7,r8,lr}; mov r5,r0; add.w r7,r0,#0x18
+    100d20e4  lda r3,[r6]; ... 100d210c ldrd r3,r0,[r5,#4]; blx r3
+    100d211a  stl r4,[r3]; ... b 0x100d20da        (poll/callback loop)
+    100d1446  movs r0,#0x8c; ldr r1,[pc,#0x10]; bl 0x100d4c00
+    literal at 0xd1458 -> 0x100f2928: "Expected chip type %d in executable,
+    got %d."
+
+So 0x100D20C8 is the faulting context (an event loop that calls a vtable entry
+at [r5+4] and stores with `stl`), and 0x100D1446 is a log site, not the parser.
+A2's next target stays the per-code record carrying 64; the crash pair alone
+does not yield the 64-byte field map.
+
 ## U370 (2026-11-14): code 15 is 64 bytes and faults on a zero payload
 
 Two boots, one send each, with controls. `head -c N /dev/zero > kci_payload;

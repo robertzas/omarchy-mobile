@@ -23,6 +23,18 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-14 (U371: the crash PC is an event loop, the second address a log site)
+
+Offline decode of the two firmware addresses from U370. `0x100D20C8` is a
+Thumb-2 function prologue that polls a word with `lda`/`stl` and calls through
+`ldrd r3, r0, [r5, #4]; blx r3` inside a retry loop - the shape of an
+event/poll loop, not of a 64-byte payload parser, so it is the faulting context
+rather than the field reader. `0x100D1446` is inside a log call (`movs r0,
+#0x8c` = line 140) whose literal is "Expected chip type %d in executable, got
+%d.", so the second address is a logging site. A2 therefore still needs the
+per-code record that carries 64; the crash report alone does not hand over the
+struct.
+
 ## 2026-11-14 (U370: code 15 takes 64 bytes, and its handler faults)
 
 Code 15's DMA descriptor size is **64**. Through the debugfs door, 63 and 65 are
