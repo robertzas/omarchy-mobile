@@ -23,6 +23,54 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-14 (U370: code 15 takes 64 bytes, and its handler faults)
+
+Code 15's DMA descriptor size is **64**. Through the debugfs door, 63 and 65 are
+refused by name (`Invalid KCI DMA descriptor size N`) and 64 is accepted, then
+answers nothing: the write returns `-110` (`Connection timed out`), three times,
+on two boots, with 63/65 as controls. A zeroed 64-byte payload is enough to make
+the firmware fault: `ERR log_embedded.cc:83 - 0x100D20C8` and `0x100D1446`,
+then `firmware unrecoverable crash` - the first firmware code addresses this
+path has ever produced. KCI 11 still answers 0 right afterwards, so the firmware
+survives and only that handler falls over. `fw_info` reads
+`{build_time 0x69d449f1, flavor 3, changelist 'VHa5', spare[0..9] = 0}`, so A4
+finds no state word. This is the first KCI command whose payload gate has been
+satisfied; the 64-byte struct's first field is a pointer the zeroed payload
+gives as null. No inference.
+
+## 2026-11-14 (U369: this firmware logs only errors)
+
+`fw_tracing/request` 15 (no default-vote bit) reports `active 1`, and the
+control send produces no new firmware line beyond
+`ERR vii_handler_layer.cc:247 - Setup is not done yet received a command of type
+0`. So the build exposes error level only: there is no debug oracle to raise.
+
+## 2026-11-14 (U368: the chroot has no setup blob)
+
+`/vendor/firmware` in the vendor chroot holds only the three
+`gxp_callisto_fw_core*` images, and `/vendor/etc` holds graph containers
+(`graph-dgc0.bin`, `graph-dwn1.bin`, `graph-scratch.bin`, ...) plus the VINTF
+fragments. Nothing there is a firmware-setup artifact, so the missing producer
+is not a file we simply never pushed.
+
+## 2026-11-14 (U367: no public Google source has the producer)
+
+Google's public gs101 vendor module (`kernel/google-modules/edgetpu`, branch
+`android13-gs-raviole-5.15`) has the same KCI enum with the 15..18 gap and the
+same `setup_buffer` that only loads the image; the open-source Coral runtime
+(`google-coral/libedgetpu`) has no firmware-setup producer at all. So the
+producer exists only in the vendor userspace HAL/service, and R5 is closed by
+source rather than by another experiment.
+
+## 2026-11-14 (U366: the dense size sweep, and the one size that is not refused)
+
+Code 15 was swept over **every** size 1..4096 in chunks of 384 so the kernel
+ring retained every line (`logs/tpu/20261114-kci-dense.txt`): all answered `-> 3`
+except **size 64**, which answered `-> -110`. 63 and 65 answer `3` in isolation,
+so 64 is the handler's constant, not a flood artifact. The first pass's
+`firmware unrecoverable crash` was the same handler faulting. Code 16's dense
+1..1024 sweep is all `-> 3`; its constant is still unknown.
+
 ## 2026-11-14 (U365: the kernel's setup handler is image loading)
 
 `mobile_firmware_setup_buffer` (`mobile-firmware.c:382`) runs once per firmware

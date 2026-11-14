@@ -42,6 +42,55 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U370 (2026-11-14): code 15 is 64 bytes and faults on a zero payload
+
+Two boots, one send each, with controls. `head -c N /dev/zero > kci_payload;
+echo 15 > kci_send`:
+
+    size 63 -> 3   ERR ... Invalid KCI DMA descriptor size 63.
+    size 64 -> -110  (write error: Connection timed out)
+    size 65 -> 3   ERR ... Invalid KCI DMA descriptor size 65.
+
+`-110` is the driver's KCI wait timeout, not a firmware return: 64 passes the
+size gate at `tpu_kci_handler_thread.cc:298` and its handler never replies. The
+send is enough to fault the firmware:
+
+    ERR log_embedded.cc:83 - 0x100D20C8
+    ERR log_embedded.cc:83 - 0x100D1446
+    firmware unrecoverable crash
+
+and KCI 11 answers 0 immediately after, so the firmware survives with a crashed
+handler. Those two addresses are the first firmware PCs on record for this path
+(link 0x100D20C8 / 0x100D1446, file 0xd20c8 / 0xd1446) and are A2's entry point.
+`kci_result` after code 11 reads `f149d469 00000000 | 03000000 56486135` then
+zeros: build_time 0x69d449f1, flavor 3, changelist 'VHa5', spare[10] all zero.
+
+## U369 (2026-11-14): only error-level logging exists
+
+`echo 15 > fw_tracing/request` reports `active 1` (no default-vote bit), and a
+control send adds no firmware line beyond the gate's own. The plan's "raise the
+firmware's logging" lever is closed: this build has error level only.
+
+## U368 (2026-11-14): the chroot holds no setup artifact
+
+`/vendor/firmware` (chroot) holds `gxp_callisto_fw_core0..2` only; `/vendor/etc`
+holds the graph containers and VINTF fragments. No setup blob exists to find.
+
+## U367 (2026-11-14): the producer is not in any public Google source
+
+Cloned and read `android.googlesource.com/kernel/google-modules/edgetpu`
+(branch `android13-gs-raviole-5.15`, the closest public vendor driver): the KCI
+enum has the same 15..18 gap and `setup_buffer` is the image loader only.
+`github.com/google-coral/libedgetpu` has no setup producer. R5 is closed by
+source; R6 (stock) remains the only externally proven producer.
+
+## U366 (2026-11-14): every size 1..4096, and the one that is not refused
+
+Code 15 swept over all sizes 1..4096 in chunks of 384 (kernel ring retains
+~545 lines, so every line was read; `logs/tpu/20261114-kci-dense.txt`). All
+`-> 3` except 64 -> `-110`. Code 16 swept 1..1024 dense: all `-> 3`. The
+earlier non-3 count in chunk 1 was this 64; the crash line was its handler.
+
 ## U276 (2026-11-13): KCI 6 answers 12 (UNIMPLEMENTED) with a mapped scratch
 
 The first response other than `3` in the whole KCI-6 history. `kci_scratch`

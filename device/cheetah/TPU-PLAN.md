@@ -1,15 +1,18 @@
 <!-- SPDX-License-Identifier: MIT -->
 # TPU / NPU plan: the Edge TPU (Abrolhos / Janeiro) on cheetah (gs201)
 
-Status (2026-11-13, rev 21): **the TPU is alive, the KCI door reads and
-writes, and the HAL's blocked `Create` is named down to its waiting primitive:
-`EventManager2::WaitForEvent` (`0x333054` -> `0x332e88`) inside
-`libdarwinn_dba_hal_runtime.so`, with three idle executor threads (1.20). The
-host callback the harness passes is **never called**, so the wait is not the
-host's contract but the runtime's own event manager with no event posted. The
-firmware setup itself is not done and no inference is claimed.** Rev 21 names
-the wait and its dispatch, records the callback experiment, and makes a futex
-syscall tracer R3's next instrument.
+Status (2026-11-14, rev 22): **the wall has a number. KCI code 15's DMA
+descriptor size is 64**: 63 and 65 are refused by name (`Invalid KCI DMA
+descriptor size N`), 64 is accepted and then the handler stops answering
+(`-> -110`, three times, with 63/65 as controls; U366). A zeroed 64-byte payload
+also logged `firmware unrecoverable crash` during a flood, while KCI 11 kept
+answering 0 afterwards, so the firmware survives but that handler faults. This
+is the first KCI command whose payload gate has been satisfied, and it is the
+strongest lead since gate K. In the same pass: the dense size sweep closes every
+other size (1..4096 chunked so no line is lost), Google's public gs101 vendor
+driver and the open-source Coral runtime contain **no** setup producer (U367),
+the chroot has no setup blob (U368), and this firmware exposes only error-level
+logging (U369). The setup itself is still not done and no inference is claimed.
 
 ## 0. Rules this plan runs under
 
@@ -1048,196 +1051,126 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program towards a working TPU (rev 19, ordered)
+## 11. The program to a working TPU (rev 22)
 
-Every row has an oracle, a cost and a stop condition. Rows are ordered by cost,
-not importance. Only P5/R3, E5 and the stock route need a reboot.
+Rev 22 supersedes the route table of rev 19-21. Its new fact is U366: KCI code
+15 has a **64-byte** payload, not an unguessable one. The old §11 rows stay in
+the history; this section is the live program.
 
-### P0. Oracle regression (no phone change, 2 min, every session)
+### 11.1 The wall, in one sentence
 
-`CODES="11 12 21 8" tools/phone-ssh 'bash -s' < tools/tpu-oracle`, then
-`PAYLOAD=/root/z4096.bin CODES="12 21"`, then read `kci_result` back.
-**Pass:** `11 -> 0`; `12`/`21 -> 0` at 4096 bytes; `kci_result` is 4096 bytes
-with `num_metrics` 17 and `metric_size` 20 (U349). **Stop:** anything else is a
-kernel or firmware regression; nothing below is meaningful until it is
-explained.
+The firmware's one-time VII setup has no producer reachable from Linux, and the
+KCI command family that might carry it has just given up its descriptor size:
+**64 bytes for code 15**.
 
-### P1. The element send (parked: needs a new field)
+### 11.2 What is proven, and what it rules out
 
-The element's 48 bytes are fully mapped (U328) and fully swept (U175, U273,
-U277); the gate's `%d` is a placeholder (U175), and the payload is not parsed
-before the gate. Repeating the 2026-11-09 element would spend a run on a known
-negative, which this plan forbids. **The row reopens only with the setup
-command's type (P3), a producer we can drive (P5/R3, R4), or a field that
-differs from U319's bytes.** It never stops `tpu-hold` (U345).
-
-### P2b. Codes 15/16 (open, needs their name)
-
-They are implemented and check the descriptor's address, then its size; the
-address is accepted, the size is not (16, 128, 512, 1024, 2048, 4096 and 524288
-all refused). The iremap pool caps a scratch at 512 KiB, so a larger exact size
-cannot be expressed through the door. **Next:** their name. Checked and empty
-(U353): the published `omamobile`/`omamobile-tpu` trees and every branch carry a
-header without the gap comment; `KCI_CODE_* = 15..18` appears nowhere; the HAL's
-and the DBA runtime's strings carry no scratch/map command name. So thename must come from a newer Google tree or from the vendor service's binary
-interface, not from a size sweep. The descriptor-size axis is now swept to its
-edge too (U364): every size from 1 to 4096 and every power of two to 524288 is
-refused by name, so 15/16 need the handler's constant, not another length.
-
-### P3. The 40-byte record (offline, one window)
-
-Read `0x14d9eac` end to end, one field per instruction. It converts one 40-byte
-record into the type-5 payload, so it names every field the firmware will read.
-**Pass:** a field map with an offset and a width for all 40 bytes.
-**Stop:** if it is a dispatcher over record kinds, map the kind first and pick
-the one `SetupFirmware` builds.
-
-*Progress (U344, U357):* neither `0x14d9eac` nor `0x14de9cc` accesses `[x1]`.
-U357 read the call site end to end: the loop at `0x14d9c74` bounds-checks an
-index against a vector whose stride is 40 bytes, then passes `x1 = base + index
-* 40` (the element), `w3 = byte[x19+0x230 + index]` and an output pointer in
-`x8` to `0x14d9eac`. That callee **never saves `x1`** (its prologue keeps only
-x0, x8, w2, w3, w4) and builds a limits block through `0x14de9cc` before
-anything else. So `0x14d9eac` is a per-entry constructor and this record is
-dead there; the type-5 serializer is a different function. New target: the
-consumer of the same vector element, found from the vector at `x19+0x230` and
-the 40-byte stride in the loop header.
-
-### P4. The rebuilt element and a single send (after P3)
-
-Build the element from P3's map with U328's field map, diff it against U319's
-known negative, and send only if it differs. **Pass:** the firmware's setup
-line, or `T10=11` answering anything but `0xf000009`.
-
-### P5. The setup routes, ranked by evidence (the real wall)
-
-| route | evidence | cost | next |
+| # | Fact | Evidence | Consequence |
 | --- | --- | --- | --- |
-| R1 KCI gap codes | code 6 is mitigation and closed (U350); 15/16 unknown | no phone | P2b |
-| R2 VII element | shape mapped, all fields swept, payload unparsed before the gate | no phone until a type exists | P3 -> P4 |
-| R3 DBA HAL in-process | table reachable (U286); `create` allocates then waits with no peer (U293-U300) | one boot per attempt | name the wait (S2b/S4) |
-| R4 stock boot | the only proven producer | owner + physical fastboot, NV rewrite; run `dumpsys neuralnetworks` first, the service is lazy | section 7 |
+| 1 | the TPU is alive; KCI works; the VII door reads and writes | `tpu-hold`, KCI 21, gate K | transport is not the wall |
+| 2 | every VII command before setup is gated, whatever its code or class | U249, U273, U277 | guessing VII fields is closed |
+| 3 | the gate's `type 0` is a placeholder, not our byte | U175 | stop reading the type as a selector |
+| 4 | KCI's enum has no setup; 6 is power mitigation; 15/16 are implemented | U269, U350, U346 | only 15/16 can hide a setup family |
+| 5 | **code 15's descriptor size is 64** | U366: 63/65 refused by name, 64 accepted, reproducible | the size gate is satisfied |
+| 6 | a zeroed 64-byte payload never answers (`-110`) and once logged `firmware unrecoverable crash` | U366 | the handler dereferences the payload |
+| 7 | the firmware logs only at error level (`request 15` -> `active 1`, no new lines) | U369 | no debug oracle on this build |
+| 8 | no public Google source has the producer (gs101 vendor driver: same enum; Coral runtime: none) | U367 | R5 is closed by source, not opinion |
+| 9 | the vendor HAL is a service client (no device fd, no poster) and its direct path reset the phone | U362, U154/U174 | in-process HAL routes are parked |
 
-**R1** is closed for code 6 and open only for 15/16's name; it is the cheapest
-way to learn whether the enum gap hides a second command family.
-**R2** has no new field to send; its next artifact is P3's field map, which
-would say what the *producer* fills, not what the wire format is.
-**R3** is the only route that runs Google's own setup builder. Its blocker is
-now named to the primitive: `EventManager2::WaitForEvent` (`0x333054` ->
-`0x332e88`), with three idle executor threads and no device fd, and the host
-callback never invoked (1.20). The futex tracer has now run (1.21, U362):
-nothing ever wakes either word, so there is no poster, not a slow one. That
-makes the shim the wrong component; the next attempt loads the 37 MB
-`libdarwinn_hal.so`, which is the library that carries `SetupFirmware` (1.22).
-**R4** stays the oracle of last resort and the only route with a proven producer;
-it needs the owner at the phone and the section-7 runbook.
+### 11.3 Route census (live)
 
-### G1-G3. Graph (after setup)
+| Route | What it needs | Verdict | Next |
+| --- | --- | --- | --- |
+| R1 KCI gap codes | a name and a payload | **open, primary**: code 15 takes 64 B | A1-A3 |
+| R2 VII element | a producer's exact values | closed (U249/U273/U277) | do not resend |
+| R3 DBA HAL shim | a peer that posts events | closed (U362: no wake at all) | - |
+| R4 37 MB HAL direct | a device path that does not reset | parked (U154/U174; payload already captured) | only with a new field |
+| R5 public-source port | a public producer | closed (U367) | - |
+| R6 stock oracle | owner, physical fastboot, **and acceptance that stock may format the Arch userdata** | owner-gated | §7 + §11.5 |
+| R7 firmware static: code 15's handler | the per-code table and the 64-byte struct | **open, primary offline** | A2 |
+| R8 firmware self-description | logging/state queries | tracing closed (U369); `fw_info.spare[]` still unread | A4 |
+| R9 kernel/product work | independent of setup | open | §6.8 stays |
 
-**G1** register the verified 12,288-byte DGC0 on the live core; **G2** a
-repeatable producer (vendor compiler in the chroot, or the laptop); **G3** verify
-the container's checksums before it reaches the TPU, because a graph is code.
+### 11.4 The live program
 
-### E1-E5. Execution (after G1)
+**A1 (phone, no reboot, one send per boot). Re-prove code 15 at 64.**
+`head -c 64 /dev/zero > kci_payload; echo 15 > kci_send`, then read the log.
+**Pass:** `-110` with no reply, and KCI 11 still answering 0 after it.
+**Stop:** if 64 now answers 3, the door's state changed (dma override, scratch)
+and the sequence must be re-established before anything else. **Never** send 64
+in the same boot twice: the handler faults.
 
-Create the execution, bind input/output from `/dev/dma_heap/system`, Invoke, dump
-the raw output. A status 0 with an empty tensor is not E3. Then E4 CPU parity on
-integer tensors (exact), E5 twice in one boot plus a cold slot-B boot (owner-
-gated).
+**A2 (laptop, no phone). Find code 15's handler and the 64-byte struct.**
+The firmware checks `desc.size` against a per-code constant at
+`tpu_kci_handler_thread.cc:298`, so a per-code record exists that carries `64`
+for code 15. Search the image (`out/tpu/edgetpu-janeiro.fw`, island
+`0xe0000..0xfd7c0`) for a table whose entry at index 15 holds 64 next to a Thumb
+pointer, then disassemble that handler and map its `[x0+off]` reads.
+**Pass:** a field map for all 64 bytes. **Stop:** if the table is not found in
+one pass, the fallback is A3's differential oracle.
 
-### A1-A3. Acceptance (after E5)
+**A3 (phone, one payload per boot). Turn the fault into an error.**
+With the struct's first fields unknown, the cheapest differential is: all zeros
+(known `-110`), then `{valid iremap addr, 64, 0, ...}`, then four `{addr,size}`
+pairs. A `3` means the layout was parsed and validated; `0` means accepted;
+`-110` means the handler still dereferences a zero. Record which byte offsets
+change the verdict, one per boot, and never two payloads in a boot.
+**Pass:** any verdict other than `-110`.
 
-`tools/tpu-acceptance compare` against the CPU reference; ten runs watching for
-a second power-up, a leaked handle or an IOMMU fault; then the product package.
+**A4 (phone, free). Read `fw_info.spare[10]`.**
+Code 11 answers 0 with `{build_time, flavor, changelist, spare[10]}`; the spares
+have never been printed. If one is a state word, it names what setup waits for.
 
-### K1-K3. Kernel work the product needs
+**A5 (owner-gated). The stock oracle**, unchanged in method (§7) but with an
+added, explicit risk: stock Android on slot A sees an Arch `userdata` it cannot
+decrypt and may format it (the 9a precedent in AGENTS.md). So this route needs
+the owner's acceptance of losing the install, or a second device.
 
-One power-up per boot enforced and loud; an IOMMU fault kills the client and not
-the phone; teardown and recovery that leave the KCI heartbeat alive.
+### 11.5 After setup (unchanged, ordered)
 
-### Parked
+G1 register the verified 12,288-byte DGC0 -> E1 create execution -> E2 bind
+from `/dev/dma_heap/system` -> E3 Invoke with a non-empty tensor -> E4 CPU
+parity with `tools/tpu-acceptance` -> E5 twice in one boot and a cold boot ->
+A1-A3 acceptance (ten runs, no second power-up, no leak, no IOMMU fault) ->
+P1-P5 product.
 
-**R-SERVICE** (binderfs plus servicemanager) stays parked until a command exists
-that only the service implements; KCI's enum (1.12) says none does.
-**R-STOCK** stays the owner-gated oracle of last resort (section 7).
+### 11.6 Product architecture (the reason this is worth doing)
+
+The product path must not depend on Google's userspace: `omamobile-tpu` speaks
+the kernel's own `/dev/janeiro` ioctls (groups, submit, dmabuf), the debugfs KCI
+door stays a bring-up instrument and is removed before release, and the kernel
+work (K1 one power-up per boot enforced and loud, K2 an IOMMU fault kills the
+client and not the phone, K3 teardown that leaves the heartbeat alive, K4 power
+and thermal) is part of the package, not an afterthought.
 
 ## 12. What "a fully working TPU" means
 
-A definition of done, in order, each with its artifact:
+Unchanged from rev 19, and each item still needs its artifact:
 
 1. **Firmware set up.** The gate stops answering `Setup is not done yet` on a
-   cold boot, and the firmware's own log says so.
-2. **A graph registered.** The verified DGC0 (12,288 B) registers on the live
-   core with status 0.
-3. **One inference.** Invoke writes a non-empty output tensor; the raw bytes are
-   dumped and hashed.
-4. **Parity.** `tools/tpu-acceptance compare` matches the CPU reference exactly
-   on integer tensors (SSD MobileNet 300x300 int8, `out/bench/detect.tflite`).
-5. **Twice in a boot, then a cold boot.** The second run reuses the same powered
-   device, and a slot-B reboot repeats the result.
-6. **Ten runs.** No second power-up, no leaked handle, no IOMMU fault, and the
-   KCI 21 heartbeat alive throughout.
-7. **The product.** `omamobile-tpu run MODEL INPUT` emits the JSON report;
-   `omamobile-tpu.service --self-test` covers the gate and the mini model; a
-   udev/group rule or a daemon owns the device; DEVICES.md says what works.
-8. **The honest line.** The benchmark table's Edge TPU row is filled only when
-   4-6 hold, with `uname -r`, the date and the firmware version.
+   cold boot, in the firmware's own log.
+2. **A graph registered.** The verified DGC0 (12,288 B) registers with status 0.
+3. **One inference.** Invoke writes a non-empty tensor; the bytes are hashed.
+4. **Parity.** `tools/tpu-acceptance compare` matches the CPU reference exactly.
+5. **Twice in a boot, then a cold boot.** Same powered device, repeatable.
+6. **Ten runs.** No second power-up, no leaked handle, no IOMMU fault, KCI 21
+   alive throughout.
+7. **The product.** `omamobile-tpu run MODEL INPUT` emits the JSON report; the
+   service self-test covers gate K and the mini model; DEVICES.md is honest.
+8. **The honest line.** The benchmark row is filled only when 4-6 hold, with
+   `uname -r`, the date and the firmware version.
 
-## Appendix A - the HAL's function table (U286)
+## 13. Falsifiers and stop conditions
 
-| Word | Offset | Entry | Role |
-| --- | --- | --- | --- |
-| 0 | +0 | - | version, `2` |
-| 1 | +8 | `0xf7738` | logging/init: logs `LibDarwinnDbaHal`, returns 0 |
-| 2 | +16 | `0xf7764` | **create**: `(options*, hal**, cb, ctx)` |
-| 3 | +24 | `0xf78dc` | small wrapper, calls `0xf920c` |
-| 4 | +32 | `0xf7900` | wrapper, calls `0xf9794` |
-| 5 | +40 | `0xf7a4c` | wrapper, calls `0xfa4e4` |
-| 6 | +48 | `0xf7b98` | wrapper, calls `0xfb22c` |
-| 7 | +56 | `0xf7c70` | larger, calls `0xfcb04` then a virtual |
-| 8 | +64 | `0xf7f5c` | wrapper, calls `0xfd054` |
-| 9 | +72 | `0xf8094` | wrapper, calls `0xfd11c` |
-| 10 | +80 | `0xf816c` | larger, virtual dispatch |
-| 11 | +88 | `0xf8448` | wrapper, calls `0xfbd6c` |
-| 12 | +96 | `0xf8520` | wrapper, calls `0xfd88c` |
-| 13 | +104 | `0xf8664` | wrapper, calls `0xfd924` |
-| 14 | +112 | `0xf87a4` | getter: `0xfd9bc`, logs line 233 |
+- **Size 64 is the handler's constant.** Falsified if A1 answers `3` on a clean
+  boot; then the `-110` was the flood, and the dense sweep's other sizes stand.
+- **The 64-byte payload is a structure the handler reads.** Falsified if A3's
+  first crafted payload returns `3` (then the handler only validates the
+  descriptor, and the command needs no fields).
+- **The gate is firmware-side only.** Falsified if stock's capture shows the
+  gate line on a boot where stock never ran the HAL (then setup is a kernel or
+  bootloader act).
+- **This firmware can be set up at all.** Falsified if every 64-byte payload
+  either faults or returns 3, and stock's own capture shows the same firmware
+  build with the same gate, i.e. the setup needs a signed artifact we lack.
 
-The service additionally reads `+0x50`, `+0x58`, `+0x60` (its session path).
-
-## Appendix B - the service's call sequence (reference client)
-
-| Address | Action |
-| --- | --- |
-| `0x84a0` | `GetDarwinnHalFunctions` |
-| `0x84c8` | version word `> 0` check |
-| `0x84e8` | entry `+8` (init) |
-| `0x850c`-`0x8524` | build the 16-byte options |
-| `0x859c` | entry `+16` create (status in `w0`) |
-| `0x85bc` | `ABinderProcess_setThreadPoolMaxThreadCount(4)` |
-| `0x85f4` | `AServiceManager_registerLazyService` |
-| `0x861c` | `ABinderProcess_joinThreadPool` |
-
-## Appendix C - signed firmware container (U260)
-
-`out/tpu/edgetpu-janeiro.fw`, 1,038,272 B, sha256
-`52c1cccdf0e243d12fbc9f3b3911fe9c780a11d9a5bfda61744c7c3fdaded7c3`.
-Magic `TPUF` at `0x400`; image config at `0x560`; remapped region `0x93200000`
-(`0xe00000`); body high-entropy to `0xdc000`; island `0xe0000..0xfd7c0`.
-
-## Appendix D - the captured HAL setup command (U262)
-
-128 bytes, `out/tpu/setup-hal-128.bin`: root table 20, vtable 10, table size 18,
-field 1 union type 5, one `{0xffe80000, 0x80000}` allocation.
-`tools/tpu-setup.py build` reproduces it exactly.
-
-## Appendix E - where the evidence lives
-
-- [TPU-HISTORY.md](TPU-HISTORY.md): the U-log (U285-U287 are this revision's).
-- [TPU-STATUS.md](TPU-STATUS.md): the one-page status.
-- `logs/tpu/`, `out/tpu/`, `out/tpu-client/`: gitignored sandboxes.
-- Tools: `tools/tpu-sampler.c`, `tools/tpu-dba-hal-probe.c`,
-  `tools/tpu-hal-harness.c`,
-  `tools/android-dba-serve.c`, `tools/tpu-binder-client.c`,
-  `tools/tpu-tachyon-run`, `tools/tpu-fw.py`, `tools/tpu-setup.py`,
-  `tools/tpu-graph.py`, `tools/tpu-acceptance`, `tools/tpu-stock-capture`.
