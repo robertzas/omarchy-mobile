@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 29)
+## 11. The program to a working TPU (rev 30)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1231,6 +1231,14 @@ Proof, in this order: build with `W=1`; boot and read `tools/tpu-status`; run th
 existing `tpu-hold` start twice and confirm exactly one power-up line and one
 `-EBUSY`; reboot and confirm the count resets. Nothing here touches setup, which
 is why it can proceed while G0 is blocked.
+
+**Product skeleton landed (rev 30).** `packages/omamobile-tpu` carries the first
+shippable piece: `omamobile-tpu [--json]` reports kernel, device, firmware build
+id and the gate by name, and `omamobile-tpu-status.service` journals it once per
+boot. It touches no debugfs write path beyond the read-only KCI 11 query and is
+not enabled by default, so it cannot change the phone's behaviour while setup is
+missing. R9 K1 stays a patch plan: the driver tree search for the power-up path
+did not land in this pass, so it is not claimed.
 
 ### 11.5 After setup (unchanged, ordered)
 

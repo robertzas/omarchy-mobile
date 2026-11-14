@@ -1,0 +1,13 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Static checks: the scripts parse and the unit carries the fields systemd needs.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { echo "FAIL: $*" >&2; exit 1; }
+bash -n install || fail "syntax: install"
+sh -n bin/omamobile-tpu || fail "syntax: omamobile-tpu"
+grep -q '^ExecStart=/usr/bin/omamobile-tpu status --json$' units/omamobile-tpu-status.service \
+  || fail "the unit runs the reporter"
+grep -q '^\[Service\]$' units/omamobile-tpu-status.service || fail "the unit has a [Service]"
+for f in bin/omamobile-tpu install; do [ -x "$f" ] || fail "not executable: $f"; done
+echo "ok - omamobile-tpu"

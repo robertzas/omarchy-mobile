@@ -1,0 +1,26 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# omamobile-tpu: report the Edge TPU's bring-up state. Read-only apart from one
+# KCI 11 query; the product path grows here once firmware setup exists (G0 in
+# device/cheetah/TPU-PLAN.md).
+set -u
+D=${TPU_DEBUGFS:-/sys/kernel/debug/edgetpu/janeiro}
+json=${1:-}
+info=unknown
+if [ -w "$D/kci_send" ]; then
+	printf '11\n' >"$D/kci_send" 2>/dev/null
+	sleep 1
+	info=$(od -An -tx1 -N16 "$D/kci_result" 2>/dev/null | tr -d '\n ')
+	[ -n "$info" ] || info=unknown
+fi
+gate=$(dmesg | grep -c 'Setup is not done yet')
+if [ "$json" = "--json" ]; then
+	printf '{"kernel":"%s","device":%s,"fw_info":"%s","gate_lines":%s,"assertions":%s,"crashes":%s}\n' \
+		"$(uname -r)" "$([ -e /dev/janeiro ] && echo true || echo false)" "$info" "$gate" \
+		"$(dmesg | grep -c 'ASSERTION FAILED')" \
+		"$(dmesg | grep -c 'firmware unrecoverable crash')"
+	exit 0
+fi
+printf 'kernel    %s\ndevice    %s\nfw_info   %s\nwall      %s\n' \
+	"$(uname -r)" "$([ -e /dev/janeiro ] && echo present || echo absent)" "$info" \
+	"$([ "$gate" -gt 0 ] && echo 'setup gated' || echo 'gate not logged this boot')"

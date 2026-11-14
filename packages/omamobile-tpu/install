@@ -1,0 +1,6 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+pkgdir=${1:?usage: install DESTDIR}
+install -Dm755 bin/omamobile-tpu "$pkgdir/usr/bin/omamobile-tpu"
+install -Dm644 units/omamobile-tpu-status.service "$pkgdir/usr/lib/systemd/system/omamobile-tpu-status.service"

@@ -1,0 +1,9 @@
+[Unit]
+Description=Omarchy Mobile Edge TPU bring-up report
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-tpu status --json
+StandardOutput=journal
+RemainAfterExit=yes
