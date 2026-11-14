@@ -43,6 +43,19 @@ cannot succeed. K1 now refuses it at once (-EBUSY) and says so, instead of
 stalling the client for the full timeout. `power_up_total` counts real power-ups
 and, unlike the refcount, is never reset.
 
+## 2026-11-14 (U384: a spent boot can come up dark; check `power-up ok`)
+
+After K1 refused a second power-up and the last holder was killed, the next boot
+logged no `power-up` line at all and KCI 11 timed out three times (`-110`,
+`status 1`, empty queues) with `fw_info` all zeros; the following clean reboot
+logged `power-up ok` at 4.8 s, `fw_info f149d469...` and `spent:false`. So a
+spent boot is recovered by a reboot, but not every reboot: one can come up with
+the TPU dark. Every run must read `power-up ok` (or `spent:false` from
+`omamobile-tpu`) before trusting anything, and a dark boot is a reboot, not a
+diagnosis. The last holder is not a `tpu-hold.service` (`is-enabled` says
+not-found): `[UNIT]`. Stopping it spends the boot (U381), so the product service
+must own the wakelock for its lifetime.
+
 ## 2026-11-14 (U383: A2 is blocked on a vendor debug artifact, not on tooling)
 
 The firmware's log site ids are not resolvable from the image. Three source

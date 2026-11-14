@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 41)
+## 11. The program to a working TPU (rev 42)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1342,6 +1342,13 @@ the pre-K1 module is kept on the phone at `/root/janeiro-orig.ko` as the restore
 point, and `omamobile-tpu` 0.1.3 reports `k1_refusals` so a run records whether
 the boot's single power-up was already spent. A kernel `push` replaces the
 module; until then this is a hand-installed module and the plan says so.
+
+**Rev 42: the boot gate.** A spent boot is recovered by a reboot, but a reboot
+can also come up with the TPU dark: no `power-up` line, KCI 11 timing out with
+empty queues, `fw_info` zeros (U384). So every run, and the product service,
+starts by requiring `power-up ok` (equivalently `spent:false` from
+`omamobile-tpu`) and treats a dark boot as a reboot, not a result. That gate goes
+above G0 in the ladder: it says whether this boot can do TPU work at all.
 
 ### 11.5 After setup (unchanged, ordered)
 

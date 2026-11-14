@@ -72,6 +72,25 @@ AON_CLK=0xdeadfeed AON_QUIESCE=0xdeadfeed POWER_CONTROL=0xdeadfeed GSA state=2`
 and `pm_get failed (-110)`. Hardware fact: the AON island does not come back
 after power-down, so a boot gets exactly one power-up.
 
+## U384 (2026-11-14): one boot came up with the TPU dark; the next did not
+
+Flow: after the K1 proof the last holder was killed (the boot's power-up spent),
+the phone was rebooted, and that boot showed:
+
+    dmesg: edgetpu janeiro: KCI tx code 11 seq 0 tail 0 head 0
+           edgetpu janeiro: KCI timeout code 11 seq 0 status 1 head 0 doorbell 0
+                           rtail 0 rhead 0
+           kci_send code 11 tpu_addr 0x1015c000 size 16 len 0 -> -110
+    (repeated seq 1, seq 2)  fw_info: 0000...0000  omamobile-tpu: spent true
+
+No `power-up` line at all in that boot. A second clean reboot then logged
+`power-up ok: PSM0_STATUS=0x4b27091 ... POWER_CONTROL=0x54 GSA state=2` at
+4.8 s and `fw_info f149d469000000000300000056486135`, `spent:false`.
+
+So recovery from a spent boot is a reboot, but a reboot can also come up dark;
+the run gate is `power-up ok` / `spent:false`, not uptime. Holder units on the
+phone: omamobile-tpu-status.service                                                                                                                   loaded    active   exited    Omarchy Mobile Edge TPU bring-up report;  omamobile-tpu.service                                                                                                                          loaded    active   running   Google Edge TPU (janeiro) and its driver wakelock;  systemd-mute-console.socket                                                                                                                    loaded    active   listening Console Output Muting Service Socket;
+
 ## U383 (2026-11-14): no single-base table over the log paths; A2 blocked
 
 Method: find three known source paths in the image (walking each back to its NUL
