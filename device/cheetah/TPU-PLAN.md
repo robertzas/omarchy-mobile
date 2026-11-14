@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 46)
+## 11. The program to a working TPU (rev 47)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1520,6 +1520,31 @@ the next cable-in boot; read the result then, never from the middle of the run.
 - **Stop.** Nothing else in the program needs G0: K1, K3, the boot gate and the
   self-test stand on their own, and the plan says so rather than implying a TPU
   that works.
+
+**Rev 47: the guided capture tool, the self-test unit, and K4's place.**
+
+The G0 run is now one press and one command. `tools/tpu-g0` (`status`, `plan`,
+`run`) holds the runbook's guards: it refuses without a fastboot device, records
+`current-slot` and `slot-successful:b` before the write, refuses to write unless
+they read `b` and `yes`, waits up to ten minutes for stock's adb (naming the USB
+debugging step if it never appears), runs the capture, returns to slot B through
+fastboot, waits for Arch, and takes a fresh NV backup plus `--check`. Without
+`--confirm` it writes nothing. Its `status`, `plan` and refusal paths were tested
+with no fastboot device present - the only state it has seen so far.
+
+The self-test now has its own boot unit (`omamobile-tpu-selftest.service`,
+`SuccessExitStatus=3`, `RemainAfterExit=yes`), so every boot's journal carries
+the transport verdict and the setup state, and a boot that cannot do TPU work is
+visible without a product run.
+
+**K4** remains the only pre-G0 measurement; its run is unattended with the cable
+out by design, so it waits for a moment when losing USB is acceptable.
+
+**The kexec route to stock was re-evaluated and is not taken.** On cheetah USB
+does not come back after kexec (AGENTS.md), and the capture rides on adb, so a
+stock kernel booted that way would most likely be a phone with no way to capture
+anything until a forced reboot - and if stock then formatted `userdata`, there
+would be no Arch to return to. S1 stays the route.
 
 ### 11.5 After setup (unchanged, ordered)
 

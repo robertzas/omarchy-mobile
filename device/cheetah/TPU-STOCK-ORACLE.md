@@ -30,8 +30,12 @@ Record the choice, with its date, in this file. An agent may not make it.
    USB, display, battery.
 2. `tools/nv-backup` of `efs`, `efs_backup`, `modem_userdata`, `persist`,
    `modem_a/b`, then `--check` against it. Store it off-repo; it holds the IMEI.
-3. A release bundle matching the installed version, so the Arch root can be
-   restored without guessing.
+3. A recovery artifact for the Arch root. Checked 2026-11-14: the local rootfs
+   image exists and is intact - `out/cheetah/omamobile-rootfs-cheetah-2026.11.13-tpu3-aarch64.img.zst`
+   (2.9 GB, sha256 starts `see TPU-STATUS U395`), built from the current pins with the current
+   `out-tpu` modules. No signed bundle is built yet (`out/repo` is empty), so a
+   release reinstall needs `tools/release` first; the image is the recovery
+   artifact this runbook relies on.
 4. `tools/phone-ssh 'cat /proc/cmdline'` and the slot (`omamobile-bootctl slot`
    or `/proc/cmdline`'s `androidboot.slot_suffix`), recorded here.
 

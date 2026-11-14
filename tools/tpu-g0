@@ -1,0 +1,100 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tpu-g0: the stock-oracle capture (TPU-STOCK-ORACLE S1-S3) behind guards.
+#
+#   tools/tpu-g0 status                  read-only: transports and slot flags
+#   tools/tpu-g0 plan                     read-only: the commands, in order
+#   tools/tpu-g0 run --capture DIR --confirm
+#                                         S1 -> capture -> S3, one check at a time
+#
+# This ABL has no buttonless fastboot (U385), so run needs the phone already at
+# the bootloader screen: hold Volume Down, then add Power, about 20 s. It records
+# the slot flags before the write, refuses anything unexpected, and stops with
+# the phone's state named rather than guessing. Without --confirm it writes
+# nothing.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+CAP=; NV=; CONFIRM=0; DRY=0
+say() { printf '==> %s\n' "$*"; }
+die() { printf 'tpu-g0: %s\n' "$*" >&2; exit 1; }
+fb_serial() { timeout 8 fastboot devices 2>/dev/null | awk 'NF{print $1; exit}'; }
+adb_state() { timeout 8 adb devices 2>/dev/null | awk 'NR>1 && NF{print $2; exit}'; }
+ssh_ok() { timeout 6 tools/phone-ssh --fresh true >/dev/null 2>&1; }
+getvar() { timeout 8 fastboot getvar "$1" 2>&1 | awk -F': ' -v k="$1" '$1==k{print $2; exit}'; }
+cmd=${1:-status}; shift || true
+while (($#)); do
+	case $1 in
+	--capture) CAP=${2:?}; shift 2 ;;
+	--nv-backup) NV=${2:?}; shift 2 ;;
+	--confirm) CONFIRM=1; shift ;;
+	--dry-run) DRY=1; shift ;;
+	*) die "unknown option $1" ;;
+	esac
+done
+if [ "$cmd" = status ]; then
+	s=$(fb_serial || true)
+	say "fastboot: ${s:-none}"
+	if [ -n "$s" ]; then
+		printf '    current-slot: %s\n' "$(getvar current-slot || true)"
+		printf '    slot-successful:b: %s\n' "$(getvar slot-successful:b || true)"
+	fi
+	say "adb: $(adb_state || echo none)"
+	say "ssh: $(ssh_ok && echo up || echo no)"
+	exit 0
+fi
+if [ "$cmd" = plan ]; then
+	cat <<'EOF'
+S1  record current-slot and slot-successful:b, then fastboot --set-active=a
+    and fastboot reboot (the owner's G0 decision, TPU-STOCK-ORACLE decision record).
+S2  wait for adb, then tools/tpu-stock-capture capture DIR.
+S3  adb reboot bootloader, fastboot --set-active=b, boot Arch, tools/phone-smoke,
+    then a fresh tools/nv-backup DIR and --check (stock rewrote the NV partitions).
+Stop: no adb after 10 min (enable USB debugging on stock), slot B not marked
+successful, or fastboot not back for the return.
+EOF
+	exit 0
+fi
+[ "$cmd" = run ] || die "usage: tpu-g0 status|plan|run --capture DIR [--nv-backup DIR] --confirm"
+[ "$CONFIRM" = 1 ] || die "run writes the slot flag, so it needs --confirm"
+[ -n "$CAP" ] || die "run needs --capture DIR (private, it holds the phone's setup bytes)"
+s=$(fb_serial || true)
+[ -n "$s" ] || die "no fastboot device: hold Volume Down, then add Power, about 20 s"
+cur=$(getvar current-slot || true); okb=$(getvar slot-successful:b || true)
+say "before: current-slot=$cur slot-successful:b=$okb"
+[ "$cur" = b ] || die "current-slot=$cur, not b: do not write the flag"
+[ "$okb" = yes ] || die "slot-successful:b=$okb, not yes: do not write the flag"
+if [ "$DRY" = 1 ]; then
+	say "dry run: would set slot a, capture into $CAP, return to b, then NV backup"
+	exit 0
+fi
+mkdir -p -- "$CAP"
+printf 'current-slot=%s slot-successful:b=%s\n' "$cur" "$okb" | tee -a "$CAP/slot.txt"
+fastboot --set-active=a
+fastboot reboot
+say "stock is booting; waiting for adb (up to 10 min)"
+for i in $(seq 1 120); do
+	st=$(adb_state || true)
+	[ "$st" = device ] && break
+	[ $((i % 12)) -eq 0 ] && say "adb: ${st:-none}"
+	sleep 5
+done
+st=$(adb_state || true)
+if [ "$st" != device ]; then
+	die "no adb (state ${st:-none}): on stock enable Developer options > USB debugging, then rerun; the phone is on slot A"
+fi
+tools/tpu-stock-capture capture "$CAP"
+say "capture written; returning to slot B"
+adb reboot bootloader || true
+for i in $(seq 1 60); do [ -n "$(fb_serial || true)" ] && break; sleep 3; done
+if [ -z "$(fb_serial || true)" ]; then
+	die "fastboot did not return: hold Volume Down + Power, then fastboot --set-active=b; the capture is in $CAP"
+fi
+fastboot --set-active=b
+fastboot reboot
+say "waiting for Arch"
+for i in $(seq 1 60); do ssh_ok && break; sleep 5; done
+ssh_ok || die "Arch did not answer; the phone is on slot B (check with tools/phone-smoke)"
+NV=${NV:-$HOME/omamobile-backups/nv/cheetah-tpu-g0-return-$(date +%Y%m%d-%H%M)}
+tools/nv-backup "$NV"
+tools/nv-backup --check "$NV"
+say "done: capture $CAP, NV backup $NV"
