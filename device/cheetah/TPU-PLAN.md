@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 37)
+## 11. The program to a working TPU (rev 38)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1299,6 +1299,8 @@ string through the metadata table, then find the code that passes the id - not t
 grep for 864. That is a bounded, offline job; A2 stays open until it is done.
 
 **Rev 37: the logger's file table.** The `vii_scheduler.cc` path sits at file `0xeff78`, and searching for its address under every plausible base encoding gives no hits at all. So the firmware does not store a pointer to the path under either absolute or island-relative encoding; the logger's id table uses a different scheme (index, hash or a per-site struct), which is the next offline job. A2 remains open with its tooling solved.
+
+**Rev 38: 16-bit offsets also miss.** A 16-bit search for the path's offset under the image and island bases gives {'0x10000000': ('-0xff10088', []), '0xe0000': ('0xff78', ['0x1b45a', '0x258ba', '0x48d0e', '0x6536e'])}. With absolute, island-relative and 16-bit encodings all empty, the logger's table is not an offset table over these paths at all; the remaining candidates are a hash or a build-time index whose table is not in this image (a separate debug artifact). A2 is therefore blocked on a mapping that the firmware does not ship, not on tooling - recorded so no future pass repeats these three searches.
 
 ### 11.5 After setup (unchanged, ordered)
 
