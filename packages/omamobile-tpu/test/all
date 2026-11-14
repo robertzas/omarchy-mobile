@@ -15,4 +15,15 @@ grep -q '^WantedBy=multi-user.target$' units/omamobile-tpu-status.service || fai
 grep -q '^ExecStartPre=/usr/bin/sleep 10$' units/omamobile-tpu-status.service || fail "the unit waits for the module"
 grep -q '"k1_refusals"' bin/omamobile-tpu || fail "the report carries the K1 count"
 grep -q '"spent"' bin/omamobile-tpu || fail "the report names a spent boot"
+grep -q '^ExecStart=/usr/bin/omamobile-tpu --gate$' units/omamobile-tpu-gate.service \
+  || fail "the gate unit runs the gate"
+# The gate must fail on a spent boot and pass on a live one, without the phone:
+# a fake door with an all-zero fw_info is a spent boot.
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+: >"$tmp/kci_send"; : >"$tmp/kci_result"
+TPU_DEBUGFS=$tmp PATH=$PWD/bin:$PATH omamobile-tpu --gate >/dev/null 2>&1 \
+  && fail "the gate passed on an all-zero fw_info"
+printf '\361\111\324\151\000\000\000\000\003\000\000\000\126\110\141\065' >"$tmp/kci_result"
+TPU_DEBUGFS=$tmp PATH=$PWD/bin:$PATH omamobile-tpu --gate >/dev/null 2>&1 \
+  || fail "the gate refused a live fw_info"
 echo "ok - omamobile-tpu"

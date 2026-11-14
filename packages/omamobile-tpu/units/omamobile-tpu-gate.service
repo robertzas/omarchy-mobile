@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Omarchy Mobile Edge TPU boot gate (fails when this boot cannot do TPU work)
+After=omamobile-tpu.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-tpu --gate
+
+[Install]
+WantedBy=multi-user.target

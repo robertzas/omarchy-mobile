@@ -6,3 +6,4 @@ pkgdir=${1:?usage: install DESTDIR}
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 install -Dm755 bin/omamobile-tpu "$pkgdir/usr/bin/omamobile-tpu"
 install -Dm644 units/omamobile-tpu-status.service "$pkgdir/usr/lib/systemd/system/omamobile-tpu-status.service"
+install -Dm644 units/omamobile-tpu-gate.service "$pkgdir/usr/lib/systemd/system/omamobile-tpu-gate.service"

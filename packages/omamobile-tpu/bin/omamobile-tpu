@@ -6,7 +6,11 @@
 set -u
 D=${TPU_DEBUGFS:-/sys/kernel/debug/edgetpu/janeiro}
 json=
-for a in "$@"; do [ "$a" = --json ] && json=--json; done
+gate_only=0
+for a in "$@"; do
+	[ "$a" = --json ] && json=--json
+	[ "$a" = --gate ] && gate_only=1
+done
 info=unknown
 if [ -w "$D/kci_send" ]; then
 	printf '11\n' >"$D/kci_send" 2>/dev/null
@@ -20,6 +24,16 @@ k1=$(dmesg | grep -c 'K1: power-up')
 spent=false
 case "$info" in 0000000000000000*) spent=true ;; esac
 dev=$([ -e /dev/janeiro ] && echo true || echo false)
+# The boot gate: a boot whose power-up is spent cannot do TPU work, and every
+# caller that needs the TPU says so here instead of discovering it mid-run.
+if [ "$gate_only" = 1 ]; then
+	if [ "$spent" = true ] || [ "$info" = unknown ]; then
+		echo "gate: this boot cannot do TPU work (fw_info=$info, spent=$spent)" >&2
+		exit 3
+	fi
+	echo "gate: ok (fw_info=$info)"
+	exit 0
+fi
 if [ "$json" = --json ]; then
 	printf '{"kernel":"%s","device":%s,"fw_info":"%s","gate_lines":%s,"assertions":%s,"crashes":%s,"k1_refusals":%s,"spent":%s}\n' \
 		"$(uname -r)" "$dev" "$info" "$gate" \
