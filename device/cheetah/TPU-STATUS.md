@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Edge TPU bring-up: status and benchmark
 
-As of 2026-11-13 (rev 11), kernel
+As of 2026-11-13 (rev 12), kernel
 `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B. The plan of record is
 [TPU-PLAN.md](TPU-PLAN.md); the full experiment log and every prior revision
 are in [TPU-HISTORY.md](TPU-HISTORY.md). **No model has run on the TPU and no
@@ -22,6 +22,17 @@ firmware up. The stock oracle remains the only *proven* producer; the image's
 only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
+
+## 2026-11-13 (U349-U352: the read channel, and code 6 is not setup)
+
+`kci_result` hands back the last KCI command's DMA buffer, and `GET_USAGE_V1`
+writes a real v1 report (17 metrics of 20 bytes; first counters 225488, 967000,
+712000, 1250000, 1066000), so the firmware now talks in data. The firmware's
+debug and verbose log entries reach dmesg too, and with them code 6 explains
+itself: `ERR power_manager_interface.h:99 - Mitigation is not configurable by
+the firmware` - the enum's gap is a power-mitigation request, not setup, and
+that route is closed. Codes 15/16 stay unnamed; their size rule is not solvable
+with a 512 KiB pool cap. No inference yet.
 
 ## 2026-11-13 (U346-U348: the KCI DMA window, and the firmware answers)
 

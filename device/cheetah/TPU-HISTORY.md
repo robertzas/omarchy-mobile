@@ -13761,3 +13761,59 @@ the oracle ran from 45 s. The kernel worktree `wt-tpu` carries one uncommitted
 file, `drivers/edgetpu/edgetpu-fs.c`; the phone runs the module built from it
 and the tree's base commit, so the release string is unchanged. Undo on the
 phone: `mv janeiro.ko.before-kci-dma janeiro.ko`, `depmod`, reboot.
+
+**U349, the read channel: the firmware writes, and the door reads it back.** The
+KCI debugfs door gained `kci_result` (0444): after a synchronous KCI send the
+driver copies the command's DMA buffer, so userspace can see what the firmware
+wrote. With 4096 zero bytes in `kci_payload` and code 12:
+
+```
+kci_send code 12 tpu_addr 0x1015c000 size 4096 len 4096 -> 0
+kci_result: 4096 bytes, 57 non-zero
+  0x00: 11 00 00 00   num_metrics = 17
+  0x04: 14 00 00 00   metric_size = 20  (EDGETPU_USAGE_METRIC_SIZE_V1)
+  0x08: first metric (20 bytes), counters 225488 967000 712000 1250000 1066000
+```
+
+That is `GET_USAGE_V1`'s v1 report, parsed against
+`drivers/edgetpu/edgetpu-usage-stats.h` (`edgetpu_usage_header_v1`,
+`EDGETPU_USAGE_METRIC_SIZE_V1` 20, `struct tpu_usage`). It is the first
+firmware-to-AP data transfer of the campaign, and the door can now be used for
+both directions. The dump is kept out of the tree (`out/tpu/` is gitignored).
+
+**U350, code 6 is a mitigation request, and the enum's gap is not setup.** The
+driver drops the firmware's debug and verbose log entries through `etdev_dbg`,
+which is a no-op on a kernel without dynamic debug (U330/U332). The decode now
+passes those levels to `etdev_info_ratelimited`, and a code-6 send explains
+itself in the firmware's own words:
+
+```
+KCI tx code 6 seq 4 tail 4 head 4
+ERR power_manager_interface.h:99 - Mitigation is not configurable by the firmware.
+kci_send code 6 tpu_addr 0x101dc000 size 4096 len 4096 -> 14
+```
+
+So code 6 carries a power/thermal mitigation request, and `14 UNAVAILABLE` is
+the firmware saying its mitigation is fixed, not a missing setup precondition.
+The one code the header leaves out is therefore power management, not firmware
+setup; the A14 image's 12 (UNIMPLEMENTED, U276) is the older handler. R1's
+code-6 branch is closed and the plan no longer sends it expecting setup.
+
+**U351, 15/16 still have no name, and no size in reach.** With the address
+window fixed, codes 15/16 check the descriptor's size (`:298`/`:338`) and refuse
+16, 128, 512, 1024, 2048, 4096 and 524288. The iremap pool caps a
+`kci_scratch` allocation at 512 KiB (a 1 MiB write fails), and the debugfs door
+can only name its own page or that scratch, so a larger exact size cannot be
+expressed. Google's published raviole tree predates the codes, and neither
+vendor HAL names them. The next artifact is a name, not another size.
+
+**U352, the hooks, the deployment and the state.** The driver now carries four
+bring-up hooks in `drivers/edgetpu/edgetpu-fs.c` - iremap DMA allocation,
+`kci_dma` (send with the whole scratch), `kci_scratch` (allocate it) and
+`kci_result` (read back) - plus the telemetry level change in
+`edgetpu-telemetry.c`. The module was built from `wt-tpu` (vermagic unchanged),
+installed over the phone's copy with the previous one kept as
+`janeiro.ko.before-kci-result` (and the original as
+`janeiro.ko.before-kci-dma`), `depmod`, then `systemctl reboot`: uptime 45 s,
+`kci_result` present, code 12 -> 0, the report read back, code 6's mitigation
+line and code 15's size refusal both observed. No inference and no setup.
