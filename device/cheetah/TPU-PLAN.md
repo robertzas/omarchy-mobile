@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 34)
+## 11. The program to a working TPU (rev 35)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1280,6 +1280,15 @@ its method named (`llvm-objdump` over the extracted code region) instead of
 being claimed. The stock oracle cannot be scheduled by an agent: the decision
 record is the owner's line to fill, and that is the only thing standing between
 the plan and G0.
+
+**A2's toolchain now works (rev 35).** The raw image disassembles with
+`llvm-objcopy -I binary -O elf32-littlearm --rename-section
+.data=.text,alloc,load,readonly,code,contents` and then `llvm-objdump -d
+--triple=thumbv7 --start-address=0x1000 --stop-address=0xdc000`, giving 334,066
+instructions with file offsets (link = offset + 0x10000000). That removes the
+capstone early-stop that made the earlier sweeps noisy; the remaining work is the
+search itself (the assertion's line 864 is passed to a log call, so the site has
+to be found by its caller chain, not by a raw immediate grep).
 
 ### 11.5 After setup (unchanged, ordered)
 
