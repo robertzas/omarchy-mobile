@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 35)
+## 11. The program to a working TPU (rev 36)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1289,6 +1289,14 @@ instructions with file offsets (link = offset + 0x10000000). That removes the
 capstone early-stop that made the earlier sweeps noisy; the remaining work is the
 search itself (the assertion's line 864 is passed to a log call, so the site has
 to be found by its caller chain, not by a raw immediate grep).
+
+**A2's caller-chain pass (rev 36).** With the working listing, the assertion's
+line is not a plain immediate: no `movw rX, #0x360` exists in the code region,
+and `vii_scheduler.cc` itself lives only in the string island (`0x100effa4`),
+referenced from data rather than from code. So the log macro passes a site id
+(or a packed file/line), and the next method is to resolve the site id to that
+string through the metadata table, then find the code that passes the id - not to
+grep for 864. That is a bounded, offline job; A2 stays open until it is done.
 
 ### 11.5 After setup (unchanged, ordered)
 
