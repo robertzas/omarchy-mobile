@@ -42,6 +42,42 @@ is refused too (U174-U177, U187-U188, U222), and a running GXP core does not set
 it up (U223-U225). L1, a real model inference, is therefore still open, and no
 model output exists. The plan of record for the rest of the work follows.
 
+## U381 (2026-11-14): K1 built, installed, proven; one power-up per boot
+
+Kernel worktree `wt-tpu`, `drivers/edgetpu/edgetpu-pm.c` (included by
+`mobile-pm.c`, included by `janeiro-pm.c`, so it is in `janeiro.ko`):
+
+    struct edgetpu_pm_private { ... int power_up_count; int power_up_total; }
+    edgetpu_pm_get_locked():
+        if (power_up_total) { power_up_count--; etdev_err("K1: power-up %d refused;
+            the TPU cannot come back in this boot"); return -EBUSY; }
+        ret = handlers->power_up(); if (!ret) { restore_mailboxes; power_up_total++; }
+
+Build: `make -C wt-tpu O=out-tpu LLVM=1 ARCH=arm64 W=1 M=drivers/edgetpu modules`
+-> rc 0, `janeiro.ko` 4,011,400 B, only the pre-existing
+`janeiro_lpm_up_after_start` missing-prototype warning. `CONFIG_PRINTK_INDEX`
+is not set, so the K1 string is greppable in the object.
+
+Proof on the phone (A17, modem stopped before the reboot):
+
+    boot: kci_send code 11 tpu_addr 0x1015c000 size 16 len 0 -> 0   K1=0
+    systemctl stop tpu-hold; sleep 4; tpu-hold &
+    K1=1
+    edgetpu janeiro: K1: power-up 2 refused; the TPU cannot come back in this boot
+    edgetpu janeiro: edgetpu_ioctl_acquire_wakelock: pm_get failed (-16)
+
+Before the refusal existed, the same sequence logged `power-up failed:
+PSM0_STATUS=0x5644c13 PSM1_STATUS=0xe893 LPM_CONTROL=0x1240 AON_RESET=0xdeadfeed
+AON_CLK=0xdeadfeed AON_QUIESCE=0xdeadfeed POWER_CONTROL=0xdeadfeed GSA state=2`
+and `pm_get failed (-110)`. Hardware fact: the AON island does not come back
+after power-down, so a boot gets exactly one power-up.
+
+## U382 (2026-11-14): rmmod/insmod leaves the TPU unpowerable until reboot
+
+`rmmod janeiro; insmod janeiro` while tpu-hold was stopped: insmod returned 0,
+but every later power-up failed with the same AON=deadfeed / GSA state=2 /
+-110, and only a reboot recovered. Replace the module file and reboot instead.
+
 ## U380 (2026-11-14): a kernel-shaped command element asserts identically
 
 Payload = `struct edgetpu_command_element` (24 B: seq 1, code 0, reserved 0,

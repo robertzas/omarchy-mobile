@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 38)
+## 11. The program to a working TPU (rev 39)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1310,6 +1310,26 @@ resolved by a scheme this image does not ship in readable form (a hash or a
 build-time index), and A2 is blocked on that mapping rather than on tooling.
 Recorded so no future pass repeats these three searches.
 
+### 11.4d Rev 39: K1 is done, and it changed the product
+
+K1 shipped as a real driver change and was proven on the phone: the first
+power-up in a boot succeeds, and the second is refused at once with `-EBUSY` and
+a named line instead of stalling a client for the timeout. The measurement
+behind it is the more valuable result: **the TPU gets exactly one power-up per
+boot.** After power-down the GSA/AON island reads `0xdeadfeed` and `power_up`
+cannot succeed (U381).
+
+That has three consequences the plan now carries:
+
+- **§12 item 5 is revised**: repeatability is proven across two boots, not two
+  runs in one boot. Any acceptance run that requires two invocations must hold
+  the wakelock for the whole run, which is what the product service must do.
+- **A module reload is not a recovery.** `rmmod`/`insmod` leaves the TPU
+  unpowerable until reboot (U382); module tests replace the file and reboot.
+- **K2's shape changes**: a client that drops the last wakelock takes the TPU
+  with it for the boot, so the product's self-test must warn before releasing
+  and must own the wakelock for its lifetime.
+
 ### 11.5 After setup (unchanged, ordered)
 
 G1 register the verified 12,288-byte DGC0 -> E1 create execution -> E2 bind
@@ -1336,7 +1356,9 @@ Unchanged from rev 19, and each item still needs its artifact:
 2. **A graph registered.** The verified DGC0 (12,288 B) registers with status 0.
 3. **One inference.** Invoke writes a non-empty tensor; the bytes are hashed.
 4. **Parity.** `tools/tpu-acceptance compare` matches the CPU reference exactly.
-5. **Twice in a boot, then a cold boot.** Same powered device, repeatable.
+5. **One power-up per boot, repeated across a cold boot.** The TPU cannot be
+   powered twice in one boot (U381: after power-down the GSA/AON island stays
+   unclocked), so the repeatability proof is two boots, not two runs in one.
 6. **Ten runs.** No second power-up, no leaked handle, no IOMMU fault, KCI 21
    alive throughout.
 7. **The product.** `omamobile-tpu run MODEL INPUT` emits the JSON report; the

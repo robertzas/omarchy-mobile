@@ -23,6 +23,35 @@ only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
 
+## 2026-11-14 (U381: K1 landed and proven - the TPU cannot power up twice in a boot)
+
+K1 is in the driver (`edgetpu-pm.c`, reached through `janeiro-pm.c` ->
+`mobile-pm.c` -> `edgetpu-pm.c`), built with `W=1` (no new warnings), installed
+and proven on the phone after a reboot with the modem stopped first:
+
+    boot: kci_send code 11 ... -> 0     K1 lines: 0
+    stop tpu-hold, wait 4 s, start it again:
+    edgetpu janeiro: K1: power-up 2 refused; the TPU cannot come back in this boot
+    edgetpu janeiro: edgetpu_ioctl_acquire_wakelock: pm_get failed (-16)
+
+Without the patch the same second attempt logged
+`power-up failed: PSM0_STATUS=0x5644c13 ... AON_RESET=0xdeadfeed
+POWER_CONTROL=0xdeadfeed GSA state=2` and `pm_get failed (-110)` after the
+timeout. So the hardware fact behind K1 is confirmed: **one power-up per boot**;
+after a power-down the GSA/AON island stays unclocked and the next power-up
+cannot succeed. K1 now refuses it at once (-EBUSY) and says so, instead of
+stalling the client for the full timeout. `power_up_total` counts real power-ups
+and, unlike the refcount, is never reset.
+
+## 2026-11-14 (U382: never rmmod/insmod janeiro)
+
+Reloading the module to test an edit left the TPU unpowerable for the rest of
+that boot: after `rmmod janeiro; insmod janeiro`, every `pm_get` failed with the
+same `AON_RESET=0xdeadfeed ... GSA state=2` and `-110`, and only a reboot
+recovered it. The module's probe must see the island in its boot state; a reload
+does not. Test module changes by replacing the file and rebooting, never by
+reloading.
+
 ## 2026-11-14 (U380: the assertion is not a payload validator)
 
 Eight payloads now, four structural classes: all zeros, sixteen self-pointers,
