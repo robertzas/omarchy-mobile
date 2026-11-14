@@ -1051,7 +1051,7 @@ so that line cannot be turned on. Do not plan to confirm the group handshake
 from `dmesg`; use the firmware's own reply, or a kprobe on
 `edgetpu_kci_join_group` if function tracing is configured.
 
-## 11. The program to a working TPU (rev 32)
+## 11. The program to a working TPU (rev 33)
 
 Rev 23 adds U372-U374: code 15 reaches the VII scheduler, and its payload
 is a self-describing VII input. Rev 22 supersedes the route table of rev 19-21; its new fact is U366: KCI code
@@ -1263,6 +1263,13 @@ power-up (`etpm->p->power_up_count++`), so the count K1 wanted exists. What is
 missing is policy: a second power-up in a boot is allowed and silent. The change
 is therefore small and local - refuse with `-EBUSY` and one `etdev_err` at the
 second increment - and its proof is the one already written in rev 29.
+
+**Rev 33: K1's first half is in the worktree, and the reporter has a boot record.**
+`edgetpu-pm.c` now logs `K1: power-up N in this boot` at the second power-up,
+without changing behaviour (the count and the put balance are untouched), so the
+proof run can distinguish "two power-ups happened" from "one" before any policy
+pttt is enforced. The reporter unit, enabled on the phone, journals its JSON at
+boot; the record is the evidence G1 will compare against.
 
 ### 11.5 After setup (unchanged, ordered)
 
