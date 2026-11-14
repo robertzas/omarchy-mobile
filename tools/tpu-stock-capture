@@ -116,7 +116,7 @@ Nothing here is executed by this tool.
   tools/nv-backup DIR
   tools/nv-backup --check DIR
 
-The three questions this capture must answer:
+The four questions this capture must answer:
   - Does stock's dmesg print a firmware setup line?
       adb shell "dmesg | grep -iE 'edgetpu|janeiro|setup|vii|scratch'"
   - Does the DBA service log SetupFirmware, or Firmware setup failed?
@@ -124,7 +124,13 @@ The three questions this capture must answer:
   - Which firmware build is installed?
       adb shell "sha256sum /vendor/firmware/edgetpu-janeiro.fw 2>&1 ||
                  toybox sha256sum /vendor/firmware/edgetpu-janeiro.fw"
-`capture` writes these as dmesg-setup.txt, logcat-setup.txt and fw-sha256.txt.
+  - Does asking NNAPI for the device (a lazy service) change the setup log?
+      adb shell dumpsys neuralnetworks, then read the setup lines again
+
+`capture` writes these as dmesg-setup.txt, logcat-setup.txt, fw-sha256.txt and
+the before/after pair nn-before.txt / nn-after.txt, with the setup lines
+re-read after the NNAPI query. A setup that only appears after the query means
+the producer is the lazily started DBA service, not the boot.
 
 Stock rewrites efs, persist and modem_userdata.  The slot change and the
 stock boot need the owner's explicit go, per AGENTS.md section 1.  Never
@@ -204,6 +210,18 @@ cmd_capture() {
   adb_capture fw-sha256.txt shell 'sha256sum /vendor/firmware/edgetpu-janeiro.fw 2>&1 || toybox sha256sum /vendor/firmware/edgetpu-janeiro.fw 2>&1'
   adb_capture fw-ls.txt shell 'ls -l /vendor/firmware/edgetpu* /vendor/lib64/libdarwinn* 2>&1'
   adb_capture tpu-service.txt shell 'ps -A | grep -iE "edgetpu|darwinn|tachyon" 2>&1'
+
+  # The DBA service is a lazy service: if it is the producer of the firmware
+  # setup, nothing is set up until something asks the NNAPI HAL for a device.
+  # dumpsys neuralnetworks enumerates the HALs, which loads the Edge TPU HAL
+  # and starts its service. Capture both sides of that so the runbook can tell
+  # a boot-time setup from a first-use one.
+  adb_capture nn-before.txt shell 'dumpsys neuralnetworks 2>&1'
+  sleep 5
+  adb_capture nn-after.txt shell 'dumpsys neuralnetworks 2>&1'
+  adb_capture dmesg-setup-after.txt shell "dmesg | grep -iE 'edgetpu|janeiro|setup|vii|scratch'"
+  adb_capture logcat-setup-after.txt shell "logcat -d | grep -iE 'SetupFirmware|Firmware setup|darwinn|edgetpu'"
+  adb_capture dba-service.txt shell 'dumpsys activity services com.google.edgetpu.dba 2>&1 | head -80'
 
   say 'capture complete; inspect for identifiers before sharing anything'
   say "files: $(find "$dir" -maxdepth 1 -type f | wc -l)"

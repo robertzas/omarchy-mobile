@@ -13928,3 +13928,68 @@ through bionic's internal symbol, so an `LD_PRELOAD` interposer of the public
 futex`, print `$x0..$x2`, continue) is the tracer until a standalone one exists;
 it must attach before the wait to catch the main thread's own wait, since the
 one catch here was a worker's.
+
+## 2026-11-14 (U362, rev 16: the wake that never comes)
+
+The futex trace runs 20 s from before the wait, so "no poster" is an accounting
+result, not a sample. Main thread: `WAIT_BITSET|CLOCK_REALTIME`,
+`uaddr 0xffff8a821180`, `val 0`, frames `runtime+0x33003c +0x30f760 +0x332f20
++0x332f5c +0x333088 +0x1202a4`. Workers (three): `WAIT_BITSET`,
+`uaddr 0xffff8aa1db90`, `val 0x4002`, frames `+0x21432c +0x12afbc +0x11139c
++0xff5b8 +0xff55c` / `+0x125664 +0x125578 +0x126460 +0x125518`.
+
+Summary for the whole run: `0xffff8a821180 waits 1 wakes 0 woken 0`;
+`0xffff8aa1db90 waits 3 wakes 0 woken 0`. The five wakes in the log are all
+before 0.11 s, all on per-thread condvar words (`0xfffc...`), all sent by the
+main thread while it created the pool, each waking exactly one task. Nothing
+wakes the two words the create and the pool wait on.
+
+So the runtime is not waiting for a poster that is slow or starved: it has no
+event source at all. That matches the empty-queue CHECK at `0x332fe4` and the
+`mutex.cc` strings, and it explains why the host callback never fires. R3 was
+framed as "our fork's bug"; it is "we drive the wrong component".
+
+The standalone tracer used here is not in the tree: a rebuilt one starts the
+target with the right environment (verified: `LD_PRELOAD`, `MODE`),
+but the harness's constructor does not run and the trace shows no futex. The
+same environment under `tools/tpu-exec.py` still runs the harness (31 `mmap fd`
+lines in the control), so the open question is the tracer's child setup, not the
+harness. It stays out until it reproduces the control.
+
+## 2026-11-14 (U363: two Hal libraries, and which one the harness drove)
+
+`readelf -sW` on both libraries gives `GetDarwinnHalFunctions` at `0xf772c` in
+`libdarwinn_dba_hal_runtime.so` (3,785,000 B) and at `0x83130c` in
+`libdarwinn_hal.so` (37,089,408 B). The harness's own dlopen string is
+`/vendor/lib64/libdarwinn_dba_hal_runtime.so`, so every in-process create this
+plan records ran the shim. The 37 MB library carries `SetupFirmware` and the
+type-5 stamp, and `tools/edgetpu-run`'s `hal`/`halcall` modes load it. Its A17
+device path has reset the phone before (A9), so the next attempt is one attended
+boot, `tpu-hold` alive, and a reset is the stop condition.
+
+## 2026-11-14 (U364: code 15/16's size check, swept to its edge)
+
+The firmware's own line names the check: `ERR tpu_kci_handler_thread.cc:298 -
+Invalid KCI DMA descriptor size N.` The debugfs door sets `cmd.dma.size` to the
+payload length (16 when empty) or to the whole `kci_scratch` allocation with
+`kci_dma`; both axes were swept. Every value 1, 2, 4, 8, 12, 16 ... 4096 gave
+`-> 3` with `Invalid ... size N`; then 8192, 16384, 32768, 65536, 131072,
+262144 and 524288 gave the same. So the accepted size is not a small struct, a
+page, or a pool size, and the codes stay unnamed.
+
+Statically, the string is at file `0xe7554` (link `0x100e7554`); a scan of the
+whole image finds no 32-bit literal of that address, and capstone finds no
+`movw`/`movt` pair that builds it, so it is reached through the log-site index
+(U178) rather than by address.
+
+## 2026-11-14 (U365: the kernel's setup handler is firmware image loading)
+
+`mobile_firmware_setup_buffer` (`mobile-firmware.c:382`, 1816 bytes, handler for
+`struct edgetpu_firmware_chip_data.setup_buffer`) is called once per run by
+`edgetpu_firmware_load_locked`. It checks `used_size`, maps the carveout with
+`memremap`, validates the mobile image header magic, copies the image config's
+firmware versions, GSA-authenticates the image (or copies it for non-secure
+firmware), checks the image against the carveout, and builds/clears the IOMMU
+and non-secure mappings before saving the image config. No KCI command is sent.
+So the driver has no producer for the firmware's VII setup (U275 holds), and the
+handler's name is not the missing piece.

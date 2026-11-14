@@ -961,6 +961,67 @@ by construction. The gdb script is the tracer for now: `catch syscall futex`,
 print `$x0..$x2`, continue. It must attach **before** the wait to capture the
 main thread's own wait.
 
+### 1.21 The wake that never comes (U362)
+
+The tracer ran for 20 s from before the wait, so the question "is a poster slow
+or absent" is answered by accounting, not by a sample. The two blocked words
+and every wake in the run:
+
+    0.102 tid 17802 WAIT_BITSET uaddr 0xffff8aa1db90 val 0x4002     (worker)
+    0.107 tid 17803 same word, frames runtime+0x21432c +0x12afbc +0x11139c
+                                       +0xff5b8 +0xff55c          (worker)
+    0.109 tid 17801 WAIT_BITSET|CLOCK_REALTIME uaddr 0xffff8a821180 val 0
+          frames runtime+0x33003c +0x30f760 +0x332f20 +0x332f5c
+                 +0x333088 +0x1202a4                              (main)
+    20.0 killed; 0xffff8a821180 waits 1 wakes 0 woken 0;
+                  0xffff8aa1db90 waits 3 wakes 0 woken 0
+
+Five wakes do appear, all before 0.11 s, all on per-thread condvar words
+(`0xfffc...`), all issued by the main thread as it creates the pool, and each
+wakes exactly one task. **Nothing ever calls `FUTEX_WAKE` on the two words the
+create and the pool wait on.** So the runtime is not waiting for a slow poster;
+it has no event source at all. The 3.8 MB library is the *client* half of a
+pair whose peer is absent, which also explains the empty queue check at
+`0x332fe4` (`waitp.thread->waitp != nullptr`, `mutex.cc`). R3 stops being "our
+fork's bug" and becomes "we drive the wrong component".
+
+### 1.22 Two Hal libraries, and the one the harness drove (U363)
+
+Both libraries export `GetDarwinnHalFunctions`: the 3,785,000-byte
+`libdarwinn_dba_hal_runtime.so` at `0xf772c` and the 37,089,408-byte
+`libdarwinn_hal.so` at `0x83130c`. The harness's own string loads
+`/vendor/lib64/libdarwinn_dba_hal_runtime.so`, so every in-process create this
+plan recorded ran the **client** shim - the one that now has no peer. The 37 MB
+library is the one that carries `SetupFirmware` and the type-5 stamp (1.15,
+U262, U331); `tools/edgetpu-run` loads it only in its `hal`/`halcall` modes, and
+its A17 device path has reset the phone before (A9). So the next in-process
+attempt is that library, not the shim: one attended boot, `tpu-hold` alive, and
+a reset is the stop condition.
+
+### 1.23 Code 15/16's descriptor size is a named gate (U364)
+
+The firmware names its own check: `ERR tpu_kci_handler_thread.cc:298 - Invalid
+KCI DMA descriptor size N.` Through the debugfs door `cmd.dma.size` is the
+payload length (16 when empty), or the whole `kci_scratch` allocation with
+`kci_dma`. A sweep of 1, 2, 4, 8, 12 ... 4096 and 8192 ... 524288 answered
+`-> 3` **for every value**, with that line quoting the same number. So the check
+is neither a small struct size nor a page or pool size, the codes stay unnamed,
+and this axis is exhausted the way P1's was: a new attempt needs the handler's
+constant, not another length. The static route is blocked the same way: the
+string at `0x100e7554` has no 32-bit literal and no `movw`/`movt` pair anywhere
+in the decoded body, so it is reached through the log-site index (U178), not by
+an address reference.
+
+### 1.24 The kernel's setup handler is firmware image loading (U365)
+
+`mobile_firmware_setup_buffer` (`mobile-firmware.c:382`) is called by
+`edgetpu_firmware_load_locked` for each run. It GSA-authenticates the image,
+copies the version words out of its image config, checks the image against the
+carveout, and builds or clears the TPU's IOMMU mappings. It sends no command. So
+U275 stands with its code read end to end: the driver carries no producer for
+the firmware's VII setup, and the name `mobile_firmware_setup_buffer` is not the
+missing piece.
+
 ### 1.11 The KCI door, corrected (U329)
 
 Userspace reaches KCI through **debugfs**, not an ioctl:
@@ -1018,9 +1079,10 @@ all refused). The iremap pool caps a scratch at 512 KiB, so a larger exact size
 cannot be expressed through the door. **Next:** their name. Checked and empty
 (U353): the published `omamobile`/`omamobile-tpu` trees and every branch carry a
 header without the gap comment; `KCI_CODE_* = 15..18` appears nowhere; the HAL's
-and the DBA runtime's strings carry no scratch/map command name. So the name
-must come from a newer Google tree or from the vendor service's binary
-interface, not from a size sweep.
+and the DBA runtime's strings carry no scratch/map command name. So thename must come from a newer Google tree or from the vendor service's binary
+interface, not from a size sweep. The descriptor-size axis is now swept to its
+edge too (U364): every size from 1 to 4096 and every power of two to 524288 is
+refused by name, so 15/16 need the handler's constant, not another length.
 
 ### P3. The 40-byte record (offline, one window)
 
@@ -1054,7 +1116,7 @@ line, or `T10=11` answering anything but `0xf000009`.
 | R1 KCI gap codes | code 6 is mitigation and closed (U350); 15/16 unknown | no phone | P2b |
 | R2 VII element | shape mapped, all fields swept, payload unparsed before the gate | no phone until a type exists | P3 -> P4 |
 | R3 DBA HAL in-process | table reachable (U286); `create` allocates then waits with no peer (U293-U300) | one boot per attempt | name the wait (S2b/S4) |
-| R4 stock boot | the only proven producer | owner + physical fastboot, NV rewrite | section 7 |
+| R4 stock boot | the only proven producer | owner + physical fastboot, NV rewrite; run `dumpsys neuralnetworks` first, the service is lazy | section 7 |
 
 **R1** is closed for code 6 and open only for 15/16's name; it is the cheapest
 way to learn whether the enum gap hides a second command family.
@@ -1063,9 +1125,10 @@ would say what the *producer* fills, not what the wire format is.
 **R3** is the only route that runs Google's own setup builder. Its blocker is
 now named to the primitive: `EventManager2::WaitForEvent` (`0x333054` ->
 `0x332e88`), with three idle executor threads and no device fd, and the host
-callback never invoked (1.20). The next instrument is a futex syscall tracer
-(WAIT/WAKE with uaddr and value): it says whether any thread ever posts the
-event, and which one - something a state sample cannot show.
+callback never invoked (1.20). The futex tracer has now run (1.21, U362):
+nothing ever wakes either word, so there is no poster, not a slow one. That
+makes the shim the wrong component; the next attempt loads the 37 MB
+`libdarwinn_hal.so`, which is the library that carries `SetupFirmware` (1.22).
 **R4** stays the oracle of last resort and the only route with a proven producer;
 it needs the owner at the phone and the section-7 runbook.
 

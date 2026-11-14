@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Edge TPU bring-up: status and benchmark
 
-As of 2026-11-13 (rev 15), kernel
+As of 2026-11-14 (rev 16), kernel
 `7.3.0-rc6-omamobile-push1-ga78d26f63e56-dirty`, slot B. The plan of record is
 [TPU-PLAN.md](TPU-PLAN.md); the full experiment log and every prior revision
 are in [TPU-HISTORY.md](TPU-HISTORY.md). **No model has run on the TPU and no
@@ -22,6 +22,44 @@ firmware up. The stock oracle remains the only *proven* producer; the image's
 only firmware-setup code is the NNAPI DBA HAL (`libdarwinn_dba_hal_runtime.so`,
 `Hal::CreatePredictor`, whose submit takes the global scratches the firmware
 asks for), which this port has never driven.
+
+## 2026-11-14 (U365: the kernel's setup handler is image loading)
+
+`mobile_firmware_setup_buffer` (`mobile-firmware.c:382`) runs once per firmware
+load: GSA authentication, the image config's version words, and the TPU's IOMMU
+and carveout mappings. It sends nothing. U275 stands with the code read end to
+end, and that name is not the missing setup.
+
+## 2026-11-14 (U364: code 15/16's size check, swept to its edge)
+
+The firmware names the check: `ERR tpu_kci_handler_thread.cc:298 - Invalid KCI
+DMA descriptor size N.` Through the debugfs door, every size 1, 2, 4, 8, 12 ...
+4096 and 8192 ... 524288 answered `-> 3` with that line. The check is neither a
+small struct nor a page or pool size, so the codes stay unnamed and the axis is
+exhausted like P1's. The string at `0x100e7554` has no literal and no
+`movw`/`movt` pair in the decoded body: the static route needs the log-site
+index (U178), not an address scan.
+
+## 2026-11-14 (U363: the harness drove the client shim)
+
+Both libraries export `GetDarwinnHalFunctions`: the 3,785,000-byte
+`libdarwinn_dba_hal_runtime.so` at `0xf772c`, and the 37,089,408-byte
+`libdarwinn_hal.so` at `0x83130c`. The harness's own string loads the runtime,
+so every in-process create on record ran the *client* shim. The 37 MB library
+is the one with `SetupFirmware`; its A17 device path has reset the phone before
+(A9), so the next attempt is one attended boot with `tpu-hold` alive and a
+reset as the stop condition.
+
+## 2026-11-14 (U362: the wake that never comes)
+
+A 20 s futex trace of `MODE=create NOFORK=1` (attached before the wait) shows
+the main thread on `WAIT_BITSET|CLOCK_REALTIME` at `0xffff8a821180` val 0 with
+frames `runtime+0x33003c 0x30f760 0x332f20 0x332f5c 0x333088 0x1202a4`, and the
+three workers on `0xffff8aa1db90` val `0x4002`. **No `FUTEX_WAKE` touches
+either word in the whole run**; the only five wakes are the main thread's own
+thread-start handshakes before 0.11 s. The runtime has no event source at all -
+it is the client half of a pair whose peer is absent, not a waiter for a slow
+poster. No inference.
 
 ## 2026-11-13 (U361: the wait is a bionic condvar)
 
